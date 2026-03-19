@@ -37,12 +37,13 @@ type topoSubPeer struct {
 type Server struct {
 	app      *app.App
 	addr     string
-	basePath string // e.g. "/scale"
+	basePath string
 
-	mu       sync.RWMutex
-	username string
-	password string
-	sessions map[string]time.Time
+	mu         sync.RWMutex
+	username   string
+	password   string
+	sessions   map[string]time.Time
+	oldNodeIDs map[string]string // old ID → new ID (for remote proxy compat)
 }
 
 func NewServer(a *app.App, addr, basePath string) *Server {
@@ -51,11 +52,12 @@ func NewServer(a *app.App, addr, basePath string) *Server {
 		bp = "/" + bp
 	}
 	return &Server{
-		app:      a,
-		addr:     addr,
-		basePath: bp,
-		username: "admin",
-		password: "admin",
+		app:        a,
+		addr:       addr,
+		basePath:   bp,
+		username:   "admin",
+		password:   "admin",
+		oldNodeIDs: make(map[string]string),
 		sessions: make(map[string]time.Time),
 	}
 }
@@ -322,6 +324,8 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server password must be at least 6 characters", 400)
 		return
 	}
+	oldID := s.app.Store().Get().NodeID
+
 	s.app.Store().Update(func(c *app.Config) {
 		if body.NodeID != nil && *body.NodeID != "" {
 			c.NodeID = *body.NodeID
@@ -341,13 +345,21 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	})
-	// Sync name change to relay node
+
 	cfg := s.app.Store().Get()
 	s.app.Node().SetName(cfg.Name)
 	s.app.Node().SetExit(cfg.ExitNode)
-	// Persist node ID to file
+
 	if body.NodeID != nil {
 		s.app.PersistNodeID(cfg.NodeID)
+		if oldID != cfg.NodeID {
+			// Track old→new mapping for remote proxy compatibility
+			s.mu.Lock()
+			s.oldNodeIDs[oldID] = cfg.NodeID
+			s.mu.Unlock()
+			// Reconnect all peers so they see the new ID
+			go s.app.ReconnectAll()
+		}
 	}
 	writeJSON(w, map[string]string{"status": "ok", "note": "server config changes require restart"})
 }
@@ -854,6 +866,14 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	chain := segments[:chainLen]
+	// Resolve old node IDs to current ones
+	s.mu.RLock()
+	for i, name := range chain {
+		if newID, ok := s.oldNodeIDs[name]; ok {
+			chain[i] = newID
+		}
+	}
+	s.mu.RUnlock()
 	remaining := strings.Join(segments[chainLen:], "/")
 	// The remote's actual path: prepend their base path (/scale)
 	// /remote/vm/ → remote /scale/

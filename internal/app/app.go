@@ -174,6 +174,26 @@ func (a *App) StartClient(cl ClientEntry) {
 	go a.connectLoop(ctx, cl)
 }
 
+// ReconnectAll stops and restarts all client connections (e.g. after node ID change).
+func (a *App) ReconnectAll() {
+	cfg := a.store.Get()
+	// Stop all
+	a.mu.Lock()
+	for name, cancel := range a.clientCancel {
+		cancel()
+		delete(a.clientCancel, name)
+	}
+	a.mu.Unlock()
+	time.Sleep(time.Second)
+	// Restart all
+	for _, cl := range cfg.Clients {
+		if !cl.Disabled {
+			a.StartClient(cl)
+		}
+	}
+	log.Printf("[%s] reconnected all peers after ID change", a.node.Name())
+}
+
 func (a *App) StopClient(name string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
