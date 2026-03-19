@@ -61,6 +61,16 @@ type peer struct {
 
 // Node is a unified relay endpoint. It can accept peers (hy2 server side)
 // and connect to peers (hy2 client side) simultaneously.
+// Stats holds traffic counters.
+type Stats struct {
+	TxBytes    uint64 // total uploaded
+	RxBytes    uint64 // total downloaded
+	TxRate     uint64 // bytes/sec upload (snapshot)
+	RxRate     uint64 // bytes/sec download (snapshot)
+	Conns      int    // active stream count
+	ExitClients int   // peers using this node as exit
+}
+
 type Node struct {
 	name  string
 	exit  bool
@@ -69,7 +79,16 @@ type Node struct {
 	seq   atomic.Uint64
 
 	nestedMu sync.RWMutex
-	nested   map[string]bool // peer name → nested discovery enabled
+	nested   map[string]bool
+
+	// Traffic counters
+	txBytes   atomic.Uint64
+	rxBytes   atomic.Uint64
+	prevTx    uint64
+	prevRx    uint64
+	txRate    atomic.Uint64
+	rxRate    atomic.Uint64
+	conns     atomic.Int64
 }
 
 // Name returns the node's name.
@@ -77,6 +96,45 @@ func (n *Node) Name() string { return n.name }
 
 // IsExit returns whether this node is an exit node.
 func (n *Node) IsExit() bool { return n.exit }
+
+// GetStats returns current traffic statistics.
+func (n *Node) GetStats() Stats {
+	n.mu.RLock()
+	exitCount := 0
+	for _, p := range n.peers {
+		if p.info.Direction == "inbound" {
+			exitCount++
+		}
+	}
+	n.mu.RUnlock()
+	return Stats{
+		TxBytes:     n.txBytes.Load(),
+		RxBytes:     n.rxBytes.Load(),
+		TxRate:      n.txRate.Load(),
+		RxRate:      n.rxRate.Load(),
+		Conns:       int(n.conns.Load()),
+		ExitClients: exitCount,
+	}
+}
+
+// StartRateTicker updates per-second rate counters. Call in a goroutine.
+func (n *Node) StartRateTicker(ctx context.Context) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			tx := n.txBytes.Load()
+			rx := n.rxBytes.Load()
+			n.txRate.Store(tx - n.prevTx)
+			n.rxRate.Store(rx - n.prevRx)
+			n.prevTx = tx
+			n.prevRx = rx
+		}
+	}
+}
 
 // NewNode creates a node.
 func NewNode(name string, exitNode bool) *Node {
@@ -232,10 +290,12 @@ func (n *Node) handleVia(ctx context.Context, peerName, targetAddr string, strea
 		stream.Close()
 		return
 	}
+	n.conns.Add(1)
+	defer n.conns.Add(-1)
 	defer exitConn.Close()
 	defer stream.Close()
-	go func() { io.Copy(exitConn, stream); exitConn.Close() }()
-	io.Copy(stream, exitConn)
+	go func() { n.copyCount(exitConn, stream, &n.txBytes); exitConn.Close() }()
+	n.copyCount(stream, exitConn, &n.rxBytes)
 }
 
 func (n *Node) deliverDataStream(id string, stream net.Conn) {
@@ -297,8 +357,10 @@ func (n *Node) dialAndStream(ctx context.Context, client hyclient.Client, id, ad
 	}
 	defer stream.Close()
 
-	go func() { io.Copy(stream, target); stream.Close() }()
-	io.Copy(target, stream)
+	n.conns.Add(1)
+	defer n.conns.Add(-1)
+	go func() { n.copyCount(stream, target, &n.rxBytes); stream.Close() }()
+	n.copyCount(target, stream, &n.txBytes)
 }
 
 // --- Peer queries ---
@@ -490,6 +552,25 @@ func (n *Node) DialVia(ctx context.Context, path []string, addr string) (net.Con
 }
 
 // --- Wire helpers ---
+
+func (n *Node) copyCount(dst io.Writer, src io.Reader, counter *atomic.Uint64) {
+	buf := make([]byte, 32*1024)
+	for {
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			nw, ew := dst.Write(buf[:nr])
+			if nw > 0 {
+				counter.Add(uint64(nw))
+			}
+			if ew != nil {
+				return
+			}
+		}
+		if er != nil {
+			return
+		}
+	}
+}
 
 func parseVia(reqAddr string) (nodeName, targetAddr string, ok bool) {
 	if !strings.HasPrefix(reqAddr, streamViaPrefix) {

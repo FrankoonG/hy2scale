@@ -64,6 +64,28 @@
     <div class="content">
       <!-- Nodes Page -->
       <div class="page active" id="page-nodes">
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-label">Total Traffic</div>
+            <div class="stat-value"><span class="stat-up" id="s-tx-total">0 B</span> <span class="sep">/</span> <span class="stat-down" id="s-rx-total">0 B</span></div>
+            <div class="stat-sub">upload / download</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Realtime Speed</div>
+            <div class="stat-value"><span class="stat-up" id="s-tx-rate">0 B/s</span> <span class="sep">/</span> <span class="stat-down" id="s-rx-rate">0 B/s</span></div>
+            <div class="stat-sub">upload / download</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Connections</div>
+            <div class="stat-value" id="s-conns">0</div>
+            <div class="stat-sub">active streams</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Exit Clients</div>
+            <div class="stat-value" id="s-exits">0</div>
+            <div class="stat-sub">using this node as exit</div>
+          </div>
+        </div>
         <div class="card">
           <div class="card-header">
             <span class="card-title">Network Topology</span>
