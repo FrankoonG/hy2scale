@@ -332,8 +332,12 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		// Load sub-peers if nested enabled
 		if tn.Nested && tn.Connected {
 			if subPeers, err := s.app.Node().PeersOf(name); err == nil {
+				myName := s.app.Node().Name()
 				children := make([]subPeer, 0, len(subPeers))
 				for _, sp := range subPeers {
+					if sp.Name == myName {
+						continue // exclude self
+					}
 					children = append(children, subPeer{Name: sp.Name, ExitNode: sp.ExitNode})
 				}
 				// Sort children by name
