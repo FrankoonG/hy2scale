@@ -89,25 +89,44 @@ func (s *Server) Start(ctx context.Context) error {
 		1)
 	indexBytes := []byte(injectedIndex)
 
+	// Known frontend routes that should serve index.html
+	frontendRoutes := map[string]bool{
+		"":         true,
+		"login":    true,
+		"nodes":    true,
+		"proxies":  true,
+		"tls":      true,
+		"settings": true,
+	}
+
 	apiMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/")
-		if path == "" {
-			path = "index.html"
-		}
-		if data, err := fs.ReadFile(staticFS, path); err == nil {
-			switch {
-			case strings.HasSuffix(path, ".css"):
-				w.Header().Set("Content-Type", "text/css")
-			case strings.HasSuffix(path, ".js"):
-				w.Header().Set("Content-Type", "application/javascript")
-			case strings.HasSuffix(path, ".html"):
-				w.Header().Set("Content-Type", "text/html")
+
+		// Serve static file if it exists (css, js, etc.)
+		if path != "" {
+			if data, err := fs.ReadFile(staticFS, path); err == nil {
+				switch {
+				case strings.HasSuffix(path, ".css"):
+					w.Header().Set("Content-Type", "text/css")
+				case strings.HasSuffix(path, ".js"):
+					w.Header().Set("Content-Type", "application/javascript")
+				case strings.HasSuffix(path, ".html"):
+					w.Header().Set("Content-Type", "text/html")
+				}
+				w.Write(data)
+				return
 			}
-			w.Write(data)
+		}
+
+		// Only serve index.html for known frontend routes
+		if frontendRoutes[path] {
+			w.Header().Set("Content-Type", "text/html")
+			w.Write(indexBytes)
 			return
 		}
-		w.Header().Set("Content-Type", "text/html")
-		w.Write(indexBytes)
+
+		// Unknown path → redirect to login
+		http.Redirect(w, r, s.basePath+"/login", http.StatusFound)
 	})
 
 	// Root mux — strip base path
