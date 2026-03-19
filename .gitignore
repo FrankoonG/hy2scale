@@ -1,0 +1,29 @@
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# TLS certs
+*.pem
+*.crt
+*.key
+
+# Configs (may contain secrets)
+configs/
+
+# Test scripts and local compose
+run-lossy-test.sh
+docker-compose.local-test.yml
+
+# Claude Code project instructions
+CLAUDE.md
