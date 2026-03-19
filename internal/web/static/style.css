@@ -165,12 +165,9 @@ button.btn-icon:hover{color:var(--red);background:var(--red-bg)}
 .modal-header h2{font-size:16px;font-weight:600;flex:1}
 .modal-body{padding:0 24px 20px;overflow-y:auto;flex:1}
 .modal-footer{display:flex;justify-content:flex-end;gap:8px;padding:16px 24px;border-top:1px solid var(--border-light)}
-.modal-tabs{display:flex;gap:0;margin:16px 0;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden}
-.modal-tab{flex:1;padding:7px;text-align:center;font-size:13px;font-weight:500;cursor:pointer;color:var(--text-muted);background:var(--bg);transition:all .15s;border-right:1px solid var(--border)}
-.modal-tab:last-child{border-right:none}
-.modal-tab.active{background:var(--primary-light);color:var(--primary)}
-.modal-panel{display:none}
-.modal-panel.active{display:block}
+/* ── Section divider ── */
+.section-divider{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;padding:12px 0 8px;border-top:1px solid var(--border-light);margin-top:4px;display:flex;align-items:center;gap:6px;user-select:none}
+.section-divider .adv-arrow{color:var(--text-muted)}
 
 /* ── Empty ── */
 .empty{text-align:center;padding:24px;color:var(--text-muted);font-size:13px}

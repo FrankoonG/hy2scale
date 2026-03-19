@@ -257,7 +257,7 @@ function openAddDialog() {
   ['add-addr','add-pass','add-sni','add-ca','add-tx','add-rx','add-isw','add-msw','add-icw','add-mcw'].forEach(id => $(`#${id}`).value = '');
   $('#add-insecure').checked = true; $('#add-fastopen').checked = false;
   $('#add-node-modal').style.display = '';
-  switchModalTab($$('#add-node-modal .modal-tab')[0]);
+  $('#quic-advanced').style.display = 'none';
 }
 
 async function openEditDialog(name) {
@@ -272,25 +272,21 @@ async function openEditDialog(name) {
     $('#add-sni').value = cl.sni || '';
     $('#add-insecure').checked = cl.insecure !== false;
     $('#add-ca').value = cl.ca || '';
-    $('#add-tx').value = cl.max_tx || '';
-    $('#add-rx').value = cl.max_rx || '';
+    $('#add-tx').value = cl.max_tx ? (cl.max_tx / 125000).toFixed(0) : '';
+    $('#add-rx').value = cl.max_rx ? (cl.max_rx / 125000).toFixed(0) : '';
     $('#add-isw').value = cl.init_stream_window || '';
     $('#add-msw').value = cl.max_stream_window || '';
     $('#add-icw').value = cl.init_conn_window || '';
     $('#add-mcw').value = cl.max_conn_window || '';
     $('#add-fastopen').checked = !!cl.fast_open;
     $('#add-node-modal').style.display = '';
-    switchModalTab($$('#add-node-modal .modal-tab')[0]);
+    // Show QUIC section if any values are set
+    const hasQuic = cl.init_stream_window || cl.max_stream_window || cl.init_conn_window || cl.max_conn_window;
+    $('#quic-advanced').style.display = hasQuic ? '' : 'none';
   } catch (e) { alert(e); }
 }
 
 function closeAddDialog() { $('#add-node-modal').style.display = 'none'; editingNode = null; }
-
-function switchModalTab(tab) {
-  const modal = tab.closest('.modal-body');
-  modal.querySelectorAll('.modal-tab').forEach(t => t.classList.toggle('active', t === tab));
-  modal.querySelectorAll('.modal-panel').forEach(p => p.classList.toggle('active', p.id === 'mtab-' + tab.dataset.mtab));
-}
 
 async function submitAddNode() {
   const name = $('#add-name').value.trim(), addr = $('#add-addr').value.trim(), password = $('#add-pass').value.trim();
@@ -298,7 +294,8 @@ async function submitAddNode() {
   const body = {
     name, addr, password,
     sni: $('#add-sni').value.trim(), insecure: $('#add-insecure').checked, ca: $('#add-ca').value.trim(),
-    max_tx: parseInt($('#add-tx').value) || 0, max_rx: parseInt($('#add-rx').value) || 0,
+    max_tx: Math.round((parseFloat($('#add-tx').value) || 0) * 125000),
+    max_rx: Math.round((parseFloat($('#add-rx').value) || 0) * 125000),
     init_stream_window: parseInt($('#add-isw').value) || 0, max_stream_window: parseInt($('#add-msw').value) || 0,
     init_conn_window: parseInt($('#add-icw').value) || 0, max_conn_window: parseInt($('#add-mcw').value) || 0,
     fast_open: $('#add-fastopen').checked,
