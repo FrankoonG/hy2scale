@@ -174,7 +174,7 @@ function dirHTML(dir) {
 }
 
 function parentRowHTML(n) {
-  const exit = n.exit_node ? ' <span class="badge badge-green">EXIT</span>' : '';
+  const exit = '';
 
   if (n.is_self) {
     return `<tr class="self-row${n.disabled ? ' disabled' : ''}">
@@ -217,7 +217,7 @@ function childRowHTML(c, isLast, depth) {
   depth = depth || 1;
   const conflict = !!c.conflict;
   const dis = conflict || isNestedDisabled(c.via, c.name);
-  const exit = c.exit_node ? ' <span class="badge badge-green">EXIT</span>' : '';
+  const exit = '';
   const conflictBadge = conflict ? ' <span class="badge badge-red">ID CONFLICT</span>' : '';
   const dir = c.direction ? dirHTML(c.direction) : '';
   const indent = 'padding-left:' + (depth * 20) + 'px';
