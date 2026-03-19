@@ -421,6 +421,32 @@ func (n *Node) PeersOf(peerName string) ([]PeerInfo, error) {
 	return peers, nil
 }
 
+// PeersOfVia returns a peer's peers through a multi-hop path.
+// path = ["vm", "au"] means: query au's peers by routing through vm.
+func (n *Node) PeersOfVia(ctx context.Context, path []string) ([]PeerInfo, error) {
+	if len(path) == 0 {
+		return nil, fmt.Errorf("relay: empty path")
+	}
+	if len(path) == 1 {
+		return n.PeersOf(path[0])
+	}
+	// Route through the chain to the target's list-peers stream
+	conn, err := n.DialVia(ctx, path, streamListPeers)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	data, err := io.ReadAll(conn)
+	if err != nil {
+		return nil, err
+	}
+	var peers []PeerInfo
+	if err := json.Unmarshal(data, &peers); err != nil {
+		return nil, err
+	}
+	return peers, nil
+}
+
 // SetNestedDiscovery enables/disables nested peer discovery for a peer.
 func (n *Node) SetNestedDiscovery(peerName string, enabled bool) {
 	n.nestedMu.Lock()
