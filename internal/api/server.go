@@ -71,11 +71,39 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("GET /api/settings/ui", s.getUISettings)
 	authed.HandleFunc("PUT /api/settings/ui", s.updateUISettings)
 
+	// TLS
+	authed.HandleFunc("GET /api/tls", s.listCerts)
+	authed.HandleFunc("POST /api/tls/import", s.importCert)
+	authed.HandleFunc("POST /api/tls/generate", s.generateCert)
+	authed.HandleFunc("DELETE /api/tls/{id}", s.deleteCert)
+
 	apiMux.Handle("/api/", s.authMiddleware(authed))
 
-	// Static files
+	// Static files with SPA fallback
 	staticFS, _ := fs.Sub(web.Static, "static")
-	apiMux.Handle("/", http.FileServer(http.FS(staticFS)))
+	indexHTML, _ := fs.ReadFile(staticFS, "index.html")
+	apiMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			path = "index.html"
+		}
+		// Serve actual static file if it exists
+		if data, err := fs.ReadFile(staticFS, path); err == nil {
+			switch {
+			case strings.HasSuffix(path, ".css"):
+				w.Header().Set("Content-Type", "text/css")
+			case strings.HasSuffix(path, ".js"):
+				w.Header().Set("Content-Type", "application/javascript")
+			case strings.HasSuffix(path, ".html"):
+				w.Header().Set("Content-Type", "text/html")
+			}
+			w.Write(data)
+			return
+		}
+		// SPA fallback: serve index.html for frontend routes
+		w.Header().Set("Content-Type", "text/html")
+		w.Write(indexHTML)
+	})
 
 	// Root mux — strip base path
 	root := http.NewServeMux()
@@ -507,6 +535,84 @@ func (s *Server) updateProxy(w http.ResponseWriter, r *http.Request) {
 func (s *Server) removeProxy(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.app.RemoveProxy(id); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// --- TLS ---
+
+func (s *Server) listCerts(w http.ResponseWriter, r *http.Request) {
+	store := s.app.TLS()
+	if store == nil {
+		writeJSON(w, []any{})
+		return
+	}
+	certs, err := store.List()
+	if err != nil {
+		writeJSON(w, []any{})
+		return
+	}
+	writeJSON(w, certs)
+}
+
+func (s *Server) importCert(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		Cert string `json:"cert"`
+		Key  string `json:"key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if body.ID == "" || body.Cert == "" {
+		http.Error(w, "id and cert required", 400)
+		return
+	}
+	if body.Name == "" {
+		body.Name = body.ID
+	}
+	if err := s.app.TLS().Import(body.ID, body.Name, body.Cert, body.Key); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) generateCert(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID      string   `json:"id"`
+		Name    string   `json:"name"`
+		Domains []string `json:"domains"`
+		Days    int      `json:"days"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if body.ID == "" || len(body.Domains) == 0 {
+		http.Error(w, "id and domains required", 400)
+		return
+	}
+	if body.Name == "" {
+		body.Name = body.ID
+	}
+	if body.Days <= 0 {
+		body.Days = 365
+	}
+	if err := s.app.TLS().Generate(body.ID, body.Name, body.Domains, body.Days); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) deleteCert(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.app.TLS().Delete(id); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
