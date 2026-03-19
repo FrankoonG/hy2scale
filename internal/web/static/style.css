@@ -75,7 +75,20 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 /* ── Nested sub-rows ── */
 .sub-row td{padding:8px 10px;background:var(--bg);font-size:13px}
 .sub-row .peer-name-cell{font-weight:500}
-.tree-branch{display:inline-block;width:20px;color:var(--text-muted);font-family:var(--mono);font-size:14px;text-align:center;margin-right:4px;vertical-align:middle;user-select:none;-webkit-user-select:none;pointer-events:none}
+.tree-branch{display:inline-block;width:20px;color:var(--border);font-family:var(--mono);font-size:14px;text-align:center;vertical-align:middle;user-select:none;-webkit-user-select:none;pointer-events:none}
+.sub-name-wrap{display:inline-block;vertical-align:middle}
+.sub-name-wrap .peer-addr-sub{margin-left:0}
+
+/* ── Stats cards ── */
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow)}
+.stat-label{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+.stat-value{font-size:20px;font-weight:700;font-family:var(--mono);letter-spacing:-.5px}
+.stat-sub{font-size:11px;color:var(--text-muted);margin-top:2px;font-family:var(--mono)}
+.stat-value .sep{color:var(--text-muted);font-weight:400;margin:0 2px}
+.stat-up{color:var(--blue)}
+.stat-down{color:var(--green)}
+@media(max-width:768px){.stats-grid{grid-template-columns:repeat(2,1fr)}}
 
 /* ── Action buttons ── */
 .act-group{display:inline-flex;gap:2px}

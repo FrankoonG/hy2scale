@@ -78,10 +78,31 @@ async function refresh() {
     const node = await api('/node');
     $('#node-badge').textContent = node.node_id;
     $('#node-name-display').textContent = node.name !== node.node_id ? node.name : '';
-    await Promise.all([refreshTopology(), refreshProxies()]);
+    await Promise.all([refreshTopology(), refreshProxies(), refreshStats()]);
   } catch (e) { console.error(e); }
   clearInterval(pollTimer);
   pollTimer = setInterval(refresh, 5000);
+}
+
+// ── Stats ──
+function fmtBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+  if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+  return (b / 1073741824).toFixed(2) + ' GB';
+}
+function fmtRate(b) { return fmtBytes(b) + '/s'; }
+
+async function refreshStats() {
+  try {
+    const s = await api('/stats');
+    $('#s-tx-total').textContent = fmtBytes(s.tx_bytes);
+    $('#s-rx-total').textContent = fmtBytes(s.rx_bytes);
+    $('#s-tx-rate').textContent = fmtRate(s.tx_rate);
+    $('#s-rx-rate').textContent = fmtRate(s.rx_rate);
+    $('#s-conns').textContent = s.conns;
+    $('#s-exits').textContent = s.exit_clients;
+  } catch (e) {}
 }
 
 // ── Topology Table ──
@@ -129,9 +150,10 @@ function childRowHTML(c, isLast) {
     <td class="col-latency">${dis ? latencyHTML(-1) : latencyHTML(c.latency_ms)}</td>
     <td class="col-dir">${dir}</td>
     <td class="col-name">
-      <span class="tree-branch" aria-hidden="true">${isLast ? '└' : '├'}</span>
-      <span class="peer-name-cell">${esc(c.name)}</span>${exit}
-      <span class="peer-addr-sub">via ${esc(c.via)}</span>
+      <span class="tree-branch" aria-hidden="true">${isLast ? '└' : '├'}</span><span class="sub-name-wrap">
+        <span class="peer-name-cell">${esc(c.name)}</span>${exit}
+        <span class="peer-addr-sub">via ${esc(c.via)}</span>
+      </span>
     </td>
     <td class="col-nested"></td>
     <td class="col-actions">

@@ -54,6 +54,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// Authed API routes
 	authed := http.NewServeMux()
 	authed.HandleFunc("GET /api/node", s.getNode)
+	authed.HandleFunc("GET /api/stats", s.getStats)
 	authed.HandleFunc("PUT /api/node", s.updateNode)
 	authed.HandleFunc("GET /api/peers", s.getPeers)
 	authed.HandleFunc("GET /api/topology", s.getTopology)
@@ -262,6 +263,18 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Node ---
+
+func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
+	st := s.app.Node().GetStats()
+	writeJSON(w, map[string]any{
+		"tx_bytes": st.TxBytes,
+		"rx_bytes": st.RxBytes,
+		"tx_rate":  st.TxRate,
+		"rx_rate":  st.RxRate,
+		"conns":    st.Conns,
+		"exit_clients": st.ExitClients,
+	})
+}
 
 func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
