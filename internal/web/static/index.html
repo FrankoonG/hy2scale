@@ -30,7 +30,7 @@
     <h1>hy2scale</h1>
     <p>Sign in to manage your mesh network</p>
     <input id="login-user" placeholder="Username" autocomplete="username">
-    <input id="login-pass" placeholder="Password" type="password" autocomplete="current-password">
+    <div class="pw-wrap"><input id="login-pass" placeholder="Password" type="password" autocomplete="current-password"><button type="button" class="pw-eye" onclick="togglePw(this)">&#128065;</button></div>
     <label class="remember-me"><input type="checkbox" id="login-remember"> Remember me</label>
     <div id="login-error" class="msg-error" style="margin-bottom:8px"></div>
     <button class="btn-primary btn-full" onclick="doLogin()">Sign in</button>
@@ -145,10 +145,10 @@
         <div class="card">
           <div class="card-header"><span class="card-title">Credentials</span></div>
           <div class="form-col" style="max-width:320px">
-            <div class="form-group"><label>Current Password</label><input id="set-cur-pass" type="password"></div>
+            <div class="form-group"><label>Current Password</label><div class="pw-wrap"><input id="set-cur-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)">&#128065;</button></div></div>
             <div class="form-group"><label>New Username (optional)</label><input id="set-new-user"></div>
-            <div class="form-group"><label>New Password</label><input id="set-new-pass" type="password"></div>
-            <div class="form-group"><label>Confirm Password</label><input id="set-confirm-pass" type="password"></div>
+            <div class="form-group"><label>New Password</label><div class="pw-wrap"><input id="set-new-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)">&#128065;</button></div></div>
+            <div class="form-group"><label>Confirm Password</label><div class="pw-wrap"><input id="set-confirm-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)">&#128065;</button></div></div>
             <div id="set-error" class="msg-error"></div>
             <div id="set-ok" class="msg-ok"></div>
             <button class="btn-primary" onclick="changePassword()">Update Credentials</button>
@@ -182,7 +182,7 @@
         <div class="section-divider">hy2 Server <span class="badge badge-muted" style="margin-left:4px">restart required</span></div>
         <div class="form-grid">
           <div class="form-group"><label>Listen (UDP)</label><input id="self-srv-listen" placeholder="0.0.0.0:5565"></div>
-          <div class="form-group"><label>Password</label><input id="self-srv-pass" type="password"></div>
+          <div class="form-group"><label>Password</label><div class="pw-wrap"><input id="self-srv-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)">&#128065;</button></div></div>
         </div>
         <div class="form-group">
           <label>TLS Certificate</label>
@@ -212,7 +212,7 @@
         <div class="form-grid">
           <div class="form-group"><label>Name *</label><input id="add-name" placeholder="e.g. jp-node"></div>
           <div class="form-group"><label>Address *</label><input id="add-addr" placeholder="host:port"></div>
-          <div class="form-group"><label>Password *</label><input id="add-pass" type="password" placeholder="Auth password"></div>
+          <div class="form-group"><label>Password *</label><div class="pw-wrap"><input id="add-pass" type="password" placeholder="Auth password"><button type="button" class="pw-eye" onclick="togglePw(this)">&#128065;</button></div></div>
           <div class="form-group">
             <label>Fast Open</label>
             <label class="toggle" style="margin-top:4px"><input type="checkbox" id="add-fastopen"><span class="slider"></span></label>

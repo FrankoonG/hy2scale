@@ -299,9 +299,15 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	// Validate server password
+	if body.Server != nil && body.Server.Listen != "" && len(body.Server.Password) < 6 {
+		http.Error(w, "server password must be at least 6 characters", 400)
+		return
+	}
 	s.app.Store().Update(func(c *app.Config) {
 		if body.NodeID != nil && *body.NodeID != "" {
 			c.NodeID = *body.NodeID
+			c.Name = *body.NodeID
 		}
 		if body.Name != nil {
 			c.Name = *body.Name
@@ -311,7 +317,7 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.Server != nil {
 			if body.Server.Listen == "" && body.Server.Password == "" {
-				c.Server = nil // clear server config
+				c.Server = nil
 			} else {
 				c.Server = body.Server
 			}

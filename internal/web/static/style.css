@@ -129,6 +129,13 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 input,select{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:var(--radius-sm);font-size:13px;font-family:var(--font);outline:none;transition:border .15s}
 input:focus,select:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(67,97,238,.1)}
 input::placeholder{color:var(--text-muted)}
+/* Password toggle */
+.pw-wrap{position:relative;display:flex}
+.pw-wrap input{flex:1;padding-right:34px}
+.pw-eye{position:absolute;right:1px;top:1px;bottom:1px;width:32px;border:none;background:transparent;cursor:pointer;color:var(--text-muted);display:flex;align-items:center;justify-content:center;border-radius:0 var(--radius-sm) var(--radius-sm) 0;font-size:15px;padding:0}
+.pw-eye:hover{color:var(--primary);background:var(--primary-light)}
+/* Custom select */
+select{appearance:none;-webkit-appearance:none;background:var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239098a8' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") no-repeat right 10px center;padding-right:30px}
 textarea{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:var(--radius-sm);font-size:12px;font-family:var(--mono);outline:none;transition:border .15s;width:100%;min-height:80px;resize:vertical}
 textarea:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(67,97,238,.1)}
 textarea::placeholder{color:var(--text-muted)}
