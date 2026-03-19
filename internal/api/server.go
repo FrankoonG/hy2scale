@@ -99,9 +99,7 @@ func (s *Server) Start(ctx context.Context) error {
 	staticFS, _ := fs.Sub(web.Static, "static")
 	rawIndex, _ := fs.ReadFile(staticFS, "index.html")
 	baseScript := "<script>window.__BASE__=\"" + s.basePath + "\";</script><script src=\"app.js\"></script>"
-	proxyScript := "<script>window.__BASE__=\"" + s.basePath + "\";window.__PROXY__=true;</script><script src=\"app.js\"></script>"
 	indexBytes := []byte(strings.Replace(string(rawIndex), "<script src=\"app.js\"></script>", baseScript, 1))
-	indexProxyBytes := []byte(strings.Replace(string(rawIndex), "<script src=\"app.js\"></script>", proxyScript, 1))
 
 	// Known frontend routes that should serve index.html
 	frontendRoutes := map[string]bool{
@@ -143,11 +141,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 		if frontendRoutes[path] {
 			w.Header().Set("Content-Type", "text/html")
-			if r.Header.Get("X-Hy2scale-Proxy") == "true" {
-				w.Write(indexProxyBytes)
-			} else {
-				w.Write(indexBytes)
-			}
+			w.Write(indexBytes)
 			return
 		}
 
@@ -825,43 +819,49 @@ func (s *Server) deleteCert(w http.ResponseWriter, r *http.Request) {
 // remoteProxy tunnels HTTP requests to a remote node's web UI through the relay chain.
 // Path: /remote/{peer1}/{peer2}/.../{remaining_path}
 // The last contiguous known-peer segment forms the chain; the rest is the proxied path.
+// remoteProxy tunnels HTTP to a remote node's web UI.
+// URL: /remote/{peer1}/{peer2}/.../{remaining}
+// Maps to remote: /scale/{remaining} (auto-prepends remote's base path)
+// Rewrites __BASE__ in HTML so JS API calls route back through the proxy.
 func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
-	// Parse: /remote/vm/au/scale/nodes → chain=["vm","au"], remotePath="/scale/nodes"
 	raw := strings.TrimPrefix(r.URL.Path, "/remote/")
-	if raw == "" {
-		http.Error(w, "missing peer path", 400)
+	if raw == "" || raw == "/" {
+		http.Error(w, "usage: /remote/{peer}/{path}", 400)
 		return
 	}
 
-	parts := strings.SplitN(raw, "/", -1)
-	// Find where the peer chain ends — peers are names we know or can resolve
-	// For simplicity: everything before the first path segment that looks like a
-	// known route (api, scale, login, nodes, etc.) or has a dot is the chain.
-	chain := []string{}
-	restIdx := len(parts)
-	knownPaths := map[string]bool{"api": true, "scale": true, "login": true, "nodes": true, "proxies": true, "tls": true, "settings": true, "remote": true}
-	for i, p := range parts {
-		if knownPaths[p] || strings.Contains(p, ".") {
-			restIdx = i
+	// Split into chain + remaining. Chain = contiguous peer names (no dots, no slashes in names).
+	// First segment with a dot or known as a file extension ends the chain.
+	segments := strings.Split(strings.TrimSuffix(raw, "/"), "/")
+	// Known path prefixes that mark the end of the peer chain
+	notPeer := map[string]bool{
+		"api": true, "login": true, "nodes": true, "proxies": true,
+		"tls": true, "settings": true, "remote": true,
+	}
+	chainLen := 0
+	for _, seg := range segments {
+		if seg == "" || strings.Contains(seg, ".") || notPeer[seg] {
 			break
 		}
-		if p != "" {
-			chain = append(chain, p)
-		}
+		chainLen++
 	}
-	if len(chain) == 0 {
+	if chainLen == 0 {
 		http.Error(w, "missing peer chain", 400)
 		return
 	}
 
-	remotePath := "/" + strings.Join(parts[restIdx:], "/")
-	if remotePath == "/" {
-		// Redirect to include the remote's base path so relative URLs resolve correctly
-		http.Redirect(w, r, s.basePath+"/remote/"+strings.Join(chain, "/")+"/scale/", http.StatusFound)
-		return
-	}
+	chain := segments[:chainLen]
+	remaining := strings.Join(segments[chainLen:], "/")
+	// The remote's actual path: prepend their base path (/scale)
+	// /remote/vm/ → remote /scale/
+	// /remote/vm/login → remote /scale/login
+	// /remote/vm/api/node → remote /scale/api/node
+	// /remote/vm/style.css → remote /scale/style.css
+	remotePath := "/scale/" + remaining
 
-	// Dial through relay chain to target's web UI (127.0.0.1:5565)
+	// Proxy base: what the remote's __BASE__ should point to
+	proxyBase := s.basePath + "/remote/" + strings.Join(chain, "/")
+
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
@@ -878,30 +878,16 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// Build request line and query string
-	reqPath := remotePath
-	if r.URL.RawQuery != "" {
-		reqPath += "?" + r.URL.RawQuery
-	}
-	proxyReq := fmt.Sprintf("%s %s HTTP/1.1\r\nHost: 127.0.0.1:5565\r\n", r.Method, reqPath)
-	// Forward all headers except Host/Connection, strip our local Authorization
-	for k, vv := range r.Header {
-		kl := strings.ToLower(k)
-		if kl == "host" || kl == "connection" || kl == "authorization" {
-			continue
-		}
-		for _, v := range vv {
-			proxyReq += fmt.Sprintf("%s: %s\r\n", k, v)
-		}
-	}
-	proxyReq += "X-Hy2scale-Proxy: true\r\nConnection: close\r\n\r\n"
+	// Construct proxied request using http.Request.Write for correctness
+	outReq, _ := http.NewRequest(r.Method, "http://127.0.0.1:5565"+remotePath, r.Body)
+	outReq.URL.RawQuery = r.URL.RawQuery
+	outReq.Header = r.Header.Clone()
+	outReq.Header.Set("Host", "127.0.0.1:5565")
+	outReq.Header.Set("Connection", "close")
+	outReq.Header.Set("X-Hy2scale-Proxy", "true")
+	outReq.ContentLength = r.ContentLength
+	outReq.Write(conn)
 
-	conn.Write([]byte(proxyReq))
-	if r.Body != nil && r.ContentLength > 0 {
-		io.Copy(conn, r.Body)
-	}
-
-	// Read response
 	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil {
 		http.Error(w, "bad response from remote: "+err.Error(), 502)
@@ -909,14 +895,37 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Copy response headers
+	// Rewrite __BASE__ in HTML responses so JS API calls route through proxy
+	ct := resp.Header.Get("Content-Type")
+	isHTML := strings.Contains(ct, "text/html")
+
 	for k, vv := range resp.Header {
+		// Rewrite Location header for redirects
+		if strings.EqualFold(k, "Location") {
+			for i, v := range vv {
+				// Rewrite /scale/... → /scale/remote/{chain}/...
+				if strings.HasPrefix(v, "/scale/") {
+					vv[i] = proxyBase + "/" + strings.TrimPrefix(v, "/scale/")
+				}
+			}
+		}
 		for _, v := range vv {
 			w.Header().Add(k, v)
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+
+	if isHTML {
+		body, _ := io.ReadAll(resp.Body)
+		// Rewrite __BASE__ to proxy path and inject __PROXY__
+		html := strings.Replace(string(body),
+			"window.__BASE__=\"/scale\"",
+			"window.__BASE__=\""+proxyBase+"\";window.__PROXY__=true",
+			1)
+		w.Write([]byte(html))
+	} else {
+		io.Copy(w, resp.Body)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

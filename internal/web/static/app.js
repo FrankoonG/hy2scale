@@ -177,7 +177,7 @@ function dirHTML(dir) {
 }
 
 function remoteURL(chain) {
-  return basePath + '/remote/' + chain.map(encodeURIComponent).join('/');
+  return basePath + '/remote/' + chain.map(encodeURIComponent).join('/') + '/';
 }
 
 function nameLink(name, chain) {
@@ -194,7 +194,7 @@ function parentRowHTML(n) {
         <span class="peer-name-cell">${esc(n.name)}</span>
         ${n.addr ? `<span class="peer-addr-sub">${esc(n.addr)} (UDP)</span>` : '<span class="peer-addr-sub">no hy2 server</span>'}
       </td>
-      <td class="col-nested"></td>
+      <td class="col-nested"><label class="toggle toggle-disabled"><input type="checkbox" checked disabled><span class="slider"></span></label></td>
       <td class="col-actions"><div class="act-group">
         <button class="act-btn edit" onclick="openEditSelf()">Edit</button>
         <button class="act-btn ${n.disabled ? 'enable' : 'warn'}" onclick="toggleSelfDisable(${!n.disabled})">${n.disabled ? 'Enable' : 'Disable'}</button>
