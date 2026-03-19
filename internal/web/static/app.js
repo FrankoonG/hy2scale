@@ -171,7 +171,6 @@ function latencyHTML(ms) {
 }
 
 function trafficHTML(tx, rx) {
-  if (!tx && !rx) return '<span style="color:var(--text-muted)">—</span>';
   return `<span class="stat-up">${fmtRate(tx||0)}</span> <span style="color:var(--text-muted)">/</span> <span class="stat-down">${fmtRate(rx||0)}</span>`;
 }
 
@@ -200,7 +199,7 @@ function parentRowHTML(n) {
         <span class="peer-name-cell">${esc(n.name)}</span>
         ${n.addr ? `<span class="peer-addr-sub">${esc(n.addr)} (UDP)</span>` : '<span class="peer-addr-sub">no hy2 server</span>'}
       </td>
-      <td class="col-traffic"><span style="color:var(--text-muted)">—</span></td>
+      <td class="col-traffic">${trafficHTML(0, 0)}</td>
       <td class="col-nested"><label class="toggle toggle-disabled"><input type="checkbox" checked disabled><span class="slider"></span></label></td>
       <td class="col-actions"><div class="act-group">
         <button class="act-btn edit" onclick="openEditSelf()">Edit</button>
