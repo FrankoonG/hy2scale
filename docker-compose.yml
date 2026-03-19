@@ -4,7 +4,9 @@ services:
     image: hy2scale
     container_name: hy2scale
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "5565:5565/tcp"
+      - "5565:5565/udp"
     volumes:
       - ./configs/${NODE:-local}.yaml:/etc/hy2scale/config.yaml:ro
       - hy2scale-data:/data

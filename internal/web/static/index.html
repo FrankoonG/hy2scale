@@ -11,101 +11,128 @@
 <!-- Login -->
 <div id="login-screen" class="login-screen">
   <div class="login-box">
+    <div class="logo">H</div>
     <h1>hy2scale</h1>
-    <input id="login-user" placeholder="Username" value="admin" autocomplete="username">
+    <p>Sign in to manage your mesh network</p>
+    <input id="login-user" placeholder="Username" autocomplete="username">
     <input id="login-pass" placeholder="Password" type="password" autocomplete="current-password">
-    <div id="login-error" class="error-msg"></div>
-    <button class="primary full" onclick="doLogin()">Login</button>
+    <div id="login-error" class="msg-error" style="margin-bottom:8px"></div>
+    <button class="btn-primary btn-full" onclick="doLogin()">Sign in</button>
   </div>
 </div>
 
-<!-- Main -->
-<div id="main" class="container" style="display:none">
-  <header>
-    <h1>hy2scale</h1>
-    <span class="node-id" id="node-id"></span>
-    <span id="node-name" style="color:var(--dim);font-size:13px"></span>
-    <span class="spacer"></span>
-    <button class="danger" onclick="doLogout()" style="font-size:12px">Logout</button>
-  </header>
+<!-- App -->
+<div id="app" class="app" style="display:none">
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo">H</div>
+      <h1>hy2scale</h1>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item active" data-page="nodes" onclick="switchPage('nodes')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4m-2.93-7.07-2.83 2.83m-8.48 8.48-2.83 2.83m0-14.14 2.83 2.83m8.48 8.48 2.83 2.83"/></svg>
+        Nodes
+      </a>
+      <a class="nav-item" data-page="proxies" onclick="switchPage('proxies')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        Proxies
+      </a>
+      <a class="nav-item" data-page="settings" onclick="switchPage('settings')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        Settings
+      </a>
+      <div class="nav-spacer"></div>
+      <a class="nav-item" onclick="doLogout()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        Logout
+      </a>
+    </nav>
+  </aside>
 
-  <div class="tabs">
-    <div class="tab active" data-tab="nodes">Nodes</div>
-    <div class="tab" data-tab="proxies">Proxies</div>
-    <div class="tab" data-tab="settings">Settings</div>
-  </div>
+  <!-- Main -->
+  <div class="main">
+    <div class="topbar">
+      <span class="topbar-title" id="page-title">Nodes</span>
+      <span class="spacer"></span>
+      <span class="node-badge" id="node-badge"></span>
+      <span id="node-name-display" style="font-size:13px;color:var(--text-secondary)"></span>
+    </div>
 
-  <!-- Nodes Panel -->
-  <div class="panel active" id="panel-nodes">
-    <div class="card">
-      <h3>Connected Peers</h3>
-      <ul class="peer-list" id="peer-list">
-        <li class="loading">Loading...</li>
-      </ul>
-    </div>
-    <div class="card">
-      <h3>Connect to Node</h3>
-      <div class="form-row">
-        <input id="cl-name" placeholder="Name" style="width:100px">
-        <input id="cl-addr" placeholder="host:port" style="width:180px">
-        <input id="cl-pass" placeholder="Password" type="password" style="width:140px">
-        <input id="cl-bw" placeholder="Bandwidth (B/s)" style="width:120px" type="number">
-        <button class="primary" onclick="addClient()">Connect</button>
+    <div class="content">
+      <!-- Nodes Page -->
+      <div class="page active" id="page-nodes">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Connected Peers</span>
+            <span class="card-count" id="peer-count">0</span>
+          </div>
+          <div id="peer-list"><div class="empty">Loading...</div></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">Connect to Node</span></div>
+          <div class="form-row">
+            <div class="form-group"><label>Name</label><input id="cl-name" placeholder="e.g. us-west" style="width:120px"></div>
+            <div class="form-group"><label>Address</label><input id="cl-addr" placeholder="host:port" style="width:180px"></div>
+            <div class="form-group"><label>Password</label><input id="cl-pass" placeholder="Password" type="password" style="width:150px"></div>
+            <div class="form-group"><label>Bandwidth</label><input id="cl-bw" placeholder="B/s (optional)" type="number" style="width:120px"></div>
+            <div class="form-group"><label>&nbsp;</label><button class="btn-primary" onclick="addClient()">+ Connect</button></div>
+          </div>
+        </div>
       </div>
-    </div>
-  </div>
 
-  <!-- Proxies Panel -->
-  <div class="panel" id="panel-proxies">
-    <div class="card">
-      <h3>Proxy Instances</h3>
-      <div id="proxy-list">
-        <div class="loading">Loading...</div>
+      <!-- Proxies Page -->
+      <div class="page" id="page-proxies" style="display:none">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Proxy Instances</span>
+            <span class="card-count" id="proxy-count">0</span>
+          </div>
+          <div id="proxy-list"><div class="empty">Loading...</div></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">Add Proxy</span></div>
+          <div class="form-row">
+            <div class="form-group"><label>ID</label><input id="px-id" placeholder="e.g. jp-exit" style="width:120px"></div>
+            <div class="form-group"><label>Protocol</label>
+              <select id="px-proto" style="width:100px"><option value="socks5">SOCKS5</option></select>
+            </div>
+            <div class="form-group"><label>Listen</label><input id="px-listen" placeholder="0.0.0.0:1080" style="width:160px"></div>
+            <div class="form-group"><label>Exit via</label><input id="px-exit" placeholder="e.g. au/jp" style="width:160px"></div>
+            <div class="form-group"><label>&nbsp;</label><button class="btn-primary" onclick="addProxy()">+ Add</button></div>
+          </div>
+        </div>
       </div>
-    </div>
-    <div class="card">
-      <h3>Add Proxy</h3>
-      <div class="form-row">
-        <input id="px-id" placeholder="ID" style="width:100px">
-        <select id="px-proto" style="width:100px">
-          <option value="socks5">SOCKS5</option>
-        </select>
-        <input id="px-listen" placeholder="0.0.0.0:1080" style="width:160px">
-        <input id="px-exit" placeholder="Exit via (e.g. au/jp)" style="width:180px">
-        <button class="primary" onclick="addProxy()">Add</button>
-      </div>
-    </div>
-  </div>
 
-  <!-- Settings Panel -->
-  <div class="panel" id="panel-settings">
-    <div class="card">
-      <h3>Change Credentials</h3>
-      <div class="form-col">
-        <input id="set-cur-pass" placeholder="Current password" type="password" style="width:260px">
-        <input id="set-new-user" placeholder="New username (optional)" style="width:260px">
-        <input id="set-new-pass" placeholder="New password" type="password" style="width:260px">
-        <input id="set-confirm-pass" placeholder="Confirm new password" type="password" style="width:260px">
-        <div id="set-error" class="error-msg"></div>
-        <div id="set-ok" class="ok-msg"></div>
-        <button class="primary" onclick="changePassword()">Update</button>
+      <!-- Settings Page -->
+      <div class="page" id="page-settings" style="display:none">
+        <div class="card">
+          <div class="card-header"><span class="card-title">Credentials</span></div>
+          <div class="form-col" style="max-width:320px">
+            <div class="form-group"><label>Current Password</label><input id="set-cur-pass" type="password"></div>
+            <div class="form-group"><label>New Username (optional)</label><input id="set-new-user"></div>
+            <div class="form-group"><label>New Password</label><input id="set-new-pass" type="password"></div>
+            <div class="form-group"><label>Confirm Password</label><input id="set-confirm-pass" type="password"></div>
+            <div id="set-error" class="msg-error"></div>
+            <div id="set-ok" class="msg-ok"></div>
+            <button class="btn-primary" onclick="changePassword()">Update Credentials</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">Web UI</span><span class="badge badge-muted">restart required</span></div>
+          <div class="form-col" style="max-width:320px">
+            <div class="form-group"><label>Listen Address</label><input id="ui-listen" placeholder="0.0.0.0:5565"></div>
+            <div class="form-group"><label>Base Path</label><input id="ui-basepath" placeholder="/scale"></div>
+            <div id="ui-error" class="msg-error"></div>
+            <div id="ui-ok" class="msg-ok"></div>
+            <button class="btn-primary" onclick="updateUISettings()">Save</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">hy2 Server</span></div>
+          <div id="server-info" class="empty">Loading...</div>
+        </div>
       </div>
-    </div>
-    <div class="card">
-      <h3>UI Settings <span style="font-size:11px;color:var(--dim);text-transform:none">(requires restart)</span></h3>
-      <div class="form-col">
-        <label style="font-size:12px;color:var(--dim)">Listen Address</label>
-        <input id="ui-listen" placeholder="0.0.0.0:5565" style="width:260px">
-        <label style="font-size:12px;color:var(--dim)">Base Path</label>
-        <input id="ui-basepath" placeholder="/scale" style="width:260px">
-        <div id="ui-error" class="error-msg"></div>
-        <div id="ui-ok" class="ok-msg"></div>
-        <button class="primary" onclick="updateUISettings()">Save</button>
-      </div>
-    </div>
-    <div class="card">
-      <h3>hy2 Server</h3>
-      <div id="server-info" style="font-size:13px;color:var(--dim)">Loading...</div>
     </div>
   </div>
 </div>
