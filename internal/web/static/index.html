@@ -162,20 +162,15 @@
     </div>
     <div class="modal-body" style="padding-top:16px">
       <div class="form-col">
-        <div class="form-grid">
-          <div class="form-group"><label>Node ID</label><input id="self-nodeid"></div>
-          <div class="form-group"><label>Display Name</label><input id="self-name"></div>
-        </div>
-        <div class="form-group">
-          <label>Exit Node</label>
-          <label class="toggle" style="margin-top:4px"><input type="checkbox" id="self-exit"><span class="slider"></span></label>
-        </div>
+        <div class="form-group"><label>Node ID</label><input id="self-nodeid"></div>
         <div class="section-divider">hy2 Server <span class="badge badge-muted" style="margin-left:4px">restart required</span></div>
         <div class="form-grid">
           <div class="form-group"><label>Listen (UDP)</label><input id="self-srv-listen" placeholder="0.0.0.0:5565"></div>
           <div class="form-group"><label>Password</label><input id="self-srv-pass" type="password"></div>
-          <div class="form-group"><label>TLS Cert Path</label><input id="self-srv-cert" placeholder="/data/tls/xxx.crt"></div>
-          <div class="form-group"><label>TLS Key Path</label><input id="self-srv-key" placeholder="/data/tls/xxx.key"></div>
+        </div>
+        <div class="form-group">
+          <label>TLS Certificate</label>
+          <select id="self-srv-tls"><option value="">Self-signed (auto)</option></select>
         </div>
         <div class="msg-error" id="self-error"></div>
         <div class="msg-ok" id="self-ok"></div>

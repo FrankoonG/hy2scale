@@ -427,16 +427,17 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 
 	// Self node at top
 	selfServer := ""
+	selfDisabled := cfg.Server == nil || cfg.Server.Listen == ""
 	if cfg.Server != nil {
 		selfServer = cfg.Server.Listen
 	}
 	result := make([]treeNode, 0, len(names)+1)
 	result = append(result, treeNode{
-		Name:      cfg.Name,
+		Name:      cfg.NodeID,
 		Addr:      selfServer,
-		ExitNode:  cfg.ExitNode,
 		Direction: "local",
 		Connected: true,
+		Disabled:  selfDisabled,
 		IsSelf:    true,
 		LatencyMs: 0,
 	})
