@@ -22,10 +22,27 @@ import (
 )
 
 type ClientEntry struct {
-	Name      string `yaml:"name" json:"name"`
-	Addr      string `yaml:"addr" json:"addr"`
-	Password  string `yaml:"password" json:"password"`
-	Bandwidth int    `yaml:"bandwidth" json:"bandwidth"`
+	Name     string `yaml:"name" json:"name"`
+	Addr     string `yaml:"addr" json:"addr"`
+	Password string `yaml:"password" json:"password"`
+
+	// TLS
+	SNI      string `yaml:"sni,omitempty" json:"sni"`
+	Insecure bool   `yaml:"insecure" json:"insecure"`
+	CA       string `yaml:"ca,omitempty" json:"ca"` // PEM content or path
+
+	// Bandwidth (bytes/sec)
+	MaxTx int `yaml:"max_tx,omitempty" json:"max_tx"`
+	MaxRx int `yaml:"max_rx,omitempty" json:"max_rx"`
+
+	// QUIC
+	InitStreamWindow int `yaml:"init_stream_window,omitempty" json:"init_stream_window"`
+	MaxStreamWindow  int `yaml:"max_stream_window,omitempty" json:"max_stream_window"`
+	InitConnWindow   int `yaml:"init_conn_window,omitempty" json:"init_conn_window"`
+	MaxConnWindow    int `yaml:"max_conn_window,omitempty" json:"max_conn_window"`
+
+	// Misc
+	FastOpen bool `yaml:"fast_open,omitempty" json:"fast_open"`
 }
 
 type PeerConfig struct {
@@ -313,27 +330,64 @@ func (a *App) connectLoop(ctx context.Context, cl ClientEntry) {
 
 func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 	addr, _ := net.ResolveUDPAddr("udp", cl.Addr)
-	bw := uint64(125000000)
-	if cl.Bandwidth > 0 {
-		bw = uint64(cl.Bandwidth)
+
+	// TLS
+	tlsCfg := hyclient.TLSConfig{
+		InsecureSkipVerify: cl.Insecure,
+		ServerName:         cl.SNI,
 	}
+	if tlsCfg.ServerName == "" {
+		tlsCfg.ServerName = "hy2scale"
+	}
+	if cl.CA != "" {
+		pool := x509.NewCertPool()
+		pool.AppendCertsFromPEM([]byte(cl.CA))
+		tlsCfg.RootCAs = pool
+	}
+
+	// Bandwidth
+	maxTx := uint64(125000000) // 1Gbps default
+	maxRx := uint64(125000000)
+	if cl.MaxTx > 0 {
+		maxTx = uint64(cl.MaxTx)
+	}
+	if cl.MaxRx > 0 {
+		maxRx = uint64(cl.MaxRx)
+	}
+
+	// QUIC windows
+	isw := uint64(67108864)  // 64MB
+	msw := uint64(67108864)
+	icw := uint64(134217728) // 128MB
+	mcw := uint64(134217728)
+	if cl.InitStreamWindow > 0 {
+		isw = uint64(cl.InitStreamWindow)
+	}
+	if cl.MaxStreamWindow > 0 {
+		msw = uint64(cl.MaxStreamWindow)
+	}
+	if cl.InitConnWindow > 0 {
+		icw = uint64(cl.InitConnWindow)
+	}
+	if cl.MaxConnWindow > 0 {
+		mcw = uint64(cl.MaxConnWindow)
+	}
+
 	c, _, err := hyclient.NewClient(&hyclient.Config{
 		ServerAddr: addr,
 		Auth:       cl.Password,
-		TLSConfig: hyclient.TLSConfig{
-			InsecureSkipVerify: true,
-			ServerName:         "hy2scale",
-		},
+		TLSConfig:  tlsCfg,
 		QUICConfig: hyclient.QUICConfig{
-			InitialStreamReceiveWindow:     67108864,
-			MaxStreamReceiveWindow:         67108864,
-			InitialConnectionReceiveWindow: 134217728,
-			MaxConnectionReceiveWindow:     134217728,
+			InitialStreamReceiveWindow:     isw,
+			MaxStreamReceiveWindow:         msw,
+			InitialConnectionReceiveWindow: icw,
+			MaxConnectionReceiveWindow:     mcw,
 		},
 		BandwidthConfig: hyclient.BandwidthConfig{
-			MaxTx: bw,
-			MaxRx: bw,
+			MaxTx: maxTx,
+			MaxRx: maxRx,
 		},
+		FastOpen: cl.FastOpen,
 	})
 	if err != nil {
 		return err

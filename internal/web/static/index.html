@@ -23,8 +23,7 @@
 
 <!-- App -->
 <div id="app" class="app" style="display:none">
-  <!-- Sidebar -->
-  <aside class="sidebar" id="sidebar">
+  <aside class="sidebar">
     <div class="sidebar-header">
       <div class="logo">H</div>
       <h1>hy2scale</h1>
@@ -50,7 +49,6 @@
     </nav>
   </aside>
 
-  <!-- Main -->
   <div class="main">
     <div class="topbar">
       <span class="topbar-title" id="page-title">Nodes</span>
@@ -64,20 +62,12 @@
       <div class="page active" id="page-nodes">
         <div class="card">
           <div class="card-header">
-            <span class="card-title">Connected Peers</span>
+            <span class="card-title">Network Topology</span>
             <span class="card-count" id="peer-count">0</span>
+            <span class="spacer"></span>
+            <button class="btn-primary btn-sm" onclick="openAddDialog()">+ Add Node</button>
           </div>
-          <div id="peer-list"><div class="empty">Loading...</div></div>
-        </div>
-        <div class="card">
-          <div class="card-header"><span class="card-title">Connect to Node</span></div>
-          <div class="form-row">
-            <div class="form-group"><label>Name</label><input id="cl-name" placeholder="e.g. us-west" style="width:120px"></div>
-            <div class="form-group"><label>Address</label><input id="cl-addr" placeholder="host:port" style="width:180px"></div>
-            <div class="form-group"><label>Password</label><input id="cl-pass" placeholder="Password" type="password" style="width:150px"></div>
-            <div class="form-group"><label>Bandwidth</label><input id="cl-bw" placeholder="B/s (optional)" type="number" style="width:120px"></div>
-            <div class="form-group"><label>&nbsp;</label><button class="btn-primary" onclick="addClient()">+ Connect</button></div>
-          </div>
+          <div id="topology-tree"><div class="empty">Loading...</div></div>
         </div>
       </div>
 
@@ -87,20 +77,10 @@
           <div class="card-header">
             <span class="card-title">Proxy Instances</span>
             <span class="card-count" id="proxy-count">0</span>
+            <span class="spacer"></span>
+            <button class="btn-primary btn-sm" onclick="openProxyDialog()">+ Add Proxy</button>
           </div>
           <div id="proxy-list"><div class="empty">Loading...</div></div>
-        </div>
-        <div class="card">
-          <div class="card-header"><span class="card-title">Add Proxy</span></div>
-          <div class="form-row">
-            <div class="form-group"><label>ID</label><input id="px-id" placeholder="e.g. jp-exit" style="width:120px"></div>
-            <div class="form-group"><label>Protocol</label>
-              <select id="px-proto" style="width:100px"><option value="socks5">SOCKS5</option></select>
-            </div>
-            <div class="form-group"><label>Listen</label><input id="px-listen" placeholder="0.0.0.0:1080" style="width:160px"></div>
-            <div class="form-group"><label>Exit via</label><input id="px-exit" placeholder="e.g. au/jp" style="width:160px"></div>
-            <div class="form-group"><label>&nbsp;</label><button class="btn-primary" onclick="addProxy()">+ Add</button></div>
-          </div>
         </div>
       </div>
 
@@ -129,10 +109,92 @@
           </div>
         </div>
         <div class="card">
-          <div class="card-header"><span class="card-title">hy2 Server</span></div>
-          <div id="server-info" class="empty">Loading...</div>
+          <div class="card-header"><span class="card-title">hy2 Server (TLS)</span></div>
+          <div id="server-tls-info" class="empty">Loading...</div>
         </div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- Add Node Dialog -->
+<div class="modal-overlay" id="add-node-modal" style="display:none" onclick="if(event.target===this)closeAddDialog()">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Add Node Connection</h2>
+      <button class="btn-icon" onclick="closeAddDialog()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-tabs">
+        <div class="modal-tab active" data-mtab="basic" onclick="switchModalTab(this)">Basic</div>
+        <div class="modal-tab" data-mtab="tls" onclick="switchModalTab(this)">TLS</div>
+        <div class="modal-tab" data-mtab="quic" onclick="switchModalTab(this)">QUIC</div>
+      </div>
+
+      <div class="modal-panel active" id="mtab-basic">
+        <div class="form-grid">
+          <div class="form-group"><label>Name *</label><input id="add-name" placeholder="e.g. jp-node"></div>
+          <div class="form-group"><label>Address *</label><input id="add-addr" placeholder="host:port"></div>
+          <div class="form-group"><label>Password *</label><input id="add-pass" type="password" placeholder="Auth password"></div>
+          <div class="form-group">
+            <label>Fast Open</label>
+            <label class="toggle" style="margin-top:4px"><input type="checkbox" id="add-fastopen"><span class="slider"></span></label>
+          </div>
+          <div class="form-group"><label>Upload Limit (B/s)</label><input id="add-tx" type="number" placeholder="0 = 1Gbps default"></div>
+          <div class="form-group"><label>Download Limit (B/s)</label><input id="add-rx" type="number" placeholder="0 = 1Gbps default"></div>
+        </div>
+      </div>
+
+      <div class="modal-panel" id="mtab-tls">
+        <div class="form-grid">
+          <div class="form-group"><label>SNI (Server Name)</label><input id="add-sni" placeholder="auto: hy2scale"></div>
+          <div class="form-group">
+            <label>Skip Verify</label>
+            <label class="toggle" style="margin-top:4px"><input type="checkbox" id="add-insecure" checked><span class="slider"></span></label>
+          </div>
+        </div>
+        <div class="form-group" style="margin-top:12px">
+          <label>CA Certificate (PEM)</label>
+          <textarea id="add-ca" placeholder="Paste CA cert PEM here (optional)..."></textarea>
+        </div>
+      </div>
+
+      <div class="modal-panel" id="mtab-quic">
+        <div class="form-grid">
+          <div class="form-group"><label>Init Stream Window</label><input id="add-isw" type="number" placeholder="67108864 (64MB)"></div>
+          <div class="form-group"><label>Max Stream Window</label><input id="add-msw" type="number" placeholder="67108864 (64MB)"></div>
+          <div class="form-group"><label>Init Conn Window</label><input id="add-icw" type="number" placeholder="134217728 (128MB)"></div>
+          <div class="form-group"><label>Max Conn Window</label><input id="add-mcw" type="number" placeholder="134217728 (128MB)"></div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button onclick="closeAddDialog()">Cancel</button>
+      <button class="btn-primary" onclick="submitAddNode()">Connect</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Proxy Dialog -->
+<div class="modal-overlay" id="add-proxy-modal" style="display:none" onclick="if(event.target===this)closeProxyDialog()">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <h2>Add Proxy</h2>
+      <button class="btn-icon" onclick="closeProxyDialog()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-group"><label>ID *</label><input id="px-id" placeholder="e.g. jp-exit"></div>
+        <div class="form-group"><label>Protocol</label>
+          <select id="px-proto"><option value="socks5">SOCKS5</option></select>
+        </div>
+        <div class="form-group"><label>Listen *</label><input id="px-listen" placeholder="0.0.0.0:1080"></div>
+        <div class="form-group"><label>Exit via</label><input id="px-exit" placeholder="e.g. au/jp"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button onclick="closeProxyDialog()">Cancel</button>
+      <button class="btn-primary" onclick="submitAddProxy()">Add</button>
     </div>
   </div>
 </div>
