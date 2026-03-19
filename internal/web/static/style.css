@@ -157,6 +157,8 @@ button.btn-icon:hover{color:var(--red);background:var(--red-bg)}
 .login-box p{font-size:13px;color:var(--text-muted);margin-bottom:24px}
 .login-box input{width:100%;margin-bottom:12px}
 .login-box button{margin-top:4px}
+.remember-me{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary);cursor:pointer;margin-bottom:8px;justify-content:center}
+.remember-me input{width:auto;margin:0}
 
 /* ── Modal ── */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;z-index:200}
