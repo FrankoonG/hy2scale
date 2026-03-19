@@ -37,6 +37,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
         Proxies
       </a>
+      <a class="nav-item" data-page="tls" onclick="switchPage('tls')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        TLS
+      </a>
       <a class="nav-item" data-page="settings" onclick="switchPage('settings')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         Settings
@@ -84,6 +88,20 @@
         </div>
       </div>
 
+      <!-- TLS Page -->
+      <div class="page" id="page-tls" style="display:none">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Certificates</span>
+            <span class="card-count" id="cert-count">0</span>
+            <span class="spacer"></span>
+            <button class="btn-primary btn-sm" onclick="openGenCertDialog()">Generate</button>
+            <button class="btn-sm" onclick="openImportCertDialog()" style="margin-left:4px">Import</button>
+          </div>
+          <div id="cert-list"><div class="empty">Loading...</div></div>
+        </div>
+      </div>
+
       <!-- Settings Page -->
       <div class="page" id="page-settings" style="display:none">
         <div class="card">
@@ -107,10 +125,6 @@
             <div id="ui-ok" class="msg-ok"></div>
             <button class="btn-primary" onclick="updateUISettings()">Save</button>
           </div>
-        </div>
-        <div class="card">
-          <div class="card-header"><span class="card-title">hy2 Server (TLS)</span></div>
-          <div id="server-tls-info" class="empty">Loading...</div>
         </div>
       </div>
     </div>
@@ -195,6 +209,52 @@
     <div class="modal-footer">
       <button onclick="closeProxyDialog()">Cancel</button>
       <button class="btn-primary" onclick="submitAddProxy()">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- Generate Cert Dialog -->
+<div class="modal-overlay" id="gen-cert-modal" style="display:none" onclick="if(event.target===this)closeGenCertDialog()">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <h2>Generate Certificate</h2>
+      <button class="btn-icon" onclick="closeGenCertDialog()">&#10005;</button>
+    </div>
+    <div class="modal-body" style="padding-top:16px">
+      <div class="form-col">
+        <div class="form-group"><label>ID *</label><input id="gen-id" placeholder="e.g. my-server"></div>
+        <div class="form-group"><label>Display Name</label><input id="gen-name" placeholder="optional"></div>
+        <div class="form-group"><label>Domains * (comma separated)</label><input id="gen-domains" placeholder="e.g. example.com, *.example.com"></div>
+        <div class="form-group"><label>Validity (days)</label><input id="gen-days" type="number" value="365"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button onclick="closeGenCertDialog()">Cancel</button>
+      <button class="btn-primary" onclick="submitGenCert()">Generate</button>
+    </div>
+  </div>
+</div>
+
+<!-- Import Cert Dialog -->
+<div class="modal-overlay" id="import-cert-modal" style="display:none" onclick="if(event.target===this)closeImportCertDialog()">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header">
+      <h2>Import Certificate</h2>
+      <button class="btn-icon" onclick="closeImportCertDialog()">&#10005;</button>
+    </div>
+    <div class="modal-body" style="padding-top:16px">
+      <div class="form-col">
+        <div class="form-grid">
+          <div class="form-group"><label>ID *</label><input id="imp-id" placeholder="e.g. my-cert"></div>
+          <div class="form-group"><label>Display Name</label><input id="imp-name" placeholder="optional"></div>
+        </div>
+        <div class="form-group"><label>Certificate (PEM) *</label><textarea id="imp-cert" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----" style="min-height:120px"></textarea></div>
+        <div class="form-group"><label>Private Key (PEM, optional)</label><textarea id="imp-key" placeholder="-----BEGIN EC PRIVATE KEY-----&#10;...&#10;-----END EC PRIVATE KEY-----" style="min-height:100px"></textarea></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button onclick="closeImportCertDialog()">Cancel</button>
+      <button class="btn-primary" onclick="submitImportCert()">Import</button>
     </div>
   </div>
 </div>

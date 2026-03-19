@@ -83,6 +83,7 @@ type proxyHandle struct {
 type App struct {
 	store        *ConfigStore
 	node         *relay.Node
+	tls          *TLSStore
 	appCtx       context.Context
 	mu           sync.Mutex
 	clientCancel map[string]context.CancelFunc
@@ -101,9 +102,15 @@ func New(cfgPath, dataDir string) (*App, error) {
 		persistPath = dataDir + "/config.yaml"
 	}
 
+	var tlsStore *TLSStore
+	if dataDir != "" {
+		tlsStore = NewTLSStore(dataDir)
+	}
+
 	return &App{
 		store:        NewConfigStore(cfg, persistPath),
 		node:         relay.NewNode(cfg.Name, cfg.ExitNode),
+		tls:          tlsStore,
 		clientCancel: make(map[string]context.CancelFunc),
 		proxyHandles: make(map[string]*proxyHandle),
 	}, nil
@@ -111,6 +118,7 @@ func New(cfgPath, dataDir string) (*App, error) {
 
 func (a *App) Store() *ConfigStore { return a.store }
 func (a *App) Node() *relay.Node   { return a.node }
+func (a *App) TLS() *TLSStore     { return a.tls }
 
 func (a *App) Run(ctx context.Context) error {
 	a.appCtx = ctx

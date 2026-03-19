@@ -15,14 +15,27 @@ function api(path, opts) {
 
 function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
-// ── Navigation ──
-function switchPage(name) {
+// ── Navigation / Router ──
+const pageTitles = { nodes: 'Nodes', proxies: 'Proxies', tls: 'TLS', settings: 'Settings' };
+
+function switchPage(name, push) {
+  if (!pageTitles[name]) name = 'nodes';
   $$('.nav-item[data-page]').forEach(n => n.classList.toggle('active', n.dataset.page === name));
   $$('.page').forEach(p => p.style.display = 'none');
   $(`#page-${name}`).style.display = '';
-  $('#page-title').textContent = { nodes: 'Nodes', proxies: 'Proxies', settings: 'Settings' }[name];
+  $('#page-title').textContent = pageTitles[name];
+  if (push !== false) history.pushState(null, '', basePath + '/' + name);
   if (name === 'settings') loadSettings();
+  if (name === 'tls') refreshCerts();
 }
+
+function routeFromURL() {
+  const path = location.pathname.replace(basePath, '').replace(/^\/+/, '');
+  const page = path.split('/')[0] || 'nodes';
+  switchPage(page, false);
+}
+
+window.addEventListener('popstate', routeFromURL);
 
 // ── Auth ──
 function showLogin() { $('#login-screen').style.display = ''; $('#app').style.display = 'none'; }
@@ -221,12 +234,8 @@ async function removeProxy(id) {
 // ── Settings ──
 async function loadSettings() {
   try {
-    const [ui, node] = await Promise.all([api('/settings/ui'), api('/node')]);
+    const ui = await api('/settings/ui');
     $('#ui-listen').value = ui.listen || ''; $('#ui-basepath').value = ui.base_path || '';
-    const si = $('#server-tls-info');
-    si.innerHTML = node.server
-      ? `<div style="font-size:13px;text-align:left"><div style="margin-bottom:8px">Listening on <code style="background:var(--bg);padding:2px 6px;border-radius:4px">${esc(node.server.listen)}</code> (UDP)</div><div style="color:var(--text-muted)">TLS: ${node.server.tls_cert ? '<span class="badge badge-green">custom cert</span>' : '<span class="badge badge-orange">self-signed</span>'}</div></div>`
-      : '<div style="font-size:13px">No hy2 server — client-only node</div>';
   } catch (e) {}
 }
 async function changePassword() {
@@ -251,5 +260,62 @@ async function updateUISettings() {
   } catch (e) { $('#ui-error').textContent = String(e); }
 }
 
+// ── TLS ──
+async function refreshCerts() {
+  const certs = await api('/tls');
+  const el = $('#cert-list');
+  $('#cert-count').textContent = certs?.length || 0;
+  if (!certs?.length) {
+    el.innerHTML = '<div class="empty">No certificates. Click <b>Generate</b> to create a self-signed cert or <b>Import</b> to add an existing one.</div>';
+    return;
+  }
+  el.innerHTML = `<table class="peer-table"><thead><tr>
+    <th>Name</th><th>Subject</th><th>Issuer</th><th>Expires</th><th>Key</th><th></th>
+  </tr></thead><tbody>${certs.map(c => `<tr>
+    <td><b>${esc(c.name)}</b><span class="peer-addr-sub">${esc(c.id)}</span></td>
+    <td>${esc(c.subject)}</td>
+    <td>${esc(c.issuer)}${c.is_ca ? ' <span class="badge badge-blue">CA</span>' : ''}</td>
+    <td><span style="font-family:var(--mono);font-size:12px">${esc(c.not_after)}</span></td>
+    <td>${c.key_file ? '<span class="badge badge-green">yes</span>' : '<span class="badge badge-muted">no</span>'}</td>
+    <td style="text-align:right"><button class="act-btn danger" onclick="deleteCert('${esc(c.id)}')">Delete</button></td>
+  </tr>`).join('')}</tbody></table>`;
+}
+
+function openGenCertDialog() { $('#gen-cert-modal').style.display = ''; }
+function closeGenCertDialog() { $('#gen-cert-modal').style.display = 'none'; }
+function openImportCertDialog() { $('#import-cert-modal').style.display = ''; }
+function closeImportCertDialog() { $('#import-cert-modal').style.display = 'none'; }
+
+async function submitGenCert() {
+  const id = $('#gen-id').value.trim(), name = $('#gen-name').value.trim(),
+    domains = $('#gen-domains').value.split(',').map(s => s.trim()).filter(Boolean),
+    days = parseInt($('#gen-days').value) || 365;
+  if (!id || !domains.length) return alert('ID and at least one domain are required');
+  try {
+    await api('/tls/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name, domains, days }) });
+    closeGenCertDialog();
+    ['gen-id','gen-name','gen-domains'].forEach(x => $(`#${x}`).value = '');
+    $('#gen-days').value = '365';
+    refreshCerts();
+  } catch (e) { alert(e); }
+}
+
+async function submitImportCert() {
+  const id = $('#imp-id').value.trim(), name = $('#imp-name').value.trim(),
+    cert = $('#imp-cert').value.trim(), key = $('#imp-key').value.trim();
+  if (!id || !cert) return alert('ID and certificate PEM are required');
+  try {
+    await api('/tls/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name, cert, key }) });
+    closeImportCertDialog();
+    ['imp-id','imp-name','imp-cert','imp-key'].forEach(x => $(`#${x}`).value = '');
+    refreshCerts();
+  } catch (e) { alert(e); }
+}
+
+async function deleteCert(id) {
+  if (!confirm(`Delete certificate "${id}"?`)) return;
+  try { await api(`/tls/${id}`, { method: 'DELETE' }); refreshCerts(); } catch (e) { alert(e); }
+}
+
 // ── Init ──
-if (sessionStorage.getItem('token')) { showApp(); refresh(); } else { showLogin(); }
+if (sessionStorage.getItem('token')) { showApp(); routeFromURL(); refresh(); } else { showLogin(); }
