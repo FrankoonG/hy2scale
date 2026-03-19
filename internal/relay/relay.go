@@ -72,6 +72,12 @@ type Node struct {
 	nested   map[string]bool // peer name → nested discovery enabled
 }
 
+// Name returns the node's name.
+func (n *Node) Name() string { return n.name }
+
+// IsExit returns whether this node is an exit node.
+func (n *Node) IsExit() bool { return n.exit }
+
 // NewNode creates a node.
 func NewNode(name string, exitNode bool) *Node {
 	return &Node{

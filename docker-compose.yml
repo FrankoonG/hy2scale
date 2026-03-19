@@ -7,3 +7,7 @@ services:
     network_mode: host
     volumes:
       - ./configs/${NODE:-local}.yaml:/etc/hy2scale/config.yaml:ro
+      - hy2scale-data:/data
+
+volumes:
+  hy2scale-data:
