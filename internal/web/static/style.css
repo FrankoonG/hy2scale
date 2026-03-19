@@ -72,6 +72,10 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 .peer-name-cell{font-weight:600}
 .peer-addr-sub{font-family:var(--mono);font-size:11px;color:var(--text-muted);display:block;margin-top:1px}
 
+/* ── Self row ── */
+.self-row td{background:var(--primary-light)}
+.self-row .peer-name-cell{color:var(--primary)}
+
 /* ── Nested sub-rows ── */
 .sub-row td{padding:8px 10px;background:var(--bg);font-size:13px}
 .sub-row .peer-name-cell{font-weight:500}

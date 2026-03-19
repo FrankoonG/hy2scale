@@ -114,6 +114,7 @@ function latencyHTML(ms) {
 }
 
 function dirHTML(dir) {
+  if (dir === 'local') return '<span class="badge badge-muted">LOCAL</span>';
   return dir === 'inbound'
     ? '<span class="badge badge-blue">IN</span>'
     : '<span class="badge badge-orange">OUT</span>';
@@ -121,6 +122,22 @@ function dirHTML(dir) {
 
 function parentRowHTML(n) {
   const exit = n.exit_node ? ' <span class="badge badge-green">EXIT</span>' : '';
+
+  if (n.is_self) {
+    return `<tr class="self-row">
+      <td class="col-latency"><span class="latency latency-good">local</span></td>
+      <td class="col-dir">${dirHTML('local')}</td>
+      <td class="col-name">
+        <span class="peer-name-cell">${esc(n.name)}</span>${exit}
+        ${n.addr ? `<span class="peer-addr-sub">${esc(n.addr)} (UDP)</span>` : '<span class="peer-addr-sub">no hy2 server</span>'}
+      </td>
+      <td class="col-nested"></td>
+      <td class="col-actions"><div class="act-group">
+        <button class="act-btn edit" onclick="openEditSelf()">Edit</button>
+      </div></td>
+    </tr>`;
+  }
+
   const nested = n.direction === 'outbound'
     ? `<label class="toggle"><input type="checkbox" ${n.nested ? 'checked' : ''} onchange="toggleNested('${esc(n.name)}',this.checked)"><span class="slider"></span></label>`
     : '';
@@ -295,6 +312,53 @@ async function submitAddNode() {
     closeAddDialog();
     lastTopoJSON = ''; setTimeout(refreshTopology, 1000);
   } catch (e) { alert(e); }
+}
+
+// ── Edit Self Modal ──
+async function openEditSelf() {
+  try {
+    const n = await api('/node');
+    $('#self-nodeid').value = n.node_id || '';
+    $('#self-name').value = n.name || '';
+    $('#self-exit').checked = !!n.exit_node;
+    $('#self-srv-listen').value = n.server?.listen || '';
+    $('#self-srv-pass').value = n.server?.password || '';
+    $('#self-srv-cert').value = n.server?.tls_cert || '';
+    $('#self-srv-key').value = n.server?.tls_key || '';
+    $('#self-error').textContent = '';
+    $('#self-ok').textContent = '';
+    $('#edit-self-modal').style.display = '';
+  } catch (e) { alert(e); }
+}
+function closeEditSelf() { $('#edit-self-modal').style.display = 'none'; }
+
+async function submitEditSelf() {
+  $('#self-error').textContent = ''; $('#self-ok').textContent = '';
+  const nodeId = $('#self-nodeid').value.trim();
+  const name = $('#self-name').value.trim();
+  const exitNode = $('#self-exit').checked;
+  const srvListen = $('#self-srv-listen').value.trim();
+  const srvPass = $('#self-srv-pass').value.trim();
+  const srvCert = $('#self-srv-cert').value.trim();
+  const srvKey = $('#self-srv-key').value.trim();
+
+  if (!nodeId) { $('#self-error').textContent = 'Node ID is required'; return; }
+
+  const body = { node_id: nodeId, name: name || nodeId, exit_node: exitNode };
+  if (srvListen || srvPass) {
+    body.server = { listen: srvListen || '0.0.0.0:5565', password: srvPass, tls_cert: srvCert, tls_key: srvKey };
+  } else {
+    body.server = { listen: '', password: '' }; // clear server
+  }
+
+  try {
+    const r = await api('/node', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    $('#self-ok').textContent = 'Saved. Server changes require restart.';
+    // Update topbar
+    $('#node-badge').textContent = nodeId;
+    $('#node-name-display').textContent = name !== nodeId ? name : '';
+    lastTopoJSON = ''; refreshTopology();
+  } catch (e) { $('#self-error').textContent = String(e); }
 }
 
 // ── Proxies ──

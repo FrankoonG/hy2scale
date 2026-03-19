@@ -94,8 +94,14 @@ type Node struct {
 // Name returns the node's name.
 func (n *Node) Name() string { return n.name }
 
+// SetName updates the node's name.
+func (n *Node) SetName(name string) { n.name = name }
+
 // IsExit returns whether this node is an exit node.
 func (n *Node) IsExit() bool { return n.exit }
+
+// SetExit updates the exit node flag.
+func (n *Node) SetExit(exit bool) { n.exit = exit }
 
 // GetStats returns current traffic statistics.
 func (n *Node) GetStats() Stats {
