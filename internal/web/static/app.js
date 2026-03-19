@@ -106,21 +106,22 @@ function parentRowHTML(n) {
 }
 
 function childRowHTML(c, isLast) {
+  const dis = isNestedDisabled(c.via, c.name);
   const exit = c.exit_node ? ' <span class="badge badge-green">EXIT</span>' : '';
   const dir = c.direction ? dirHTML(c.direction) : '';
-  const via = `<span class="badge badge-muted">via ${esc(c.via)}</span>`;
 
-  return `<tr class="sub-row">
-    <td class="col-latency">${latencyHTML(c.latency_ms)}</td>
+  return `<tr class="sub-row${dis ? ' disabled' : ''}">
+    <td class="col-latency">${dis ? latencyHTML(-1) : latencyHTML(c.latency_ms)}</td>
     <td class="col-dir">${dir}</td>
     <td class="col-name">
-      <span class="tree-branch">${isLast ? '└' : '├'}</span>
-      <span class="peer-name-cell">${esc(c.name)}</span>${exit} ${via}
+      <span class="tree-branch" aria-hidden="true">${isLast ? '└' : '├'}</span>
+      <span class="peer-name-cell">${esc(c.name)}</span>${exit}
+      <span class="peer-addr-sub">via ${esc(c.via)}</span>
     </td>
     <td class="col-nested"></td>
     <td class="col-actions">
       <div class="act-group">
-        <button class="act-btn ${c._disabled ? 'enable' : 'warn'}" onclick="toggleNestedDisable('${esc(c.via)}','${esc(c.name)}',${!c._disabled})">${c._disabled ? 'Enable' : 'Disable'}</button>
+        <button class="act-btn ${dis ? 'enable' : 'warn'}" onclick="toggleNestedDisable('${esc(c.via)}','${esc(c.name)}',${!dis})">${dis ? 'Enable' : 'Disable'}</button>
       </div>
     </td>
   </tr>`;
@@ -146,9 +147,7 @@ async function refreshTopology() {
     if (n.children?.length) {
       for (let i = 0; i < n.children.length; i++) {
         count++;
-        const c = n.children[i];
-        c._disabled = false; // TODO: persist nested disable state
-        rows += childRowHTML(c, i === n.children.length - 1);
+        rows += childRowHTML(n.children[i], i === n.children.length - 1);
       }
     }
   }
@@ -176,9 +175,14 @@ async function toggleDisable(name, disabled) {
   catch (e) { alert(e); }
 }
 
+// Nested peer disable: stop pinging/using this peer via the parent
+const nestedDisabled = JSON.parse(sessionStorage.getItem('nestedDisabled') || '{}');
+function isNestedDisabled(via, name) { return !!nestedDisabled[via + '/' + name]; }
 function toggleNestedDisable(via, name, disabled) {
-  // TODO: implement nested peer disable (exclude from routing)
-  alert(`${disabled ? 'Disable' : 'Enable'} ${name} via ${via} — not yet implemented`);
+  const key = via + '/' + name;
+  if (disabled) nestedDisabled[key] = true; else delete nestedDisabled[key];
+  sessionStorage.setItem('nestedDisabled', JSON.stringify(nestedDisabled));
+  lastTopoJSON = ''; refreshTopology();
 }
 
 async function removeClient(name) {
