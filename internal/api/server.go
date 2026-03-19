@@ -79,15 +79,21 @@ func (s *Server) Start(ctx context.Context) error {
 
 	apiMux.Handle("/api/", s.authMiddleware(authed))
 
-	// Static files with SPA fallback
+	// Static files with SPA fallback — inject basePath into index.html
 	staticFS, _ := fs.Sub(web.Static, "static")
-	indexHTML, _ := fs.ReadFile(staticFS, "index.html")
+	rawIndex, _ := fs.ReadFile(staticFS, "index.html")
+	// Inject basePath as a global so JS doesn't have to guess
+	injectedIndex := strings.Replace(string(rawIndex),
+		"<script src=\"app.js\"></script>",
+		"<script>window.__BASE__=\""+s.basePath+"\";</script><script src=\"app.js\"></script>",
+		1)
+	indexBytes := []byte(injectedIndex)
+
 	apiMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path == "" {
 			path = "index.html"
 		}
-		// Serve actual static file if it exists
 		if data, err := fs.ReadFile(staticFS, path); err == nil {
 			switch {
 			case strings.HasSuffix(path, ".css"):
@@ -100,9 +106,8 @@ func (s *Server) Start(ctx context.Context) error {
 			w.Write(data)
 			return
 		}
-		// SPA fallback: serve index.html for frontend routes
 		w.Header().Set("Content-Type", "text/html")
-		w.Write(indexHTML)
+		w.Write(indexBytes)
 	})
 
 	// Root mux — strip base path

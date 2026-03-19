@@ -1,6 +1,6 @@
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
-const basePath = location.pathname.replace(/\/$/, '');
+const basePath = window.__BASE__ || '';
 
 function api(path, opts) {
   const headers = { ...(opts?.headers || {}) };
