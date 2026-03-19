@@ -115,6 +115,11 @@ func LoadConfig(cfgPath, dataDir string) (Config, error) {
 		}}
 	}
 
+	// Default hy2 server listen to :5565 if server is configured but listen is empty
+	if cfg.Server != nil && cfg.Server.Listen == "" {
+		cfg.Server.Listen = "0.0.0.0:5565"
+	}
+
 	if cfg.Peers == nil {
 		cfg.Peers = make(map[string]PeerConfig)
 	}

@@ -45,14 +45,16 @@ type SOCKS5Config struct {
 }
 
 type Config struct {
-	NodeID   string                `yaml:"node_id" json:"node_id"`
-	Name     string                `yaml:"name" json:"name"`
-	ExitNode bool                  `yaml:"exit_node" json:"exit_node"`
-	Server   *ServerConfig         `yaml:"server" json:"server"`
-	Clients  []ClientEntry         `yaml:"clients" json:"clients"`
-	Peers    map[string]PeerConfig `yaml:"peers" json:"peers"`
-	SOCKS5   *SOCKS5Config         `yaml:"socks5,omitempty" json:"-"`
-	Proxies  []ProxyConfig         `yaml:"proxies" json:"proxies"`
+	NodeID     string                `yaml:"node_id" json:"node_id"`
+	Name       string                `yaml:"name" json:"name"`
+	ExitNode   bool                  `yaml:"exit_node" json:"exit_node"`
+	Server     *ServerConfig         `yaml:"server" json:"server"`
+	Clients    []ClientEntry         `yaml:"clients" json:"clients"`
+	Peers      map[string]PeerConfig `yaml:"peers" json:"peers"`
+	SOCKS5     *SOCKS5Config         `yaml:"socks5,omitempty" json:"-"`
+	Proxies    []ProxyConfig         `yaml:"proxies" json:"proxies"`
+	UIListen   string                `yaml:"ui_listen,omitempty" json:"ui_listen,omitempty"`
+	UIBasePath string                `yaml:"ui_base_path,omitempty" json:"ui_base_path,omitempty"`
 }
 
 type proxyHandle struct {

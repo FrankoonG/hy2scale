@@ -31,7 +31,8 @@ header h1{font-size:18px;font-weight:600}
 .toggle input:checked+.slider:before{transform:translateX(16px);background:#fff}
 .nested-peers{margin-left:24px;padding:4px 0 4px 12px;border-left:2px solid var(--border)}
 .nested-peers .peer-item{padding:4px 0}
-.form-row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.form-row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}
+.form-col{display:flex;flex-direction:column;gap:10px;margin-top:8px}
 input,select{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:4px;font-size:13px;outline:none}
 input:focus{border-color:var(--accent)}
 input::placeholder{color:var(--dim)}
@@ -41,6 +42,7 @@ button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 button.primary:hover{opacity:.85}
 button.danger{color:var(--red);border-color:transparent}
 button.danger:hover{border-color:var(--red)}
+button.full{width:100%}
 .proxy-item{display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--border)}
 .proxy-item:last-child{border-bottom:none}
 .proxy-protocol{font-family:monospace;font-size:12px;background:var(--accent-dim);padding:2px 6px;border-radius:3px;color:var(--accent)}
@@ -48,3 +50,11 @@ button.danger:hover{border-color:var(--red)}
 .proxy-exit{font-family:monospace;font-size:13px;color:var(--green)}
 .spacer{flex:1}
 .loading{color:var(--dim);font-size:13px;padding:12px}
+.error-msg{color:var(--red);font-size:13px;min-height:18px}
+.ok-msg{color:var(--green);font-size:13px;min-height:18px}
+
+/* Login */
+.login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh}
+.login-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:32px;width:320px;display:flex;flex-direction:column;gap:12px;text-align:center}
+.login-box h1{font-size:22px;margin-bottom:8px}
+.login-box input{width:100%}

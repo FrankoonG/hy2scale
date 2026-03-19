@@ -7,28 +7,42 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="container">
+
+<!-- Login -->
+<div id="login-screen" class="login-screen">
+  <div class="login-box">
+    <h1>hy2scale</h1>
+    <input id="login-user" placeholder="Username" value="admin" autocomplete="username">
+    <input id="login-pass" placeholder="Password" type="password" autocomplete="current-password">
+    <div id="login-error" class="error-msg"></div>
+    <button class="primary full" onclick="doLogin()">Login</button>
+  </div>
+</div>
+
+<!-- Main -->
+<div id="main" class="container" style="display:none">
   <header>
     <h1>hy2scale</h1>
     <span class="node-id" id="node-id"></span>
     <span id="node-name" style="color:var(--dim);font-size:13px"></span>
+    <span class="spacer"></span>
+    <button class="danger" onclick="doLogout()" style="font-size:12px">Logout</button>
   </header>
 
   <div class="tabs">
     <div class="tab active" data-tab="nodes">Nodes</div>
     <div class="tab" data-tab="proxies">Proxies</div>
+    <div class="tab" data-tab="settings">Settings</div>
   </div>
 
+  <!-- Nodes Panel -->
   <div class="panel active" id="panel-nodes">
-    <!-- Connected Peers -->
     <div class="card">
       <h3>Connected Peers</h3>
       <ul class="peer-list" id="peer-list">
         <li class="loading">Loading...</li>
       </ul>
     </div>
-
-    <!-- Add Client -->
     <div class="card">
       <h3>Connect to Node</h3>
       <div class="form-row">
@@ -41,16 +55,14 @@
     </div>
   </div>
 
+  <!-- Proxies Panel -->
   <div class="panel" id="panel-proxies">
-    <!-- Proxy List -->
     <div class="card">
       <h3>Proxy Instances</h3>
       <div id="proxy-list">
         <div class="loading">Loading...</div>
       </div>
     </div>
-
-    <!-- Add Proxy -->
     <div class="card">
       <h3>Add Proxy</h3>
       <div class="form-row">
@@ -64,7 +76,40 @@
       </div>
     </div>
   </div>
+
+  <!-- Settings Panel -->
+  <div class="panel" id="panel-settings">
+    <div class="card">
+      <h3>Change Credentials</h3>
+      <div class="form-col">
+        <input id="set-cur-pass" placeholder="Current password" type="password" style="width:260px">
+        <input id="set-new-user" placeholder="New username (optional)" style="width:260px">
+        <input id="set-new-pass" placeholder="New password" type="password" style="width:260px">
+        <input id="set-confirm-pass" placeholder="Confirm new password" type="password" style="width:260px">
+        <div id="set-error" class="error-msg"></div>
+        <div id="set-ok" class="ok-msg"></div>
+        <button class="primary" onclick="changePassword()">Update</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>UI Settings <span style="font-size:11px;color:var(--dim);text-transform:none">(requires restart)</span></h3>
+      <div class="form-col">
+        <label style="font-size:12px;color:var(--dim)">Listen Address</label>
+        <input id="ui-listen" placeholder="0.0.0.0:5565" style="width:260px">
+        <label style="font-size:12px;color:var(--dim)">Base Path</label>
+        <input id="ui-basepath" placeholder="/scale" style="width:260px">
+        <div id="ui-error" class="error-msg"></div>
+        <div id="ui-ok" class="ok-msg"></div>
+        <button class="primary" onclick="updateUISettings()">Save</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>hy2 Server</h3>
+      <div id="server-info" style="font-size:13px;color:var(--dim)">Loading...</div>
+    </div>
+  </div>
 </div>
+
 <script src="app.js"></script>
 </body>
 </html>

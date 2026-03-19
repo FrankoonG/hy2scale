@@ -14,7 +14,8 @@ import (
 
 func main() {
 	cfgPath := flag.String("config", "/etc/hy2scale/config.yaml", "config file")
-	apiAddr := flag.String("api", ":8080", "API/UI listen address")
+	apiAddr := flag.String("api", "", "API/UI listen address (default 0.0.0.0:5565)")
+	basePath := flag.String("base-path", "", "UI base path (e.g. /scale)")
 	dataDir := flag.String("data", "/data", "persistent data directory")
 	flag.Parse()
 
@@ -31,7 +32,25 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() { <-sigCh; cancel() }()
 
-	srv := api.NewServer(a, *apiAddr)
+	// Resolve API listen address and base path from config or flags
+	cfg := a.Store().Get()
+	listenAddr := "0.0.0.0:5565"
+	if cfg.UIListen != "" {
+		listenAddr = cfg.UIListen
+	}
+	if *apiAddr != "" {
+		listenAddr = *apiAddr
+	}
+
+	bp := "/scale"
+	if cfg.UIBasePath != "" {
+		bp = cfg.UIBasePath
+	}
+	if *basePath != "" {
+		bp = *basePath
+	}
+
+	srv := api.NewServer(a, listenAddr, bp)
 	go func() {
 		if err := srv.Start(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintf(os.Stderr, "api: %v\n", err)
