@@ -170,8 +170,7 @@
           <label>Exit Node</label>
           <label class="toggle" style="margin-top:4px"><input type="checkbox" id="self-exit"><span class="slider"></span></label>
         </div>
-        <hr style="border:none;border-top:1px solid var(--border-light);margin:8px 0">
-        <div style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">hy2 Server</div>
+        <div class="section-divider">hy2 Server <span class="badge badge-muted" style="margin-left:4px">restart required</span></div>
         <div class="form-grid">
           <div class="form-group"><label>Listen (UDP)</label><input id="self-srv-listen" placeholder="0.0.0.0:5565"></div>
           <div class="form-group"><label>Password</label><input id="self-srv-pass" type="password"></div>
@@ -189,21 +188,16 @@
   </div>
 </div>
 
-<!-- Add Node Dialog -->
+<!-- Add/Edit Node Dialog -->
 <div class="modal-overlay" id="add-node-modal" style="display:none" onclick="if(event.target===this)closeAddDialog()">
   <div class="modal">
     <div class="modal-header">
       <h2 id="add-node-modal-title">Add Node Connection</h2>
-      <button class="btn-icon" onclick="closeAddDialog()">✕</button>
+      <button class="btn-icon" onclick="closeAddDialog()">&#10005;</button>
     </div>
-    <div class="modal-body">
-      <div class="modal-tabs">
-        <div class="modal-tab active" data-mtab="basic" onclick="switchModalTab(this)">Basic</div>
-        <div class="modal-tab" data-mtab="tls" onclick="switchModalTab(this)">TLS</div>
-        <div class="modal-tab" data-mtab="quic" onclick="switchModalTab(this)">QUIC</div>
-      </div>
-
-      <div class="modal-panel active" id="mtab-basic">
+    <div class="modal-body" style="padding-top:16px">
+      <div class="form-col">
+        <!-- Connection -->
         <div class="form-grid">
           <div class="form-group"><label>Name *</label><input id="add-name" placeholder="e.g. jp-node"></div>
           <div class="form-group"><label>Address *</label><input id="add-addr" placeholder="host:port"></div>
@@ -212,12 +206,12 @@
             <label>Fast Open</label>
             <label class="toggle" style="margin-top:4px"><input type="checkbox" id="add-fastopen"><span class="slider"></span></label>
           </div>
-          <div class="form-group"><label>Upload Limit (B/s)</label><input id="add-tx" type="number" placeholder="0 = 1Gbps default"></div>
-          <div class="form-group"><label>Download Limit (B/s)</label><input id="add-rx" type="number" placeholder="0 = 1Gbps default"></div>
+          <div class="form-group"><label>Upload (Mbps)</label><input id="add-tx" type="number" placeholder="0 = 1000 Mbps"></div>
+          <div class="form-group"><label>Download (Mbps)</label><input id="add-rx" type="number" placeholder="0 = 1000 Mbps"></div>
         </div>
-      </div>
 
-      <div class="modal-panel" id="mtab-tls">
+        <!-- TLS -->
+        <div class="section-divider">TLS</div>
         <div class="form-grid">
           <div class="form-group"><label>SNI (Server Name)</label><input id="add-sni" placeholder="auto: hy2scale"></div>
           <div class="form-group">
@@ -225,18 +219,22 @@
             <label class="toggle" style="margin-top:4px"><input type="checkbox" id="add-insecure" checked><span class="slider"></span></label>
           </div>
         </div>
-        <div class="form-group" style="margin-top:12px">
+        <div class="form-group">
           <label>CA Certificate (PEM)</label>
           <textarea id="add-ca" placeholder="Paste CA cert PEM here (optional)..."></textarea>
         </div>
-      </div>
 
-      <div class="modal-panel" id="mtab-quic">
-        <div class="form-grid">
-          <div class="form-group"><label>Init Stream Window</label><input id="add-isw" type="number" placeholder="67108864 (64MB)"></div>
-          <div class="form-group"><label>Max Stream Window</label><input id="add-msw" type="number" placeholder="67108864 (64MB)"></div>
-          <div class="form-group"><label>Init Conn Window</label><input id="add-icw" type="number" placeholder="134217728 (128MB)"></div>
-          <div class="form-group"><label>Max Conn Window</label><input id="add-mcw" type="number" placeholder="134217728 (128MB)"></div>
+        <!-- QUIC Advanced -->
+        <div class="section-divider" style="cursor:pointer" onclick="$('#quic-advanced').style.display=$('#quic-advanced').style.display==='none'?'':'none'; this.querySelector('.adv-arrow').textContent=$('#quic-advanced').style.display==='none'?'▸':'▾'">
+          QUIC Advanced <span class="adv-arrow" style="font-size:10px">▸</span>
+        </div>
+        <div id="quic-advanced" style="display:none">
+          <div class="form-grid">
+            <div class="form-group"><label>Init Stream Window</label><input id="add-isw" type="number" placeholder="67108864 (64MB)"></div>
+            <div class="form-group"><label>Max Stream Window</label><input id="add-msw" type="number" placeholder="67108864 (64MB)"></div>
+            <div class="form-group"><label>Init Conn Window</label><input id="add-icw" type="number" placeholder="134217728 (128MB)"></div>
+            <div class="form-group"><label>Max Conn Window</label><input id="add-mcw" type="number" placeholder="134217728 (128MB)"></div>
+          </div>
         </div>
       </div>
     </div>
