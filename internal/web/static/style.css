@@ -61,6 +61,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 .peer-table .col-latency{width:75px;text-align:center}
 .peer-table .col-dir{width:55px}
 .peer-table .col-name{min-width:80px}
+.peer-table .col-traffic{width:160px;font-size:11px;font-family:var(--mono);white-space:nowrap}
 .peer-table .col-nested{width:70px;text-align:center}
 .peer-table .col-actions{width:150px;text-align:right}
 .latency{font-family:var(--mono);font-size:12px;font-weight:600}

@@ -57,6 +57,15 @@ type peer struct {
 	ctrlW   net.Conn        // write dial requests to this peer
 	writeMu sync.Mutex
 	waiting map[string]chan net.Conn
+	txBytes atomic.Uint64
+	rxBytes atomic.Uint64
+}
+
+// PeerTraffic holds per-peer traffic info.
+type PeerTraffic struct {
+	Name   string
+	TxRate uint64
+	RxRate uint64
 }
 
 // Node is a unified relay endpoint. It can accept peers (hy2 server side)
@@ -89,6 +98,21 @@ type Node struct {
 	txRate    atomic.Uint64
 	rxRate    atomic.Uint64
 	conns     atomic.Int64
+
+	// Per-peer rate snapshots (updated by rate ticker)
+	peerRateMu sync.RWMutex
+	peerRates  map[string]PeerTraffic
+}
+
+// PeerRates returns per-peer traffic rates.
+func (n *Node) PeerRates() map[string]PeerTraffic {
+	n.peerRateMu.RLock()
+	defer n.peerRateMu.RUnlock()
+	out := make(map[string]PeerTraffic, len(n.peerRates))
+	for k, v := range n.peerRates {
+		out[k] = v
+	}
+	return out
 }
 
 // Name returns the node's name.
@@ -125,6 +149,8 @@ func (n *Node) GetStats() Stats {
 
 // StartRateTicker updates per-second rate counters. Call in a goroutine.
 func (n *Node) StartRateTicker(ctx context.Context) {
+	prevPeerTx := make(map[string]uint64)
+	prevPeerRx := make(map[string]uint64)
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	for {
@@ -138,6 +164,25 @@ func (n *Node) StartRateTicker(ctx context.Context) {
 			n.rxRate.Store(rx - n.prevRx)
 			n.prevTx = tx
 			n.prevRx = rx
+
+			// Per-peer rates
+			rates := make(map[string]PeerTraffic)
+			n.mu.RLock()
+			for name, p := range n.peers {
+				ptx := p.txBytes.Load()
+				prx := p.rxBytes.Load()
+				rates[name] = PeerTraffic{
+					Name:   name,
+					TxRate: ptx - prevPeerTx[name],
+					RxRate: prx - prevPeerRx[name],
+				}
+				prevPeerTx[name] = ptx
+				prevPeerRx[name] = prx
+			}
+			n.mu.RUnlock()
+			n.peerRateMu.Lock()
+			n.peerRates = rates
+			n.peerRateMu.Unlock()
 		}
 	}
 }
@@ -145,10 +190,11 @@ func (n *Node) StartRateTicker(ctx context.Context) {
 // NewNode creates a node.
 func NewNode(name string, exitNode bool) *Node {
 	return &Node{
-		name:   name,
-		exit:   exitNode,
-		peers:  make(map[string]*peer),
-		nested: make(map[string]bool),
+		name:      name,
+		exit:      exitNode,
+		peers:     make(map[string]*peer),
+		nested:    make(map[string]bool),
+		peerRates: make(map[string]PeerTraffic),
 	}
 }
 
@@ -219,7 +265,7 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 				errCh <- err
 				return
 			}
-			go n.dialAndStream(ctx, client, id, addr)
+			go n.dialAndStream(ctx, actualName, client, id, addr)
 		}
 	}()
 
@@ -318,8 +364,16 @@ func (n *Node) handleVia(ctx context.Context, peerName, targetAddr string, strea
 	defer n.conns.Add(-1)
 	defer exitConn.Close()
 	defer stream.Close()
-	go func() { n.copyCount(exitConn, stream, &n.txBytes); exitConn.Close() }()
-	n.copyCount(stream, exitConn, &n.rxBytes)
+	n.mu.RLock()
+	p := n.peers[peerName]
+	n.mu.RUnlock()
+	var ptx, prx *atomic.Uint64
+	if p != nil {
+		ptx = &p.txBytes
+		prx = &p.rxBytes
+	}
+	go func() { n.copyCount(exitConn, stream, &n.txBytes, ptx); exitConn.Close() }()
+	n.copyCount(stream, exitConn, &n.rxBytes, prx)
 }
 
 func (n *Node) deliverDataStream(id string, stream net.Conn) {
@@ -359,7 +413,7 @@ func (n *Node) deliverDataStream(id string, stream net.Conn) {
 	stream.Close()
 }
 
-func (n *Node) dialAndStream(ctx context.Context, client hyclient.Client, id, addr string) {
+func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclient.Client, id, addr string) {
 	var target net.Conn
 	var err error
 
@@ -383,8 +437,16 @@ func (n *Node) dialAndStream(ctx context.Context, client hyclient.Client, id, ad
 
 	n.conns.Add(1)
 	defer n.conns.Add(-1)
-	go func() { n.copyCount(stream, target, &n.rxBytes); stream.Close() }()
-	n.copyCount(target, stream, &n.txBytes)
+	n.mu.RLock()
+	p := n.peers[peerName]
+	n.mu.RUnlock()
+	var ptx, prx *atomic.Uint64
+	if p != nil {
+		ptx = &p.txBytes
+		prx = &p.rxBytes
+	}
+	go func() { n.copyCount(stream, target, &n.rxBytes, prx); stream.Close() }()
+	n.copyCount(target, stream, &n.txBytes, ptx)
 }
 
 // --- Peer queries ---
@@ -603,7 +665,7 @@ func (n *Node) DialVia(ctx context.Context, path []string, addr string) (net.Con
 
 // --- Wire helpers ---
 
-func (n *Node) copyCount(dst io.Writer, src io.Reader, counter *atomic.Uint64) {
+func (n *Node) copyCount(dst io.Writer, src io.Reader, counter *atomic.Uint64, peerCounter *atomic.Uint64) {
 	buf := make([]byte, 32*1024)
 	for {
 		nr, er := src.Read(buf)
@@ -611,6 +673,9 @@ func (n *Node) copyCount(dst io.Writer, src io.Reader, counter *atomic.Uint64) {
 			nw, ew := dst.Write(buf[:nr])
 			if nw > 0 {
 				counter.Add(uint64(nw))
+				if peerCounter != nil {
+					peerCounter.Add(uint64(nw))
+				}
 			}
 			if ew != nil {
 				return

@@ -170,6 +170,11 @@ function latencyHTML(ms) {
   return `<span class="latency ${cls}">${ms}ms</span>`;
 }
 
+function trafficHTML(tx, rx) {
+  if (!tx && !rx) return '<span style="color:var(--text-muted)">—</span>';
+  return `<span class="stat-up">${fmtRate(tx||0)}</span> <span style="color:var(--text-muted)">/</span> <span class="stat-down">${fmtRate(rx||0)}</span>`;
+}
+
 function dirHTML(dir) {
   if (dir === 'local') return '<span class="badge badge-green">LOCAL</span>';
   return dir === 'inbound'
@@ -195,6 +200,7 @@ function parentRowHTML(n) {
         <span class="peer-name-cell">${esc(n.name)}</span>
         ${n.addr ? `<span class="peer-addr-sub">${esc(n.addr)} (UDP)</span>` : '<span class="peer-addr-sub">no hy2 server</span>'}
       </td>
+      <td class="col-traffic"><span style="color:var(--text-muted)">—</span></td>
       <td class="col-nested"><label class="toggle toggle-disabled"><input type="checkbox" checked disabled><span class="slider"></span></label></td>
       <td class="col-actions"><div class="act-group">
         <button class="act-btn edit" onclick="openEditSelf()">Edit</button>
@@ -220,6 +226,7 @@ function parentRowHTML(n) {
       ${nameLink(n.name, chain)}
       ${n.addr ? `<span class="peer-addr-sub">${esc(n.addr)}</span>` : ''}
     </td>
+    <td class="col-traffic">${trafficHTML(n.tx_rate, n.rx_rate)}</td>
     <td class="col-nested">${nested}</td>
     <td class="col-actions">${actions}</td>
   </tr>`;
@@ -244,6 +251,7 @@ function childRowHTML(c, isLast, depth, parentChain) {
         <span class="peer-addr-sub">via ${esc(c.via)}</span>
       </span>
     </td>
+    <td class="col-traffic">${trafficHTML(c.tx_rate, c.rx_rate)}</td>
     <td class="col-nested">${nestedToggle}</td>
     <td class="col-actions"><div class="act-group">${actions}</div></td>
   </tr>`;
@@ -288,6 +296,7 @@ async function refreshTopology() {
       <th class="col-latency">Latency</th>
       <th class="col-dir">Dir</th>
       <th class="col-name">Node</th>
+      <th class="col-traffic">Traffic</th>
       <th class="col-nested">Nested</th>
       <th class="col-actions"></th>
     </tr></thead>
