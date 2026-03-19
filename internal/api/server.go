@@ -26,6 +26,7 @@ type topoSubPeer struct {
 	Via       string         `json:"via"`
 	LatencyMs int            `json:"latency_ms"`
 	Nested    bool           `json:"nested"`
+	Conflict  bool           `json:"conflict,omitempty"`
 	Children  []topoSubPeer  `json:"children,omitempty"`
 }
 
@@ -396,6 +397,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		Nested    bool            `json:"nested"`
 		LatencyMs int             `json:"latency_ms"`
 		IsSelf    bool            `json:"is_self,omitempty"`
+		Conflict  bool            `json:"conflict,omitempty"`
 		Children  []topoSubPeer   `json:"children,omitempty"`
 	}
 
@@ -445,15 +447,22 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	for _, p := range peers {
 		if p.Direction == "inbound" {
 			inboundNames[p.Name] = true
+			isConflict := p.Name == cfg.NodeID || p.Name == cfg.Name
 			child := topoSubPeer{
 				Name:      p.Name,
 				ExitNode:  p.ExitNode,
 				Direction: "inbound",
 				Via:       cfg.NodeID,
 				LatencyMs: 0,
+				Conflict:  isConflict,
 			}
-			if pc, ok := cfg.Peers[p.Name]; ok {
-				child.Nested = pc.Nested
+			if isConflict {
+				child.LatencyMs = -2
+			}
+			if !isConflict {
+				if pc, ok := cfg.Peers[p.Name]; ok {
+					child.Nested = pc.Nested
+				}
 			}
 			selfChildren = append(selfChildren, child)
 		}
@@ -531,30 +540,34 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 	}
 	children := make([]topoSubPeer, 0, len(subPeers))
 	for _, sp := range subPeers {
-		if ancestors[sp.Name] {
-			continue
-		}
-		childLatency := -1
-		if parentLatency > 0 {
-			if directLat, ok := latencyCache[sp.Name]; ok && directLat > 0 {
-				childLatency = parentLatency + directLat
-			} else {
-				childLatency = parentLatency * 2
-			}
-		}
+		isConflict := sp.Name == myName || sp.Name == myID
 		child := topoSubPeer{
 			Name:      sp.Name,
 			ExitNode:  sp.ExitNode,
 			Direction: sp.Direction,
 			Via:       peerName,
-			LatencyMs: childLatency,
+			Conflict:  isConflict,
 		}
-		if pc, ok := cfg.Peers[sp.Name]; ok {
-			child.Nested = pc.Nested
-		}
-		if child.Nested {
-			childPath := append(append([]string{}, path...), sp.Name)
-			child.Children = s.loadSubPeers(childPath, childLatency, latencyCache, cfg, depth+1)
+		if isConflict || ancestors[sp.Name] {
+			child.LatencyMs = -2 // conflict marker
+			child.Conflict = true
+		} else {
+			childLatency := -1
+			if parentLatency > 0 {
+				if directLat, ok := latencyCache[sp.Name]; ok && directLat > 0 {
+					childLatency = parentLatency + directLat
+				} else {
+					childLatency = parentLatency * 2
+				}
+			}
+			child.LatencyMs = childLatency
+			if pc, ok := cfg.Peers[sp.Name]; ok {
+				child.Nested = pc.Nested
+			}
+			if child.Nested {
+				childPath := append(append([]string{}, path...), sp.Name)
+				child.Children = s.loadSubPeers(childPath, childLatency, latencyCache, cfg, depth+1)
+			}
 		}
 		children = append(children, child)
 	}
