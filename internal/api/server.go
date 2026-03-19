@@ -29,6 +29,8 @@ type topoSubPeer struct {
 	Via       string         `json:"via"`
 	LatencyMs int            `json:"latency_ms"`
 	Nested    bool           `json:"nested"`
+	TxRate    uint64         `json:"tx_rate"`
+	RxRate    uint64         `json:"rx_rate"`
 	Children  []topoSubPeer  `json:"children,omitempty"`
 }
 
@@ -401,6 +403,8 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		Disabled  bool            `json:"disabled"`
 		Nested    bool            `json:"nested"`
 		LatencyMs int             `json:"latency_ms"`
+		TxRate    uint64          `json:"tx_rate"`
+		RxRate    uint64          `json:"rx_rate"`
 		IsSelf    bool            `json:"is_self,omitempty"`
 		Children  []topoSubPeer   `json:"children,omitempty"`
 	}
@@ -466,6 +470,8 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(selfChildren, func(i, j int) bool { return selfChildren[i].Name < selfChildren[j].Name })
 
+	peerRates := s.app.Node().PeerRates()
+
 	result := make([]treeNode, 0, len(names)+1)
 	result = append(result, treeNode{
 		Name:      cfg.NodeID,
@@ -503,6 +509,10 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		} else if !tn.Connected {
 			tn.LatencyMs = -1
 		}
+		if pr, ok := peerRates[name]; ok {
+			tn.TxRate = pr.TxRate
+			tn.RxRate = pr.RxRate
+		}
 
 		// Load sub-peers recursively
 		if tn.Nested && tn.Connected {
@@ -535,14 +545,7 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 		if sp.Name == myID {
 			continue
 		}
-		childLatency := -1
-		if parentLatency > 0 {
-			if directLat, ok := latencyCache[sp.Name]; ok && directLat > 0 {
-				childLatency = parentLatency + directLat
-			} else {
-				childLatency = parentLatency * 2
-			}
-		}
+		childLatency := 0 // nested children don't show latency
 		child := topoSubPeer{
 			Name:      sp.Name,
 			ExitNode:  sp.ExitNode,
