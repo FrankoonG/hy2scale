@@ -329,8 +329,8 @@ function openAddDialog() {
   editingNode = null;
   $('#add-node-modal-title').textContent = 'Add Node Connection';
   $('#add-node-submit').textContent = 'Connect';
-  $('#add-name').value = ''; $('#add-name').disabled = false;
   ['add-addr','add-pass','add-sni','add-ca','add-tx','add-rx','add-isw','add-msw','add-icw','add-mcw'].forEach(id => $(`#${id}`).value = '');
+  $('#add-addr').disabled = false;
   $('#add-insecure').checked = true; $('#add-fastopen').checked = false;
   $('#add-node-modal').style.display = '';
   $('#quic-advanced').style.display = 'none';
@@ -342,8 +342,7 @@ async function openEditDialog(name) {
     editingNode = name;
     $('#add-node-modal-title').textContent = `Edit: ${name}`;
     $('#add-node-submit').textContent = 'Save';
-    $('#add-name').value = cl.name; $('#add-name').disabled = true;
-    $('#add-addr').value = cl.addr || '';
+    $('#add-addr').value = cl.addr || ''; $('#add-addr').disabled = true;
     $('#add-pass').value = cl.password || '';
     $('#add-sni').value = cl.sni || '';
     $('#add-insecure').checked = cl.insecure !== false;
@@ -356,7 +355,6 @@ async function openEditDialog(name) {
     $('#add-mcw').value = cl.max_conn_window || '';
     $('#add-fastopen').checked = !!cl.fast_open;
     $('#add-node-modal').style.display = '';
-    // Show QUIC section if any values are set
     const hasQuic = cl.init_stream_window || cl.max_stream_window || cl.init_conn_window || cl.max_conn_window;
     $('#quic-advanced').style.display = hasQuic ? '' : 'none';
   } catch (e) { toast(String(e), 'error'); }
@@ -365,8 +363,9 @@ async function openEditDialog(name) {
 function closeAddDialog() { $('#add-node-modal').style.display = 'none'; editingNode = null; }
 
 async function submitAddNode() {
-  const name = $('#add-name').value.trim(), addr = $('#add-addr').value.trim(), password = $('#add-pass').value.trim();
-  if (!name || !addr || !password) { toast('Name, address and password are required', 'error'); return; }
+  const addr = $('#add-addr').value.trim(), password = $('#add-pass').value.trim();
+  if (!addr || !password) { toast('Address and password are required', 'error'); return; }
+  const name = editingNode || addr; // use addr as temp name; remote ID replaces it after connect
   const body = {
     name, addr, password,
     sni: $('#add-sni').value.trim(), insecure: $('#add-insecure').checked, ca: $('#add-ca').value.trim(),

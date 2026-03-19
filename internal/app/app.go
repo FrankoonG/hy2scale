@@ -447,8 +447,21 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 		return err
 	}
 	defer c.Close()
-	log.Printf("[%s] connected to %s", a.node.Name(), cl.Name)
-	return a.node.AttachTo(ctx, cl.Name, c)
+	log.Printf("[%s] connected to %s (%s)", a.node.Name(), cl.Name, cl.Addr)
+	return a.node.AttachTo(ctx, cl.Name, c, func(remoteID string) {
+		if remoteID != "" && remoteID != cl.Name {
+			log.Printf("[%s] peer %s actual ID: %s", a.node.Name(), cl.Addr, remoteID)
+			// Update stored client entry with remote's actual node ID
+			a.store.Update(func(cfg *Config) {
+				for i, entry := range cfg.Clients {
+					if entry.Addr == cl.Addr {
+						cfg.Clients[i].Name = remoteID
+						break
+					}
+				}
+			})
+		}
+	})
 }
 
 func (a *App) serveProxy(ctx context.Context, ln net.Listener, pc ProxyConfig) {
