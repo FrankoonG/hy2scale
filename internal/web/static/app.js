@@ -79,10 +79,14 @@ window.addEventListener('popstate', routeFromURL);
 
 // ── Auth ──
 function showLogin() {
+  // Force full browser refresh to /login
+  const loginURL = basePath + '/login';
+  if (location.pathname !== loginURL) {
+    location.href = loginURL;
+    return;
+  }
   $('#login-screen').style.display = '';
   $('#app').style.display = 'none';
-  history.replaceState(null, '', basePath + '/login');
-  // Restore saved credentials
   const saved = JSON.parse(localStorage.getItem('hy2scale_cred') || 'null');
   if (saved) {
     $('#login-user').value = saved.u;
@@ -173,9 +177,16 @@ function dirHTML(dir) {
     : '<span class="badge badge-orange">OUT</span>';
 }
 
-function parentRowHTML(n) {
-  const exit = '';
+function remoteURL(chain) {
+  return basePath + '/remote/' + chain.map(encodeURIComponent).join('/');
+}
 
+function nameLink(name, chain) {
+  if (!chain || !chain.length) return `<span class="peer-name-cell">${esc(name)}</span>`;
+  return `<a class="peer-name-cell peer-link" href="${remoteURL(chain)}" target="_blank">${esc(name)}</a>`;
+}
+
+function parentRowHTML(n) {
   if (n.is_self) {
     return `<tr class="self-row${n.disabled ? ' disabled' : ''}">
       <td class="col-latency"><span class="latency latency-good">∞ms</span></td>
@@ -192,6 +203,7 @@ function parentRowHTML(n) {
     </tr>`;
   }
 
+  const chain = [n.name];
   const nested = n.direction === 'outbound'
     ? `<label class="toggle"><input type="checkbox" ${n.nested ? 'checked' : ''} onchange="toggleNested('${esc(n.name)}',this.checked)"><span class="slider"></span></label>`
     : '';
@@ -205,7 +217,7 @@ function parentRowHTML(n) {
     <td class="col-latency">${latencyHTML(n.latency_ms)}</td>
     <td class="col-dir">${dirHTML(n.direction)}</td>
     <td class="col-name">
-      <span class="peer-name-cell">${esc(n.name)}</span>${exit}
+      ${nameLink(n.name, chain)}
       ${n.addr ? `<span class="peer-addr-sub">${esc(n.addr)}</span>` : ''}
     </td>
     <td class="col-nested">${nested}</td>
@@ -213,11 +225,12 @@ function parentRowHTML(n) {
   </tr>`;
 }
 
-function childRowHTML(c, isLast, depth) {
+function childRowHTML(c, isLast, depth, parentChain) {
   depth = depth || 1;
+  parentChain = parentChain || [];
+  const chain = [...parentChain, c.name];
   const conflict = !!c.conflict;
   const dis = conflict || isNestedDisabled(c.via, c.name);
-  const exit = '';
   const conflictBadge = conflict ? ' <span class="badge badge-red">ID CONFLICT</span>' : '';
   const dir = c.direction ? dirHTML(c.direction) : '';
   const indent = 'padding-left:' + (depth * 20) + 'px';
@@ -229,7 +242,7 @@ function childRowHTML(c, isLast, depth) {
     <td class="col-dir">${dir}</td>
     <td class="col-name" style="${indent}">
       <span class="tree-branch" aria-hidden="true">${isLast ? '└' : '├'}</span><span class="sub-name-wrap">
-        <span class="peer-name-cell">${esc(c.name)}</span>${exit}${conflictBadge}
+        ${conflict ? `<span class="peer-name-cell">${esc(c.name)}</span>` : nameLink(c.name, chain)}${conflictBadge}
         <span class="peer-addr-sub">via ${esc(c.via)}</span>
       </span>
     </td>
@@ -240,7 +253,7 @@ function childRowHTML(c, isLast, depth) {
   // Render grandchildren recursively
   if (c.children?.length) {
     for (let i = 0; i < c.children.length; i++) {
-      html += childRowHTML(c.children[i], i === c.children.length - 1, depth + 1);
+      html += childRowHTML(c.children[i], i === c.children.length - 1, depth + 1, chain);
     }
   }
   return html;
@@ -266,7 +279,8 @@ async function refreshTopology() {
     if (n.children?.length) {
       for (let i = 0; i < n.children.length; i++) {
         count++;
-        rows += childRowHTML(n.children[i], i === n.children.length - 1);
+        const parentChain = n.is_self ? [] : [n.name];
+        rows += childRowHTML(n.children[i], i === n.children.length - 1, 1, parentChain);
       }
     }
   }

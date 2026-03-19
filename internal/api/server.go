@@ -1,16 +1,19 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net"
-	"sort"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -113,10 +116,12 @@ func (s *Server) Start(ctx context.Context) error {
 		"settings": true,
 	}
 
+	// Remote node proxy (authed)
+	apiMux.Handle("/remote/", s.authMiddleware(http.HandlerFunc(s.remoteProxy)))
+
 	apiMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/")
 
-		// Serve static file if it exists (css, js, etc.)
 		if path != "" {
 			if data, err := fs.ReadFile(staticFS, path); err == nil {
 				switch {
@@ -132,14 +137,12 @@ func (s *Server) Start(ctx context.Context) error {
 			}
 		}
 
-		// Only serve index.html for known frontend routes
 		if frontendRoutes[path] {
 			w.Header().Set("Content-Type", "text/html")
 			w.Write(indexBytes)
 			return
 		}
 
-		// Unknown path → redirect to login
 		http.Redirect(w, r, s.basePath+"/login", http.StatusFound)
 	})
 
@@ -826,6 +829,102 @@ func (s *Server) deleteCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// remoteProxy tunnels HTTP requests to a remote node's web UI through the relay chain.
+// Path: /remote/{peer1}/{peer2}/.../{remaining_path}
+// The last contiguous known-peer segment forms the chain; the rest is the proxied path.
+func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
+	// Parse: /remote/vm/au/scale/nodes → chain=["vm","au"], remotePath="/scale/nodes"
+	raw := strings.TrimPrefix(r.URL.Path, "/remote/")
+	if raw == "" {
+		http.Error(w, "missing peer path", 400)
+		return
+	}
+
+	parts := strings.SplitN(raw, "/", -1)
+	// Find where the peer chain ends — peers are names we know or can resolve
+	// For simplicity: everything before the first path segment that looks like a
+	// known route (api, scale, login, nodes, etc.) or has a dot is the chain.
+	chain := []string{}
+	restIdx := len(parts)
+	knownPaths := map[string]bool{"api": true, "scale": true, "login": true, "nodes": true, "proxies": true, "tls": true, "settings": true, "remote": true}
+	for i, p := range parts {
+		if knownPaths[p] || strings.Contains(p, ".") {
+			restIdx = i
+			break
+		}
+		if p != "" {
+			chain = append(chain, p)
+		}
+	}
+	if len(chain) == 0 {
+		http.Error(w, "missing peer chain", 400)
+		return
+	}
+
+	remotePath := "/" + strings.Join(parts[restIdx:], "/")
+	if remotePath == "/" {
+		// Default to the remote's base path
+		remotePath = "/scale/"
+	}
+
+	// Dial through relay chain to target's web UI (127.0.0.1:5565)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	var conn net.Conn
+	var err error
+	if len(chain) == 1 {
+		conn, err = s.app.Node().DialTCP(ctx, chain[0], "127.0.0.1:5565")
+	} else {
+		conn, err = s.app.Node().DialVia(ctx, chain, "127.0.0.1:5565")
+	}
+	if err != nil {
+		http.Error(w, fmt.Sprintf("tunnel to %s failed: %v", strings.Join(chain, "/"), err), 502)
+		return
+	}
+	defer conn.Close()
+
+	// Build request line and query string
+	reqPath := remotePath
+	if r.URL.RawQuery != "" {
+		reqPath += "?" + r.URL.RawQuery
+	}
+	proxyReq := fmt.Sprintf("%s %s HTTP/1.1\r\nHost: 127.0.0.1:5565\r\n", r.Method, reqPath)
+	// Forward all headers except Host/Connection, strip our local Authorization
+	for k, vv := range r.Header {
+		kl := strings.ToLower(k)
+		if kl == "host" || kl == "connection" || kl == "authorization" {
+			continue
+		}
+		for _, v := range vv {
+			proxyReq += fmt.Sprintf("%s: %s\r\n", k, v)
+		}
+	}
+	proxyReq += "Connection: close\r\n\r\n"
+
+	conn.Write([]byte(proxyReq))
+	if r.Body != nil && r.ContentLength > 0 {
+		io.Copy(conn, r.Body)
+	}
+
+	// Read response
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		http.Error(w, "bad response from remote: "+err.Error(), 502)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Copy response headers
+	for k, vv := range resp.Header {
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
