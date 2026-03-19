@@ -522,10 +522,16 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 		return nil
 	}
 	myName := s.app.Node().Name()
+	myID := s.app.Store().Get().NodeID
 	peerName := path[len(path)-1]
+	// Build set of ancestors to avoid cycles
+	ancestors := map[string]bool{myName: true, myID: true}
+	for _, p := range path {
+		ancestors[p] = true
+	}
 	children := make([]topoSubPeer, 0, len(subPeers))
 	for _, sp := range subPeers {
-		if sp.Name == myName {
+		if ancestors[sp.Name] {
 			continue
 		}
 		childLatency := -1
