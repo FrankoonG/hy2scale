@@ -212,27 +212,38 @@ function parentRowHTML(n) {
   </tr>`;
 }
 
-function childRowHTML(c, isLast) {
+function childRowHTML(c, isLast, depth) {
+  depth = depth || 1;
   const dis = isNestedDisabled(c.via, c.name);
   const exit = c.exit_node ? ' <span class="badge badge-green">EXIT</span>' : '';
   const dir = c.direction ? dirHTML(c.direction) : '';
+  const indent = 'padding-left:' + (depth * 20) + 'px';
+  const nestedToggle = `<label class="toggle"><input type="checkbox" ${c.nested ? 'checked' : ''} onchange="toggleNested('${esc(c.name)}',this.checked)"><span class="slider"></span></label>`;
 
-  return `<tr class="sub-row${dis ? ' disabled' : ''}">
+  let html = `<tr class="sub-row${dis ? ' disabled' : ''}">
     <td class="col-latency">${dis ? latencyHTML(-1) : latencyHTML(c.latency_ms)}</td>
     <td class="col-dir">${dir}</td>
-    <td class="col-name">
+    <td class="col-name" style="${indent}">
       <span class="tree-branch" aria-hidden="true">${isLast ? '└' : '├'}</span><span class="sub-name-wrap">
         <span class="peer-name-cell">${esc(c.name)}</span>${exit}
         <span class="peer-addr-sub">via ${esc(c.via)}</span>
       </span>
     </td>
-    <td class="col-nested"></td>
+    <td class="col-nested">${nestedToggle}</td>
     <td class="col-actions">
       <div class="act-group">
         <button class="act-btn ${dis ? 'enable' : 'warn'}" onclick="toggleNestedDisable('${esc(c.via)}','${esc(c.name)}',${!dis})">${dis ? 'Enable' : 'Disable'}</button>
       </div>
     </td>
   </tr>`;
+
+  // Render grandchildren recursively
+  if (c.children?.length) {
+    for (let i = 0; i < c.children.length; i++) {
+      html += childRowHTML(c.children[i], i === c.children.length - 1, depth + 1);
+    }
+  }
+  return html;
 }
 
 async function refreshTopology() {
