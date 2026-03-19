@@ -156,7 +156,10 @@ func NewNode(name string, exitNode bool) *Node {
 
 // AttachTo connects to a remote node via an hy2 client, registers, and
 // handles dial requests from the remote. Blocks until ctx or connection ends.
-func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Client) error {
+// AttachTo connects to a remote node via an hy2 client, registers, and
+// handles dial requests from the remote. Blocks until ctx or connection ends.
+// Returns the remote's actual node ID via the onID callback (if non-nil).
+func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Client, onID func(string)) error {
 	// Register with remote
 	regStream, err := client.TCP(streamRegister)
 	if err != nil {
@@ -171,6 +174,19 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	regStream.Write([]byte{flags})
 	writeString(regStream, n.name)
 
+	// Read back the remote's actual node ID
+	remoteID, err := readString(regStream)
+	if err != nil {
+		return fmt.Errorf("relay: register response: %w", err)
+	}
+	actualName := peerName
+	if remoteID != "" {
+		actualName = remoteID
+	}
+	if onID != nil {
+		onID(actualName)
+	}
+
 	// Open s2c ctrl for dial requests from remote
 	s2cCtrl, err := client.TCP(streamCtrlS2C)
 	if err != nil {
@@ -179,18 +195,18 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	defer s2cCtrl.Close()
 	writeString(s2cCtrl, n.name)
 
-	// Register peer (outbound)
+	// Register peer with remote's actual name
 	p := &peer{
-		info:    PeerInfo{Name: peerName, Direction: "outbound"},
+		info:    PeerInfo{Name: actualName, Direction: "outbound"},
 		client:  client,
 		waiting: make(map[string]chan net.Conn),
 	}
 	n.mu.Lock()
-	n.peers[peerName] = p
+	n.peers[actualName] = p
 	n.mu.Unlock()
 	defer func() {
 		n.mu.Lock()
-		delete(n.peers, peerName)
+		delete(n.peers, actualName)
 		n.mu.Unlock()
 	}()
 
@@ -262,6 +278,8 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 		stream.Close()
 		return
 	}
+	// Send back our name so the client knows our actual node ID
+	writeString(stream, n.name)
 
 	p := &peer{
 		info: PeerInfo{
