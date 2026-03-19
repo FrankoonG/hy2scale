@@ -2,6 +2,34 @@ const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 const basePath = window.__BASE__ || '';
 
+// ── Toast notifications ──
+function toast(msg, type) {
+  type = type || 'info';
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.textContent = msg;
+  $('#toast-container').appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 3000);
+}
+
+// ── Confirm dialog (returns Promise<bool>) ──
+function showConfirm(title, msg) {
+  return new Promise(resolve => {
+    $('#confirm-title').textContent = title;
+    $('#confirm-msg').textContent = msg;
+    $('#confirm-modal').style.display = '';
+    const ok = () => { cleanup(); resolve(true); };
+    const cancel = () => { cleanup(); resolve(false); };
+    const cleanup = () => {
+      $('#confirm-modal').style.display = 'none';
+      $('#confirm-ok').onclick = null;
+      $('#confirm-cancel').onclick = null;
+    };
+    $('#confirm-ok').onclick = ok;
+    $('#confirm-cancel').onclick = cancel;
+  });
+}
+
 function api(path, opts) {
   const headers = { ...(opts?.headers || {}) };
   const token = sessionStorage.getItem('token');
@@ -142,7 +170,7 @@ function parentRowHTML(n) {
 
   if (n.is_self) {
     return `<tr class="self-row${n.disabled ? ' disabled' : ''}">
-      <td class="col-latency"><span class="latency latency-na">∞ms</span></td>
+      <td class="col-latency"><span class="latency latency-good">∞ms</span></td>
       <td class="col-dir">${dirHTML('local')}</td>
       <td class="col-name">
         <span class="peer-name-cell">${esc(n.name)}</span>
@@ -240,12 +268,12 @@ async function refreshTopology() {
 
 async function toggleNested(name, enabled) {
   try { await api(`/peers/${name}/nested`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) }); lastTopoJSON = ''; refreshTopology(); }
-  catch (e) { alert(e); }
+  catch (e) { toast(String(e), 'error'); }
 }
 
 async function toggleDisable(name, disabled) {
   try { await api(`/clients/${name}/disable`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ disabled }) }); lastTopoJSON = ''; refreshTopology(); }
-  catch (e) { alert(e); }
+  catch (e) { toast(String(e), 'error'); }
 }
 
 // Nested peer disable: stop pinging/using this peer via the parent
@@ -259,9 +287,9 @@ function toggleNestedDisable(via, name, disabled) {
 }
 
 async function removeClient(name) {
-  if (!confirm(`Delete "${name}"?`)) return;
-  try { await api(`/clients/${name}`, { method: 'DELETE' }); lastTopoJSON = ''; refreshTopology(); }
-  catch (e) { alert(e); }
+  if (!await showConfirm('Delete Node', `Remove connection to "${name}"?`)) return;
+  try { await api(`/clients/${name}`, { method: 'DELETE' }); lastTopoJSON = ''; refreshTopology(); toast(`Deleted ${name}`, 'success'); }
+  catch (e) { toast(String(e), 'error'); }
 }
 
 // ── Node Modal (Add / Edit) ──
@@ -301,14 +329,14 @@ async function openEditDialog(name) {
     // Show QUIC section if any values are set
     const hasQuic = cl.init_stream_window || cl.max_stream_window || cl.init_conn_window || cl.max_conn_window;
     $('#quic-advanced').style.display = hasQuic ? '' : 'none';
-  } catch (e) { alert(e); }
+  } catch (e) { toast(String(e), 'error'); }
 }
 
 function closeAddDialog() { $('#add-node-modal').style.display = 'none'; editingNode = null; }
 
 async function submitAddNode() {
   const name = $('#add-name').value.trim(), addr = $('#add-addr').value.trim(), password = $('#add-pass').value.trim();
-  if (!name || !addr || !password) return alert('Name, address and password are required');
+  if (!name || !addr || !password) { toast('Name, address and password are required', 'error'); return; }
   const body = {
     name, addr, password,
     sni: $('#add-sni').value.trim(), insecure: $('#add-insecure').checked, ca: $('#add-ca').value.trim(),
@@ -324,9 +352,11 @@ async function submitAddNode() {
     } else {
       await api('/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     }
+    const wasEdit = !!editingNode;
     closeAddDialog();
+    toast(wasEdit ? `Updated ${name}` : `Connected to ${name}`, 'success');
     lastTopoJSON = ''; setTimeout(refreshTopology, 1000);
-  } catch (e) { alert(e); }
+  } catch (e) { toast(String(e), 'error'); }
 }
 
 // ── Edit Self Modal ──
@@ -350,7 +380,7 @@ async function openEditSelf() {
     $('#self-error').textContent = '';
     $('#self-ok').textContent = '';
     $('#edit-self-modal').style.display = '';
-  } catch (e) { alert(e); }
+  } catch (e) { toast(String(e), 'error'); }
 }
 function closeEditSelf() { $('#edit-self-modal').style.display = 'none'; }
 
@@ -394,7 +424,7 @@ async function toggleSelfDisable(disabled) {
     // Mark in config
     await api('/node', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ exit_node: !disabled }) });
     lastTopoJSON = ''; refreshTopology();
-  } catch (e) { alert(e); }
+  } catch (e) { toast(String(e), 'error'); }
 }
 
 // ── Proxies ──
@@ -419,15 +449,15 @@ function closeProxyDialog() { $('#add-proxy-modal').style.display = 'none'; }
 async function submitAddProxy() {
   const id = $('#px-id').value.trim(), protocol = $('#px-proto').value,
     listen = $('#px-listen').value.trim(), exit_via = $('#px-exit').value.trim();
-  if (!id || !listen) return alert('ID and listen address are required');
+  if (!id || !listen) { toast('ID and listen address are required', 'error'); return; }
   try {
     await api('/proxies', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, protocol, listen, exit_via }) });
     closeProxyDialog(); ['px-id','px-listen','px-exit'].forEach(id => $(`#${id}`).value = ''); refreshProxies();
-  } catch (e) { alert(e); }
+  } catch (e) { toast(String(e), 'error'); }
 }
 async function removeProxy(id) {
-  if (!confirm(`Remove proxy "${id}"?`)) return;
-  try { await api(`/proxies/${id}`, { method: 'DELETE' }); refreshProxies(); } catch (e) { alert(e); }
+  if (!await showConfirm('Delete Proxy', `Remove proxy "${id}"?`)) return;
+  try { await api(`/proxies/${id}`, { method: 'DELETE' }); refreshProxies(); toast(`Removed ${id}`, 'success'); } catch (e) { toast(String(e), 'error'); }
 }
 
 // ── Settings ──
@@ -490,31 +520,31 @@ async function submitGenCert() {
   const id = $('#gen-id').value.trim(), name = $('#gen-name').value.trim(),
     domains = $('#gen-domains').value.split(',').map(s => s.trim()).filter(Boolean),
     days = parseInt($('#gen-days').value) || 365;
-  if (!id || !domains.length) return alert('ID and at least one domain are required');
+  if (!id || !domains.length) { toast('ID and at least one domain are required', 'error'); return; }
   try {
     await api('/tls/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name, domains, days }) });
     closeGenCertDialog();
     ['gen-id','gen-name','gen-domains'].forEach(x => $(`#${x}`).value = '');
     $('#gen-days').value = '365';
     refreshCerts();
-  } catch (e) { alert(e); }
+  } catch (e) { toast(String(e), 'error'); }
 }
 
 async function submitImportCert() {
   const id = $('#imp-id').value.trim(), name = $('#imp-name').value.trim(),
     cert = $('#imp-cert').value.trim(), key = $('#imp-key').value.trim();
-  if (!id || !cert) return alert('ID and certificate PEM are required');
+  if (!id || !cert) { toast('ID and certificate PEM are required', 'error'); return; }
   try {
     await api('/tls/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name, cert, key }) });
     closeImportCertDialog();
     ['imp-id','imp-name','imp-cert','imp-key'].forEach(x => $(`#${x}`).value = '');
     refreshCerts();
-  } catch (e) { alert(e); }
+  } catch (e) { toast(String(e), 'error'); }
 }
 
 async function deleteCert(id) {
-  if (!confirm(`Delete certificate "${id}"?`)) return;
-  try { await api(`/tls/${id}`, { method: 'DELETE' }); refreshCerts(); } catch (e) { alert(e); }
+  if (!await showConfirm('Delete Certificate', `Delete certificate "${id}"?`)) return;
+  try { await api(`/tls/${id}`, { method: 'DELETE' }); refreshCerts(); toast(`Deleted ${id}`, 'success'); } catch (e) { toast(String(e), 'error'); }
 }
 
 // ── Init ──

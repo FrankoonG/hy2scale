@@ -8,6 +8,21 @@
 </head>
 <body>
 
+<!-- Toast -->
+<div id="toast-container"></div>
+
+<!-- Confirm Dialog -->
+<div class="modal-overlay" id="confirm-modal" style="display:none">
+  <div class="modal" style="max-width:360px">
+    <div class="modal-header"><h2 id="confirm-title">Confirm</h2></div>
+    <div class="modal-body" style="padding:16px 24px"><p id="confirm-msg"></p></div>
+    <div class="modal-footer">
+      <button id="confirm-cancel">Cancel</button>
+      <button class="btn-primary" id="confirm-ok" style="background:var(--red);border-color:var(--red)">Confirm</button>
+    </div>
+  </div>
+</div>
+
 <!-- Login -->
 <div id="login-screen" class="login-screen">
   <div class="login-box">
