@@ -13,136 +13,280 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	hyclient "github.com/apernet/hysteria/core/v2/client"
 	hyserver "github.com/apernet/hysteria/core/v2/server"
 	"github.com/FrankoonG/hy2scale/internal/relay"
-	"gopkg.in/yaml.v3"
 )
 
 type ClientEntry struct {
-	Name      string `yaml:"name"`
-	Addr      string `yaml:"addr"`
-	Password  string `yaml:"password"`
-	Bandwidth int    `yaml:"bandwidth"` // bytes/sec, 0 = default 125MB/s (1Gbps)
+	Name      string `yaml:"name" json:"name"`
+	Addr      string `yaml:"addr" json:"addr"`
+	Password  string `yaml:"password" json:"password"`
+	Bandwidth int    `yaml:"bandwidth" json:"bandwidth"`
 }
 
 type PeerConfig struct {
-	Nested bool `yaml:"nested"`
+	Nested bool `yaml:"nested" json:"nested"`
 }
 
 type ServerConfig struct {
-	Listen   string `yaml:"listen"`
-	Password string `yaml:"password"`
-	TLSCert  string `yaml:"tls_cert"`
-	TLSKey   string `yaml:"tls_key"`
+	Listen   string `yaml:"listen" json:"listen"`
+	Password string `yaml:"password" json:"password"`
+	TLSCert  string `yaml:"tls_cert" json:"tls_cert"`
+	TLSKey   string `yaml:"tls_key" json:"tls_key"`
 }
 
 type SOCKS5Config struct {
 	Listen  string `yaml:"listen"`
-	ExitVia string `yaml:"exit_via"` // peer name or "peer1/peer2" for nested
+	ExitVia string `yaml:"exit_via"`
 }
 
 type Config struct {
-	Name     string                `yaml:"name"`
-	ExitNode bool                  `yaml:"exit_node"`
-	Server   *ServerConfig         `yaml:"server"`
-	Clients  []ClientEntry         `yaml:"clients"`
-	Peers    map[string]PeerConfig `yaml:"peers"`
-	SOCKS5   *SOCKS5Config         `yaml:"socks5"`
+	NodeID   string                `yaml:"node_id" json:"node_id"`
+	Name     string                `yaml:"name" json:"name"`
+	ExitNode bool                  `yaml:"exit_node" json:"exit_node"`
+	Server   *ServerConfig         `yaml:"server" json:"server"`
+	Clients  []ClientEntry         `yaml:"clients" json:"clients"`
+	Peers    map[string]PeerConfig `yaml:"peers" json:"peers"`
+	SOCKS5   *SOCKS5Config         `yaml:"socks5,omitempty" json:"-"`
+	Proxies  []ProxyConfig         `yaml:"proxies" json:"proxies"`
+}
+
+type proxyHandle struct {
+	listener net.Listener
+	cancel   context.CancelFunc
 }
 
 type App struct {
-	cfg  Config
-	node *relay.Node
+	store        *ConfigStore
+	node         *relay.Node
+	appCtx       context.Context
+	mu           sync.Mutex
+	clientCancel map[string]context.CancelFunc
+	proxyHandles map[string]*proxyHandle
 }
 
-func New(cfgPath string) (*App, error) {
-	data, err := os.ReadFile(cfgPath)
+func New(cfgPath, dataDir string) (*App, error) {
+	cfg, err := LoadConfig(cfgPath, dataDir)
 	if err != nil {
 		return nil, err
 	}
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, err
+
+	persistPath := ""
+	if dataDir != "" {
+		os.MkdirAll(dataDir, 0755)
+		persistPath = dataDir + "/config.yaml"
 	}
-	if cfg.Name == "" {
-		return nil, fmt.Errorf("name required")
-	}
+
 	return &App{
-		cfg:  cfg,
-		node: relay.NewNode(cfg.Name, cfg.ExitNode),
+		store:        NewConfigStore(cfg, persistPath),
+		node:         relay.NewNode(cfg.Name, cfg.ExitNode),
+		clientCancel: make(map[string]context.CancelFunc),
+		proxyHandles: make(map[string]*proxyHandle),
 	}, nil
 }
 
-func (a *App) Run(ctx context.Context) error {
-	log.Printf("[%s] starting node (exit=%v)", a.cfg.Name, a.cfg.ExitNode)
+func (a *App) Store() *ConfigStore { return a.store }
+func (a *App) Node() *relay.Node   { return a.node }
 
-	// Apply nested discovery settings
-	for peerName, pc := range a.cfg.Peers {
+func (a *App) Run(ctx context.Context) error {
+	a.appCtx = ctx
+	cfg := a.store.Get()
+	log.Printf("[%s] starting node id=%s (exit=%v)", cfg.Name, cfg.NodeID, cfg.ExitNode)
+
+	// Apply nested discovery
+	for peerName, pc := range cfg.Peers {
 		if pc.Nested {
 			a.node.SetNestedDiscovery(peerName, true)
-			log.Printf("[%s] nested discovery enabled for %q", a.cfg.Name, peerName)
+			log.Printf("[%s] nested discovery enabled for %q", cfg.Name, peerName)
 		}
 	}
 
 	// Start hy2 server if configured
-	if a.cfg.Server != nil {
-		if err := a.startServer(ctx); err != nil {
+	if cfg.Server != nil {
+		if err := a.startServer(ctx, cfg.Server); err != nil {
 			return err
 		}
 	}
 
-	// Start SOCKS5 if configured
-	if a.cfg.SOCKS5 != nil {
-		go a.serveSOCKS5(ctx)
+	// Start proxies
+	for _, pc := range cfg.Proxies {
+		a.StartProxy(pc)
 	}
 
-	// Start hy2 clients
-	for _, cl := range a.cfg.Clients {
-		cl := cl
-		go a.connectLoop(ctx, cl)
+	// Start clients
+	for _, cl := range cfg.Clients {
+		a.StartClient(cl)
 	}
 
 	<-ctx.Done()
 	return ctx.Err()
 }
 
-func (a *App) startServer(ctx context.Context) error {
-	cert, err := loadCert(a.cfg.Server.TLSCert, a.cfg.Server.TLSKey)
+// --- Dynamic client management ---
+
+func (a *App) StartClient(cl ClientEntry) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, ok := a.clientCancel[cl.Name]; ok {
+		return // already running
+	}
+	ctx, cancel := context.WithCancel(a.appCtx)
+	a.clientCancel[cl.Name] = cancel
+	go a.connectLoop(ctx, cl)
+}
+
+func (a *App) StopClient(name string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if cancel, ok := a.clientCancel[name]; ok {
+		cancel()
+		delete(a.clientCancel, name)
+	}
+}
+
+func (a *App) AddClient(cl ClientEntry) error {
+	a.StartClient(cl)
+	return a.store.Update(func(c *Config) {
+		for _, existing := range c.Clients {
+			if existing.Name == cl.Name {
+				return
+			}
+		}
+		c.Clients = append(c.Clients, cl)
+	})
+}
+
+func (a *App) RemoveClient(name string) error {
+	a.StopClient(name)
+	return a.store.Update(func(c *Config) {
+		for i, cl := range c.Clients {
+			if cl.Name == name {
+				c.Clients = append(c.Clients[:i], c.Clients[i+1:]...)
+				return
+			}
+		}
+	})
+}
+
+// --- Dynamic proxy management ---
+
+func (a *App) StartProxy(pc ProxyConfig) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, ok := a.proxyHandles[pc.ID]; ok {
+		return
+	}
+	ctx, cancel := context.WithCancel(a.appCtx)
+	ln, err := net.Listen("tcp", pc.Listen)
+	if err != nil {
+		log.Printf("[%s] proxy %s: %v", a.node.Name(), pc.ID, err)
+		cancel()
+		return
+	}
+	a.proxyHandles[pc.ID] = &proxyHandle{listener: ln, cancel: cancel}
+	log.Printf("[%s] %s proxy %s on %s (exit_via=%q)", a.node.Name(), pc.Protocol, pc.ID, pc.Listen, pc.ExitVia)
+	go a.serveProxy(ctx, ln, pc)
+}
+
+func (a *App) StopProxy(id string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if h, ok := a.proxyHandles[id]; ok {
+		h.cancel()
+		h.listener.Close()
+		delete(a.proxyHandles, id)
+	}
+}
+
+func (a *App) AddProxy(pc ProxyConfig) error {
+	a.StartProxy(pc)
+	return a.store.Update(func(c *Config) {
+		for _, existing := range c.Proxies {
+			if existing.ID == pc.ID {
+				return
+			}
+		}
+		c.Proxies = append(c.Proxies, pc)
+	})
+}
+
+func (a *App) RemoveProxy(id string) error {
+	a.StopProxy(id)
+	return a.store.Update(func(c *Config) {
+		for i, p := range c.Proxies {
+			if p.ID == id {
+				c.Proxies = append(c.Proxies[:i], c.Proxies[i+1:]...)
+				return
+			}
+		}
+	})
+}
+
+func (a *App) UpdateProxy(pc ProxyConfig) error {
+	a.StopProxy(pc.ID)
+	a.StartProxy(pc)
+	return a.store.Update(func(c *Config) {
+		for i, p := range c.Proxies {
+			if p.ID == pc.ID {
+				c.Proxies[i] = pc
+				return
+			}
+		}
+		c.Proxies = append(c.Proxies, pc)
+	})
+}
+
+// --- Nested discovery ---
+
+func (a *App) SetNested(peer string, enabled bool) error {
+	a.node.SetNestedDiscovery(peer, enabled)
+	return a.store.Update(func(c *Config) {
+		if c.Peers == nil {
+			c.Peers = make(map[string]PeerConfig)
+		}
+		pc := c.Peers[peer]
+		pc.Nested = enabled
+		c.Peers[peer] = pc
+	})
+}
+
+// --- Internal ---
+
+func (a *App) startServer(ctx context.Context, sc *ServerConfig) error {
+	cert, err := loadCert(sc.TLSCert, sc.TLSKey)
 	if err != nil {
 		return err
 	}
-
-	conn, err := net.ListenPacket("udp", a.cfg.Server.Listen)
+	conn, err := net.ListenPacket("udp", sc.Listen)
 	if err != nil {
 		return err
 	}
-
 	hyServer, err := hyserver.NewServer(&hyserver.Config{
 		Conn: conn,
 		TLSConfig: hyserver.TLSConfig{
 			Certificates: []tls.Certificate{cert},
 		},
 		QUICConfig: hyserver.QUICConfig{
-			InitialStreamReceiveWindow:     67108864,  // 64MB
+			InitialStreamReceiveWindow:     67108864,
 			MaxStreamReceiveWindow:         67108864,
-			InitialConnectionReceiveWindow: 134217728, // 128MB
+			InitialConnectionReceiveWindow: 134217728,
 			MaxConnectionReceiveWindow:     134217728,
 			MaxIncomingStreams:              4096,
 		},
-		Authenticator: &simpleAuth{password: a.cfg.Server.Password},
+		Authenticator: &simpleAuth{password: sc.Password},
 		Outbound:      &nodeOutbound{node: a.node, ctx: ctx},
 	})
 	if err != nil {
 		conn.Close()
 		return err
 	}
-
 	go func() { <-ctx.Done(); hyServer.Close(); conn.Close() }()
 	go hyServer.Serve()
-	log.Printf("[%s] hy2 server on %s", a.cfg.Name, a.cfg.Server.Listen)
+	log.Printf("[%s] hy2 server on %s", a.node.Name(), sc.Listen)
 	return nil
 }
 
@@ -153,9 +297,9 @@ func (a *App) connectLoop(ctx context.Context, cl ClientEntry) {
 			return
 		default:
 		}
-		log.Printf("[%s] connecting to %s (%s)", a.cfg.Name, cl.Name, cl.Addr)
+		log.Printf("[%s] connecting to %s (%s)", a.node.Name(), cl.Name, cl.Addr)
 		if err := a.connect(ctx, cl); err != nil {
-			log.Printf("[%s] %s: %v", a.cfg.Name, cl.Name, err)
+			log.Printf("[%s] %s: %v", a.node.Name(), cl.Name, err)
 		}
 		select {
 		case <-ctx.Done():
@@ -167,7 +311,7 @@ func (a *App) connectLoop(ctx context.Context, cl ClientEntry) {
 
 func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 	addr, _ := net.ResolveUDPAddr("udp", cl.Addr)
-	bw := uint64(125000000) // 1Gbps default
+	bw := uint64(125000000)
 	if cl.Bandwidth > 0 {
 		bw = uint64(cl.Bandwidth)
 	}
@@ -179,9 +323,9 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 			ServerName:         "hy2scale",
 		},
 		QUICConfig: hyclient.QUICConfig{
-			InitialStreamReceiveWindow:     67108864, // 64MB
+			InitialStreamReceiveWindow:     67108864,
 			MaxStreamReceiveWindow:         67108864,
-			InitialConnectionReceiveWindow: 134217728, // 128MB
+			InitialConnectionReceiveWindow: 134217728,
 			MaxConnectionReceiveWindow:     134217728,
 		},
 		BandwidthConfig: hyclient.BandwidthConfig{
@@ -193,30 +337,22 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 		return err
 	}
 	defer c.Close()
-	log.Printf("[%s] connected to %s", a.cfg.Name, cl.Name)
+	log.Printf("[%s] connected to %s", a.node.Name(), cl.Name)
 	return a.node.AttachTo(ctx, cl.Name, c)
 }
 
-func (a *App) serveSOCKS5(ctx context.Context) {
-	ln, err := net.Listen("tcp", a.cfg.SOCKS5.Listen)
-	if err != nil {
-		log.Printf("[%s] socks5: %v", a.cfg.Name, err)
-		return
-	}
-	defer ln.Close()
-	log.Printf("[%s] SOCKS5 on %s (exit_via=%q)", a.cfg.Name, a.cfg.SOCKS5.Listen, a.cfg.SOCKS5.ExitVia)
+func (a *App) serveProxy(ctx context.Context, ln net.Listener, pc ProxyConfig) {
 	go func() { <-ctx.Done(); ln.Close() }()
-
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			return
 		}
-		go a.handleSOCKS5(c)
+		go a.handleSOCKS5(c, pc.ExitVia)
 	}
 }
 
-func (a *App) handleSOCKS5(conn net.Conn) {
+func (a *App) handleSOCKS5(conn net.Conn, exitVia string) {
 	defer conn.Close()
 	buf := make([]byte, 256)
 	n, _ := conn.Read(buf)
@@ -245,10 +381,8 @@ func (a *App) handleSOCKS5(conn net.Conn) {
 
 	var remote net.Conn
 	var err error
-	exitVia := a.cfg.SOCKS5.ExitVia
-
 	if exitVia == "" {
-		remote, err = net.DialTimeout("tcp", addr, 10*time.Second) // local exit
+		remote, err = net.DialTimeout("tcp", addr, 10*time.Second)
 	} else {
 		parts := splitPath(exitVia)
 		if len(parts) == 1 {
@@ -340,5 +474,3 @@ func loadCert(certFile, keyFile string) (tls.Certificate, error) {
 	der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
 }
-
-func (a *App) Shutdown() error { return nil }

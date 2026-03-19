@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>hy2scale</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>hy2scale</h1>
+    <span class="node-id" id="node-id"></span>
+    <span id="node-name" style="color:var(--dim);font-size:13px"></span>
+  </header>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="nodes">Nodes</div>
+    <div class="tab" data-tab="proxies">Proxies</div>
+  </div>
+
+  <div class="panel active" id="panel-nodes">
+    <!-- Connected Peers -->
+    <div class="card">
+      <h3>Connected Peers</h3>
+      <ul class="peer-list" id="peer-list">
+        <li class="loading">Loading...</li>
+      </ul>
+    </div>
+
+    <!-- Add Client -->
+    <div class="card">
+      <h3>Connect to Node</h3>
+      <div class="form-row">
+        <input id="cl-name" placeholder="Name" style="width:100px">
+        <input id="cl-addr" placeholder="host:port" style="width:180px">
+        <input id="cl-pass" placeholder="Password" type="password" style="width:140px">
+        <input id="cl-bw" placeholder="Bandwidth (B/s)" style="width:120px" type="number">
+        <button class="primary" onclick="addClient()">Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-proxies">
+    <!-- Proxy List -->
+    <div class="card">
+      <h3>Proxy Instances</h3>
+      <div id="proxy-list">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Add Proxy -->
+    <div class="card">
+      <h3>Add Proxy</h3>
+      <div class="form-row">
+        <input id="px-id" placeholder="ID" style="width:100px">
+        <select id="px-proto" style="width:100px">
+          <option value="socks5">SOCKS5</option>
+        </select>
+        <input id="px-listen" placeholder="0.0.0.0:1080" style="width:160px">
+        <input id="px-exit" placeholder="Exit via (e.g. au/jp)" style="width:180px">
+        <button class="primary" onclick="addProxy()">Add</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
