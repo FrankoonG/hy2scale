@@ -47,6 +47,13 @@ function showLogin() {
   $('#login-screen').style.display = '';
   $('#app').style.display = 'none';
   history.replaceState(null, '', basePath + '/login');
+  // Restore saved credentials
+  const saved = JSON.parse(localStorage.getItem('hy2scale_cred') || 'null');
+  if (saved) {
+    $('#login-user').value = saved.u;
+    $('#login-pass').value = saved.p;
+    $('#login-remember').checked = true;
+  }
 }
 function showApp() {
   $('#login-screen').style.display = 'none';
@@ -60,13 +67,23 @@ async function doLogin() {
     const r = await fetch(basePath + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
     if (!r.ok) { $('#login-error').textContent = 'Invalid username or password'; return; }
     sessionStorage.setItem('token', (await r.json()).token);
+    // Remember credentials
+    if ($('#login-remember').checked) {
+      localStorage.setItem('hy2scale_cred', JSON.stringify({ u: username, p: password }));
+    } else {
+      localStorage.removeItem('hy2scale_cred');
+    }
     showApp();
     history.pushState(null, '', basePath + '/nodes');
     switchPage('nodes', false);
     refresh();
   } catch (e) { $('#login-error').textContent = String(e); }
 }
-function doLogout() { sessionStorage.removeItem('token'); clearInterval(pollTimer); showLogin(); }
+function doLogout() {
+  sessionStorage.removeItem('token');
+  clearInterval(pollTimer);
+  showLogin();
+}
 $('#login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 $('#login-user').addEventListener('keydown', e => { if (e.key === 'Enter') $('#login-pass').focus(); });
 
@@ -430,6 +447,7 @@ async function changePassword() {
   try {
     await api('/settings/password', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ current_password: cur, new_username: newUser, new_password: newPass }) });
     ['set-cur-pass','set-new-user','set-new-pass','set-confirm-pass'].forEach(id => $(`#${id}`).value = '');
+    localStorage.removeItem('hy2scale_cred');
     $('#set-ok').textContent = 'Updated. Redirecting to login...'; setTimeout(doLogout, 1500);
   } catch (e) { $('#set-error').textContent = String(e); }
 }
@@ -500,7 +518,23 @@ async function deleteCert(id) {
 }
 
 // ── Init ──
-routeFromURL();
-if (sessionStorage.getItem('token') && location.pathname.replace(basePath, '').replace(/^\/+/, '') !== 'login') {
-  refresh();
-}
+(async function init() {
+  // Auto-login if remembered credentials exist and no active session
+  if (!sessionStorage.getItem('token')) {
+    const saved = JSON.parse(localStorage.getItem('hy2scale_cred') || 'null');
+    if (saved) {
+      try {
+        const r = await fetch(basePath + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: saved.u, password: saved.p }) });
+        if (r.ok) {
+          sessionStorage.setItem('token', (await r.json()).token);
+        } else {
+          localStorage.removeItem('hy2scale_cred'); // credentials stale
+        }
+      } catch (e) {}
+    }
+  }
+  routeFromURL();
+  if (sessionStorage.getItem('token') && location.pathname.replace(basePath, '').replace(/^\/+/, '') !== 'login') {
+    refresh();
+  }
+})();
