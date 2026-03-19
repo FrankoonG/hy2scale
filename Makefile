@@ -1,23 +1,13 @@
-.PHONY: all server client test clean docker-server docker-client
+.PHONY: build up down logs
 
-all: server client
+build:
+	docker compose build
 
-server:
-	go build -o bin/server ./server/cmd/server
+up:
+	docker compose up -d
 
-client:
-	go build -o bin/client ./client/cmd/client
+down:
+	docker compose down
 
-test:
-	go test ./pkg/... ./server/... ./client/... -v -race
-
-clean:
-	rm -rf bin/
-
-docker-server:
-	docker compose -f server/docker-compose.yml build
-
-docker-client:
-	docker compose -f client/docker-compose.yml build
-
-docker-all: docker-server docker-client
+logs:
+	docker compose logs -f

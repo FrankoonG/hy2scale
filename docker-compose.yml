@@ -1,0 +1,9 @@
+services:
+  hy2scale:
+    build: .
+    image: hy2scale
+    container_name: hy2scale
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./configs/${NODE:-local}.yaml:/etc/hy2scale/config.yaml:ro
