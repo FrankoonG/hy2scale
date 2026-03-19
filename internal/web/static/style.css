@@ -79,7 +79,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 /* ── Nested sub-rows ── */
 .sub-row td{padding:8px 10px;background:var(--bg);font-size:13px}
 .sub-row .peer-name-cell{font-weight:500}
-.tree-branch{display:inline-block;width:20px;color:var(--border);font-family:var(--mono);font-size:14px;text-align:center;vertical-align:middle;user-select:none;-webkit-user-select:none;pointer-events:none}
+.tree-branch{display:inline-block;width:20px;color:var(--text-muted);font-family:var(--mono);font-size:14px;text-align:center;vertical-align:middle;user-select:none;-webkit-user-select:none;pointer-events:none}
 .sub-name-wrap{display:inline-block;vertical-align:middle}
 .sub-name-wrap .peer-addr-sub{margin-left:0}
 

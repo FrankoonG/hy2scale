@@ -431,12 +431,28 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Self node at top
+	// Collect inbound peers as self's children
 	selfServer := ""
 	selfDisabled := cfg.Server == nil || cfg.Server.Listen == ""
 	if cfg.Server != nil {
 		selfServer = cfg.Server.Listen
 	}
+	selfChildren := make([]subPeer, 0)
+	inboundNames := make(map[string]bool)
+	for _, p := range peers {
+		if p.Direction == "inbound" {
+			inboundNames[p.Name] = true
+			selfChildren = append(selfChildren, subPeer{
+				Name:      p.Name,
+				ExitNode:  p.ExitNode,
+				Direction: "inbound",
+				Via:       cfg.NodeID,
+				LatencyMs: 0,
+			})
+		}
+	}
+	sort.Slice(selfChildren, func(i, j int) bool { return selfChildren[i].Name < selfChildren[j].Name })
+
 	result := make([]treeNode, 0, len(names)+1)
 	result = append(result, treeNode{
 		Name:      cfg.NodeID,
@@ -446,9 +462,14 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		Disabled:  selfDisabled,
 		IsSelf:    true,
 		LatencyMs: 0,
+		Children:  selfChildren,
 	})
 
 	for _, name := range names {
+		// Skip inbound peers — they're nested under self
+		if inboundNames[name] {
+			continue
+		}
 		tn := treeNode{Name: name, Connected: connected[name], Disabled: disabledMap[name]}
 		if cl, ok := clientMap[name]; ok {
 			tn.Addr = cl.Addr
@@ -466,9 +487,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		}
 		if tn.Connected && tn.Direction == "outbound" {
 			tn.LatencyMs = latencyCache[name]
-		} else if tn.Connected {
-			tn.LatencyMs = 0 // inbound, no measurement
-		} else {
+		} else if !tn.Connected {
 			tn.LatencyMs = -1
 		}
 
