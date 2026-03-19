@@ -163,7 +163,6 @@ async function refreshStats() {
 
 // ── Topology Table ──
 function latencyHTML(ms) {
-  if (ms === -2) return '<span class="latency latency-conflict">conflict</span>';
   if (ms === -1) return '<span class="latency latency-off">offline</span>';
   if (ms === 0) return '<span class="latency latency-na">—</span>';
   const cls = ms < 80 ? 'latency-good' : ms < 200 ? 'latency-med' : 'latency-bad';
@@ -182,7 +181,7 @@ function remoteURL(chain) {
 }
 
 function nameLink(name, chain) {
-  if (!chain || !chain.length) return `<span class="peer-name-cell">${esc(name)}</span>`;
+  if (!chain || !chain.length || window.__PROXY__) return `<span class="peer-name-cell">${esc(name)}</span>`;
   return `<a class="peer-name-cell peer-link" href="${remoteURL(chain)}" target="_blank">${esc(name)}</a>`;
 }
 
@@ -229,20 +228,18 @@ function childRowHTML(c, isLast, depth, parentChain) {
   depth = depth || 1;
   parentChain = parentChain || [];
   const chain = [...parentChain, c.name];
-  const conflict = !!c.conflict;
-  const dis = conflict || isNestedDisabled(c.via, c.name);
-  const conflictBadge = conflict ? ' <span class="badge badge-red">ID CONFLICT</span>' : '';
+  const dis = isNestedDisabled(c.via, c.name);
   const dir = c.direction ? dirHTML(c.direction) : '';
   const indent = 'padding-left:' + (depth * 20) + 'px';
-  const nestedToggle = conflict ? '' : `<label class="toggle"><input type="checkbox" ${c.nested ? 'checked' : ''} onchange="toggleNested('${esc(c.name)}',this.checked)"><span class="slider"></span></label>`;
-  const actions = conflict ? '' : `<button class="act-btn ${dis ? 'enable' : 'warn'}" onclick="toggleNestedDisable('${esc(c.via)}','${esc(c.name)}',${!dis})">${dis ? 'Enable' : 'Disable'}</button>`;
+  const nestedToggle = `<label class="toggle"><input type="checkbox" ${c.nested ? 'checked' : ''} onchange="toggleNested('${esc(c.name)}',this.checked)"><span class="slider"></span></label>`;
+  const actions = `<button class="act-btn ${dis ? 'enable' : 'warn'}" onclick="toggleNestedDisable('${esc(c.via)}','${esc(c.name)}',${!dis})">${dis ? 'Enable' : 'Disable'}</button>`;
 
-  let html = `<tr class="sub-row${dis ? ' disabled' : ''}${conflict ? ' conflict' : ''}">
-    <td class="col-latency">${conflict ? latencyHTML(-2) : (dis ? latencyHTML(-1) : latencyHTML(c.latency_ms))}</td>
+  let html = `<tr class="sub-row${dis ? ' disabled' : ''}">
+    <td class="col-latency">${dis ? latencyHTML(-1) : latencyHTML(c.latency_ms)}</td>
     <td class="col-dir">${dir}</td>
     <td class="col-name" style="${indent}">
       <span class="tree-branch" aria-hidden="true">${isLast ? '└' : '├'}</span><span class="sub-name-wrap">
-        ${conflict ? `<span class="peer-name-cell">${esc(c.name)}</span>` : nameLink(c.name, chain)}${conflictBadge}
+        ${nameLink(c.name, chain)}
         <span class="peer-addr-sub">via ${esc(c.via)}</span>
       </span>
     </td>
