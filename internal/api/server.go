@@ -19,6 +19,16 @@ import (
 	"github.com/FrankoonG/hy2scale/internal/web"
 )
 
+type topoSubPeer struct {
+	Name      string         `json:"name"`
+	ExitNode  bool           `json:"exit_node"`
+	Direction string         `json:"direction"`
+	Via       string         `json:"via"`
+	LatencyMs int            `json:"latency_ms"`
+	Nested    bool           `json:"nested"`
+	Children  []topoSubPeer  `json:"children,omitempty"`
+}
+
 type Server struct {
 	app      *app.App
 	addr     string
@@ -376,24 +386,17 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		connected[p.Name] = true
 	}
 
-	type subPeer struct {
-		Name      string `json:"name"`
-		ExitNode  bool   `json:"exit_node"`
-		Direction string `json:"direction"`
-		Via       string `json:"via"`
-		LatencyMs int    `json:"latency_ms"`
-	}
 	type treeNode struct {
-		Name      string    `json:"name"`
-		Addr      string    `json:"addr,omitempty"`
-		ExitNode  bool      `json:"exit_node"`
-		Direction string    `json:"direction"`
-		Connected bool      `json:"connected"`
-		Disabled  bool      `json:"disabled"`
-		Nested    bool      `json:"nested"`
-		LatencyMs int       `json:"latency_ms"`
-		IsSelf    bool      `json:"is_self,omitempty"`
-		Children  []subPeer `json:"children,omitempty"`
+		Name      string          `json:"name"`
+		Addr      string          `json:"addr,omitempty"`
+		ExitNode  bool            `json:"exit_node"`
+		Direction string          `json:"direction"`
+		Connected bool            `json:"connected"`
+		Disabled  bool            `json:"disabled"`
+		Nested    bool            `json:"nested"`
+		LatencyMs int             `json:"latency_ms"`
+		IsSelf    bool            `json:"is_self,omitempty"`
+		Children  []topoSubPeer   `json:"children,omitempty"`
 	}
 
 	disabledMap := make(map[string]bool)
@@ -437,18 +440,22 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	if cfg.Server != nil {
 		selfServer = cfg.Server.Listen
 	}
-	selfChildren := make([]subPeer, 0)
+	selfChildren := make([]topoSubPeer, 0)
 	inboundNames := make(map[string]bool)
 	for _, p := range peers {
 		if p.Direction == "inbound" {
 			inboundNames[p.Name] = true
-			selfChildren = append(selfChildren, subPeer{
+			child := topoSubPeer{
 				Name:      p.Name,
 				ExitNode:  p.ExitNode,
 				Direction: "inbound",
 				Via:       cfg.NodeID,
 				LatencyMs: 0,
-			})
+			}
+			if pc, ok := cfg.Peers[p.Name]; ok {
+				child.Nested = pc.Nested
+			}
+			selfChildren = append(selfChildren, child)
 		}
 	}
 	sort.Slice(selfChildren, func(i, j int) bool { return selfChildren[i].Name < selfChildren[j].Name })
@@ -491,42 +498,58 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			tn.LatencyMs = -1
 		}
 
-		// Load sub-peers with enriched info
+		// Load sub-peers recursively
 		if tn.Nested && tn.Connected {
-			parentLatency := latencyCache[name]
-			if subPeers, err := s.app.Node().PeersOf(name); err == nil {
-				myName := s.app.Node().Name()
-				children := make([]subPeer, 0, len(subPeers))
-				for _, sp := range subPeers {
-					if sp.Name == myName {
-						continue
-					}
-					childLatency := -1
-					if parentLatency > 0 {
-						// Chain latency estimate: parent RTT is the minimum floor
-						// If we also have a direct connection, use that as additional data
-						if directLat, ok := latencyCache[sp.Name]; ok && directLat > 0 {
-							childLatency = parentLatency + directLat
-						} else {
-							// Approximate: parent RTT × 2 for one additional hop
-							childLatency = parentLatency * 2
-						}
-					}
-					children = append(children, subPeer{
-						Name:      sp.Name,
-						ExitNode:  sp.ExitNode,
-						Direction: sp.Direction,
-						Via:       name,
-						LatencyMs: childLatency,
-					})
-				}
-				sort.Slice(children, func(i, j int) bool { return children[i].Name < children[j].Name })
-				tn.Children = children
-			}
+			tn.Children = s.loadSubPeers(name, latencyCache[name], latencyCache, cfg, 0)
 		}
+		// Also load children for inbound peers nested under self
+		// (they can have outbound connections visible if nested is enabled)
 		result = append(result, tn)
 	}
 	writeJSON(w, result)
+}
+
+
+func (s *Server) loadSubPeers(peerName string, parentLatency int, latencyCache map[string]int, cfg app.Config, depth int) []topoSubPeer {
+	if depth > 3 {
+		return nil
+	}
+	subPeers, err := s.app.Node().PeersOf(peerName)
+	if err != nil {
+		return nil
+	}
+	myName := s.app.Node().Name()
+	children := make([]topoSubPeer, 0, len(subPeers))
+	for _, sp := range subPeers {
+		if sp.Name == myName {
+			continue
+		}
+		childLatency := -1
+		if parentLatency > 0 {
+			if directLat, ok := latencyCache[sp.Name]; ok && directLat > 0 {
+				childLatency = parentLatency + directLat
+			} else {
+				childLatency = parentLatency * 2
+			}
+		}
+		child := topoSubPeer{
+			Name:      sp.Name,
+			ExitNode:  sp.ExitNode,
+			Direction: sp.Direction,
+			Via:       peerName,
+			LatencyMs: childLatency,
+		}
+		if pc, ok := cfg.Peers[sp.Name]; ok {
+			child.Nested = pc.Nested
+		}
+		// Recurse if nested enabled for this child
+		if child.Nested {
+			child.Children = s.loadSubPeers(sp.Name, childLatency, latencyCache, cfg, depth+1)
+		}
+		children = append(children, child)
+	}
+	sort.Slice(children, func(i, j int) bool { return children[i].Name < children[j].Name })
+	return children
 }
 
 func (s *Server) getNestedPeers(w http.ResponseWriter, r *http.Request) {
