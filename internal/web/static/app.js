@@ -125,6 +125,7 @@ function parentRowHTML(n) {
     ? `<label class="toggle"><input type="checkbox" ${n.nested ? 'checked' : ''} onchange="toggleNested('${esc(n.name)}',this.checked)"><span class="slider"></span></label>`
     : '';
   const actions = n.direction === 'outbound' ? `<div class="act-group">
+    <button class="act-btn edit" onclick="openEditDialog('${esc(n.name)}')">Edit</button>
     <button class="act-btn ${n.disabled ? 'enable' : 'warn'}" onclick="toggleDisable('${esc(n.name)}',${!n.disabled})">${n.disabled ? 'Enable' : 'Disable'}</button>
     <button class="act-btn danger" onclick="removeClient('${esc(n.name)}')">Delete</button>
   </div>` : '';
@@ -228,9 +229,46 @@ async function removeClient(name) {
   catch (e) { alert(e); }
 }
 
-// ── Add Node Modal ──
-function openAddDialog() { $('#add-node-modal').style.display = ''; switchModalTab($$('#add-node-modal .modal-tab')[0]); }
-function closeAddDialog() { $('#add-node-modal').style.display = 'none'; }
+// ── Node Modal (Add / Edit) ──
+let editingNode = null; // null = add mode, string = edit mode (name)
+
+function openAddDialog() {
+  editingNode = null;
+  $('#add-node-modal-title').textContent = 'Add Node Connection';
+  $('#add-node-submit').textContent = 'Connect';
+  $('#add-name').value = ''; $('#add-name').disabled = false;
+  ['add-addr','add-pass','add-sni','add-ca','add-tx','add-rx','add-isw','add-msw','add-icw','add-mcw'].forEach(id => $(`#${id}`).value = '');
+  $('#add-insecure').checked = true; $('#add-fastopen').checked = false;
+  $('#add-node-modal').style.display = '';
+  switchModalTab($$('#add-node-modal .modal-tab')[0]);
+}
+
+async function openEditDialog(name) {
+  try {
+    const cl = await api(`/clients/${encodeURIComponent(name)}`);
+    editingNode = name;
+    $('#add-node-modal-title').textContent = `Edit: ${name}`;
+    $('#add-node-submit').textContent = 'Save';
+    $('#add-name').value = cl.name; $('#add-name').disabled = true;
+    $('#add-addr').value = cl.addr || '';
+    $('#add-pass').value = cl.password || '';
+    $('#add-sni').value = cl.sni || '';
+    $('#add-insecure').checked = cl.insecure !== false;
+    $('#add-ca').value = cl.ca || '';
+    $('#add-tx').value = cl.max_tx || '';
+    $('#add-rx').value = cl.max_rx || '';
+    $('#add-isw').value = cl.init_stream_window || '';
+    $('#add-msw').value = cl.max_stream_window || '';
+    $('#add-icw').value = cl.init_conn_window || '';
+    $('#add-mcw').value = cl.max_conn_window || '';
+    $('#add-fastopen').checked = !!cl.fast_open;
+    $('#add-node-modal').style.display = '';
+    switchModalTab($$('#add-node-modal .modal-tab')[0]);
+  } catch (e) { alert(e); }
+}
+
+function closeAddDialog() { $('#add-node-modal').style.display = 'none'; editingNode = null; }
+
 function switchModalTab(tab) {
   const modal = tab.closest('.modal-body');
   modal.querySelectorAll('.modal-tab').forEach(t => t.classList.toggle('active', t === tab));
@@ -249,10 +287,12 @@ async function submitAddNode() {
     fast_open: $('#add-fastopen').checked,
   };
   try {
-    await api('/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (editingNode) {
+      await api(`/clients/${encodeURIComponent(editingNode)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } else {
+      await api('/clients', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    }
     closeAddDialog();
-    ['add-name','add-addr','add-pass','add-sni','add-ca','add-tx','add-rx','add-isw','add-msw','add-icw','add-mcw'].forEach(id => $(`#${id}`).value = '');
-    $('#add-insecure').checked = true; $('#add-fastopen').checked = false;
     lastTopoJSON = ''; setTimeout(refreshTopology, 1000);
   } catch (e) { alert(e); }
 }

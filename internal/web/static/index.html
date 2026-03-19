@@ -157,7 +157,7 @@
 <div class="modal-overlay" id="add-node-modal" style="display:none" onclick="if(event.target===this)closeAddDialog()">
   <div class="modal">
     <div class="modal-header">
-      <h2>Add Node Connection</h2>
+      <h2 id="add-node-modal-title">Add Node Connection</h2>
       <button class="btn-icon" onclick="closeAddDialog()">✕</button>
     </div>
     <div class="modal-body">
@@ -206,7 +206,7 @@
     </div>
     <div class="modal-footer">
       <button onclick="closeAddDialog()">Cancel</button>
-      <button class="btn-primary" onclick="submitAddNode()">Connect</button>
+      <button class="btn-primary" id="add-node-submit" onclick="submitAddNode()">Connect</button>
     </div>
   </div>
 </div>

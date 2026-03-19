@@ -12,7 +12,6 @@ import (
 	"log"
 	"math/big"
 	"net"
-	"os"
 	"sync"
 	"time"
 
@@ -90,27 +89,18 @@ type App struct {
 	proxyHandles map[string]*proxyHandle
 }
 
-func New(cfgPath, dataDir string) (*App, error) {
-	cfg, err := LoadConfig(cfgPath, dataDir)
+func New(dataDir string) (*App, error) {
+	cfg, err := LoadOrInitConfig(dataDir)
 	if err != nil {
 		return nil, err
 	}
 
-	persistPath := ""
-	if dataDir != "" {
-		os.MkdirAll(dataDir, 0755)
-		persistPath = dataDir + "/config.yaml"
-	}
-
-	var tlsStore *TLSStore
-	if dataDir != "" {
-		tlsStore = NewTLSStore(dataDir)
-	}
+	persistPath := dataDir + "/config.yaml"
 
 	return &App{
 		store:        NewConfigStore(cfg, persistPath),
 		node:         relay.NewNode(cfg.Name, cfg.ExitNode),
-		tls:          tlsStore,
+		tls:          NewTLSStore(dataDir),
 		clientCancel: make(map[string]context.CancelFunc),
 		proxyHandles: make(map[string]*proxyHandle),
 	}, nil
@@ -187,6 +177,20 @@ func (a *App) AddClient(cl ClientEntry) error {
 	return a.store.Update(func(c *Config) {
 		for _, existing := range c.Clients {
 			if existing.Name == cl.Name {
+				return
+			}
+		}
+		c.Clients = append(c.Clients, cl)
+	})
+}
+
+func (a *App) UpdateClient(cl ClientEntry) error {
+	a.StopClient(cl.Name)
+	a.StartClient(cl)
+	return a.store.Update(func(c *Config) {
+		for i, existing := range c.Clients {
+			if existing.Name == cl.Name {
+				c.Clients[i] = cl
 				return
 			}
 		}
