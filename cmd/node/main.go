@@ -13,13 +13,12 @@ import (
 )
 
 func main() {
-	cfgPath := flag.String("config", "/etc/hy2scale/config.yaml", "config file")
 	apiAddr := flag.String("api", "", "API/UI listen address (default 0.0.0.0:5565)")
 	basePath := flag.String("base-path", "", "UI base path (e.g. /scale)")
 	dataDir := flag.String("data", "/data", "persistent data directory")
 	flag.Parse()
 
-	a, err := app.New(*cfgPath, *dataDir)
+	a, err := app.New(*dataDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "init: %v\n", err)
 		os.Exit(1)
@@ -32,7 +31,6 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() { <-sigCh; cancel() }()
 
-	// Resolve API listen address and base path from config or flags
 	cfg := a.Store().Get()
 	listenAddr := "0.0.0.0:5565"
 	if cfg.UIListen != "" {

@@ -10,4 +10,3 @@ RUN apk add --no-cache ca-certificates
 COPY --from=builder /hy2scale /usr/local/bin/hy2scale
 VOLUME /data
 ENTRYPOINT ["hy2scale"]
-CMD ["-config", "/etc/hy2scale/config.yaml"]

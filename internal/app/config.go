@@ -23,7 +23,7 @@ type ProxyConfig struct {
 type ConfigStore struct {
 	mu   sync.RWMutex
 	cfg  Config
-	path string // persistence path
+	path string
 }
 
 func NewConfigStore(cfg Config, persistPath string) *ConfigStore {
@@ -79,71 +79,42 @@ func loadOrCreateNodeID(dataDir string) (string, error) {
 	return id, os.WriteFile(path, []byte(id), 0644)
 }
 
-// LoadConfig loads config from YAML, applies node ID, and migrates legacy fields.
-func LoadConfig(cfgPath, dataDir string) (Config, error) {
-	data, err := os.ReadFile(cfgPath)
+// LoadOrInitConfig loads persisted config from dataDir/config.yaml.
+// If it doesn't exist, creates a fresh default config.
+func LoadOrInitConfig(dataDir string) (Config, error) {
+	os.MkdirAll(dataDir, 0755)
+
+	nodeID, err := loadOrCreateNodeID(dataDir)
 	if err != nil {
 		return Config{}, err
 	}
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return Config{}, err
-	}
 
-	// Generate or load node ID
-	if dataDir != "" {
-		nodeID, err := loadOrCreateNodeID(dataDir)
-		if err != nil {
+	persistPath := filepath.Join(dataDir, "config.yaml")
+	data, err := os.ReadFile(persistPath)
+	if err == nil {
+		// Load existing persisted config
+		var cfg Config
+		if err := yaml.Unmarshal(data, &cfg); err != nil {
 			return Config{}, err
 		}
 		if cfg.NodeID == "" {
 			cfg.NodeID = nodeID
 		}
-	}
-
-	if cfg.Name == "" {
-		cfg.Name = cfg.NodeID
-	}
-
-	// Migrate legacy bandwidth field to max_tx/max_rx
-	for i := range cfg.Clients {
-		cl := &cfg.Clients[i]
-		if cl.MaxTx == 0 && cl.MaxRx == 0 {
-			// Check for legacy "bandwidth" field via raw parse
-			var raw struct {
-				Clients []struct {
-					Bandwidth int `yaml:"bandwidth"`
-				} `yaml:"clients"`
-			}
-			yaml.Unmarshal(data, &raw)
-			if i < len(raw.Clients) && raw.Clients[i].Bandwidth > 0 {
-				cl.MaxTx = raw.Clients[i].Bandwidth
-				cl.MaxRx = raw.Clients[i].Bandwidth
-			}
+		if cfg.Name == "" {
+			cfg.Name = cfg.NodeID
 		}
-		if cl.Insecure == false && cl.SNI == "" && cl.CA == "" {
-			cl.Insecure = true // default for backward compat
+		if cfg.Peers == nil {
+			cfg.Peers = make(map[string]PeerConfig)
 		}
+		return cfg, nil
 	}
 
-	// Migrate legacy SOCKS5 field to Proxies
-	if cfg.SOCKS5 != nil && len(cfg.Proxies) == 0 {
-		cfg.Proxies = []ProxyConfig{{
-			ID:       "default",
-			Protocol: "socks5",
-			Listen:   cfg.SOCKS5.Listen,
-			ExitVia:  cfg.SOCKS5.ExitVia,
-		}}
+	// Fresh start — empty config with just the node ID
+	cfg := Config{
+		NodeID:   nodeID,
+		Name:     nodeID,
+		ExitNode: true,
+		Peers:    make(map[string]PeerConfig),
 	}
-
-	// Default hy2 server listen to :5565 if server is configured but listen is empty
-	if cfg.Server != nil && cfg.Server.Listen == "" {
-		cfg.Server.Listen = "0.0.0.0:5565"
-	}
-
-	if cfg.Peers == nil {
-		cfg.Peers = make(map[string]PeerConfig)
-	}
-
 	return cfg, nil
 }

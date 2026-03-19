@@ -61,7 +61,9 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("GET /api/peers/{name}/peers", s.getNestedPeers)
 	authed.HandleFunc("PUT /api/peers/{name}/nested", s.setNested)
 	authed.HandleFunc("GET /api/clients", s.getClients)
+	authed.HandleFunc("GET /api/clients/{name}", s.getClient)
 	authed.HandleFunc("POST /api/clients", s.addClient)
+	authed.HandleFunc("PUT /api/clients/{name}", s.updateClient)
 	authed.HandleFunc("PUT /api/clients/{name}/disable", s.disableClient)
 	authed.HandleFunc("DELETE /api/clients/{name}", s.removeClient)
 	authed.HandleFunc("GET /api/proxies", s.getProxies)
@@ -511,6 +513,37 @@ func (s *Server) getClients(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, result)
+}
+
+func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	cfg := s.app.Store().Get()
+	for _, cl := range cfg.Clients {
+		if cl.Name == name {
+			writeJSON(w, cl)
+			return
+		}
+	}
+	http.Error(w, "not found", 404)
+}
+
+func (s *Server) updateClient(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var cl app.ClientEntry
+	if err := json.NewDecoder(r.Body).Decode(&cl); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	cl.Name = name
+	if cl.Addr == "" || cl.Password == "" {
+		http.Error(w, "addr and password required", 400)
+		return
+	}
+	if err := s.app.UpdateClient(cl); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 func (s *Server) addClient(w http.ResponseWriter, r *http.Request) {

@@ -94,6 +94,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 .act-group{display:inline-flex;gap:2px}
 .act-btn{padding:4px 10px;border:none;border-radius:var(--radius-sm);cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:500;font-family:var(--font);transition:opacity .12s;color:#fff}
 .act-btn:hover{opacity:.85;color:#fff}
+.act-btn.edit{background:var(--primary)}
 .act-btn.warn{background:var(--orange)}
 .act-btn.enable{background:var(--green)}
 .act-btn.danger{background:var(--red)}
