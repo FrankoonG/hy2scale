@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log"
 	"net"
+	"sort"
 	"net/http"
 	"strings"
 	"sync"
@@ -55,6 +56,7 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("GET /api/node", s.getNode)
 	authed.HandleFunc("PUT /api/node", s.updateNode)
 	authed.HandleFunc("GET /api/peers", s.getPeers)
+	authed.HandleFunc("GET /api/topology", s.getTopology)
 	authed.HandleFunc("GET /api/peers/{name}/peers", s.getNestedPeers)
 	authed.HandleFunc("PUT /api/peers/{name}/nested", s.setNested)
 	authed.HandleFunc("GET /api/clients", s.getClients)
@@ -261,6 +263,85 @@ func (s *Server) getPeers(w http.ResponseWriter, r *http.Request) {
 			Direction: p.Direction,
 			Nested:    nested,
 		})
+	}
+	writeJSON(w, result)
+}
+
+// getTopology returns a tree structure: direct peers with their nested sub-peers.
+func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
+	peers := s.app.Node().Peers()
+	cfg := s.app.Store().Get()
+
+	// Build client lookup for addr info
+	clientMap := make(map[string]app.ClientEntry)
+	for _, cl := range cfg.Clients {
+		clientMap[cl.Name] = cl
+	}
+	connected := make(map[string]bool)
+	for _, p := range peers {
+		connected[p.Name] = true
+	}
+
+	type subPeer struct {
+		Name     string `json:"name"`
+		ExitNode bool   `json:"exit_node"`
+	}
+	type treeNode struct {
+		Name      string    `json:"name"`
+		Addr      string    `json:"addr,omitempty"`
+		ExitNode  bool      `json:"exit_node"`
+		Direction string    `json:"direction"`
+		Connected bool      `json:"connected"`
+		Nested    bool      `json:"nested"`
+		Children  []subPeer `json:"children,omitempty"`
+	}
+
+	// Collect all names (clients + inbound peers), sorted
+	nameSet := make(map[string]bool)
+	for _, p := range peers {
+		nameSet[p.Name] = true
+	}
+	for _, cl := range cfg.Clients {
+		nameSet[cl.Name] = true
+	}
+	names := make([]string, 0, len(nameSet))
+	for n := range nameSet {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	result := make([]treeNode, 0, len(names))
+	for _, name := range names {
+		tn := treeNode{Name: name, Connected: connected[name]}
+		if cl, ok := clientMap[name]; ok {
+			tn.Addr = cl.Addr
+			tn.Direction = "outbound"
+		}
+		// Find peer info
+		for _, p := range peers {
+			if p.Name == name {
+				tn.ExitNode = p.ExitNode
+				tn.Direction = p.Direction
+				break
+			}
+		}
+		// Check nested
+		if pc, ok := cfg.Peers[name]; ok {
+			tn.Nested = pc.Nested
+		}
+		// Load sub-peers if nested enabled
+		if tn.Nested && tn.Connected {
+			if subPeers, err := s.app.Node().PeersOf(name); err == nil {
+				children := make([]subPeer, 0, len(subPeers))
+				for _, sp := range subPeers {
+					children = append(children, subPeer{Name: sp.Name, ExitNode: sp.ExitNode})
+				}
+				// Sort children by name
+				sort.Slice(children, func(i, j int) bool { return children[i].Name < children[j].Name })
+				tn.Children = children
+			}
+		}
+		result = append(result, tn)
 	}
 	writeJSON(w, result)
 }

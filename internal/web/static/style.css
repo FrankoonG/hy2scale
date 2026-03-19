@@ -134,9 +134,39 @@ button.btn-icon:hover{color:var(--red);background:var(--red-bg)}
 .login-box input{width:100%;margin-bottom:12px}
 .login-box button{margin-top:4px}
 
-/* ── Settings ── */
-.settings-section{margin-bottom:24px}
-.settings-section:last-child{margin-bottom:0}
+/* ── Tree topology ── */
+.tree-node{border-bottom:1px solid var(--border-light)}
+.tree-node:last-child{border-bottom:none}
+.tree-row{display:flex;align-items:center;gap:10px;padding:10px 0;padding-left:var(--depth,0px)}
+.tree-row .peer-name{font-weight:600;font-size:14px;min-width:60px}
+.tree-row .peer-addr{font-family:var(--mono);font-size:12px;color:var(--text-muted)}
+.tree-row .spacer{flex:1}
+.tree-children{padding-left:28px;border-left:2px solid var(--border-light);margin-left:14px}
+.tree-children .tree-row{padding:6px 0}
+.tree-children .peer-name{font-size:13px;font-weight:500}
+.tree-connector{width:16px;height:16px;color:var(--text-muted);flex-shrink:0;font-size:11px;text-align:center}
+
+/* ── Form grid ── */
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+
+/* ── Textarea ── */
+textarea{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:var(--radius-sm);font-size:12px;font-family:var(--mono);outline:none;transition:border .15s;width:100%;min-height:80px;resize:vertical}
+textarea:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(67,97,238,.1)}
+textarea::placeholder{color:var(--text-muted)}
+
+/* ── Modal ── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;z-index:200}
+.modal{background:var(--surface);border-radius:12px;width:100%;max-width:520px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.15)}
+.modal-header{display:flex;align-items:center;padding:20px 24px 16px;border-bottom:1px solid var(--border-light)}
+.modal-header h2{font-size:16px;font-weight:600;flex:1}
+.modal-body{padding:0 24px 20px;overflow-y:auto;flex:1}
+.modal-footer{display:flex;justify-content:flex-end;gap:8px;padding:16px 24px;border-top:1px solid var(--border-light)}
+.modal-tabs{display:flex;gap:0;margin:16px 0;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden}
+.modal-tab{flex:1;padding:7px;text-align:center;font-size:13px;font-weight:500;cursor:pointer;color:var(--text-muted);background:var(--bg);transition:all .15s;border-right:1px solid var(--border)}
+.modal-tab:last-child{border-right:none}
+.modal-tab.active{background:var(--primary-light);color:var(--primary)}
+.modal-panel{display:none}
+.modal-panel.active{display:block}
 
 /* ── Empty state ── */
 .empty{text-align:center;padding:24px;color:var(--text-muted);font-size:13px}
@@ -146,6 +176,6 @@ button.btn-icon:hover{color:var(--red);background:var(--red-bg)}
   .sidebar{position:fixed;z-index:100;left:-var(--sidebar-w);transition:left .25s}
   .sidebar.open{left:0}
   .content{padding:16px}
-  .form-row{flex-direction:column}
-  .form-row input,.form-row select{width:100%!important}
+  .form-grid{grid-template-columns:1fr}
+  .modal{max-width:95vw;margin:16px}
 }

@@ -105,6 +105,27 @@ func LoadConfig(cfgPath, dataDir string) (Config, error) {
 		cfg.Name = cfg.NodeID
 	}
 
+	// Migrate legacy bandwidth field to max_tx/max_rx
+	for i := range cfg.Clients {
+		cl := &cfg.Clients[i]
+		if cl.MaxTx == 0 && cl.MaxRx == 0 {
+			// Check for legacy "bandwidth" field via raw parse
+			var raw struct {
+				Clients []struct {
+					Bandwidth int `yaml:"bandwidth"`
+				} `yaml:"clients"`
+			}
+			yaml.Unmarshal(data, &raw)
+			if i < len(raw.Clients) && raw.Clients[i].Bandwidth > 0 {
+				cl.MaxTx = raw.Clients[i].Bandwidth
+				cl.MaxRx = raw.Clients[i].Bandwidth
+			}
+		}
+		if cl.Insecure == false && cl.SNI == "" && cl.CA == "" {
+			cl.Insecure = true // default for backward compat
+		}
+	}
+
 	// Migrate legacy SOCKS5 field to Proxies
 	if cfg.SOCKS5 != nil && len(cfg.Proxies) == 0 {
 		cfg.Proxies = []ProxyConfig{{
