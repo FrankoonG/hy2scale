@@ -73,9 +73,9 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 .peer-addr-sub{font-family:var(--mono);font-size:11px;color:var(--text-muted);display:block;margin-top:1px}
 
 /* ── Nested sub-rows ── */
-.sub-row td{padding:6px 10px;background:var(--bg);font-size:12px}
-.sub-row td:first-child{padding-left:36px}
+.sub-row td{padding:8px 10px;background:var(--bg);font-size:13px}
 .sub-row .peer-name-cell{font-weight:500}
+.tree-branch{display:inline-block;width:20px;color:var(--text-muted);font-family:var(--mono);font-size:14px;text-align:center;margin-right:4px;vertical-align:middle}
 
 /* ── Action buttons ── */
 .act-group{display:inline-flex;gap:2px}

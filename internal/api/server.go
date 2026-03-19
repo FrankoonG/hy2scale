@@ -312,8 +312,11 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type subPeer struct {
-		Name     string `json:"name"`
-		ExitNode bool   `json:"exit_node"`
+		Name      string `json:"name"`
+		ExitNode  bool   `json:"exit_node"`
+		Direction string `json:"direction"`
+		Via       string `json:"via"`
+		LatencyMs int    `json:"latency_ms"`
 	}
 	type treeNode struct {
 		Name      string    `json:"name"`
@@ -323,11 +326,10 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		Connected bool      `json:"connected"`
 		Disabled  bool      `json:"disabled"`
 		Nested    bool      `json:"nested"`
-		LatencyMs int       `json:"latency_ms"` // -1 = unreachable, 0 = not measured (inbound)
+		LatencyMs int       `json:"latency_ms"`
 		Children  []subPeer `json:"children,omitempty"`
 	}
 
-	// Build disabled lookup
 	disabledMap := make(map[string]bool)
 	for _, cl := range cfg.Clients {
 		if cl.Disabled {
@@ -335,7 +337,6 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Collect all names (clients + inbound peers), sorted
 	nameSet := make(map[string]bool)
 	for _, p := range peers {
 		nameSet[p.Name] = true
@@ -348,6 +349,21 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		names = append(names, n)
 	}
 	sort.Strings(names)
+
+	// Measure direct peer latencies
+	latencyCache := make(map[string]int)
+	for _, name := range names {
+		if connected[name] {
+			rtt := s.app.Node().PingPeer(name)
+			if rtt < 0 {
+				latencyCache[name] = -1
+			} else {
+				latencyCache[name] = int(rtt.Milliseconds())
+			}
+		} else {
+			latencyCache[name] = -1
+		}
+	}
 
 	result := make([]treeNode, 0, len(names))
 	for _, name := range names {
@@ -366,19 +382,17 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		if pc, ok := cfg.Peers[name]; ok {
 			tn.Nested = pc.Nested
 		}
-		// Measure latency for connected outbound peers
 		if tn.Connected && tn.Direction == "outbound" {
-			rtt := s.app.Node().PingPeer(name)
-			if rtt < 0 {
-				tn.LatencyMs = -1
-			} else {
-				tn.LatencyMs = int(rtt.Milliseconds())
-			}
-		} else if !tn.Connected {
+			tn.LatencyMs = latencyCache[name]
+		} else if tn.Connected {
+			tn.LatencyMs = 0 // inbound, no measurement
+		} else {
 			tn.LatencyMs = -1
 		}
-		// Load sub-peers if nested enabled
+
+		// Load sub-peers with enriched info
 		if tn.Nested && tn.Connected {
+			parentLatency := latencyCache[name]
 			if subPeers, err := s.app.Node().PeersOf(name); err == nil {
 				myName := s.app.Node().Name()
 				children := make([]subPeer, 0, len(subPeers))
@@ -386,7 +400,24 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 					if sp.Name == myName {
 						continue
 					}
-					children = append(children, subPeer{Name: sp.Name, ExitNode: sp.ExitNode})
+					childLatency := -1
+					if parentLatency > 0 {
+						// Chain latency estimate: parent RTT is the minimum floor
+						// If we also have a direct connection, use that as additional data
+						if directLat, ok := latencyCache[sp.Name]; ok && directLat > 0 {
+							childLatency = parentLatency + directLat
+						} else {
+							// Approximate: parent RTT × 2 for one additional hop
+							childLatency = parentLatency * 2
+						}
+					}
+					children = append(children, subPeer{
+						Name:      sp.Name,
+						ExitNode:  sp.ExitNode,
+						Direction: sp.Direction,
+						Via:       name,
+						LatencyMs: childLatency,
+					})
 				}
 				sort.Slice(children, func(i, j int) bool { return children[i].Name < children[j].Name })
 				tn.Children = children
