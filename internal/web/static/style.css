@@ -62,7 +62,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 .peer-table .col-dir{width:55px}
 .peer-table .col-name{min-width:80px}
 .peer-table .col-nested{width:70px;text-align:center}
-.peer-table .col-actions{width:80px;text-align:right}
+.peer-table .col-actions{width:150px;text-align:right}
 .latency{font-family:var(--mono);font-size:12px;font-weight:600}
 .latency-good{color:var(--green)}
 .latency-med{color:var(--orange)}
@@ -79,14 +79,12 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 
 /* ── Action buttons ── */
 .act-group{display:inline-flex;gap:2px}
-.act-btn{width:30px;height:30px;border:1px solid var(--border);background:var(--surface);cursor:pointer;border-radius:var(--radius-sm);display:inline-flex;align-items:center;justify-content:center;transition:all .12s;font-size:14px}
-.act-btn.warn{color:var(--orange);background:var(--orange-bg);border-color:var(--orange-bg)}
-.act-btn.warn:hover{border-color:var(--orange)}
-.act-btn.enable{color:var(--green);background:var(--green-bg);border-color:var(--green-bg)}
-.act-btn.enable:hover{border-color:var(--green)}
-.act-btn.danger{color:var(--red);background:var(--red-bg);border-color:var(--red-bg)}
-.act-btn.danger:hover{border-color:var(--red)}
-.act-btn svg{width:15px;height:15px}
+.act-btn{padding:4px 10px;border:none;border-radius:var(--radius-sm);cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:500;font-family:var(--font);transition:opacity .12s;color:#fff}
+.act-btn:hover{opacity:.8}
+.act-btn.warn{background:var(--orange)}
+.act-btn.enable{background:var(--green)}
+.act-btn.danger{background:var(--red)}
+.act-btn svg{width:13px;height:13px}
 
 /* ── Toggle ── */
 .toggle{position:relative;width:36px;height:20px;cursor:pointer;display:inline-block;vertical-align:middle}
