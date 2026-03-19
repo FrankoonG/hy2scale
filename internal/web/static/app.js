@@ -114,7 +114,7 @@ function latencyHTML(ms) {
 }
 
 function dirHTML(dir) {
-  if (dir === 'local') return '<span class="badge badge-muted">LOCAL</span>';
+  if (dir === 'local') return '<span class="badge badge-green">LOCAL</span>';
   return dir === 'inbound'
     ? '<span class="badge badge-blue">IN</span>'
     : '<span class="badge badge-orange">OUT</span>';
@@ -124,16 +124,17 @@ function parentRowHTML(n) {
   const exit = n.exit_node ? ' <span class="badge badge-green">EXIT</span>' : '';
 
   if (n.is_self) {
-    return `<tr class="self-row">
-      <td class="col-latency"><span class="latency latency-good">local</span></td>
+    return `<tr class="self-row${n.disabled ? ' disabled' : ''}">
+      <td class="col-latency"><span class="latency latency-na">∞ms</span></td>
       <td class="col-dir">${dirHTML('local')}</td>
       <td class="col-name">
-        <span class="peer-name-cell">${esc(n.name)}</span>${exit}
+        <span class="peer-name-cell">${esc(n.name)}</span>
         ${n.addr ? `<span class="peer-addr-sub">${esc(n.addr)} (UDP)</span>` : '<span class="peer-addr-sub">no hy2 server</span>'}
       </td>
       <td class="col-nested"></td>
       <td class="col-actions"><div class="act-group">
         <button class="act-btn edit" onclick="openEditSelf()">Edit</button>
+        <button class="act-btn ${n.disabled ? 'enable' : 'warn'}" onclick="toggleSelfDisable(${!n.disabled})">${n.disabled ? 'Enable' : 'Disable'}</button>
       </div></td>
     </tr>`;
   }
@@ -314,14 +315,21 @@ async function submitAddNode() {
 // ── Edit Self Modal ──
 async function openEditSelf() {
   try {
-    const n = await api('/node');
+    const [n, certs] = await Promise.all([api('/node'), api('/tls')]);
     $('#self-nodeid').value = n.node_id || '';
-    $('#self-name').value = n.name || '';
-    $('#self-exit').checked = !!n.exit_node;
     $('#self-srv-listen').value = n.server?.listen || '';
     $('#self-srv-pass').value = n.server?.password || '';
-    $('#self-srv-cert').value = n.server?.tls_cert || '';
-    $('#self-srv-key').value = n.server?.tls_key || '';
+    // Populate TLS cert dropdown
+    const sel = $('#self-srv-tls');
+    const currentCert = n.server?.tls_cert || '';
+    sel.innerHTML = '<option value="">Self-signed (auto)</option>';
+    if (certs?.length) {
+      for (const c of certs) {
+        if (!c.key_file) continue; // need private key
+        const selected = c.cert_file === currentCert ? ' selected' : '';
+        sel.innerHTML += `<option value="${esc(c.id)}"${selected}>${esc(c.name)} (${esc(c.subject)})</option>`;
+      }
+    }
     $('#self-error').textContent = '';
     $('#self-ok').textContent = '';
     $('#edit-self-modal').style.display = '';
@@ -332,30 +340,44 @@ function closeEditSelf() { $('#edit-self-modal').style.display = 'none'; }
 async function submitEditSelf() {
   $('#self-error').textContent = ''; $('#self-ok').textContent = '';
   const nodeId = $('#self-nodeid').value.trim();
-  const name = $('#self-name').value.trim();
-  const exitNode = $('#self-exit').checked;
   const srvListen = $('#self-srv-listen').value.trim();
   const srvPass = $('#self-srv-pass').value.trim();
-  const srvCert = $('#self-srv-cert').value.trim();
-  const srvKey = $('#self-srv-key').value.trim();
+  const tlsId = $('#self-srv-tls').value;
 
   if (!nodeId) { $('#self-error').textContent = 'Node ID is required'; return; }
 
-  const body = { node_id: nodeId, name: name || nodeId, exit_node: exitNode };
+  const body = { node_id: nodeId, name: nodeId, exit_node: true };
   if (srvListen || srvPass) {
-    body.server = { listen: srvListen || '0.0.0.0:5565', password: srvPass, tls_cert: srvCert, tls_key: srvKey };
+    const srv = { listen: srvListen || '0.0.0.0:5565', password: srvPass, tls_cert: '', tls_key: '' };
+    if (tlsId) {
+      // Resolve cert/key paths from TLS store
+      srv.tls_cert = `/data/tls/${tlsId}.crt`;
+      srv.tls_key = `/data/tls/${tlsId}.key`;
+    }
+    body.server = srv;
   } else {
-    body.server = { listen: '', password: '' }; // clear server
+    body.server = { listen: '', password: '' };
   }
 
   try {
-    const r = await api('/node', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    await api('/node', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     $('#self-ok').textContent = 'Saved. Server changes require restart.';
-    // Update topbar
     $('#node-badge').textContent = nodeId;
-    $('#node-name-display').textContent = name !== nodeId ? name : '';
+    $('#node-name-display').textContent = '';
     lastTopoJSON = ''; refreshTopology();
   } catch (e) { $('#self-error').textContent = String(e); }
+}
+
+async function toggleSelfDisable(disabled) {
+  try {
+    if (disabled) {
+      // Clear server config to disable hy2 server
+      await api('/node', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ server: { listen: '', password: '' } }) });
+    }
+    // Mark in config
+    await api('/node', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ exit_node: !disabled }) });
+    lastTopoJSON = ''; refreshTopology();
+  } catch (e) { alert(e); }
 }
 
 // ── Proxies ──
