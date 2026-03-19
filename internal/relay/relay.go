@@ -368,6 +368,25 @@ func (n *Node) HasPeer(name string) bool {
 	return ok
 }
 
+// PingPeer measures round-trip latency to a peer by opening and closing a
+// list-peers stream. Returns -1 if the peer is not reachable.
+func (n *Node) PingPeer(name string) time.Duration {
+	n.mu.RLock()
+	p, ok := n.peers[name]
+	n.mu.RUnlock()
+	if !ok || p.client == nil {
+		return -1 // inbound or not connected
+	}
+	start := time.Now()
+	stream, err := p.client.TCP(streamListPeers)
+	if err != nil {
+		return -1
+	}
+	io.ReadAll(stream)
+	stream.Close()
+	return time.Since(start)
+}
+
 // --- Dial ---
 
 // DialTCP dials addr through a directly connected peer's network.
