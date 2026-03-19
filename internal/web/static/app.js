@@ -31,15 +31,27 @@ function switchPage(name, push) {
 
 function routeFromURL() {
   const path = location.pathname.replace(basePath, '').replace(/^\/+/, '');
-  const page = path.split('/')[0] || 'nodes';
-  switchPage(page, false);
+  const seg = path.split('/')[0];
+  if (seg === 'login' || !sessionStorage.getItem('token')) {
+    showLogin();
+    return;
+  }
+  showApp();
+  switchPage(seg || 'nodes', false);
 }
 
 window.addEventListener('popstate', routeFromURL);
 
 // ── Auth ──
-function showLogin() { $('#login-screen').style.display = ''; $('#app').style.display = 'none'; }
-function showApp() { $('#login-screen').style.display = 'none'; $('#app').style.display = ''; }
+function showLogin() {
+  $('#login-screen').style.display = '';
+  $('#app').style.display = 'none';
+  history.replaceState(null, '', basePath + '/login');
+}
+function showApp() {
+  $('#login-screen').style.display = 'none';
+  $('#app').style.display = '';
+}
 
 async function doLogin() {
   const username = $('#login-user').value.trim(), password = $('#login-pass').value;
@@ -48,10 +60,13 @@ async function doLogin() {
     const r = await fetch(basePath + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
     if (!r.ok) { $('#login-error').textContent = 'Invalid username or password'; return; }
     sessionStorage.setItem('token', (await r.json()).token);
-    showApp(); refresh();
+    showApp();
+    history.pushState(null, '', basePath + '/nodes');
+    switchPage('nodes', false);
+    refresh();
   } catch (e) { $('#login-error').textContent = String(e); }
 }
-function doLogout() { sessionStorage.removeItem('token'); showLogin(); clearInterval(pollTimer); }
+function doLogout() { sessionStorage.removeItem('token'); clearInterval(pollTimer); showLogin(); }
 $('#login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 $('#login-user').addEventListener('keydown', e => { if (e.key === 'Enter') $('#login-pass').focus(); });
 
@@ -340,4 +355,7 @@ async function deleteCert(id) {
 }
 
 // ── Init ──
-if (sessionStorage.getItem('token')) { showApp(); routeFromURL(); refresh(); } else { showLogin(); }
+routeFromURL();
+if (sessionStorage.getItem('token') && location.pathname.replace(basePath, '').replace(/^\/+/, '') !== 'login') {
+  refresh();
+}
