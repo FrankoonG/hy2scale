@@ -30,6 +30,13 @@ function showConfirm(title, msg) {
   });
 }
 
+// ── Password eye toggle ──
+function togglePw(btn) {
+  const inp = btn.parentElement.querySelector('input');
+  if (inp.type === 'password') { inp.type = 'text'; btn.style.color = 'var(--primary)'; }
+  else { inp.type = 'password'; btn.style.color = ''; }
+}
+
 function api(path, opts) {
   const headers = { ...(opts?.headers || {}) };
   const token = sessionStorage.getItem('token');

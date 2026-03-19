@@ -109,12 +109,26 @@ func LoadOrInitConfig(dataDir string) (Config, error) {
 		return cfg, nil
 	}
 
-	// Fresh start — empty config with just the node ID
+	// Fresh start — generate random password and default TLS cert
+	pwBytes := make([]byte, 12)
+	rand.Read(pwBytes)
+	password := hex.EncodeToString(pwBytes)
+
+	// Generate default TLS certificate
+	tlsStore := NewTLSStore(dataDir)
+	tlsStore.Generate("default", "Default", []string{nodeID}, 3650)
+
 	cfg := Config{
 		NodeID:   nodeID,
 		Name:     nodeID,
 		ExitNode: true,
-		Peers:    make(map[string]PeerConfig),
+		Server: &ServerConfig{
+			Listen:  "0.0.0.0:5565",
+			Password: password,
+			TLSCert: filepath.Join(dataDir, "tls", "default.crt"),
+			TLSKey:  filepath.Join(dataDir, "tls", "default.key"),
+		},
+		Peers: make(map[string]PeerConfig),
 	}
 	return cfg, nil
 }
