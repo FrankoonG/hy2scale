@@ -43,6 +43,7 @@ type ClientEntry struct {
 
 	// Misc
 	FastOpen bool `yaml:"fast_open,omitempty" json:"fast_open"`
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled"`
 }
 
 type PeerConfig struct {
@@ -148,6 +149,9 @@ func (a *App) Run(ctx context.Context) error {
 // --- Dynamic client management ---
 
 func (a *App) StartClient(cl ClientEntry) {
+	if cl.Disabled {
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if _, ok := a.clientCancel[cl.Name]; ok {
@@ -185,6 +189,30 @@ func (a *App) RemoveClient(name string) error {
 		for i, cl := range c.Clients {
 			if cl.Name == name {
 				c.Clients = append(c.Clients[:i], c.Clients[i+1:]...)
+				return
+			}
+		}
+	})
+}
+
+func (a *App) SetClientDisabled(name string, disabled bool) error {
+	if disabled {
+		a.StopClient(name)
+	} else {
+		// Find the client entry and start it
+		cfg := a.store.Get()
+		for _, cl := range cfg.Clients {
+			if cl.Name == name {
+				cl.Disabled = false
+				a.StartClient(cl)
+				break
+			}
+		}
+	}
+	return a.store.Update(func(c *Config) {
+		for i, cl := range c.Clients {
+			if cl.Name == name {
+				c.Clients[i].Disabled = disabled
 				return
 			}
 		}

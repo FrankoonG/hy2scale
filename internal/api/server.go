@@ -61,6 +61,7 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("PUT /api/peers/{name}/nested", s.setNested)
 	authed.HandleFunc("GET /api/clients", s.getClients)
 	authed.HandleFunc("POST /api/clients", s.addClient)
+	authed.HandleFunc("PUT /api/clients/{name}/disable", s.disableClient)
 	authed.HandleFunc("DELETE /api/clients/{name}", s.removeClient)
 	authed.HandleFunc("GET /api/proxies", s.getProxies)
 	authed.HandleFunc("POST /api/proxies", s.addProxy)
@@ -292,8 +293,18 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		ExitNode  bool      `json:"exit_node"`
 		Direction string    `json:"direction"`
 		Connected bool      `json:"connected"`
+		Disabled  bool      `json:"disabled"`
 		Nested    bool      `json:"nested"`
+		LatencyMs int       `json:"latency_ms"` // -1 = unreachable, 0 = not measured (inbound)
 		Children  []subPeer `json:"children,omitempty"`
+	}
+
+	// Build disabled lookup
+	disabledMap := make(map[string]bool)
+	for _, cl := range cfg.Clients {
+		if cl.Disabled {
+			disabledMap[cl.Name] = true
+		}
 	}
 
 	// Collect all names (clients + inbound peers), sorted
@@ -312,12 +323,11 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 
 	result := make([]treeNode, 0, len(names))
 	for _, name := range names {
-		tn := treeNode{Name: name, Connected: connected[name]}
+		tn := treeNode{Name: name, Connected: connected[name], Disabled: disabledMap[name]}
 		if cl, ok := clientMap[name]; ok {
 			tn.Addr = cl.Addr
 			tn.Direction = "outbound"
 		}
-		// Find peer info
 		for _, p := range peers {
 			if p.Name == name {
 				tn.ExitNode = p.ExitNode
@@ -325,9 +335,19 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
-		// Check nested
 		if pc, ok := cfg.Peers[name]; ok {
 			tn.Nested = pc.Nested
+		}
+		// Measure latency for connected outbound peers
+		if tn.Connected && tn.Direction == "outbound" {
+			rtt := s.app.Node().PingPeer(name)
+			if rtt < 0 {
+				tn.LatencyMs = -1
+			} else {
+				tn.LatencyMs = int(rtt.Milliseconds())
+			}
+		} else if !tn.Connected {
+			tn.LatencyMs = -1
 		}
 		// Load sub-peers if nested enabled
 		if tn.Nested && tn.Connected {
@@ -336,11 +356,10 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				children := make([]subPeer, 0, len(subPeers))
 				for _, sp := range subPeers {
 					if sp.Name == myName {
-						continue // exclude self
+						continue
 					}
 					children = append(children, subPeer{Name: sp.Name, ExitNode: sp.ExitNode})
 				}
-				// Sort children by name
 				sort.Slice(children, func(i, j int) bool { return children[i].Name < children[j].Name })
 				tn.Children = children
 			}
@@ -409,6 +428,22 @@ func (s *Server) addClient(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.app.AddClient(cl); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) disableClient(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var body struct {
+		Disabled bool `json:"disabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if err := s.app.SetClientDisabled(name, body.Disabled); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
