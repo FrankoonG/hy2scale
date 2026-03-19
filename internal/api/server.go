@@ -29,7 +29,6 @@ type topoSubPeer struct {
 	Via       string         `json:"via"`
 	LatencyMs int            `json:"latency_ms"`
 	Nested    bool           `json:"nested"`
-	Conflict  bool           `json:"conflict,omitempty"`
 	Children  []topoSubPeer  `json:"children,omitempty"`
 }
 
@@ -99,12 +98,10 @@ func (s *Server) Start(ctx context.Context) error {
 	// Static files with SPA fallback — inject basePath into index.html
 	staticFS, _ := fs.Sub(web.Static, "static")
 	rawIndex, _ := fs.ReadFile(staticFS, "index.html")
-	// Inject basePath as a global so JS doesn't have to guess
-	injectedIndex := strings.Replace(string(rawIndex),
-		"<script src=\"app.js\"></script>",
-		"<script>window.__BASE__=\""+s.basePath+"\";</script><script src=\"app.js\"></script>",
-		1)
-	indexBytes := []byte(injectedIndex)
+	baseScript := "<script>window.__BASE__=\"" + s.basePath + "\";</script><script src=\"app.js\"></script>"
+	proxyScript := "<script>window.__BASE__=\"" + s.basePath + "\";window.__PROXY__=true;</script><script src=\"app.js\"></script>"
+	indexBytes := []byte(strings.Replace(string(rawIndex), "<script src=\"app.js\"></script>", baseScript, 1))
+	indexProxyBytes := []byte(strings.Replace(string(rawIndex), "<script src=\"app.js\"></script>", proxyScript, 1))
 
 	// Known frontend routes that should serve index.html
 	frontendRoutes := map[string]bool{
@@ -116,8 +113,15 @@ func (s *Server) Start(ctx context.Context) error {
 		"settings": true,
 	}
 
-	// Remote node proxy (authed)
-	apiMux.Handle("/remote/", s.authMiddleware(http.HandlerFunc(s.remoteProxy)))
+	// Remote node proxy — no local auth, remote handles its own
+	// Block if accessed through proxy (prevent proxy chaining)
+	apiMux.HandleFunc("/remote/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Hy2scale-Proxy") == "true" {
+			http.Error(w, "proxy chaining not allowed", 403)
+			return
+		}
+		s.remoteProxy(w, r)
+	})
 
 	apiMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/")
@@ -139,7 +143,11 @@ func (s *Server) Start(ctx context.Context) error {
 
 		if frontendRoutes[path] {
 			w.Header().Set("Content-Type", "text/html")
-			w.Write(indexBytes)
+			if r.Header.Get("X-Hy2scale-Proxy") == "true" {
+				w.Write(indexProxyBytes)
+			} else {
+				w.Write(indexBytes)
+			}
 			return
 		}
 
@@ -400,7 +408,6 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		Nested    bool            `json:"nested"`
 		LatencyMs int             `json:"latency_ms"`
 		IsSelf    bool            `json:"is_self,omitempty"`
-		Conflict  bool            `json:"conflict,omitempty"`
 		Children  []topoSubPeer   `json:"children,omitempty"`
 	}
 
@@ -450,22 +457,15 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	for _, p := range peers {
 		if p.Direction == "inbound" {
 			inboundNames[p.Name] = true
-			isConflict := p.Name == cfg.NodeID || p.Name == cfg.Name
 			child := topoSubPeer{
 				Name:      p.Name,
 				ExitNode:  p.ExitNode,
 				Direction: "inbound",
 				Via:       cfg.NodeID,
 				LatencyMs: 0,
-				Conflict:  isConflict,
 			}
-			if isConflict {
-				child.LatencyMs = -2
-			}
-			if !isConflict {
-				if pc, ok := cfg.Peers[p.Name]; ok {
-					child.Nested = pc.Nested
-				}
+			if pc, ok := cfg.Peers[p.Name]; ok {
+				child.Nested = pc.Nested
 			}
 			selfChildren = append(selfChildren, child)
 		}
@@ -533,44 +533,35 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 	if err != nil {
 		return nil
 	}
-	myName := s.app.Node().Name()
 	myID := s.app.Store().Get().NodeID
 	peerName := path[len(path)-1]
-	// Build set of ancestors to avoid cycles
-	ancestors := map[string]bool{myName: true, myID: true}
-	for _, p := range path {
-		ancestors[p] = true
-	}
 	children := make([]topoSubPeer, 0, len(subPeers))
 	for _, sp := range subPeers {
-		isConflict := sp.Name == myName || sp.Name == myID
+		// Only hide self nodeID
+		if sp.Name == myID {
+			continue
+		}
+		childLatency := -1
+		if parentLatency > 0 {
+			if directLat, ok := latencyCache[sp.Name]; ok && directLat > 0 {
+				childLatency = parentLatency + directLat
+			} else {
+				childLatency = parentLatency * 2
+			}
+		}
 		child := topoSubPeer{
 			Name:      sp.Name,
 			ExitNode:  sp.ExitNode,
 			Direction: sp.Direction,
 			Via:       peerName,
-			Conflict:  isConflict,
+			LatencyMs: childLatency,
 		}
-		if isConflict || ancestors[sp.Name] {
-			child.LatencyMs = -2 // conflict marker
-			child.Conflict = true
-		} else {
-			childLatency := -1
-			if parentLatency > 0 {
-				if directLat, ok := latencyCache[sp.Name]; ok && directLat > 0 {
-					childLatency = parentLatency + directLat
-				} else {
-					childLatency = parentLatency * 2
-				}
-			}
-			child.LatencyMs = childLatency
-			if pc, ok := cfg.Peers[sp.Name]; ok {
-				child.Nested = pc.Nested
-			}
-			if child.Nested {
-				childPath := append(append([]string{}, path...), sp.Name)
-				child.Children = s.loadSubPeers(childPath, childLatency, latencyCache, cfg, depth+1)
-			}
+		if pc, ok := cfg.Peers[sp.Name]; ok {
+			child.Nested = pc.Nested
+		}
+		if child.Nested {
+			childPath := append(append([]string{}, path...), sp.Name)
+			child.Children = s.loadSubPeers(childPath, childLatency, latencyCache, cfg, depth+1)
 		}
 		children = append(children, child)
 	}
@@ -865,8 +856,9 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 
 	remotePath := "/" + strings.Join(parts[restIdx:], "/")
 	if remotePath == "/" {
-		// Default to the remote's base path
-		remotePath = "/scale/"
+		// Redirect to include the remote's base path so relative URLs resolve correctly
+		http.Redirect(w, r, s.basePath+"/remote/"+strings.Join(chain, "/")+"/scale/", http.StatusFound)
+		return
 	}
 
 	// Dial through relay chain to target's web UI (127.0.0.1:5565)
@@ -902,7 +894,7 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 			proxyReq += fmt.Sprintf("%s: %s\r\n", k, v)
 		}
 	}
-	proxyReq += "Connection: close\r\n\r\n"
+	proxyReq += "X-Hy2scale-Proxy: true\r\nConnection: close\r\n\r\n"
 
 	conn.Write([]byte(proxyReq))
 	if r.Body != nil && r.ContentLength > 0 {

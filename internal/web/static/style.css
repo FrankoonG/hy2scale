@@ -68,7 +68,6 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 .latency-med{color:var(--orange)}
 .latency-bad{color:var(--red)}
 .latency-off{color:var(--red);font-weight:500;font-family:var(--font)}
-.latency-conflict{color:var(--red);font-weight:600;font-family:var(--font)}
 .latency-na{color:var(--text-muted)}
 .peer-name-cell{font-weight:600}
 a.peer-link{color:var(--primary);text-decoration:none;cursor:pointer}
@@ -82,8 +81,6 @@ a.peer-link:hover{text-decoration:underline}
 /* ── Nested sub-rows ── */
 .sub-row td{padding:8px 10px;background:var(--bg);font-size:13px}
 .sub-row .peer-name-cell{font-weight:500}
-.sub-row.conflict td{opacity:.5}
-.sub-row.conflict .latency-conflict{opacity:1}
 .tree-branch{display:inline-block;width:20px;color:var(--text-muted);font-family:var(--mono);font-size:14px;text-align:center;vertical-align:middle;user-select:none;-webkit-user-select:none;pointer-events:none}
 .sub-name-wrap{display:inline-block;vertical-align:middle}
 .sub-name-wrap .peer-addr-sub{margin-left:0}
