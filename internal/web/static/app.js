@@ -85,15 +85,8 @@ function peerRowHTML(n, isSub) {
   const actionsCell = isSub ? '<td class="col-actions"></td>' : `<td class="col-actions">
     <div class="act-group">
       ${n.direction === 'outbound' ? `
-        <button class="act-btn ${n.disabled ? 'enable' : 'warn'}" title="${n.disabled ? 'Enable' : 'Disable'}" onclick="toggleDisable('${esc(n.name)}',${!n.disabled})">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${n.disabled
-            ? '<polygon points="5 3 19 12 5 21 5 3"/>'
-            : '<rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/>'
-          }</svg>
-        </button>
-        <button class="act-btn danger" title="Delete" onclick="removeClient('${esc(n.name)}')">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
-        </button>
+        <button class="act-btn ${n.disabled ? 'enable' : 'warn'}" onclick="toggleDisable('${esc(n.name)}',${!n.disabled})">${n.disabled ? 'Enable' : 'Disable'}</button>
+        <button class="act-btn danger" onclick="removeClient('${esc(n.name)}')">Delete</button>
       ` : ''}
     </div>
   </td>`;
