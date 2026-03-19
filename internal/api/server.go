@@ -500,7 +500,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 
 		// Load sub-peers recursively
 		if tn.Nested && tn.Connected {
-			tn.Children = s.loadSubPeers(name, latencyCache[name], latencyCache, cfg, 0)
+			tn.Children = s.loadSubPeers([]string{name}, latencyCache[name], latencyCache, cfg, 0)
 		}
 		// Also load children for inbound peers nested under self
 		// (they can have outbound connections visible if nested is enabled)
@@ -510,15 +510,19 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 }
 
 
-func (s *Server) loadSubPeers(peerName string, parentLatency int, latencyCache map[string]int, cfg app.Config, depth int) []topoSubPeer {
-	if depth > 3 {
+// loadSubPeers loads nested peers. path is the chain from local to the peer being queried.
+func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map[string]int, cfg app.Config, depth int) []topoSubPeer {
+	if depth > 8 {
 		return nil
 	}
-	subPeers, err := s.app.Node().PeersOf(peerName)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	subPeers, err := s.app.Node().PeersOfVia(ctx, path)
 	if err != nil {
 		return nil
 	}
 	myName := s.app.Node().Name()
+	peerName := path[len(path)-1]
 	children := make([]topoSubPeer, 0, len(subPeers))
 	for _, sp := range subPeers {
 		if sp.Name == myName {
@@ -542,9 +546,9 @@ func (s *Server) loadSubPeers(peerName string, parentLatency int, latencyCache m
 		if pc, ok := cfg.Peers[sp.Name]; ok {
 			child.Nested = pc.Nested
 		}
-		// Recurse if nested enabled for this child
 		if child.Nested {
-			child.Children = s.loadSubPeers(sp.Name, childLatency, latencyCache, cfg, depth+1)
+			childPath := append(append([]string{}, path...), sp.Name)
+			child.Children = s.loadSubPeers(childPath, childLatency, latencyCache, cfg, depth+1)
 		}
 		children = append(children, child)
 	}
