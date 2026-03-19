@@ -1,6 +1,7 @@
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 const basePath = window.__BASE__ || '';
+const tokenKey = 'token:' + basePath; // scope token per context to avoid conflicts
 
 // ── Toast notifications ──
 function toast(msg, type) {
@@ -39,7 +40,7 @@ function togglePw(btn) {
 
 function api(path, opts) {
   const headers = { ...(opts?.headers || {}) };
-  const token = sessionStorage.getItem('token');
+  const token = sessionStorage.getItem(tokenKey);
   if (token) headers['Authorization'] = 'Bearer ' + token;
   return fetch(basePath + '/api' + path, { ...opts, headers }).then(r => {
     if (r.status === 401) { doLogout(); throw 'session expired'; }
@@ -67,7 +68,7 @@ function switchPage(name, push) {
 function routeFromURL() {
   const path = location.pathname.replace(basePath, '').replace(/^\/+/, '');
   const seg = path.split('/')[0];
-  if (seg === 'login' || !sessionStorage.getItem('token')) {
+  if (seg === 'login' || !sessionStorage.getItem(tokenKey)) {
     showLogin();
     return;
   }
@@ -105,7 +106,7 @@ async function doLogin() {
   try {
     const r = await fetch(basePath + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
     if (!r.ok) { $('#login-error').textContent = 'Invalid username or password'; return; }
-    sessionStorage.setItem('token', (await r.json()).token);
+    sessionStorage.setItem(tokenKey, (await r.json()).token);
     // Remember credentials
     if ($('#login-remember').checked) {
       localStorage.setItem('hy2scale_cred', JSON.stringify({ u: username, p: password }));
@@ -119,7 +120,7 @@ async function doLogin() {
   } catch (e) { $('#login-error').textContent = String(e); }
 }
 function doLogout() {
-  sessionStorage.removeItem('token');
+  sessionStorage.removeItem(tokenKey);
   clearInterval(pollTimer);
   showLogin();
 }
@@ -578,22 +579,33 @@ async function deleteCert(id) {
 
 // ── Init ──
 (async function init() {
-  // Auto-login if remembered credentials exist and no active session
-  if (!sessionStorage.getItem('token')) {
-    const saved = JSON.parse(localStorage.getItem('hy2scale_cred') || 'null');
-    if (saved) {
-      try {
-        const r = await fetch(basePath + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: saved.u, password: saved.p }) });
-        if (r.ok) {
-          sessionStorage.setItem('token', (await r.json()).token);
-        } else {
-          localStorage.removeItem('hy2scale_cred'); // credentials stale
-        }
-      } catch (e) {}
+  if (!sessionStorage.getItem(tokenKey)) {
+    // Try auto-login
+    let loggedIn = false;
+
+    if (window.__PROXY__) {
+      // Proxy mode: try local node's saved credentials first
+      const saved = JSON.parse(localStorage.getItem('hy2scale_cred') || 'null');
+      if (saved) {
+        try {
+          const r = await fetch(basePath + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: saved.u, password: saved.p }) });
+          if (r.ok) { sessionStorage.setItem(tokenKey, (await r.json()).token); loggedIn = true; }
+        } catch (e) {}
+      }
+    } else {
+      // Local mode: try remembered credentials
+      const saved = JSON.parse(localStorage.getItem('hy2scale_cred') || 'null');
+      if (saved) {
+        try {
+          const r = await fetch(basePath + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: saved.u, password: saved.p }) });
+          if (r.ok) { sessionStorage.setItem(tokenKey, (await r.json()).token); loggedIn = true; }
+          else { localStorage.removeItem('hy2scale_cred'); }
+        } catch (e) {}
+      }
     }
   }
   routeFromURL();
-  if (sessionStorage.getItem('token') && location.pathname.replace(basePath, '').replace(/^\/+/, '') !== 'login') {
+  if (sessionStorage.getItem(tokenKey) && location.pathname.replace(basePath, '').replace(/^\/+/, '') !== 'login') {
     refresh();
   }
 })();
