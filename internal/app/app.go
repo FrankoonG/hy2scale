@@ -12,6 +12,7 @@ import (
 	"log"
 	"math/big"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -83,6 +84,7 @@ type App struct {
 	store        *ConfigStore
 	node         *relay.Node
 	tls          *TLSStore
+	dataDir      string
 	appCtx       context.Context
 	mu           sync.Mutex
 	clientCancel map[string]context.CancelFunc
@@ -101,6 +103,7 @@ func New(dataDir string) (*App, error) {
 		store:        NewConfigStore(cfg, persistPath),
 		node:         relay.NewNode(cfg.Name, cfg.ExitNode),
 		tls:          NewTLSStore(dataDir),
+		dataDir:      dataDir,
 		clientCancel: make(map[string]context.CancelFunc),
 		proxyHandles: make(map[string]*proxyHandle),
 	}, nil
@@ -109,6 +112,14 @@ func New(dataDir string) (*App, error) {
 func (a *App) Store() *ConfigStore { return a.store }
 func (a *App) Node() *relay.Node   { return a.node }
 func (a *App) TLS() *TLSStore     { return a.tls }
+
+// PersistNodeID writes the node ID to the persistent file.
+func (a *App) PersistNodeID(id string) {
+	if a.dataDir != "" {
+		os.MkdirAll(a.dataDir, 0755)
+		os.WriteFile(a.dataDir+"/node-id", []byte(id), 0644)
+	}
+}
 
 func (a *App) Run(ctx context.Context) error {
 	a.appCtx = ctx

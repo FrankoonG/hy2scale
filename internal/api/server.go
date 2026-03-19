@@ -290,22 +290,42 @@ func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name     *string `json:"name"`
-		ExitNode *bool   `json:"exit_node"`
+		NodeID   *string          `json:"node_id"`
+		Name     *string          `json:"name"`
+		ExitNode *bool            `json:"exit_node"`
+		Server   *app.ServerConfig `json:"server"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
 	s.app.Store().Update(func(c *app.Config) {
+		if body.NodeID != nil && *body.NodeID != "" {
+			c.NodeID = *body.NodeID
+		}
 		if body.Name != nil {
 			c.Name = *body.Name
 		}
 		if body.ExitNode != nil {
 			c.ExitNode = *body.ExitNode
 		}
+		if body.Server != nil {
+			if body.Server.Listen == "" && body.Server.Password == "" {
+				c.Server = nil // clear server config
+			} else {
+				c.Server = body.Server
+			}
+		}
 	})
-	writeJSON(w, map[string]string{"status": "ok"})
+	// Sync name change to relay node
+	cfg := s.app.Store().Get()
+	s.app.Node().SetName(cfg.Name)
+	s.app.Node().SetExit(cfg.ExitNode)
+	// Persist node ID to file
+	if body.NodeID != nil {
+		s.app.PersistNodeID(cfg.NodeID)
+	}
+	writeJSON(w, map[string]string{"status": "ok", "note": "server config changes require restart"})
 }
 
 // --- Peers ---
@@ -366,6 +386,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		Disabled  bool      `json:"disabled"`
 		Nested    bool      `json:"nested"`
 		LatencyMs int       `json:"latency_ms"`
+		IsSelf    bool      `json:"is_self,omitempty"`
 		Children  []subPeer `json:"children,omitempty"`
 	}
 
@@ -404,7 +425,22 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result := make([]treeNode, 0, len(names))
+	// Self node at top
+	selfServer := ""
+	if cfg.Server != nil {
+		selfServer = cfg.Server.Listen
+	}
+	result := make([]treeNode, 0, len(names)+1)
+	result = append(result, treeNode{
+		Name:      cfg.Name,
+		Addr:      selfServer,
+		ExitNode:  cfg.ExitNode,
+		Direction: "local",
+		Connected: true,
+		IsSelf:    true,
+		LatencyMs: 0,
+	})
+
 	for _, name := range names {
 		tn := treeNode{Name: name, Connected: connected[name], Disabled: disabledMap[name]}
 		if cl, ok := clientMap[name]; ok {
