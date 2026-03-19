@@ -83,35 +83,46 @@ function dirHTML(dir) {
     : '<span class="badge badge-orange">OUT</span>';
 }
 
-function peerRowHTML(n, isSub) {
-  const cls = (n.disabled ? ' class="disabled"' : '') + (isSub ? ' class="sub-row"' : '');
-  const trCls = [isSub ? 'sub-row' : '', n.disabled ? 'disabled' : ''].filter(Boolean).join(' ');
+function parentRowHTML(n) {
+  const exit = n.exit_node ? ' <span class="badge badge-green">EXIT</span>' : '';
+  const nested = n.direction === 'outbound'
+    ? `<label class="toggle"><input type="checkbox" ${n.nested ? 'checked' : ''} onchange="toggleNested('${esc(n.name)}',this.checked)"><span class="slider"></span></label>`
+    : '';
+  const actions = n.direction === 'outbound' ? `<div class="act-group">
+    <button class="act-btn ${n.disabled ? 'enable' : 'warn'}" onclick="toggleDisable('${esc(n.name)}',${!n.disabled})">${n.disabled ? 'Enable' : 'Disable'}</button>
+    <button class="act-btn danger" onclick="removeClient('${esc(n.name)}')">Delete</button>
+  </div>` : '';
 
-  const nameCell = isSub
-    ? `<td class="col-name"><span class="peer-name-cell">${esc(n.name)}</span></td>`
-    : `<td class="col-name"><span class="peer-name-cell">${esc(n.name)}</span>${n.addr ? `<span class="peer-addr-sub">${esc(n.addr)}</span>` : ''}</td>`;
+  return `<tr class="${n.disabled ? 'disabled' : ''}">
+    <td class="col-latency">${latencyHTML(n.latency_ms)}</td>
+    <td class="col-dir">${dirHTML(n.direction)}</td>
+    <td class="col-name">
+      <span class="peer-name-cell">${esc(n.name)}</span>${exit}
+      ${n.addr ? `<span class="peer-addr-sub">${esc(n.addr)}</span>` : ''}
+    </td>
+    <td class="col-nested">${nested}</td>
+    <td class="col-actions">${actions}</td>
+  </tr>`;
+}
 
-  const nestedCell = (!isSub && n.direction === 'outbound')
-    ? `<td class="col-nested"><label class="toggle"><input type="checkbox" ${n.nested ? 'checked' : ''} onchange="toggleNested('${esc(n.name)}',this.checked)"><span class="slider"></span></label></td>`
-    : '<td class="col-nested"></td>';
+function childRowHTML(c, isLast) {
+  const exit = c.exit_node ? ' <span class="badge badge-green">EXIT</span>' : '';
+  const dir = c.direction ? dirHTML(c.direction) : '';
+  const via = `<span class="badge badge-muted">via ${esc(c.via)}</span>`;
 
-  const actionsCell = isSub ? '<td class="col-actions"></td>' : `<td class="col-actions">
-    <div class="act-group">
-      ${n.direction === 'outbound' ? `
-        <button class="act-btn ${n.disabled ? 'enable' : 'warn'}" onclick="toggleDisable('${esc(n.name)}',${!n.disabled})">${n.disabled ? 'Enable' : 'Disable'}</button>
-        <button class="act-btn danger" onclick="removeClient('${esc(n.name)}')">Delete</button>
-      ` : ''}
-    </div>
-  </td>`;
-
-  const exitBadge = n.exit_node ? ' <span class="badge badge-green">EXIT</span>' : '';
-
-  return `<tr class="${trCls}">
-    <td class="col-latency">${isSub ? '<span class="latency latency-na">—</span>' : latencyHTML(n.latency_ms)}</td>
-    <td class="col-dir">${isSub ? '' : dirHTML(n.direction)}</td>
-    ${nameCell.replace('</span>', `</span>${exitBadge}`)}
-    ${nestedCell}
-    ${actionsCell}
+  return `<tr class="sub-row">
+    <td class="col-latency">${latencyHTML(c.latency_ms)}</td>
+    <td class="col-dir">${dir}</td>
+    <td class="col-name">
+      <span class="tree-branch">${isLast ? '└' : '├'}</span>
+      <span class="peer-name-cell">${esc(c.name)}</span>${exit} ${via}
+    </td>
+    <td class="col-nested"></td>
+    <td class="col-actions">
+      <div class="act-group">
+        <button class="act-btn ${c._disabled ? 'enable' : 'warn'}" onclick="toggleNestedDisable('${esc(c.via)}','${esc(c.name)}',${!c._disabled})">${c._disabled ? 'Enable' : 'Disable'}</button>
+      </div>
+    </td>
   </tr>`;
 }
 
@@ -131,11 +142,13 @@ async function refreshTopology() {
   let count = 0, rows = '';
   for (const n of topo) {
     count++;
-    rows += peerRowHTML(n, false);
+    rows += parentRowHTML(n);
     if (n.children?.length) {
-      for (const c of n.children) {
+      for (let i = 0; i < n.children.length; i++) {
         count++;
-        rows += peerRowHTML({ name: c.name, exit_node: c.exit_node, latency_ms: 0, direction: '', connected: true }, true);
+        const c = n.children[i];
+        c._disabled = false; // TODO: persist nested disable state
+        rows += childRowHTML(c, i === n.children.length - 1);
       }
     }
   }
@@ -161,6 +174,11 @@ async function toggleNested(name, enabled) {
 async function toggleDisable(name, disabled) {
   try { await api(`/clients/${name}/disable`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ disabled }) }); lastTopoJSON = ''; refreshTopology(); }
   catch (e) { alert(e); }
+}
+
+function toggleNestedDisable(via, name, disabled) {
+  // TODO: implement nested peer disable (exclude from routing)
+  alert(`${disabled ? 'Disable' : 'Enable'} ${name} via ${via} — not yet implemented`);
 }
 
 async function removeClient(name) {
