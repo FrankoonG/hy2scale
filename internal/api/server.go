@@ -402,8 +402,12 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		clientMap[cl.Name] = cl
 	}
 	connected := make(map[string]bool)
+	nativeMap := make(map[string]bool)
 	for _, p := range peers {
 		connected[p.Name] = true
+		if p.Native {
+			nativeMap[p.Name] = true
+		}
 	}
 
 	type treeNode struct {
@@ -414,6 +418,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		Connected bool            `json:"connected"`
 		Disabled  bool            `json:"disabled"`
 		Nested    bool            `json:"nested"`
+		Native    bool            `json:"native,omitempty"`
 		LatencyMs int             `json:"latency_ms"`
 		TxRate    uint64          `json:"tx_rate"`
 		RxRate    uint64          `json:"rx_rate"`
@@ -524,7 +529,10 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 		}
-		if pc, ok := cfg.Peers[name]; ok {
+		tn.Native = nativeMap[name]
+		if tn.Native {
+			tn.Nested = false // native hy2 never supports nested
+		} else if pc, ok := cfg.Peers[name]; ok {
 			tn.Nested = pc.Nested
 		}
 		if tn.Connected && tn.Direction == "outbound" {
@@ -537,8 +545,8 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			tn.RxRate = pr.RxRate
 		}
 
-		// Load sub-peers recursively
-		if tn.Nested && tn.Connected {
+		// Load sub-peers recursively (not for native hy2 peers)
+		if tn.Nested && tn.Connected && !tn.Native {
 			tn.Children = s.loadSubPeers([]string{name}, latencyCache[name], latencyCache, cfg, 0)
 		}
 		// Also load children for inbound peers nested under self

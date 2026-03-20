@@ -514,10 +514,11 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 	}
 	defer c.Close()
 	log.Printf("[%s] connected to %s (%s)", a.node.Name(), cl.Name, cl.Addr)
-	return a.node.AttachTo(ctx, cl.Name, c, func(remoteID string) {
+
+	// Try hy2scale relay protocol first
+	err = a.node.AttachTo(ctx, cl.Name, c, func(remoteID string) {
 		if remoteID != "" && remoteID != cl.Name {
 			log.Printf("[%s] peer %s actual ID: %s", a.node.Name(), cl.Addr, remoteID)
-			// Update stored client entry with remote's actual node ID
 			a.store.Update(func(cfg *Config) {
 				for i, entry := range cfg.Clients {
 					if entry.Addr == cl.Addr {
@@ -528,6 +529,30 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 			})
 		}
 	})
+	if err != nil && ctx.Err() == nil {
+		// Relay protocol failed — try as native hy2 server
+		log.Printf("[%s] %s is not hy2scale, attaching as native hy2", a.node.Name(), cl.Addr)
+		// Need a fresh client since the old one may be broken
+		c2, _, err2 := hyclient.NewClient(&hyclient.Config{
+			ServerAddr: addr,
+			Auth:       cl.Password,
+			TLSConfig:  tlsCfg,
+			QUICConfig: hyclient.QUICConfig{
+				InitialStreamReceiveWindow:     isw,
+				MaxStreamReceiveWindow:         msw,
+				InitialConnectionReceiveWindow: icw,
+				MaxConnectionReceiveWindow:     mcw,
+			},
+			BandwidthConfig: hyclient.BandwidthConfig{MaxTx: maxTx, MaxRx: maxRx},
+			FastOpen:        cl.FastOpen,
+		})
+		if err2 != nil {
+			return err // return original error
+		}
+		defer c2.Close()
+		return a.node.AttachNative(ctx, cl.Name, c2)
+	}
+	return err
 }
 
 func (a *App) serveProxy(ctx context.Context, ln net.Listener, pc ProxyConfig) {

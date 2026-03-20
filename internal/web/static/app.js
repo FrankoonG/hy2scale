@@ -208,10 +208,13 @@ function parentRowHTML(n) {
     </tr>`;
   }
 
-  const chain = [n.name];
-  const nested = n.direction === 'outbound'
-    ? `<label class="toggle"><input type="checkbox" ${n.nested ? 'checked' : ''} onchange="toggleNested('${esc(n.name)}',this.checked)"><span class="slider"></span></label>`
-    : '';
+  const chain = n.native ? [] : [n.name]; // native hy2 has no remote UI
+  const nativeBadge = n.native ? ' <span class="badge badge-muted">HY2</span>' : '';
+  const nested = n.native
+    ? '<label class="toggle toggle-disabled"><input type="checkbox" disabled><span class="slider"></span></label>'
+    : (n.direction === 'outbound'
+      ? `<label class="toggle"><input type="checkbox" ${n.nested ? 'checked' : ''} onchange="toggleNested('${esc(n.name)}',this.checked)"><span class="slider"></span></label>`
+      : '');
   const actions = n.direction === 'outbound' ? `<div class="act-group">
     <button class="act-btn edit" onclick="openEditDialog('${esc(n.name)}')">Edit</button>
     <button class="act-btn ${n.disabled ? 'enable' : 'warn'}" onclick="toggleDisable('${esc(n.name)}',${!n.disabled})">${n.disabled ? 'Enable' : 'Disable'}</button>
@@ -222,7 +225,7 @@ function parentRowHTML(n) {
     <td class="col-latency">${latencyHTML(n.latency_ms)}</td>
     <td class="col-dir">${dirHTML(n.direction)}</td>
     <td class="col-name">
-      ${nameLink(n.name, chain)}
+      ${n.native ? `<span class="peer-name-cell">${esc(n.name)}</span>` : nameLink(n.name, chain)}${nativeBadge}
       ${n.addr ? `<span class="peer-addr-sub">${esc(n.addr)}</span>` : ''}
     </td>
     <td class="col-traffic">${trafficHTML(n.tx_rate, n.rx_rate)}</td>

@@ -47,6 +47,7 @@ type PeerInfo struct {
 	Name      string `json:"name"`
 	ExitNode  bool   `json:"exit_node"`
 	Direction string `json:"direction"` // "inbound" or "outbound"
+	Native    bool   `json:"native"`    // true = plain hy2 server, no relay protocol
 }
 
 // --- Node ---
@@ -205,6 +206,26 @@ func NewNode(name string, exitNode bool) *Node {
 // AttachTo connects to a remote node via an hy2 client, registers, and
 // handles dial requests from the remote. Blocks until ctx or connection ends.
 // Returns the remote's actual node ID via the onID callback (if non-nil).
+// AttachNative registers a plain hy2 server (no relay protocol) as a peer.
+// Only DialTCP works (direct proxy). No nested discovery, no control stream.
+func (n *Node) AttachNative(ctx context.Context, peerName string, client hyclient.Client) error {
+	p := &peer{
+		info:    PeerInfo{Name: peerName, Direction: "outbound", Native: true},
+		client:  client,
+		waiting: make(map[string]chan net.Conn),
+	}
+	n.mu.Lock()
+	n.peers[peerName] = p
+	n.mu.Unlock()
+	defer func() {
+		n.mu.Lock()
+		delete(n.peers, peerName)
+		n.mu.Unlock()
+	}()
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Client, onID func(string)) error {
 	// Register with remote
 	regStream, err := client.TCP(streamRegister)
@@ -567,6 +588,15 @@ func (n *Node) PingPeer(name string) time.Duration {
 	ch := make(chan time.Duration, 1)
 	go func() {
 		start := time.Now()
+		if p.info.Native {
+			// Native hy2: open+close a dummy stream to measure QUIC RTT
+			stream, err := p.client.TCP("0.0.0.0:1")
+			if err == nil {
+				stream.Close()
+			}
+			ch <- time.Since(start)
+			return
+		}
 		stream, err := p.client.TCP(streamListPeers)
 		if err != nil {
 			ch <- -1
