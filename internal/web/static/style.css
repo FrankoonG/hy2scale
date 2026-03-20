@@ -86,13 +86,13 @@ a.peer-link:hover{text-decoration:underline}
 /* ── Nested sub-rows ── */
 .sub-row td{padding:8px 10px;background:var(--bg);font-size:13px}
 .sub-row .peer-name-cell{font-weight:500}
-.tree-branch{display:inline-block;width:20px;position:relative;vertical-align:middle;user-select:none;-webkit-user-select:none;pointer-events:none;height:1em}
-/* Non-last: vertical line through full height + horizontal branch */
-.tree-branch::before{content:'';position:absolute;left:8px;top:-12px;width:0;height:calc(100% + 12px);border-left:1.5px solid var(--border)}
+.sub-row .col-name{position:relative;overflow:visible}
+.tree-branch{display:inline-block;width:20px;position:relative;vertical-align:middle;user-select:none;-webkit-user-select:none;pointer-events:none;height:1em;z-index:1}
+/* Non-last: vertical line extends beyond cell boundaries to connect rows */
+.tree-branch::before{content:'';position:absolute;left:8px;top:-20px;width:0;height:calc(100% + 40px);border-left:1.5px solid var(--border)}
 .tree-branch::after{content:'';position:absolute;left:8px;top:50%;width:10px;height:0;border-top:1.5px solid var(--border)}
-/* Last child: vertical line only to middle, then turns */
-.tree-branch.tree-last::before{height:calc(50% + 12px)}
-.tree-branch.tree-last::after{border-top:1.5px solid var(--border)}
+/* Last child: vertical line stops at center */
+.tree-branch.tree-last::before{top:-20px;height:calc(50% + 20px)}
 .sub-name-wrap{display:inline-block;vertical-align:middle}
 .sub-name-wrap .peer-addr-sub{margin-left:0}
 
