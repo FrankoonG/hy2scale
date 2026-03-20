@@ -75,6 +75,8 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 .peer-name-cell{font-weight:600}
 a.peer-link{color:var(--primary);text-decoration:none;cursor:pointer}
 a.peer-link:hover{text-decoration:underline}
+.peer-rename{cursor:pointer;border-bottom:1px dashed var(--text-muted)}
+.peer-rename:hover{color:var(--primary)}
 .peer-addr-sub{font-family:var(--mono);font-size:11px;color:var(--text-muted);display:block;margin-top:1px}
 
 /* ── Self row ── */

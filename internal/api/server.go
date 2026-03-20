@@ -664,12 +664,16 @@ func (s *Server) updateClient(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	cl.Name = name
 	if cl.Addr == "" || cl.Password == "" {
 		http.Error(w, "addr and password required", 400)
 		return
 	}
-	if err := s.app.UpdateClient(cl); err != nil {
+	// Look up by URL path name, update with body (may include rename)
+	oldName := name
+	if cl.Name == "" {
+		cl.Name = name
+	}
+	if err := s.app.UpdateClientByAddr(oldName, cl); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
