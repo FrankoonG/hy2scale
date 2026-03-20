@@ -130,6 +130,7 @@ $('#login-user').addEventListener('keydown', e => { if (e.key === 'Enter') $('#l
 
 // ── Polling ──
 let pollTimer = null, lastTopoJSON = '';
+let connectedPeers = new Set(); // updated from topology
 
 async function refresh() {
   try {
@@ -287,6 +288,17 @@ async function refreshTopology() {
   const json = JSON.stringify(topo);
   if (json === lastTopoJSON) return;
   lastTopoJSON = json;
+
+  // Build connected peers set from all visible nodes
+  const newConnected = new Set();
+  function collectPeers(nodes) {
+    for (const n of nodes) {
+      if (n.connected || n.is_self) newConnected.add(n.name);
+      if (n.children) collectPeers(n.children);
+    }
+  }
+  collectPeers(topo);
+  connectedPeers = newConnected;
 
   const el = $('#topology-tree');
   if (!topo?.length) {
@@ -580,6 +592,24 @@ async function updateUISettings() {
   } catch (e) { $('#ui-error').textContent = String(e); }
 }
 
+// ── Exit Via rendering with reachability colors ──
+function exitViaHTML(path) {
+  if (!path) return '<span style="color:var(--text-muted)">(direct)</span>';
+  const hops = path.split('/').filter(Boolean);
+  let reachable = true;
+  return hops.map(hop => {
+    if (!reachable) {
+      return `<span style="color:var(--red);font-weight:600">${esc(hop)}</span>`;
+    }
+    if (connectedPeers.has(hop)) {
+      return `<span style="color:var(--green);font-weight:600">${esc(hop)}</span>`;
+    } else {
+      reachable = false;
+      return `<span style="color:var(--red);font-weight:600">${esc(hop)}</span>`;
+    }
+  }).join('<span style="color:var(--text-muted);margin:0 2px">/</span>');
+}
+
 // ── Users ──
 let editingUserId = null;
 
@@ -591,12 +621,12 @@ async function refreshUsers() {
     el.innerHTML = '<div class="empty">No users. Click <b>+ Add User</b> to create one.</div>';
     return;
   }
-  el.innerHTML = `<table class="peer-table"><thead><tr>
+  el.innerHTML = `<table class="peer-table user-table"><thead><tr>
     <th style="width:50px">On</th>
-    <th>Username</th>
+    <th style="width:120px">Username</th>
     <th>Exit Via</th>
-    <th>Traffic</th>
-    <th>Expiry</th>
+    <th class="col-right" style="width:130px">Traffic</th>
+    <th class="col-right" style="width:90px">Expiry</th>
     <th style="width:150px"></th>
   </tr></thead><tbody>${users.map(u => {
     const limitGB = u.traffic_limit ? (u.traffic_limit / 1073741824).toFixed(1) + ' GB' : '∞';
@@ -607,12 +637,12 @@ async function refreshUsers() {
     return `<tr class="${!u.enabled ? 'disabled' : ''}">
       <td><label class="toggle"><input type="checkbox" ${u.enabled ? 'checked' : ''} onchange="toggleUser('${esc(u.id)}',this.checked)"><span class="slider"></span></label></td>
       <td><b>${esc(u.username)}</b></td>
-      <td><span style="font-family:var(--mono);font-size:12px">${esc(u.exit_via) || '(direct)'}</span></td>
-      <td>
+      <td><span style="font-family:var(--mono);font-size:12px">${exitViaHTML(u.exit_via)}</span></td>
+      <td class="col-right">
         <span style="font-size:12px">${usedGB} / ${limitGB}</span>
         ${u.traffic_limit ? `<div style="background:var(--border-light);height:3px;border-radius:2px;margin-top:3px"><div style="background:${pct > 90 ? 'var(--red)' : 'var(--primary)'};height:100%;width:${pct}%;border-radius:2px"></div></div>` : ''}
       </td>
-      <td><span style="font-size:12px;${expired ? 'color:var(--red)' : ''}">${expiryText}</span></td>
+      <td class="col-right"><span style="font-size:12px;${expired ? 'color:var(--red)' : ''}">${expiryText}</span></td>
       <td style="text-align:right"><div class="act-group">
         <button class="act-btn edit" onclick="editUser('${esc(u.id)}')">Edit</button>
         <button class="act-btn warn" onclick="resetTraffic('${esc(u.id)}')">Reset</button>

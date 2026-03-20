@@ -30,7 +30,7 @@
     <h1>hy2scale</h1>
     <p>Sign in to manage your mesh network</p>
     <input id="login-user" placeholder="Username" autocomplete="username">
-    <div class="pw-wrap"><input id="login-pass" placeholder="Password" type="password" autocomplete="current-password"><button type="button" class="pw-eye" onclick="togglePw(this)">&#128065;</button></div>
+    <div class="pw-wrap"><input id="login-pass" placeholder="Password" type="password" autocomplete="current-password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
     <label class="remember-me"><input type="checkbox" id="login-remember"> Remember me</label>
     <div id="login-error" class="msg-error" style="margin-bottom:8px"></div>
     <button class="btn-primary btn-full" onclick="doLogin()">Sign in</button>
@@ -163,10 +163,10 @@
         <div class="card">
           <div class="card-header"><span class="card-title">Credentials</span></div>
           <div class="form-col" style="max-width:320px">
-            <div class="form-group"><label>Current Password</label><div class="pw-wrap"><input id="set-cur-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)">&#128065;</button></div></div>
+            <div class="form-group"><label>Current Password</label><div class="pw-wrap"><input id="set-cur-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
             <div class="form-group"><label>New Username (optional)</label><input id="set-new-user"></div>
-            <div class="form-group"><label>New Password</label><div class="pw-wrap"><input id="set-new-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)">&#128065;</button></div></div>
-            <div class="form-group"><label>Confirm Password</label><div class="pw-wrap"><input id="set-confirm-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)">&#128065;</button></div></div>
+            <div class="form-group"><label>New Password</label><div class="pw-wrap"><input id="set-new-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+            <div class="form-group"><label>Confirm Password</label><div class="pw-wrap"><input id="set-confirm-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
             <div id="set-error" class="msg-error"></div>
             <div id="set-ok" class="msg-ok"></div>
             <button class="btn-primary" onclick="changePassword()">Update Credentials</button>
@@ -200,7 +200,7 @@
         <div class="section-divider">hy2 Server <span class="badge badge-muted" style="margin-left:4px">restart required</span></div>
         <div class="form-grid">
           <div class="form-group"><label>Listen (UDP)</label><input id="self-srv-listen" placeholder="0.0.0.0:5565"></div>
-          <div class="form-group"><label>Password</label><div class="pw-wrap"><input id="self-srv-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)">&#128065;</button></div></div>
+          <div class="form-group"><label>Password</label><div class="pw-wrap"><input id="self-srv-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
         </div>
         <div class="form-group">
           <label>TLS Certificate</label>
@@ -229,7 +229,7 @@
         <!-- Connection -->
         <div class="form-grid">
           <div class="form-group"><label>Address *</label><input id="add-addr" placeholder="host:port"></div>
-          <div class="form-group"><label>Password *</label><div class="pw-wrap"><input id="add-pass" type="password" placeholder="Auth password"><button type="button" class="pw-eye" onclick="togglePw(this)">&#128065;</button></div></div>
+          <div class="form-group"><label>Password *</label><div class="pw-wrap"><input id="add-pass" type="password" placeholder="Auth password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
           <div class="form-group"><label>Upload (Mbps)</label><input id="add-tx" type="number" placeholder="0 = 1000 Mbps"></div>
           <div class="form-group"><label>Download (Mbps)</label><input id="add-rx" type="number" placeholder="0 = 1000 Mbps"></div>
           <div class="form-group">
@@ -308,7 +308,7 @@
       <div class="form-col">
         <div class="form-grid">
           <div class="form-group"><label>Username *</label><input id="u-username"></div>
-          <div class="form-group"><label>Password *</label><div class="pw-wrap"><input id="u-password" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)">&#128065;</button></div></div>
+          <div class="form-group"><label>Password *</label><div class="pw-wrap"><input id="u-password" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
         </div>
         <div class="form-group"><label>Exit Via</label><input id="u-exitvia" placeholder="e.g. au/fast-test (empty = direct)"></div>
         <div class="form-grid">
