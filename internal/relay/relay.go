@@ -111,8 +111,9 @@ type Node struct {
 	peerRates  map[string]PeerTraffic
 
 	// Per-peer latency (updated by background prober)
-	latencyMu sync.RWMutex
-	latencies map[string]int // peer name → latency ms (-1 = unreachable)
+	latencyMu    sync.RWMutex
+	latencies    map[string]int
+	peersOfCache map[string][]PeerInfo // cached PeersOf results from prober
 }
 
 // PeerRates returns per-peer traffic rates.
@@ -143,8 +144,18 @@ func (n *Node) GetLatency(peerName string) int {
 	return -1
 }
 
-// StartLatencyProber periodically pings outbound peers in the background.
-// Non-blocking: each ping runs in its own goroutine with a timeout.
+// PeersOfCached returns cached peer list from the last prober cycle.
+func (n *Node) PeersOfCached(peerName string) ([]PeerInfo, bool) {
+	n.peerRateMu.RLock()
+	defer n.peerRateMu.RUnlock()
+	if n.peersOfCache == nil {
+		return nil, false
+	}
+	peers, ok := n.peersOfCache[peerName]
+	return peers, ok
+}
+
+// StartLatencyProber periodically pings outbound peers and caches their peer lists.
 func (n *Node) StartLatencyProber(ctx context.Context) {
 	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
@@ -163,14 +174,33 @@ func (n *Node) StartLatencyProber(ctx context.Context) {
 			n.mu.RUnlock()
 			for i, p := range peers {
 				if p.client == nil {
-					continue // can't ping inbound
+					continue
 				}
 				go func(name string, p *peer) {
-					rtt := n.PingPeer(name)
-					if rtt >= 0 {
-						n.SetLatency(name, int(rtt.Milliseconds()))
+					n.nestedMu.RLock()
+					isNested := n.nested[name]
+					n.nestedMu.RUnlock()
+
+					if isNested && !p.info.Native {
+						start := time.Now()
+						result, err := n.PeersOf(name)
+						rtt := time.Since(start)
+						if err == nil {
+							n.SetLatency(name, int(rtt.Milliseconds()))
+							n.peerRateMu.Lock()
+							n.peersOfCache[name] = result
+							n.peerRateMu.Unlock()
+						} else {
+							n.SetLatency(name, -1)
+						}
 					} else {
-						n.SetLatency(name, -1)
+						// Non-nested: just ping for latency
+						rtt := n.PingPeer(name)
+						if rtt >= 0 {
+							n.SetLatency(name, int(rtt.Milliseconds()))
+						} else {
+							n.SetLatency(name, -1)
+						}
 					}
 				}(names[i], p)
 			}
@@ -258,7 +288,8 @@ func NewNode(name string, exitNode bool) *Node {
 		peers:     make(map[string]*peer),
 		nested:    make(map[string]bool),
 		peerRates: make(map[string]PeerTraffic),
-		latencies: make(map[string]int),
+		latencies:    make(map[string]int),
+		peersOfCache: make(map[string][]PeerInfo),
 	}
 }
 
