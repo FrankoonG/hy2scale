@@ -77,7 +77,7 @@ a.peer-link{color:var(--primary);text-decoration:none;cursor:pointer}
 a.peer-link:hover{text-decoration:underline}
 .peer-rename{cursor:pointer;border-bottom:1px dashed var(--text-muted)}
 .peer-rename:hover{color:var(--primary)}
-.peer-addr-sub{font-family:var(--mono);font-size:11px;color:var(--text-muted);display:block;margin-top:1px}
+.peer-addr-sub{font-family:var(--mono);font-size:11px;color:var(--text-muted);display:block;margin-top:1px;user-select:none;-webkit-user-select:none}
 
 /* ── Self row ── */
 .self-row td{background:var(--primary-light)}
@@ -86,7 +86,8 @@ a.peer-link:hover{text-decoration:underline}
 /* ── Nested sub-rows ── */
 .sub-row td{padding:8px 10px;background:var(--bg);font-size:13px}
 .sub-row .peer-name-cell{font-weight:500}
-.tree-branch{display:inline-block;width:20px;color:var(--text-muted);font-family:var(--mono);font-size:14px;text-align:center;vertical-align:middle;user-select:none;-webkit-user-select:none;pointer-events:none}
+.tree-branch{display:inline-block;width:20px;height:100%;position:relative;vertical-align:middle;user-select:none;-webkit-user-select:none;pointer-events:none;font-size:0;color:transparent}
+.tree-branch::before{content:'';position:absolute;left:8px;top:-10px;width:10px;height:calc(50% + 10px);border-left:1.5px solid var(--border);border-bottom:1.5px solid var(--border);border-radius:0 0 0 3px}
 .sub-name-wrap{display:inline-block;vertical-align:middle}
 .sub-name-wrap .peer-addr-sub{margin-left:0}
 
