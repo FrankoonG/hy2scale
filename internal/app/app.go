@@ -89,6 +89,7 @@ type App struct {
 	mu           sync.Mutex
 	clientCancel map[string]context.CancelFunc
 	proxyHandles map[string]*proxyHandle
+	srvCancel    context.CancelFunc // cancel to restart hy2 server
 }
 
 func New(dataDir string) (*App, error) {
@@ -139,7 +140,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	// Start hy2 server if configured
 	if cfg.Server != nil {
-		if err := a.startServer(ctx, cfg.Server); err != nil {
+		if err := a.restartServer(); err != nil {
 			return err
 		}
 	}
@@ -166,26 +167,33 @@ func (a *App) StartClient(cl ClientEntry) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if _, ok := a.clientCancel[cl.Name]; ok {
-		return // already running
+	if _, ok := a.clientCancel[cl.Addr]; ok {
+		return // already running for this address
 	}
 	ctx, cancel := context.WithCancel(a.appCtx)
-	a.clientCancel[cl.Name] = cancel
+	a.clientCancel[cl.Addr] = cancel
 	go a.connectLoop(ctx, cl)
 }
 
-// ReconnectAll stops and restarts all client connections (e.g. after node ID change).
+// ReconnectAll stops and restarts all connections (outbound + hy2 server) after ID change.
+// Restarting the server disconnects all inbound peers, forcing them to reconnect and see the new ID.
 func (a *App) ReconnectAll() {
 	cfg := a.store.Get()
-	// Stop all
+	// Stop all outbound
 	a.mu.Lock()
 	for name, cancel := range a.clientCancel {
 		cancel()
 		delete(a.clientCancel, name)
 	}
 	a.mu.Unlock()
+
+	// Restart hy2 server to disconnect inbound peers
+	if err := a.restartServer(); err != nil {
+		log.Printf("[%s] server restart after ID change: %v", a.node.Name(), err)
+	}
+
 	time.Sleep(time.Second)
-	// Restart all
+	// Restart outbound
 	for _, cl := range cfg.Clients {
 		if !cl.Disabled {
 			a.StartClient(cl)
@@ -197,17 +205,31 @@ func (a *App) ReconnectAll() {
 func (a *App) StopClient(name string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	// Try by addr first, then by name (addr is the stable key)
 	if cancel, ok := a.clientCancel[name]; ok {
 		cancel()
 		delete(a.clientCancel, name)
+		return
+	}
+	// Look up addr from config by name
+	cfg := a.store.Get()
+	for _, cl := range cfg.Clients {
+		if cl.Name == name {
+			if cancel, ok := a.clientCancel[cl.Addr]; ok {
+				cancel()
+				delete(a.clientCancel, cl.Addr)
+			}
+			return
+		}
 	}
 }
 
 func (a *App) AddClient(cl ClientEntry) error {
 	a.StartClient(cl)
 	return a.store.Update(func(c *Config) {
+		// Deduplicate by Addr (stable key)
 		for _, existing := range c.Clients {
-			if existing.Name == cl.Name {
+			if existing.Addr == cl.Addr {
 				return
 			}
 		}
@@ -233,7 +255,7 @@ func (a *App) RemoveClient(name string) error {
 	a.StopClient(name)
 	return a.store.Update(func(c *Config) {
 		for i, cl := range c.Clients {
-			if cl.Name == name {
+			if cl.Name == name || cl.Addr == name {
 				c.Clients = append(c.Clients[:i], c.Clients[i+1:]...)
 				return
 			}
@@ -245,10 +267,9 @@ func (a *App) SetClientDisabled(name string, disabled bool) error {
 	if disabled {
 		a.StopClient(name)
 	} else {
-		// Find the client entry and start it
 		cfg := a.store.Get()
 		for _, cl := range cfg.Clients {
-			if cl.Name == name {
+			if cl.Name == name || cl.Addr == name {
 				cl.Disabled = false
 				a.StartClient(cl)
 				break
@@ -257,7 +278,7 @@ func (a *App) SetClientDisabled(name string, disabled bool) error {
 	}
 	return a.store.Update(func(c *Config) {
 		for i, cl := range c.Clients {
-			if cl.Name == name {
+			if cl.Name == name || cl.Addr == name {
 				c.Clients[i].Disabled = disabled
 				return
 			}
@@ -349,6 +370,22 @@ func (a *App) SetNested(peer string, enabled bool) error {
 
 // --- Internal ---
 
+// restartServer stops the current hy2 server (if running) and starts a new one.
+// This disconnects all inbound peers, forcing them to reconnect and discover the new ID.
+func (a *App) restartServer() error {
+	if a.srvCancel != nil {
+		a.srvCancel()
+		time.Sleep(500 * time.Millisecond)
+	}
+	cfg := a.store.Get()
+	if cfg.Server == nil || cfg.Server.Listen == "" {
+		return nil
+	}
+	srvCtx, cancel := context.WithCancel(a.appCtx)
+	a.srvCancel = cancel
+	return a.startServer(srvCtx, cfg.Server)
+}
+
 func (a *App) startServer(ctx context.Context, sc *ServerConfig) error {
 	cert, err := loadCert(sc.TLSCert, sc.TLSKey)
 	if err != nil {
@@ -384,11 +421,20 @@ func (a *App) startServer(ctx context.Context, sc *ServerConfig) error {
 }
 
 func (a *App) connectLoop(ctx context.Context, cl ClientEntry) {
+	addr := cl.Addr // stable key
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
+		}
+		// Re-read latest config for this addr (Name may have changed)
+		cfg := a.store.Get()
+		for _, entry := range cfg.Clients {
+			if entry.Addr == addr {
+				cl = entry
+				break
+			}
 		}
 		log.Printf("[%s] connecting to %s (%s)", a.node.Name(), cl.Name, cl.Addr)
 		if err := a.connect(ctx, cl); err != nil {

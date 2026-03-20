@@ -630,7 +630,7 @@ func (s *Server) getClient(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	cfg := s.app.Store().Get()
 	for _, cl := range cfg.Clients {
-		if cl.Name == name {
+		if cl.Name == name || cl.Addr == name {
 			writeJSON(w, cl)
 			return
 		}
