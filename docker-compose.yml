@@ -4,9 +4,14 @@ services:
     image: hy2scale
     container_name: hy2scale
     restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/ppp:/dev/ppp
     ports:
       - "5565:5565/tcp"
       - "5565:5565/udp"
+      - "1701:1701/udp"
     volumes:
       - hy2scale-data:/data
 

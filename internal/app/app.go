@@ -74,6 +74,7 @@ type Config struct {
 	Users      []UserConfig          `yaml:"users" json:"users"`
 	Proxies    []ProxyConfig         `yaml:"proxies" json:"proxies"`
 	SS         *SSConfig             `yaml:"ss,omitempty" json:"ss,omitempty"`
+	L2TP       *L2TPConfig           `yaml:"l2tp,omitempty" json:"l2tp,omitempty"`
 	UIListen   string                `yaml:"ui_listen,omitempty" json:"ui_listen,omitempty"`
 	UIBasePath string                `yaml:"ui_base_path,omitempty" json:"ui_base_path,omitempty"`
 }
@@ -164,6 +165,13 @@ func (a *App) Run(ctx context.Context) error {
 	// Start SS server if configured
 	if cfg.SS != nil {
 		a.StartSS(*cfg.SS)
+	}
+
+	// Start L2TP server if configured
+	if cfg.L2TP != nil {
+		if err := a.StartL2TP(*cfg.L2TP); err != nil {
+			log.Printf("[l2tp] start error: %v", err)
+		}
 	}
 
 	// Start clients
