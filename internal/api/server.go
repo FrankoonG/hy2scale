@@ -29,6 +29,7 @@ type topoSubPeer struct {
 	Via       string         `json:"via"`
 	LatencyMs int            `json:"latency_ms"`
 	Nested    bool           `json:"nested"`
+	Native    bool           `json:"native,omitempty"`
 	TxRate    uint64         `json:"tx_rate"`
 	RxRate    uint64         `json:"rx_rate"`
 	Children  []topoSubPeer  `json:"children,omitempty"`
@@ -43,7 +44,11 @@ type Server struct {
 	username   string
 	password   string
 	sessions   map[string]time.Time
-	oldNodeIDs map[string]string // old ID → new ID (for remote proxy compat)
+	oldNodeIDs map[string]string
+
+	// Cached nested sub-peers (updated asynchronously)
+	subPeersMu    sync.RWMutex
+	subPeersCache map[string][]topoSubPeer
 }
 
 func NewServer(a *app.App, addr, basePath string) *Server {
@@ -57,7 +62,8 @@ func NewServer(a *app.App, addr, basePath string) *Server {
 		basePath:   bp,
 		username:   "admin",
 		password:   "admin",
-		oldNodeIDs: make(map[string]string),
+		oldNodeIDs:    make(map[string]string),
+		subPeersCache: make(map[string][]topoSubPeer),
 		sessions: make(map[string]time.Time),
 	}
 }
@@ -534,7 +540,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 
 		// Load sub-peers recursively (not for native hy2 peers)
 		if tn.Nested && tn.Connected && !tn.Native {
-			tn.Children = s.loadSubPeers([]string{name}, latencyCache[name], latencyCache, cfg, 0)
+			tn.Children = s.getCachedSubPeers(name)
 		}
 		// Also load children for inbound peers nested under self
 		// (they can have outbound connections visible if nested is enabled)
@@ -544,12 +550,52 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 }
 
 
+func (s *Server) getCachedSubPeers(name string) []topoSubPeer {
+	s.subPeersMu.RLock()
+	defer s.subPeersMu.RUnlock()
+	return s.subPeersCache[name]
+}
+
+// StartSubPeersUpdater runs in background, periodically refreshes nested peer data.
+func (s *Server) StartSubPeersUpdater(ctx context.Context) {
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			cfg := s.app.Store().Get()
+			latencyCache := make(map[string]int)
+			for _, p := range s.app.Node().Peers() {
+				latencyCache[p.Name] = s.app.Node().GetLatency(p.Name)
+			}
+			newCache := make(map[string][]topoSubPeer)
+			for name, pc := range cfg.Peers {
+				if !pc.Nested {
+					continue
+				}
+				if !s.app.Node().HasPeer(name) {
+					continue
+				}
+				children := s.loadSubPeers([]string{name}, latencyCache[name], latencyCache, cfg, 0)
+				if children != nil {
+					newCache[name] = children
+				}
+			}
+			s.subPeersMu.Lock()
+			s.subPeersCache = newCache
+			s.subPeersMu.Unlock()
+		}
+	}
+}
+
 // loadSubPeers loads nested peers. path is the chain from local to the peer being queried.
 func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map[string]int, cfg app.Config, depth int) []topoSubPeer {
 	if depth > 8 {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	subPeers, err := s.app.Node().PeersOfVia(ctx, path)
 	if err != nil {
@@ -571,10 +617,12 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 			Via:       peerName,
 			LatencyMs: childLatency,
 		}
-		if pc, ok := cfg.Peers[sp.Name]; ok {
+		if sp.Native {
+			child.Native = true
+		} else if pc, ok := cfg.Peers[sp.Name]; ok {
 			child.Nested = pc.Nested
 		}
-		if child.Nested {
+		if child.Nested && !child.Native {
 			childPath := append(append([]string{}, path...), sp.Name)
 			child.Children = s.loadSubPeers(childPath, childLatency, latencyCache, cfg, depth+1)
 		}
