@@ -246,7 +246,7 @@ function childRowHTML(c, isLast, depth, parentChain) {
     ? '<label class="toggle toggle-disabled"><input type="checkbox" disabled><span class="slider"></span></label>'
     : `<label class="toggle"><input type="checkbox" ${c.nested ? 'checked' : ''} onchange="toggleNested('${esc(c.name)}',this.checked)"><span class="slider"></span></label>`;
   const nameCell = c.native
-    ? `<span class="peer-name-cell peer-rename" onclick="renameNative('${esc(c.name)}')">${esc(c.name)}</span>`
+    ? `<span class="peer-name-cell">${esc(c.name)}</span>`
     : nameLink(c.name, chain);
   const actions = `<button class="act-btn ${dis ? 'enable' : 'warn'}" onclick="toggleNestedDisable('${esc(c.via)}','${esc(c.name)}',${!dis})">${dis ? 'Enable' : 'Disable'}</button>`;
 
@@ -254,7 +254,7 @@ function childRowHTML(c, isLast, depth, parentChain) {
     <td class="col-latency">${dis ? latencyHTML(-1) : latencyHTML(c.latency_ms)}</td>
     <td class="col-dir">${dir}</td>
     <td class="col-name" style="${indent}">
-      <span class="tree-branch" aria-hidden="true">${isLast ? '└' : '├'}</span><span class="sub-name-wrap">
+      <span class="tree-branch${isLast ? ' tree-last' : ''}" aria-hidden="true"></span><span class="sub-name-wrap">
         ${nameCell}${nativeBadge}
         <span class="peer-addr-sub">via ${esc(c.via)}</span>
       </span>
