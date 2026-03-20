@@ -136,6 +136,7 @@
         <div class="proxy-tabs">
           <div class="proxy-tab active" data-ptab="socks5" onclick="switchProxyTab(this)">SOCKS5</div>
           <div class="proxy-tab" data-ptab="ss" onclick="switchProxyTab(this)">Shadowsocks</div>
+          <div class="proxy-tab" data-ptab="l2tp" onclick="switchProxyTab(this)">L2TP/IPsec</div>
         </div>
 
         <div class="proxy-panel active" id="ptab-socks5">
@@ -189,6 +190,28 @@
           </div>
         </div>
       </div>
+
+        <div class="proxy-panel" id="ptab-l2tp" style="display:none">
+          <div id="l2tp-warn" class="l2tp-warn" style="display:none">
+            Insufficient privileges — container requires <code>--cap-add NET_ADMIN</code> and <code>--device /dev/ppp</code> to enable L2TP/IPsec.
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">L2TP/IPsec Server</span></div>
+            <div class="form-col" style="max-width:400px">
+              <div class="form-grid">
+                <div class="form-group"><label>UDP Port</label><input id="l2tp-port" type="number" value="1701"></div>
+                <div class="form-group">
+                  <label>Enabled</label>
+                  <label class="toggle" style="margin-top:4px"><input type="checkbox" id="l2tp-enabled"><span class="slider"></span></label>
+                </div>
+              </div>
+              <div class="form-group"><label>Address Pool (CIDR)</label><input id="l2tp-pool" placeholder="192.168.25.1/24"></div>
+              <div class="form-group"><label>IPsec Pre-Shared Key</label><div class="pw-wrap"><input id="l2tp-psk" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+              <div style="font-size:12px;color:var(--text-muted)">Users authenticate via PPP CHAP with their hy2scale credentials. TCP traffic routed per user's exit_via. UDP exits locally. Requires NET_ADMIN capability.</div>
+              <div><button class="btn-primary btn-sm" onclick="saveL2TP()">Save</button></div>
+            </div>
+          </div>
+        </div>
 
       <!-- TLS Page -->
       <div class="page" id="page-tls" style="display:none">

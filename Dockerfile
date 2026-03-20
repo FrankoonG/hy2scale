@@ -6,7 +6,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -o /hy2scale ./cmd/node
 
 FROM alpine:3.19
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates xl2tpd strongswan ppp iptables iproute2
 COPY --from=builder /hy2scale /usr/local/bin/hy2scale
 VOLUME /data
 ENTRYPOINT ["hy2scale"]

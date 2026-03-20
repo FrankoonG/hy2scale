@@ -553,6 +553,29 @@ async function refreshProxies() {
     $('#ss-enabled').checked = ss.enabled;
     if (ss.method) $('#ss-method').value = ss.method;
   } catch(e) {}
+  // Load L2TP config
+  try {
+    const l = await api('/l2tp');
+    $('#l2tp-port').value = l.listen || '1701';
+    $('#l2tp-enabled').checked = l.enabled;
+    $('#l2tp-pool').value = l.pool || '';
+    $('#l2tp-psk').value = l.psk || '';
+    // Capability check
+    const panel = $('#ptab-l2tp');
+    const warn = $('#l2tp-warn');
+    if (!l.capable) {
+      warn.style.display = '';
+      panel.querySelectorAll('input,select,button').forEach(el => { el.disabled = true; });
+      panel.style.opacity = '0.5';
+      panel.style.pointerEvents = 'none';
+      warn.style.pointerEvents = 'auto';
+      warn.style.opacity = '1';
+    } else {
+      warn.style.display = 'none';
+      panel.style.opacity = '';
+      panel.style.pointerEvents = '';
+    }
+  } catch(e) {}
 }
 
 async function saveSocks5() {
@@ -583,6 +606,18 @@ async function saveSS() {
       listen: '0.0.0.0:' + port, enabled, method
     })});
     toast('Shadowsocks saved', 'success');
+  } catch(e) { toast(String(e), 'error'); }
+}
+
+async function saveL2TP() {
+  const listen = $('#l2tp-port').value.trim();
+  const enabled = $('#l2tp-enabled').checked;
+  const pool = $('#l2tp-pool').value.trim();
+  const psk = $('#l2tp-psk').value.trim();
+  if (enabled && (!listen || !pool || !psk)) { toast('Port, pool and PSK required', 'error'); return; }
+  try {
+    await api('/l2tp', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ listen, enabled, pool, psk })});
+    toast('L2TP saved. Restart required for L2TP changes.', 'success');
   } catch(e) { toast(String(e), 'error'); }
 }
 

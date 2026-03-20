@@ -97,6 +97,10 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("GET /api/ss", s.getSSConfig)
 	authed.HandleFunc("PUT /api/ss", s.updateSSConfig)
 
+	// L2TP config
+	authed.HandleFunc("GET /api/l2tp", s.getL2TPConfig)
+	authed.HandleFunc("PUT /api/l2tp", s.updateL2TPConfig)
+
 	// Users
 	authed.HandleFunc("GET /api/users", s.getUsers)
 	authed.HandleFunc("POST /api/users", s.addUserAPI)
@@ -871,6 +875,44 @@ func (s *Server) updateSSConfig(w http.ResponseWriter, r *http.Request) {
 	})
 	go s.app.RestartSS()
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// --- L2TP ---
+
+func (s *Server) getL2TPConfig(w http.ResponseWriter, r *http.Request) {
+	capable := app.CheckL2TPCapability()
+	cfg := s.app.Store().Get()
+	result := map[string]any{
+		"capable": capable,
+	}
+	if cfg.L2TP != nil {
+		result["listen"] = cfg.L2TP.Listen
+		result["enabled"] = cfg.L2TP.Enabled
+		result["pool"] = cfg.L2TP.Pool
+		result["psk"] = cfg.L2TP.PSK
+	} else {
+		result["listen"] = "1701"
+		result["enabled"] = false
+		result["pool"] = "192.168.25.1/24"
+		result["psk"] = ""
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) updateL2TPConfig(w http.ResponseWriter, r *http.Request) {
+	if !app.CheckL2TPCapability() {
+		http.Error(w, "container lacks NET_ADMIN capability or /dev/ppp", 403)
+		return
+	}
+	var l2tp app.L2TPConfig
+	if err := json.NewDecoder(r.Body).Decode(&l2tp); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	s.app.Store().Update(func(c *app.Config) {
+		c.L2TP = &l2tp
+	})
+	writeJSON(w, map[string]string{"status": "ok", "note": "restart required for L2TP changes"})
 }
 
 // --- Users ---
