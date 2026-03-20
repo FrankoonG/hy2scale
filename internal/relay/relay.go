@@ -588,8 +588,17 @@ func (n *Node) PingPeer(name string) time.Duration {
 
 type countedConn struct {
 	net.Conn
-	tx, rx       *atomic.Uint64 // global
-	peerTx, peerRx *atomic.Uint64 // per-peer
+	tx, rx         *atomic.Uint64
+	peerTx, peerRx *atomic.Uint64
+	conns          *atomic.Int64
+	closed         atomic.Bool
+}
+
+func (c *countedConn) Close() error {
+	if c.closed.CompareAndSwap(false, true) {
+		c.conns.Add(-1)
+	}
+	return c.Conn.Close()
 }
 
 func (c *countedConn) Read(b []byte) (int, error) {
@@ -618,7 +627,7 @@ func (n *Node) wrapConn(peerName string, conn net.Conn) net.Conn {
 	n.mu.RLock()
 	p := n.peers[peerName]
 	n.mu.RUnlock()
-	cc := &countedConn{Conn: conn, tx: &n.txBytes, rx: &n.rxBytes}
+	cc := &countedConn{Conn: conn, tx: &n.txBytes, rx: &n.rxBytes, conns: &n.conns}
 	if p != nil {
 		cc.peerTx = &p.txBytes
 		cc.peerRx = &p.rxBytes
