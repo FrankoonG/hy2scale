@@ -66,6 +66,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 .peer-table .col-traffic{width:160px;font-size:11px;font-family:var(--mono);white-space:nowrap}
 .peer-table .col-nested{width:70px;text-align:center}
 .peer-table .col-actions{width:150px;text-align:right}
+.peer-table .col-right{text-align:right}
 .latency{font-family:var(--mono);font-size:12px;font-weight:600}
 .latency-good{color:var(--green)}
 .latency-med{color:var(--orange)}
@@ -148,8 +149,9 @@ input::placeholder{color:var(--text-muted)}
 /* Password toggle */
 .pw-wrap{position:relative;display:flex}
 .pw-wrap input{flex:1;padding-right:34px}
-.pw-eye{position:absolute;right:1px;top:1px;bottom:1px;width:32px;border:none;background:transparent;cursor:pointer;color:var(--text-muted);display:flex;align-items:center;justify-content:center;border-radius:0 var(--radius-sm) var(--radius-sm) 0;font-size:15px;padding:0}
+.pw-eye{position:absolute;right:1px;top:1px;bottom:1px;width:32px;border:none;background:transparent;cursor:pointer;color:var(--text-muted);display:flex;align-items:center;justify-content:center;border-radius:0 var(--radius-sm) var(--radius-sm) 0;padding:0}
 .pw-eye:hover{color:var(--primary);background:var(--primary-light)}
+.pw-eye svg{flex-shrink:0}
 /* Custom select */
 select{appearance:none;-webkit-appearance:none;background:var(--bg) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239098a8' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") no-repeat right 10px center;padding-right:30px}
 textarea{background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:var(--radius-sm);font-size:12px;font-family:var(--mono);outline:none;transition:border .15s;width:100%;min-height:80px;resize:vertical}
