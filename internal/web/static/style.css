@@ -53,7 +53,9 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 .badge-muted{background:var(--bg);color:var(--text-muted)}
 
 /* ── Peer Table ── */
-.peer-table{width:100%;border-collapse:collapse}
+.peer-table{width:100%;border-collapse:collapse;user-select:none;-webkit-user-select:none}
+.peer-table .col-name{user-select:text;-webkit-user-select:text}
+.peer-table .col-name .tree-branch{user-select:none;-webkit-user-select:none}
 .peer-table th{text-align:left;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;padding:8px 10px;border-bottom:2px solid var(--border)}
 .peer-table td{padding:10px;border-bottom:1px solid var(--border-light);font-size:13px;vertical-align:middle}
 .peer-table tr:last-child td{border-bottom:none}
