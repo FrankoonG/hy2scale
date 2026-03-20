@@ -482,23 +482,36 @@ func (n *Node) PeersOf(peerName string) ([]PeerInfo, error) {
 		return nil, fmt.Errorf("relay: peer %q is inbound, cannot query (no client)", peerName)
 	}
 
-	// Open a list-peers stream to the peer
-	stream, err := p.client.TCP(streamListPeers)
-	if err != nil {
-		return nil, err
+	type result struct {
+		peers []PeerInfo
+		err   error
 	}
-	defer stream.Close()
-
-	data, err := io.ReadAll(stream)
-	if err != nil {
-		return nil, err
+	ch := make(chan result, 1)
+	go func() {
+		stream, err := p.client.TCP(streamListPeers)
+		if err != nil {
+			ch <- result{nil, err}
+			return
+		}
+		defer stream.Close()
+		data, err := io.ReadAll(stream)
+		if err != nil {
+			ch <- result{nil, err}
+			return
+		}
+		var peers []PeerInfo
+		if err := json.Unmarshal(data, &peers); err != nil {
+			ch <- result{nil, err}
+			return
+		}
+		ch <- result{peers, nil}
+	}()
+	select {
+	case r := <-ch:
+		return r.peers, r.err
+	case <-time.After(3 * time.Second):
+		return nil, fmt.Errorf("relay: peer %q query timeout", peerName)
 	}
-
-	var peers []PeerInfo
-	if err := json.Unmarshal(data, &peers); err != nil {
-		return nil, err
-	}
-	return peers, nil
 }
 
 // PeersOfVia returns a peer's peers through a multi-hop path.
@@ -542,23 +555,33 @@ func (n *Node) HasPeer(name string) bool {
 	return ok
 }
 
-// PingPeer measures round-trip latency to a peer by opening and closing a
-// list-peers stream. Returns -1 if the peer is not reachable.
+// PingPeer measures round-trip latency to a peer. Returns -1 if unreachable.
+// Non-blocking: uses a 3-second timeout.
 func (n *Node) PingPeer(name string) time.Duration {
 	n.mu.RLock()
 	p, ok := n.peers[name]
 	n.mu.RUnlock()
 	if !ok || p.client == nil {
-		return -1 // inbound or not connected
-	}
-	start := time.Now()
-	stream, err := p.client.TCP(streamListPeers)
-	if err != nil {
 		return -1
 	}
-	io.ReadAll(stream)
-	stream.Close()
-	return time.Since(start)
+	ch := make(chan time.Duration, 1)
+	go func() {
+		start := time.Now()
+		stream, err := p.client.TCP(streamListPeers)
+		if err != nil {
+			ch <- -1
+			return
+		}
+		io.ReadAll(stream)
+		stream.Close()
+		ch <- time.Since(start)
+	}()
+	select {
+	case d := <-ch:
+		return d
+	case <-time.After(2 * time.Second):
+		return -1
+	}
 }
 
 // --- Dial ---
