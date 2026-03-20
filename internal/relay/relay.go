@@ -584,6 +584,49 @@ func (n *Node) PingPeer(name string) time.Duration {
 	}
 }
 
+// --- Counted connection wrapper ---
+
+type countedConn struct {
+	net.Conn
+	tx, rx       *atomic.Uint64 // global
+	peerTx, peerRx *atomic.Uint64 // per-peer
+}
+
+func (c *countedConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 {
+		c.rx.Add(uint64(n))
+		if c.peerRx != nil {
+			c.peerRx.Add(uint64(n))
+		}
+	}
+	return n, err
+}
+
+func (c *countedConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	if n > 0 {
+		c.tx.Add(uint64(n))
+		if c.peerTx != nil {
+			c.peerTx.Add(uint64(n))
+		}
+	}
+	return n, err
+}
+
+func (n *Node) wrapConn(peerName string, conn net.Conn) net.Conn {
+	n.mu.RLock()
+	p := n.peers[peerName]
+	n.mu.RUnlock()
+	cc := &countedConn{Conn: conn, tx: &n.txBytes, rx: &n.rxBytes}
+	if p != nil {
+		cc.peerTx = &p.txBytes
+		cc.peerRx = &p.rxBytes
+	}
+	n.conns.Add(1)
+	return cc
+}
+
 // --- Dial ---
 
 // DialTCP dials addr through a directly connected peer's network.
@@ -597,7 +640,11 @@ func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.C
 
 	// Outbound peer: we have a client, use it directly
 	if p.client != nil {
-		return p.client.TCP(addr)
+		conn, err := p.client.TCP(addr)
+		if err != nil {
+			return nil, err
+		}
+		return n.wrapConn(peerName, conn), nil
 	}
 
 	// Inbound peer: send dial request via control stream
@@ -620,7 +667,7 @@ func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.C
 		if conn == nil {
 			return nil, fmt.Errorf("relay: dial via %q failed", peerName)
 		}
-		return conn, nil
+		return n.wrapConn(peerName, conn), nil
 	case <-ctx.Done():
 		p.writeMu.Lock()
 		delete(p.waiting, id)
@@ -653,7 +700,11 @@ func (n *Node) DialVia(ctx context.Context, path []string, addr string) (net.Con
 	viaAddr := streamViaPrefix + remaining + "_" + addr + ":0"
 
 	if p.client != nil {
-		return p.client.TCP(viaAddr)
+		conn, err := p.client.TCP(viaAddr)
+		if err != nil {
+			return nil, err
+		}
+		return n.wrapConn(firstPeer, conn), nil
 	}
 
 	// Inbound peer: send via address as a dial request through control stream.
@@ -677,7 +728,7 @@ func (n *Node) DialVia(ctx context.Context, path []string, addr string) (net.Con
 		if conn == nil {
 			return nil, fmt.Errorf("relay: dial via %q failed", firstPeer)
 		}
-		return conn, nil
+		return n.wrapConn(firstPeer, conn), nil
 	case <-ctx.Done():
 		p.writeMu.Lock()
 		delete(p.waiting, id)
