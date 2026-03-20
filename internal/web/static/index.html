@@ -150,8 +150,7 @@
                 </div>
               </div>
               <div style="font-size:12px;color:var(--text-muted)">Users authenticate via SOCKS5 username/password. Exit path is determined by the user's configuration.</div>
-              <button class="btn-primary" onclick="saveSocks5()">Save</button>
-              <div id="sk5-msg" class="msg-ok"></div>
+              <div><button class="btn-primary btn-sm" onclick="saveSocks5()">Save</button></div>
             </div>
           </div>
         </div>
@@ -170,14 +169,22 @@
               <div class="form-group">
                 <label>Encryption Method</label>
                 <select id="ss-method">
-                  <option value="aes-128-gcm">aes-128-gcm</option>
-                  <option value="aes-256-gcm" selected>aes-256-gcm</option>
-                  <option value="chacha20-ietf-poly1305">chacha20-ietf-poly1305</option>
+                  <optgroup label="AEAD">
+                    <option value="aes-128-gcm">aes-128-gcm</option>
+                    <option value="aes-256-gcm" selected>aes-256-gcm</option>
+                    <option value="chacha20-ietf-poly1305">chacha20-ietf-poly1305</option>
+                  </optgroup>
+                  <optgroup label="AEAD 2022">
+                    <option value="2022-blake3-aes-128-gcm">2022-blake3-aes-128-gcm</option>
+                    <option value="2022-blake3-aes-256-gcm">2022-blake3-aes-256-gcm</option>
+                  </optgroup>
+                  <optgroup label="Other">
+                    <option value="none">none (no encryption)</option>
+                  </optgroup>
                 </select>
               </div>
               <div style="font-size:12px;color:var(--text-muted)">Each user's password is used as the SS key. The server tries all enabled user passwords to identify the connecting client.</div>
-              <button class="btn-primary" onclick="saveSS()">Save</button>
-              <div id="ss-msg" class="msg-ok"></div>
+              <div><button class="btn-primary btn-sm" onclick="saveSS()">Save</button></div>
             </div>
           </div>
         </div>

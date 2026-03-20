@@ -510,7 +510,7 @@ async function submitEditSelf() {
 
   try {
     await api('/node', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    $('#self-ok').textContent = 'Saved. Server changes require restart.';
+    toast('Node settings saved. Server changes require restart.', 'success');
     $('#node-badge').textContent = nodeId;
     $('#node-name-display').textContent = '';
     lastTopoJSON = ''; refreshTopology();
@@ -569,7 +569,6 @@ async function saveSocks5() {
     await api('/proxies', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
       id: 'socks5', protocol: 'socks5', listen: '0.0.0.0:' + port, enabled
     })});
-    $('#sk5-msg').textContent = 'Saved. Restart required.';
     toast('SOCKS5 saved', 'success');
   } catch(e) { toast(String(e), 'error'); }
 }
@@ -583,8 +582,7 @@ async function saveSS() {
     await api('/ss', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
       listen: '0.0.0.0:' + port, enabled, method
     })});
-    $('#ss-msg').textContent = 'Saved. Restart required.';
-    toast('SS saved', 'success');
+    toast('Shadowsocks saved', 'success');
   } catch(e) { toast(String(e), 'error'); }
 }
 
@@ -614,7 +612,7 @@ async function updateUISettings() {
   $('#ui-error').textContent = ''; $('#ui-ok').textContent = '';
   try {
     await api('/settings/ui', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ listen: listen || null, base_path: bp || null }) });
-    $('#ui-ok').textContent = 'Saved. Restart the container to apply.';
+    toast('Saved. Restart container to apply.', 'success');
   } catch (e) { $('#ui-error').textContent = String(e); }
 }
 

@@ -869,7 +869,8 @@ func (s *Server) updateSSConfig(w http.ResponseWriter, r *http.Request) {
 	s.app.Store().Update(func(c *app.Config) {
 		c.SS = &ss
 	})
-	writeJSON(w, map[string]string{"status": "ok", "note": "restart required"})
+	go s.app.RestartSS()
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 // --- Users ---
