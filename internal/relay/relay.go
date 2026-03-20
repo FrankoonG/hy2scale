@@ -24,6 +24,9 @@ import (
 	hyclient "github.com/apernet/hysteria/core/v2/client"
 )
 
+// ErrNotHy2scale indicates the remote is a plain hy2 server without relay protocol.
+var ErrNotHy2scale = fmt.Errorf("relay: remote is not hy2scale")
+
 const (
 	streamRegister   = "_relay_register_:0"
 	streamCtrlS2C    = "_relay_s2c_ctrl_:0"
@@ -230,6 +233,16 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	// Register with remote
 	regStream, err := client.TCP(streamRegister)
 	if err != nil {
+		// If the error looks like a proxy failure (native hy2 tried to TCP-proxy
+		// the relay stream address), it's a native server. Otherwise it's a
+		// transient network error that should be retried.
+		errStr := err.Error()
+		if strings.Contains(errStr, "NXDOMAIN") ||
+			strings.Contains(errStr, "connection refused") ||
+			strings.Contains(errStr, "no such host") ||
+			strings.Contains(errStr, "connect:") {
+			return ErrNotHy2scale
+		}
 		return fmt.Errorf("relay: register: %w", err)
 	}
 	defer regStream.Close()
@@ -242,9 +255,10 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	writeString(regStream, n.name)
 
 	// Read back the remote's actual node ID
+	// If the remote is a plain hy2 server, this will fail (EOF/timeout)
 	remoteID, err := readString(regStream)
 	if err != nil {
-		return fmt.Errorf("relay: register response: %w", err)
+		return ErrNotHy2scale
 	}
 	actualName := peerName
 	if remoteID != "" {

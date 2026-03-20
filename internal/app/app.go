@@ -544,8 +544,8 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 			})
 		}
 	})
-	if err != nil && ctx.Err() == nil {
-		// Relay protocol failed — try as native hy2 server
+	if err == relay.ErrNotHy2scale && ctx.Err() == nil {
+		// Relay protocol not supported — native hy2 server
 		log.Printf("[%s] %s is not hy2scale, attaching as native hy2", a.node.Name(), cl.Addr)
 		// Need a fresh client since the old one may be broken
 		c2, _, err2 := hyclient.NewClient(&hyclient.Config{
