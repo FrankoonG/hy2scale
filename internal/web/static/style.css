@@ -55,7 +55,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 /* ── Peer Table ── */
 .peer-table{width:100%;border-collapse:collapse;user-select:none;-webkit-user-select:none}
 .peer-table .col-name{user-select:text;-webkit-user-select:text}
-.peer-table .col-name .tree-branch{user-select:none;-webkit-user-select:none}
+.peer-table .col-name .tree-branch,.peer-table .col-name .tree-guide{user-select:none;-webkit-user-select:none}
 .peer-table th{text-align:left;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;padding:8px 10px;border-bottom:2px solid var(--border)}
 .peer-table td{padding:10px;border-bottom:1px solid var(--border-light);font-size:13px;vertical-align:middle}
 .peer-table tr:last-child td{border-bottom:none}
@@ -87,11 +87,13 @@ a.peer-link:hover{text-decoration:underline}
 .sub-row td{padding:8px 10px;background:var(--bg);font-size:13px}
 .sub-row .peer-name-cell{font-weight:500}
 .sub-row .col-name{position:relative;overflow:visible}
-.tree-branch{display:inline-block;width:20px;position:relative;vertical-align:middle;user-select:none;-webkit-user-select:none;pointer-events:none;height:1em;z-index:1}
-/* Non-last: vertical line extends beyond cell boundaries to connect rows */
+/* Guide: vertical line continuing from ancestor depth */
+.tree-guide{display:inline-block;width:20px;height:1em;position:relative;vertical-align:middle;pointer-events:none}
+.tree-guide-active::before{content:'';position:absolute;left:8px;top:-20px;width:0;height:calc(100% + 40px);border-left:1.5px solid var(--border)}
+/* Branch: T-connector (non-last) or L-connector (last) */
+.tree-branch{display:inline-block;width:20px;height:1em;position:relative;vertical-align:middle;user-select:none;-webkit-user-select:none;pointer-events:none;z-index:1}
 .tree-branch::before{content:'';position:absolute;left:8px;top:-20px;width:0;height:calc(100% + 40px);border-left:1.5px solid var(--border)}
 .tree-branch::after{content:'';position:absolute;left:8px;top:50%;width:10px;height:0;border-top:1.5px solid var(--border)}
-/* Last child: vertical line stops at center */
 .tree-branch.tree-last::before{top:-20px;height:calc(50% + 20px)}
 .sub-name-wrap{display:inline-block;vertical-align:middle}
 .sub-name-wrap .peer-addr-sub{margin-left:0}
