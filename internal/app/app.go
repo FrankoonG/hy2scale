@@ -535,6 +535,7 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 	err = a.node.AttachTo(ctx, cl.Name, c, func(remoteID string) {
 		if remoteID != "" && remoteID != cl.Name {
 			log.Printf("[%s] peer %s actual ID: %s", a.node.Name(), cl.Addr, remoteID)
+			oldName := cl.Name
 			a.store.Update(func(cfg *Config) {
 				for i, entry := range cfg.Clients {
 					if entry.Addr == cl.Addr {
@@ -542,7 +543,15 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 						break
 					}
 				}
+				// Migrate Peers config (nested flag etc.) to new name
+				if pc, ok := cfg.Peers[oldName]; ok {
+					cfg.Peers[remoteID] = pc
+					delete(cfg.Peers, oldName)
+				}
 			})
+			// Also update relay's nested discovery
+			a.node.SetNestedDiscovery(remoteID, a.node.IsNestedEnabled(oldName))
+			a.node.SetNestedDiscovery(oldName, false)
 		}
 	})
 	if err == relay.ErrNotHy2scale && ctx.Err() == nil {
