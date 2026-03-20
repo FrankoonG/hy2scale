@@ -209,7 +209,7 @@ function parentRowHTML(n) {
   }
 
   const chain = n.native ? [] : [n.name]; // native hy2 has no remote UI
-  const nativeBadge = n.native ? ' <span class="badge badge-muted">HY2</span>' : '';
+  const nativeBadge = n.native ? ' <span class="badge badge-muted">NATIVE</span>' : '';
   const nested = n.native
     ? '<label class="toggle toggle-disabled"><input type="checkbox" disabled><span class="slider"></span></label>'
     : (n.direction === 'outbound'
@@ -225,7 +225,7 @@ function parentRowHTML(n) {
     <td class="col-latency">${latencyHTML(n.latency_ms)}</td>
     <td class="col-dir">${dirHTML(n.direction)}</td>
     <td class="col-name">
-      ${n.native ? `<span class="peer-name-cell">${esc(n.name)}</span>` : nameLink(n.name, chain)}${nativeBadge}
+      ${n.native ? `<span class="peer-name-cell peer-rename" onclick="renameNative('${esc(n.name)}')">${esc(n.name)}</span>` : nameLink(n.name, chain)}${nativeBadge}
       ${n.addr ? `<span class="peer-addr-sub">${esc(n.addr)}</span>` : ''}
     </td>
     <td class="col-traffic">${trafficHTML(n.tx_rate, n.rx_rate)}</td>
@@ -315,6 +315,41 @@ async function toggleNested(name, enabled) {
 async function toggleDisable(name, disabled) {
   try { await api(`/clients/${name}/disable`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ disabled }) }); lastTopoJSON = ''; refreshTopology(); }
   catch (e) { toast(String(e), 'error'); }
+}
+
+// Rename native peer (display name only, stored locally)
+async function renameNative(currentName) {
+  const input = document.createElement('input');
+  input.value = currentName;
+  input.style.cssText = 'width:200px';
+  const container = document.createElement('div');
+  container.appendChild(input);
+  $('#confirm-msg').textContent = '';
+  $('#confirm-msg').appendChild(container);
+  $('#confirm-title').textContent = 'Rename Node';
+  $('#confirm-ok').style.background = 'var(--primary)';
+  $('#confirm-ok').style.borderColor = 'var(--primary)';
+  $('#confirm-ok').textContent = 'Save';
+  $('#confirm-modal').style.display = '';
+  input.focus();
+  input.select();
+  const ok = await new Promise(resolve => {
+    const done = (v) => { $('#confirm-modal').style.display = 'none'; $('#confirm-ok').style.background = ''; $('#confirm-ok').style.borderColor = ''; $('#confirm-ok').textContent = 'Confirm'; resolve(v); };
+    $('#confirm-ok').onclick = () => done(true);
+    $('#confirm-cancel').onclick = () => done(false);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); });
+  });
+  if (!ok) return;
+  const newName = input.value.trim();
+  if (!newName || newName === currentName) return;
+  try {
+    // Update client name via API
+    const cl = await api(`/clients/${encodeURIComponent(currentName)}`);
+    cl.name = newName;
+    await api(`/clients/${encodeURIComponent(currentName)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cl) });
+    toast(`Renamed to ${newName}`, 'success');
+    lastTopoJSON = ''; refreshTopology();
+  } catch (e) { toast(String(e), 'error'); }
 }
 
 // Nested peer disable: stop pinging/using this peer via the parent

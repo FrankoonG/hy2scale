@@ -242,12 +242,27 @@ func (a *App) UpdateClient(cl ClientEntry) error {
 	a.StartClient(cl)
 	return a.store.Update(func(c *Config) {
 		for i, existing := range c.Clients {
-			if existing.Name == cl.Name {
+			if existing.Name == cl.Name || existing.Addr == cl.Addr {
 				c.Clients[i] = cl
 				return
 			}
 		}
 		c.Clients = append(c.Clients, cl)
+	})
+}
+
+// UpdateClientByAddr finds a client by oldName (name or addr) and replaces it.
+func (a *App) UpdateClientByAddr(oldName string, cl ClientEntry) error {
+	a.StopClient(oldName)
+	return a.store.Update(func(c *Config) {
+		for i, existing := range c.Clients {
+			if existing.Name == oldName || existing.Addr == oldName {
+				cl.Addr = existing.Addr // preserve addr
+				c.Clients[i] = cl
+				a.StartClient(cl)
+				return
+			}
+		}
 	})
 }
 
