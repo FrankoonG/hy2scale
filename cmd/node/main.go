@@ -54,6 +54,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "api: %v\n", err)
 		}
 	}()
+	go srv.StartSubPeersUpdater(ctx)
 
 	if err := a.Run(ctx); err != nil && ctx.Err() == nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
