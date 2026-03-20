@@ -589,11 +589,16 @@ func (n *Node) PingPeer(name string) time.Duration {
 	go func() {
 		start := time.Now()
 		if p.info.Native {
-			// Native hy2: open+close a dummy stream to measure QUIC RTT
-			stream, err := p.client.TCP("0.0.0.0:1")
-			if err == nil {
-				stream.Close()
+			// Native hy2: HTTP request through proxy to measure real latency
+			stream, err := p.client.TCP("1.1.1.1:80")
+			if err != nil {
+				ch <- -1
+				return
 			}
+			stream.Write([]byte("HEAD / HTTP/1.1\r\nHost: 1.1.1.1\r\nConnection: close\r\n\r\n"))
+			buf := make([]byte, 1)
+			stream.Read(buf)
+			stream.Close()
 			ch <- time.Since(start)
 			return
 		}
