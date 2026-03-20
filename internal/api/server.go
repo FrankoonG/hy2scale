@@ -538,7 +538,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			tn.RxRate = pr.RxRate
 		}
 
-		// Load sub-peers recursively (not for native hy2 peers)
+		// Load sub-peers from background cache only (never blocks)
 		if tn.Nested && tn.Connected && !tn.Native {
 			tn.Children = s.getCachedSubPeers(name)
 		}
@@ -558,7 +558,8 @@ func (s *Server) getCachedSubPeers(name string) []topoSubPeer {
 
 // StartSubPeersUpdater runs in background, periodically refreshes nested peer data.
 func (s *Server) StartSubPeersUpdater(ctx context.Context) {
-	t := time.NewTicker(5 * time.Second)
+	time.Sleep(2 * time.Second) // offset from prober
+	t := time.NewTicker(7 * time.Second)
 	defer t.Stop()
 	for {
 		select {
@@ -566,10 +567,6 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 			return
 		case <-t.C:
 			cfg := s.app.Store().Get()
-			latencyCache := make(map[string]int)
-			for _, p := range s.app.Node().Peers() {
-				latencyCache[p.Name] = s.app.Node().GetLatency(p.Name)
-			}
 			newCache := make(map[string][]topoSubPeer)
 			for name, pc := range cfg.Peers {
 				if !pc.Nested {
@@ -578,9 +575,22 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 				if !s.app.Node().HasPeer(name) {
 					continue
 				}
-				children := s.loadSubPeers([]string{name}, latencyCache[name], latencyCache, cfg, 0)
-				if children != nil {
-					newCache[name] = children
+				// Use a goroutine with timeout per peer to avoid blocking
+				ch := make(chan []topoSubPeer, 1)
+				go func(n string) {
+					latencyCache := make(map[string]int)
+					for _, p := range s.app.Node().Peers() {
+						latencyCache[p.Name] = s.app.Node().GetLatency(p.Name)
+					}
+					ch <- s.loadSubPeers([]string{n}, latencyCache[n], latencyCache, cfg, 0)
+				}(name)
+				select {
+				case children := <-ch:
+					if children != nil {
+						newCache[name] = children
+					}
+				case <-time.After(8 * time.Second):
+					// Skip this peer if loading takes too long
 				}
 			}
 			s.subPeersMu.Lock()
@@ -595,11 +605,18 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 	if depth > 8 {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	subPeers, err := s.app.Node().PeersOfVia(ctx, path)
-	if err != nil {
-		return nil
+	// Always use prober's cached peer list for the last hop
+	target := path[len(path)-1]
+	subPeers, ok := s.app.Node().PeersOfCached(target)
+	if !ok {
+		// Not in local cache — try via chain query (with timeout)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		var err error
+		subPeers, err = s.app.Node().PeersOfVia(ctx, path)
+		if err != nil {
+			return nil
+		}
 	}
 	myID := s.app.Store().Get().NodeID
 	peerName := path[len(path)-1]
@@ -622,7 +639,15 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 		} else if pc, ok := cfg.Peers[sp.Name]; ok {
 			child.Nested = pc.Nested
 		}
-		if child.Nested && !child.Native {
+		// Cycle detection: don't recurse into a peer already in the path
+		inPath := false
+		for _, p := range path {
+			if p == sp.Name {
+				inPath = true
+				break
+			}
+		}
+		if child.Nested && !child.Native && !inPath {
 			childPath := append(append([]string{}, path...), sp.Name)
 			child.Children = s.loadSubPeers(childPath, childLatency, latencyCache, cfg, depth+1)
 		}
