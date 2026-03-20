@@ -727,6 +727,13 @@ func (n *Node) SetNestedDiscovery(peerName string, enabled bool) {
 	n.nestedMu.Unlock()
 }
 
+// IsNestedEnabled returns whether nested discovery is enabled for a peer.
+func (n *Node) IsNestedEnabled(peerName string) bool {
+	n.nestedMu.RLock()
+	defer n.nestedMu.RUnlock()
+	return n.nested[peerName]
+}
+
 // HasPeer checks if a peer is connected.
 func (n *Node) HasPeer(name string) bool {
 	n.mu.RLock()
