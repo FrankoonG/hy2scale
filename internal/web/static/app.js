@@ -237,11 +237,17 @@ function parentRowHTML(n) {
 function childRowHTML(c, isLast, depth, parentChain) {
   depth = depth || 1;
   parentChain = parentChain || [];
-  const chain = [...parentChain, c.name];
+  const chain = c.native ? [] : [...parentChain, c.name];
   const dis = isNestedDisabled(c.via, c.name);
   const dir = c.direction ? dirHTML(c.direction) : '';
   const indent = 'padding-left:' + (depth * 20) + 'px';
-  const nestedToggle = `<label class="toggle"><input type="checkbox" ${c.nested ? 'checked' : ''} onchange="toggleNested('${esc(c.name)}',this.checked)"><span class="slider"></span></label>`;
+  const nativeBadge = c.native ? ' <span class="badge badge-muted">NATIVE</span>' : '';
+  const nestedToggle = c.native
+    ? '<label class="toggle toggle-disabled"><input type="checkbox" disabled><span class="slider"></span></label>'
+    : `<label class="toggle"><input type="checkbox" ${c.nested ? 'checked' : ''} onchange="toggleNested('${esc(c.name)}',this.checked)"><span class="slider"></span></label>`;
+  const nameCell = c.native
+    ? `<span class="peer-name-cell peer-rename" onclick="renameNative('${esc(c.name)}')">${esc(c.name)}</span>`
+    : nameLink(c.name, chain);
   const actions = `<button class="act-btn ${dis ? 'enable' : 'warn'}" onclick="toggleNestedDisable('${esc(c.via)}','${esc(c.name)}',${!dis})">${dis ? 'Enable' : 'Disable'}</button>`;
 
   let html = `<tr class="sub-row${dis ? ' disabled' : ''}">
@@ -249,7 +255,7 @@ function childRowHTML(c, isLast, depth, parentChain) {
     <td class="col-dir">${dir}</td>
     <td class="col-name" style="${indent}">
       <span class="tree-branch" aria-hidden="true">${isLast ? '└' : '├'}</span><span class="sub-name-wrap">
-        ${nameLink(c.name, chain)}
+        ${nameCell}${nativeBadge}
         <span class="peer-addr-sub">via ${esc(c.via)}</span>
       </span>
     </td>
