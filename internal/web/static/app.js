@@ -234,13 +234,14 @@ function parentRowHTML(n) {
   </tr>`;
 }
 
-function childRowHTML(c, isLast, depth, parentChain) {
+// guides: array of booleans per depth, true = draw continuation vertical line at that depth
+function childRowHTML(c, isLast, depth, parentChain, guides) {
   depth = depth || 1;
   parentChain = parentChain || [];
+  guides = guides || [];
   const chain = c.native ? [] : [...parentChain, c.name];
   const dis = isNestedDisabled(c.via, c.name);
   const dir = c.direction ? dirHTML(c.direction) : '';
-  const indent = 'padding-left:' + (depth * 20) + 'px';
   const nativeBadge = c.native ? ' <span class="badge badge-muted">NATIVE</span>' : '';
   const nestedToggle = c.native
     ? '<label class="toggle toggle-disabled"><input type="checkbox" disabled><span class="slider"></span></label>'
@@ -250,11 +251,18 @@ function childRowHTML(c, isLast, depth, parentChain) {
     : nameLink(c.name, chain);
   const actions = `<button class="act-btn ${dis ? 'enable' : 'warn'}" onclick="toggleNestedDisable('${esc(c.via)}','${esc(c.name)}',${!dis})">${dis ? 'Enable' : 'Disable'}</button>`;
 
+  // Build guide lines for ancestor depths + current branch
+  let treeHTML = '';
+  for (let d = 0; d < depth - 1; d++) {
+    treeHTML += `<span class="tree-guide${guides[d] ? ' tree-guide-active' : ''}" aria-hidden="true"></span>`;
+  }
+  treeHTML += `<span class="tree-branch${isLast ? ' tree-last' : ''}" aria-hidden="true"></span>`;
+
   let html = `<tr class="sub-row${dis ? ' disabled' : ''}">
     <td class="col-latency">${dis ? latencyHTML(-1) : latencyHTML(c.latency_ms)}</td>
     <td class="col-dir">${dir}</td>
-    <td class="col-name" style="${indent}">
-      <span class="tree-branch${isLast ? ' tree-last' : ''}" aria-hidden="true"></span><span class="sub-name-wrap">
+    <td class="col-name">
+      ${treeHTML}<span class="sub-name-wrap">
         ${nameCell}${nativeBadge}
         <span class="peer-addr-sub">via ${esc(c.via)}</span>
       </span>
@@ -264,10 +272,10 @@ function childRowHTML(c, isLast, depth, parentChain) {
     <td class="col-actions"><div class="act-group">${actions}</div></td>
   </tr>`;
 
-  // Render grandchildren recursively
   if (c.children?.length) {
+    const childGuides = [...guides, !isLast]; // propagate: "my parent is not last"
     for (let i = 0; i < c.children.length; i++) {
-      html += childRowHTML(c.children[i], i === c.children.length - 1, depth + 1, chain);
+      html += childRowHTML(c.children[i], i === c.children.length - 1, depth + 1, chain, childGuides);
     }
   }
   return html;
@@ -294,7 +302,7 @@ async function refreshTopology() {
       for (let i = 0; i < n.children.length; i++) {
         count++;
         const parentChain = n.is_self ? [] : [n.name];
-        rows += childRowHTML(n.children[i], i === n.children.length - 1, 1, parentChain);
+        rows += childRowHTML(n.children[i], i === n.children.length - 1, 1, parentChain, []);
       }
     }
   }
