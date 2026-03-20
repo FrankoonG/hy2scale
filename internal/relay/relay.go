@@ -392,7 +392,6 @@ func (n *Node) handleListPeers(stream net.Conn) {
 func (n *Node) handleVia(ctx context.Context, peerName, targetAddr string, stream net.Conn) {
 	var exitConn net.Conn
 	var err error
-	// Check if peerName is a multi-hop path (contains /)
 	if parts := strings.Split(peerName, "/"); len(parts) > 1 {
 		exitConn, err = n.DialVia(ctx, parts, targetAddr)
 	} else {
@@ -402,20 +401,11 @@ func (n *Node) handleVia(ctx context.Context, peerName, targetAddr string, strea
 		stream.Close()
 		return
 	}
-	n.conns.Add(1)
-	defer n.conns.Add(-1)
 	defer exitConn.Close()
 	defer stream.Close()
-	n.mu.RLock()
-	p := n.peers[peerName]
-	n.mu.RUnlock()
-	var ptx, prx *atomic.Uint64
-	if p != nil {
-		ptx = &p.txBytes
-		prx = &p.rxBytes
-	}
-	go func() { n.copyCount(exitConn, stream, &n.txBytes, ptx); exitConn.Close() }()
-	n.copyCount(stream, exitConn, &n.rxBytes, prx)
+	// exitConn is already a countedConn from DialTCP/DialVia, so just use plain io.Copy
+	go func() { io.Copy(exitConn, stream); exitConn.Close() }()
+	io.Copy(stream, exitConn)
 }
 
 func (n *Node) deliverDataStream(id string, stream net.Conn) {
