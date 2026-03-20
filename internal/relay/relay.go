@@ -390,7 +390,14 @@ func (n *Node) handleListPeers(stream net.Conn) {
 }
 
 func (n *Node) handleVia(ctx context.Context, peerName, targetAddr string, stream net.Conn) {
-	exitConn, err := n.DialTCP(ctx, peerName, targetAddr)
+	var exitConn net.Conn
+	var err error
+	// Check if peerName is a multi-hop path (contains /)
+	if parts := strings.Split(peerName, "/"); len(parts) > 1 {
+		exitConn, err = n.DialVia(ctx, parts, targetAddr)
+	} else {
+		exitConn, err = n.DialTCP(ctx, peerName, targetAddr)
+	}
 	if err != nil {
 		stream.Close()
 		return
@@ -453,9 +460,12 @@ func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclie
 	var err error
 
 	// Check if addr is a via request (multi-hop forwarding)
-	if peerName, targetAddr, ok := parseVia(addr); ok {
-		// Route through one of our peers
-		target, err = n.DialTCP(ctx, peerName, targetAddr)
+	if viaPeer, targetAddr, ok := parseVia(addr); ok {
+		if parts := strings.Split(viaPeer, "/"); len(parts) > 1 {
+			target, err = n.DialVia(ctx, parts, targetAddr)
+		} else {
+			target, err = n.DialTCP(ctx, viaPeer, targetAddr)
+		}
 	} else {
 		target, err = net.DialTimeout("tcp", addr, 10*time.Second)
 	}
