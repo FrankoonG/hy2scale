@@ -28,12 +28,13 @@ import (
 var ErrNotHy2scale = fmt.Errorf("relay: remote is not hy2scale")
 
 const (
-	streamRegister   = "_relay_register_:0"
-	streamCtrlS2C    = "_relay_s2c_ctrl_:0"
-	streamListPeers  = "_relay_list_peers_:0"
-	streamViaPrefix  = "_relay_via_"
-	streamDataPrefix = "_relay_data_"
-	streamDataSuffix = ":0"
+	streamRegister      = "_relay_register_:0"
+	streamCtrlS2C       = "_relay_s2c_ctrl_:0"
+	streamListPeers     = "_relay_list_peers_:0"
+	streamLatencyReport = "_relay_latency_:0"
+	streamViaPrefix     = "_relay_via_"
+	streamDataPrefix    = "_relay_data_"
+	streamDataSuffix    = ":0"
 )
 
 // IsRelayStream returns true if addr is a relay internal stream.
@@ -41,6 +42,7 @@ func IsRelayStream(addr string) bool {
 	return addr == streamRegister ||
 		addr == streamCtrlS2C ||
 		addr == streamListPeers ||
+		addr == streamLatencyReport ||
 		strings.HasPrefix(addr, streamViaPrefix) ||
 		strings.HasPrefix(addr, streamDataPrefix)
 }
@@ -49,8 +51,9 @@ func IsRelayStream(addr string) bool {
 type PeerInfo struct {
 	Name      string `json:"name"`
 	ExitNode  bool   `json:"exit_node"`
-	Direction string `json:"direction"` // "inbound" or "outbound"
-	Native    bool   `json:"native"`    // true = plain hy2 server, no relay protocol
+	Direction string `json:"direction"`
+	Native    bool   `json:"native"`
+	LatencyMs int    `json:"latency_ms"` // self-reported latency to this peer
 }
 
 // --- Node ---
@@ -106,6 +109,10 @@ type Node struct {
 	// Per-peer rate snapshots (updated by rate ticker)
 	peerRateMu sync.RWMutex
 	peerRates  map[string]PeerTraffic
+
+	// Per-peer latency (updated by background prober)
+	latencyMu sync.RWMutex
+	latencies map[string]int // peer name → latency ms (-1 = unreachable)
 }
 
 // PeerRates returns per-peer traffic rates.
@@ -117,6 +124,58 @@ func (n *Node) PeerRates() map[string]PeerTraffic {
 		out[k] = v
 	}
 	return out
+}
+
+// SetLatency stores a latency measurement for a peer (called by prober or inbound report).
+func (n *Node) SetLatency(peerName string, ms int) {
+	n.latencyMu.Lock()
+	n.latencies[peerName] = ms
+	n.latencyMu.Unlock()
+}
+
+// GetLatency returns stored latency for a peer. -1 if unknown.
+func (n *Node) GetLatency(peerName string) int {
+	n.latencyMu.RLock()
+	defer n.latencyMu.RUnlock()
+	if ms, ok := n.latencies[peerName]; ok {
+		return ms
+	}
+	return -1
+}
+
+// StartLatencyProber periodically pings outbound peers in the background.
+// Non-blocking: each ping runs in its own goroutine with a timeout.
+func (n *Node) StartLatencyProber(ctx context.Context) {
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			n.mu.RLock()
+			peers := make([]*peer, 0, len(n.peers))
+			names := make([]string, 0, len(n.peers))
+			for name, p := range n.peers {
+				peers = append(peers, p)
+				names = append(names, name)
+			}
+			n.mu.RUnlock()
+			for i, p := range peers {
+				if p.client == nil {
+					continue // can't ping inbound
+				}
+				go func(name string, p *peer) {
+					rtt := n.PingPeer(name)
+					if rtt >= 0 {
+						n.SetLatency(name, int(rtt.Milliseconds()))
+					} else {
+						n.SetLatency(name, -1)
+					}
+				}(names[i], p)
+			}
+		}
+	}
 }
 
 // Name returns the node's name.
@@ -199,6 +258,7 @@ func NewNode(name string, exitNode bool) *Node {
 		peers:     make(map[string]*peer),
 		nested:    make(map[string]bool),
 		peerRates: make(map[string]PeerTraffic),
+		latencies: make(map[string]int),
 	}
 }
 
@@ -304,6 +364,35 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 		}
 	}()
 
+	// Periodically report our latency to the remote so it knows inbound latency
+	go func() {
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				ms := n.GetLatency(actualName)
+				if ms <= 0 {
+					continue
+				}
+				stream, err := client.TCP(streamLatencyReport)
+				if err != nil {
+					continue
+				}
+				writeString(stream, n.name)
+				var lb [2]byte
+				if ms > 65535 {
+					ms = 65535
+				}
+				binary.BigEndian.PutUint16(lb[:], uint16(ms))
+				stream.Write(lb[:])
+				stream.Close()
+			}
+		}
+	}()
+
 	select {
 	case err := <-errCh:
 		return fmt.Errorf("relay: peer %s disconnected: %w", peerName, err)
@@ -332,6 +421,9 @@ func (n *Node) HandleStream(ctx context.Context, reqAddr string, stream net.Conn
 		}
 		n.mu.Unlock()
 		<-ctx.Done()
+
+	case streamLatencyReport:
+		n.handleLatencyReport(stream)
 
 	case streamListPeers:
 		n.handleListPeers(stream)
@@ -380,6 +472,22 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 	n.mu.Lock()
 	delete(n.peers, name)
 	n.mu.Unlock()
+}
+
+// handleLatencyReport reads a latency report from an inbound peer.
+// Format: peer name (string) + latency ms (uint16 big-endian)
+func (n *Node) handleLatencyReport(stream net.Conn) {
+	defer stream.Close()
+	name, err := readString(stream)
+	if err != nil {
+		return
+	}
+	var lb [2]byte
+	if _, err := io.ReadFull(stream, lb[:]); err != nil {
+		return
+	}
+	ms := int(binary.BigEndian.Uint16(lb[:]))
+	n.SetLatency(name, ms)
 }
 
 func (n *Node) handleListPeers(stream net.Conn) {
@@ -490,9 +598,15 @@ func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclie
 func (n *Node) Peers() []PeerInfo {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
+	n.latencyMu.RLock()
+	defer n.latencyMu.RUnlock()
 	result := make([]PeerInfo, 0, len(n.peers))
-	for _, p := range n.peers {
-		result = append(result, p.info)
+	for name, p := range n.peers {
+		info := p.info
+		if ms, ok := n.latencies[name]; ok {
+			info.LatencyMs = ms
+		}
+		result = append(result, info)
 	}
 	return result
 }

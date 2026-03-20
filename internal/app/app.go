@@ -127,8 +127,9 @@ func (a *App) Run(ctx context.Context) error {
 	cfg := a.store.Get()
 	log.Printf("[%s] starting node id=%s (exit=%v)", cfg.Name, cfg.NodeID, cfg.ExitNode)
 
-	// Start rate ticker
+	// Start rate ticker and latency prober
 	go a.node.StartRateTicker(ctx)
+	go a.node.StartLatencyProber(ctx)
 
 	// Apply nested discovery
 	for peerName, pc := range cfg.Peers {

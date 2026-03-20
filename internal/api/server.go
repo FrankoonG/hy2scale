@@ -446,30 +446,10 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(names)
 
-	// Measure direct peer latencies (parallel, non-blocking)
+	// Read latencies from background prober (instant, non-blocking)
 	latencyCache := make(map[string]int)
-	type latResult struct {
-		name string
-		ms   int
-	}
-	lch := make(chan latResult, len(names))
 	for _, name := range names {
-		if connected[name] {
-			go func(n string) {
-				rtt := s.app.Node().PingPeer(n)
-				if rtt < 0 {
-					lch <- latResult{n, -1}
-				} else {
-					lch <- latResult{n, int(rtt.Milliseconds())}
-				}
-			}(name)
-		} else {
-			lch <- latResult{name, -1}
-		}
-	}
-	for range names {
-		r := <-lch
-		latencyCache[r.name] = r.ms
+		latencyCache[name] = s.app.Node().GetLatency(name)
 	}
 
 	// Collect inbound peers as self's children
@@ -571,9 +551,7 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	start := time.Now()
 	subPeers, err := s.app.Node().PeersOfVia(ctx, path)
-	chainRTT := int(time.Since(start).Milliseconds())
 	if err != nil {
 		return nil
 	}
@@ -584,8 +562,8 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 		if sp.Name == myID {
 			continue
 		}
-		// Use chain RTT as the latency (measures full path to this peer's host)
-		childLatency := chainRTT
+		// Use remote-reported latency (the remote node measured this itself)
+		childLatency := sp.LatencyMs
 		child := topoSubPeer{
 			Name:      sp.Name,
 			ExitNode:  sp.ExitNode,
