@@ -205,8 +205,8 @@ button.btn-icon:hover{color:var(--red);background:var(--red-bg)}
 @keyframes toast-in{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:translateY(0)}}
 
 /* ── Proxy tabs ── */
-.proxy-tabs{display:flex;gap:0;margin-bottom:16px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden}
-.proxy-tab{flex:1;padding:10px;text-align:center;font-size:13px;font-weight:600;cursor:pointer;color:var(--text-muted);background:var(--bg);transition:all .15s;border-right:1px solid var(--border)}
+.proxy-tabs{display:inline-flex;gap:0;margin-bottom:16px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden}
+.proxy-tab{padding:8px 20px;text-align:center;font-size:13px;font-weight:600;cursor:pointer;color:var(--text-muted);background:var(--bg);transition:all .15s;border-right:1px solid var(--border)}
 .proxy-tab:last-child{border-right:none}
 .proxy-tab.active{background:var(--primary-light);color:var(--primary)}
 .proxy-panel{display:none}

@@ -93,6 +93,8 @@ type App struct {
 	clientCancel map[string]context.CancelFunc
 	proxyHandles map[string]*proxyHandle
 	srvCancel    context.CancelFunc
+	ssListener   net.Listener
+	ssCancel     context.CancelFunc
 	usersMu      sync.RWMutex
 	userIndex    map[string]*UserConfig // username → user (for fast auth lookup)
 	trafficDirty sync.Map              // username → true (needs flush)

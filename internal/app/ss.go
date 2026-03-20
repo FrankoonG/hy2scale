@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/md5"
@@ -35,8 +36,11 @@ func (a *App) StartSS(cfg SSConfig) {
 		log.Printf("[ss] listen error: %v", err)
 		return
 	}
+	ctx, cancel := context.WithCancel(a.appCtx)
+	a.ssListener = ln
+	a.ssCancel = cancel
 	log.Printf("[ss] server on %s (method=%s)", cfg.Listen, cfg.Method)
-	go func() { <-a.appCtx.Done(); ln.Close() }()
+	go func() { <-ctx.Done(); ln.Close() }()
 	go func() {
 		for {
 			conn, err := ln.Accept()
@@ -48,11 +52,32 @@ func (a *App) StartSS(cfg SSConfig) {
 	}()
 }
 
+// RestartSS stops and restarts the SS server with current config.
+func (a *App) RestartSS() {
+	if a.ssCancel != nil {
+		a.ssCancel()
+	}
+	if a.ssListener != nil {
+		a.ssListener.Close()
+		a.ssListener = nil
+	}
+	time.Sleep(200 * time.Millisecond)
+	cfg := a.store.Get()
+	if cfg.SS != nil {
+		a.StartSS(*cfg.SS)
+	}
+}
+
 func (a *App) handleSS(conn net.Conn, method string) {
 	defer conn.Close()
 
+	// "none" method: no encryption, just relay with address header
+	if method == "none" {
+		a.handleSSNone(conn)
+		return
+	}
+
 	// SS server needs to try each user's password to decrypt
-	// The first valid decryption identifies the user
 	cfg := a.store.Get()
 	for _, u := range cfg.Users {
 		if !u.Enabled {
@@ -216,11 +241,65 @@ func (a *App) handleSS(conn net.Conn, method string) {
 	}
 }
 
+func (a *App) handleSSNone(conn net.Conn) {
+	// No encryption — read address header directly
+	buf := make([]byte, 512)
+	n, err := conn.Read(buf)
+	if err != nil || n < 2 {
+		return
+	}
+	addr, remaining, err := parseSocksAddr(buf[:n])
+	if err != nil {
+		return
+	}
+
+	// No user identification possible with "none" — use first enabled user or direct
+	cfg := a.store.Get()
+	var exitVia, username string
+	for _, u := range cfg.Users {
+		if u.Enabled {
+			exitVia = u.ExitVia
+			username = u.Username
+			break
+		}
+	}
+
+	var remote net.Conn
+	if exitVia == "" {
+		remote, err = net.DialTimeout("tcp", addr, 10*time.Second)
+	} else {
+		parts := splitPath(exitVia)
+		if len(parts) == 1 {
+			remote, err = a.node.DialTCP(a.appCtx, parts[0], addr)
+		} else {
+			remote, err = a.node.DialVia(a.appCtx, parts, addr)
+		}
+	}
+	if err != nil {
+		return
+	}
+	defer remote.Close()
+
+	if len(remaining) > 0 {
+		remote.Write(remaining)
+	}
+
+	var up, down int64
+	done := make(chan struct{})
+	go func() { n, _ := io.Copy(remote, conn); atomic.AddInt64(&up, n); done <- struct{}{} }()
+	n2, _ := io.Copy(conn, remote)
+	atomic.AddInt64(&down, n2)
+	<-done
+	if username != "" {
+		a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))
+	}
+}
+
 func keySize(method string) int {
 	switch method {
-	case "aes-128-gcm":
+	case "aes-128-gcm", "2022-blake3-aes-128-gcm":
 		return 16
-	case "aes-256-gcm":
+	case "aes-256-gcm", "2022-blake3-aes-256-gcm":
 		return 32
 	case "chacha20-ietf-poly1305":
 		return 32
