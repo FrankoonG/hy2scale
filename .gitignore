@@ -21,7 +21,9 @@ vendor/
 # Configs (may contain secrets)
 configs/
 
-# Test scripts and local compose
+# Test scripts and local files
+test/
+test_*.sh
 run-lossy-test.sh
 docker-compose.local-test.yml
 
