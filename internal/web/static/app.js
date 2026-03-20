@@ -293,7 +293,7 @@ async function refreshTopology() {
   const newConnected = new Set();
   function collectPeers(nodes) {
     for (const n of nodes) {
-      if (n.connected || n.is_self) newConnected.add(n.name);
+      if (n.connected || n.is_self || n.native) newConnected.add(n.name);
       if (n.children) collectPeers(n.children);
     }
   }
