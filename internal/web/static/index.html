@@ -133,14 +133,53 @@
 
       <!-- Proxies Page -->
       <div class="page" id="page-proxies" style="display:none">
-        <div class="card">
-          <div class="card-header">
-            <span class="card-title">Proxy Instances</span>
-            <span class="card-count" id="proxy-count">0</span>
-            <span class="spacer"></span>
-            <button class="btn-primary btn-sm" onclick="openProxyDialog()">+ Add Proxy</button>
+        <div class="proxy-tabs">
+          <div class="proxy-tab active" data-ptab="socks5" onclick="switchProxyTab(this)">SOCKS5</div>
+          <div class="proxy-tab" data-ptab="ss" onclick="switchProxyTab(this)">Shadowsocks</div>
+        </div>
+
+        <div class="proxy-panel active" id="ptab-socks5">
+          <div class="card">
+            <div class="card-header"><span class="card-title">SOCKS5 Server</span></div>
+            <div class="form-col" style="max-width:400px">
+              <div class="form-grid">
+                <div class="form-group"><label>Listen Port</label><input id="sk5-port" type="number" placeholder="1080"></div>
+                <div class="form-group">
+                  <label>Enabled</label>
+                  <label class="toggle" style="margin-top:4px"><input type="checkbox" id="sk5-enabled"><span class="slider"></span></label>
+                </div>
+              </div>
+              <div style="font-size:12px;color:var(--text-muted)">Users authenticate via SOCKS5 username/password. Exit path is determined by the user's configuration.</div>
+              <button class="btn-primary" onclick="saveSocks5()">Save</button>
+              <div id="sk5-msg" class="msg-ok"></div>
+            </div>
           </div>
-          <div id="proxy-list"><div class="empty">Loading...</div></div>
+        </div>
+
+        <div class="proxy-panel" id="ptab-ss" style="display:none">
+          <div class="card">
+            <div class="card-header"><span class="card-title">Shadowsocks Server</span></div>
+            <div class="form-col" style="max-width:400px">
+              <div class="form-grid">
+                <div class="form-group"><label>Listen Port</label><input id="ss-port" type="number" placeholder="8388"></div>
+                <div class="form-group">
+                  <label>Enabled</label>
+                  <label class="toggle" style="margin-top:4px"><input type="checkbox" id="ss-enabled"><span class="slider"></span></label>
+                </div>
+              </div>
+              <div class="form-group">
+                <label>Encryption Method</label>
+                <select id="ss-method">
+                  <option value="aes-128-gcm">aes-128-gcm</option>
+                  <option value="aes-256-gcm" selected>aes-256-gcm</option>
+                  <option value="chacha20-ietf-poly1305">chacha20-ietf-poly1305</option>
+                </select>
+              </div>
+              <div style="font-size:12px;color:var(--text-muted)">Each user's password is used as the SS key. The server tries all enabled user passwords to identify the connecting client.</div>
+              <button class="btn-primary" onclick="saveSS()">Save</button>
+              <div id="ss-msg" class="msg-ok"></div>
+            </div>
+          </div>
         </div>
       </div>
 

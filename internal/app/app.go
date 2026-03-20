@@ -73,6 +73,7 @@ type Config struct {
 	SOCKS5     *SOCKS5Config         `yaml:"socks5,omitempty" json:"-"`
 	Users      []UserConfig          `yaml:"users" json:"users"`
 	Proxies    []ProxyConfig         `yaml:"proxies" json:"proxies"`
+	SS         *SSConfig             `yaml:"ss,omitempty" json:"ss,omitempty"`
 	UIListen   string                `yaml:"ui_listen,omitempty" json:"ui_listen,omitempty"`
 	UIBasePath string                `yaml:"ui_base_path,omitempty" json:"ui_base_path,omitempty"`
 }
@@ -156,6 +157,11 @@ func (a *App) Run(ctx context.Context) error {
 	// Start proxies
 	for _, pc := range cfg.Proxies {
 		a.StartProxy(pc)
+	}
+
+	// Start SS server if configured
+	if cfg.SS != nil {
+		a.StartSS(*cfg.SS)
 	}
 
 	// Start clients
@@ -594,8 +600,8 @@ func (a *App) startServer(ctx context.Context, sc *ServerConfig) error {
 			MaxConnectionReceiveWindow:     134217728,
 			MaxIncomingStreams:              4096,
 		},
-		Authenticator: &simpleAuth{password: sc.Password},
-		Outbound:      &nodeOutbound{node: a.node, ctx: ctx},
+		Authenticator: &hy2Auth{app: a, sysPassword: sc.Password},
+		Outbound:      &nodeOutbound{app: a, node: a.node, ctx: ctx},
 	})
 	if err != nil {
 		conn.Close()
@@ -905,6 +911,7 @@ func splitOn(s string, sep byte) []string {
 // --- helpers ---
 
 type nodeOutbound struct {
+	app  *App
 	node *relay.Node
 	ctx  context.Context
 }
@@ -915,6 +922,11 @@ func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
 		go o.node.HandleStream(o.ctx, reqAddr, c1)
 		return c2, nil
 	}
+	// For native hy2 client users: their traffic is handled by hy2 server directly
+	// Route through their exit_via if they authenticated as a user
+	// Note: hy2 server doesn't pass user info to Outbound, so we can't do per-user
+	// routing here. Native hy2 client users exit directly (local network).
+	// Per-user exit routing works through SOCKS5/SS where we control the full flow.
 	return net.DialTimeout("tcp", reqAddr, 10*time.Second)
 }
 
@@ -922,11 +934,35 @@ func (o *nodeOutbound) UDP(addr string) (hyserver.UDPConn, error) {
 	return &dummyUDP{}, nil
 }
 
-type simpleAuth struct{ password string }
+// hy2Auth handles authentication for the hy2 server.
+// - User password → accept as user proxy client (identified by username)
+// - System password → must be hy2scale relay (verified after connect via relay protocol)
+type hy2Auth struct {
+	app          *App
+	sysPassword  string
+}
 
-func (a *simpleAuth) Authenticate(addr net.Addr, auth string, tx uint64) (bool, string) {
-	if auth == a.password {
-		return true, "user"
+func (a *hy2Auth) Authenticate(addr net.Addr, auth string, tx uint64) (bool, string) {
+	// Check user passwords first
+	cfg := a.app.store.Get()
+	for _, u := range cfg.Users {
+		if u.Password == auth && u.Enabled {
+			// Check expiry
+			if u.ExpiryDate != "" {
+				if t, err := time.Parse("2006-01-02", u.ExpiryDate); err == nil && time.Now().After(t) {
+					return false, ""
+				}
+			}
+			// Check traffic limit
+			if u.TrafficLimit > 0 && u.TrafficUsed >= u.TrafficLimit {
+				return false, ""
+			}
+			return true, "user:" + u.Username
+		}
+	}
+	// Check system password (for hy2scale relay nodes)
+	if auth == a.sysPassword {
+		return true, "system"
 	}
 	return false, ""
 }

@@ -93,6 +93,10 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("POST /api/proxies", s.addProxy)
 	authed.HandleFunc("PUT /api/proxies/{id}", s.updateProxy)
 	authed.HandleFunc("DELETE /api/proxies/{id}", s.removeProxy)
+	// SS config
+	authed.HandleFunc("GET /api/ss", s.getSSConfig)
+	authed.HandleFunc("PUT /api/ss", s.updateSSConfig)
+
 	// Users
 	authed.HandleFunc("GET /api/users", s.getUsers)
 	authed.HandleFunc("POST /api/users", s.addUserAPI)
@@ -843,6 +847,29 @@ func (s *Server) removeProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// --- SS ---
+
+func (s *Server) getSSConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := s.app.Store().Get()
+	if cfg.SS == nil {
+		writeJSON(w, map[string]any{"listen": "", "enabled": false, "method": "aes-256-gcm"})
+		return
+	}
+	writeJSON(w, cfg.SS)
+}
+
+func (s *Server) updateSSConfig(w http.ResponseWriter, r *http.Request) {
+	var ss app.SSConfig
+	if err := json.NewDecoder(r.Body).Decode(&ss); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	s.app.Store().Update(func(c *app.Config) {
+		c.SS = &ss
+	})
+	writeJSON(w, map[string]string{"status": "ok", "note": "restart required"})
 }
 
 // --- Users ---

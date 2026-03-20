@@ -530,36 +530,62 @@ async function toggleSelfDisable(disabled) {
 }
 
 // ── Proxies ──
+function switchProxyTab(tab) {
+  $$('.proxy-tab').forEach(t => t.classList.toggle('active', t === tab));
+  $$('.proxy-panel').forEach(p => p.classList.toggle('active', p.id === 'ptab-' + tab.dataset.ptab));
+  $$('.proxy-panel').forEach(p => p.style.display = p.classList.contains('active') ? '' : 'none');
+}
+
 async function refreshProxies() {
-  const proxies = await api('/proxies');
-  const el = $('#proxy-list');
-  $('#proxy-count').textContent = proxies?.length || 0;
-  if (!proxies?.length) { el.innerHTML = '<div class="empty">No proxies. Click <b>+ Add Proxy</b> to create one.</div>'; return; }
-  el.innerHTML = proxies.map(p => `
-    <div class="proxy-row">
-      <span class="proxy-tag">${esc(p.protocol)}</span>
-      <span class="proxy-listen">${esc(p.listen)}</span>
-      <span class="proxy-arrow">&rarr;</span>
-      <span class="proxy-exit">${esc(p.exit_via) || '(local exit)'}</span>
-      <span class="spacer"></span>
-      <span class="badge badge-muted">${esc(p.id)}</span>
-      <button class="btn-icon" onclick="removeProxy('${esc(p.id)}')" title="Remove">&#10005;</button>
-    </div>`).join('');
-}
-function openProxyDialog() { $('#add-proxy-modal').style.display = ''; }
-function closeProxyDialog() { $('#add-proxy-modal').style.display = 'none'; }
-async function submitAddProxy() {
-  const id = $('#px-id').value.trim(), protocol = $('#px-proto').value,
-    listen = $('#px-listen').value.trim(), exit_via = $('#px-exit').value.trim();
-  if (!id || !listen) { toast('ID and listen address are required', 'error'); return; }
+  // Load SOCKS5 config
   try {
-    await api('/proxies', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, protocol, listen, exit_via }) });
-    closeProxyDialog(); ['px-id','px-listen','px-exit'].forEach(id => $(`#${id}`).value = ''); refreshProxies();
-  } catch (e) { toast(String(e), 'error'); }
+    const proxies = await api('/proxies');
+    const sk5 = proxies?.find(p => p.protocol === 'socks5');
+    if (sk5) {
+      $('#sk5-port').value = sk5.listen?.replace(/.*:/, '') || '';
+      $('#sk5-enabled').checked = sk5.enabled;
+    }
+  } catch(e) {}
+  // Load SS config
+  try {
+    const ss = await api('/ss');
+    $('#ss-port').value = ss.listen?.replace(/.*:/, '') || '';
+    $('#ss-enabled').checked = ss.enabled;
+    if (ss.method) $('#ss-method').value = ss.method;
+  } catch(e) {}
 }
-async function removeProxy(id) {
-  if (!await showConfirm('Delete Proxy', `Remove proxy "${id}"?`)) return;
-  try { await api(`/proxies/${id}`, { method: 'DELETE' }); refreshProxies(); toast(`Removed ${id}`, 'success'); } catch (e) { toast(String(e), 'error'); }
+
+async function saveSocks5() {
+  const port = $('#sk5-port').value.trim();
+  const enabled = $('#sk5-enabled').checked;
+  if (!port) { toast('Port required', 'error'); return; }
+  try {
+    // Delete existing socks5 proxies first
+    const proxies = await api('/proxies');
+    for (const p of proxies) {
+      if (p.protocol === 'socks5') await api(`/proxies/${p.id}`, { method: 'DELETE' });
+    }
+    // Add new
+    await api('/proxies', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
+      id: 'socks5', protocol: 'socks5', listen: '0.0.0.0:' + port, enabled
+    })});
+    $('#sk5-msg').textContent = 'Saved. Restart required.';
+    toast('SOCKS5 saved', 'success');
+  } catch(e) { toast(String(e), 'error'); }
+}
+
+async function saveSS() {
+  const port = $('#ss-port').value.trim();
+  const enabled = $('#ss-enabled').checked;
+  const method = $('#ss-method').value;
+  if (!port) { toast('Port required', 'error'); return; }
+  try {
+    await api('/ss', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
+      listen: '0.0.0.0:' + port, enabled, method
+    })});
+    $('#ss-msg').textContent = 'Saved. Restart required.';
+    toast('SS saved', 'success');
+  } catch(e) { toast(String(e), 'error'); }
 }
 
 // ── Settings ──
