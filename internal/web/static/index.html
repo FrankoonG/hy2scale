@@ -12,7 +12,7 @@
 <div id="toast-container"></div>
 
 <!-- Confirm Dialog -->
-<div class="modal-overlay" id="confirm-modal" style="display:none">
+<div class="modal-overlay" id="confirm-modal" style="display:none" onmousedown="if(event.target===this)document.getElementById('confirm-cancel').click()">
   <div class="modal" style="max-width:360px">
     <div class="modal-header"><h2 id="confirm-title">Confirm</h2></div>
     <div class="modal-body" style="padding:16px 24px"><p id="confirm-msg"></p></div>
@@ -188,7 +188,7 @@
 </div>
 
 <!-- Edit Self Dialog -->
-<div class="modal-overlay" id="edit-self-modal" style="display:none" onclick="if(event.target===this)closeEditSelf()">
+<div class="modal-overlay" id="edit-self-modal" style="display:none" onmousedown="if(event.target===this)closeEditSelf()">
   <div class="modal" style="max-width:480px">
     <div class="modal-header">
       <h2>Edit Local Node</h2>
@@ -218,7 +218,7 @@
 </div>
 
 <!-- Add/Edit Node Dialog -->
-<div class="modal-overlay" id="add-node-modal" style="display:none" onclick="if(event.target===this)closeAddDialog()">
+<div class="modal-overlay" id="add-node-modal" style="display:none" onmousedown="if(event.target===this)closeAddDialog()">
   <div class="modal">
     <div class="modal-header">
       <h2 id="add-node-modal-title">Add Node Connection</h2>
@@ -274,7 +274,7 @@
 </div>
 
 <!-- Add Proxy Dialog -->
-<div class="modal-overlay" id="add-proxy-modal" style="display:none" onclick="if(event.target===this)closeProxyDialog()">
+<div class="modal-overlay" id="add-proxy-modal" style="display:none" onmousedown="if(event.target===this)closeProxyDialog()">
   <div class="modal" style="max-width:420px">
     <div class="modal-header">
       <h2>Add Proxy</h2>
@@ -298,7 +298,7 @@
 </div>
 
 <!-- Add/Edit User Dialog -->
-<div class="modal-overlay" id="user-modal" style="display:none" onclick="if(event.target===this)closeUserDialog()">
+<div class="modal-overlay" id="user-modal" style="display:none" onmousedown="if(event.target===this)closeUserDialog()">
   <div class="modal" style="max-width:460px">
     <div class="modal-header">
       <h2 id="user-modal-title">Add User</h2>
@@ -329,7 +329,7 @@
 </div>
 
 <!-- Generate Cert Dialog -->
-<div class="modal-overlay" id="gen-cert-modal" style="display:none" onclick="if(event.target===this)closeGenCertDialog()">
+<div class="modal-overlay" id="gen-cert-modal" style="display:none" onmousedown="if(event.target===this)closeGenCertDialog()">
   <div class="modal" style="max-width:420px">
     <div class="modal-header">
       <h2>Generate Certificate</h2>
@@ -351,7 +351,7 @@
 </div>
 
 <!-- Import Cert Dialog -->
-<div class="modal-overlay" id="import-cert-modal" style="display:none" onclick="if(event.target===this)closeImportCertDialog()">
+<div class="modal-overlay" id="import-cert-modal" style="display:none" onmousedown="if(event.target===this)closeImportCertDialog()">
   <div class="modal" style="max-width:520px">
     <div class="modal-header">
       <h2>Import Certificate</h2>
