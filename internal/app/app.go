@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	hyclient "github.com/apernet/hysteria/core/v2/client"
@@ -70,6 +71,7 @@ type Config struct {
 	Clients    []ClientEntry         `yaml:"clients" json:"clients"`
 	Peers      map[string]PeerConfig `yaml:"peers" json:"peers"`
 	SOCKS5     *SOCKS5Config         `yaml:"socks5,omitempty" json:"-"`
+	Users      []UserConfig          `yaml:"users" json:"users"`
 	Proxies    []ProxyConfig         `yaml:"proxies" json:"proxies"`
 	UIListen   string                `yaml:"ui_listen,omitempty" json:"ui_listen,omitempty"`
 	UIBasePath string                `yaml:"ui_base_path,omitempty" json:"ui_base_path,omitempty"`
@@ -89,7 +91,10 @@ type App struct {
 	mu           sync.Mutex
 	clientCancel map[string]context.CancelFunc
 	proxyHandles map[string]*proxyHandle
-	srvCancel    context.CancelFunc // cancel to restart hy2 server
+	srvCancel    context.CancelFunc
+	usersMu      sync.RWMutex
+	userIndex    map[string]*UserConfig // username → user (for fast auth lookup)
+	trafficDirty sync.Map              // username → true (needs flush)
 }
 
 func New(dataDir string) (*App, error) {
@@ -127,9 +132,11 @@ func (a *App) Run(ctx context.Context) error {
 	cfg := a.store.Get()
 	log.Printf("[%s] starting node id=%s (exit=%v)", cfg.Name, cfg.NodeID, cfg.ExitNode)
 
-	// Start rate ticker and latency prober
+	// Start rate ticker, latency prober, and traffic flusher
 	go a.node.StartRateTicker(ctx)
 	go a.node.StartLatencyProber(ctx)
+	go a.StartTrafficFlusher(ctx)
+	a.rebuildUserIndex()
 
 	// Apply nested discovery
 	for peerName, pc := range cfg.Peers {
@@ -305,6 +312,9 @@ func (a *App) SetClientDisabled(name string, disabled bool) error {
 // --- Dynamic proxy management ---
 
 func (a *App) StartProxy(pc ProxyConfig) {
+	if !pc.Enabled {
+		return
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if _, ok := a.proxyHandles[pc.ID]; ok {
@@ -368,6 +378,167 @@ func (a *App) UpdateProxy(pc ProxyConfig) error {
 		}
 		c.Proxies = append(c.Proxies, pc)
 	})
+}
+
+// --- User management ---
+
+func (a *App) rebuildUserIndex() {
+	cfg := a.store.Get()
+	index := make(map[string]*UserConfig, len(cfg.Users))
+	for i := range cfg.Users {
+		index[cfg.Users[i].Username] = &cfg.Users[i]
+	}
+	a.usersMu.Lock()
+	a.userIndex = index
+	a.usersMu.Unlock()
+}
+
+func (a *App) LookupUser(username, password string) (*UserConfig, error) {
+	a.usersMu.RLock()
+	u, ok := a.userIndex[username]
+	a.usersMu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("user not found")
+	}
+	if u.Password != password {
+		return nil, fmt.Errorf("invalid password")
+	}
+	if !u.Enabled {
+		return nil, fmt.Errorf("user disabled")
+	}
+	if u.ExpiryDate != "" {
+		if t, err := time.Parse("2006-01-02", u.ExpiryDate); err == nil && time.Now().After(t) {
+			return nil, fmt.Errorf("user expired")
+		}
+	}
+	if u.TrafficLimit > 0 && u.TrafficUsed >= u.TrafficLimit {
+		return nil, fmt.Errorf("traffic limit exceeded")
+	}
+	return u, nil
+}
+
+func (a *App) AddUser(u UserConfig) error {
+	err := a.store.Update(func(c *Config) {
+		for _, existing := range c.Users {
+			if existing.Username == u.Username {
+				return
+			}
+		}
+		c.Users = append(c.Users, u)
+	})
+	if err == nil {
+		a.rebuildUserIndex()
+	}
+	return err
+}
+
+func (a *App) UpdateUser(id string, u UserConfig) error {
+	err := a.store.Update(func(c *Config) {
+		for i, existing := range c.Users {
+			if existing.ID == id {
+				u.TrafficUsed = existing.TrafficUsed // preserve traffic
+				c.Users[i] = u
+				return
+			}
+		}
+	})
+	if err == nil {
+		a.rebuildUserIndex()
+	}
+	return err
+}
+
+func (a *App) RemoveUser(id string) error {
+	err := a.store.Update(func(c *Config) {
+		for i, u := range c.Users {
+			if u.ID == id {
+				c.Users = append(c.Users[:i], c.Users[i+1:]...)
+				return
+			}
+		}
+	})
+	if err == nil {
+		a.rebuildUserIndex()
+	}
+	return err
+}
+
+func (a *App) ToggleUser(id string, enabled bool) error {
+	err := a.store.Update(func(c *Config) {
+		for i, u := range c.Users {
+			if u.ID == id {
+				c.Users[i].Enabled = enabled
+				return
+			}
+		}
+	})
+	if err == nil {
+		a.rebuildUserIndex()
+	}
+	return err
+}
+
+func (a *App) ResetUserTraffic(id string) error {
+	err := a.store.Update(func(c *Config) {
+		for i, u := range c.Users {
+			if u.ID == id {
+				c.Users[i].TrafficUsed = 0
+				return
+			}
+		}
+	})
+	if err == nil {
+		a.rebuildUserIndex()
+	}
+	return err
+}
+
+func (a *App) RecordTraffic(username string, bytes int64) {
+	a.usersMu.RLock()
+	u, ok := a.userIndex[username]
+	a.usersMu.RUnlock()
+	if !ok {
+		return
+	}
+	atomic.AddInt64(&u.TrafficUsed, bytes)
+	a.trafficDirty.Store(username, true)
+}
+
+// FlushTraffic persists dirty traffic counters to config.
+func (a *App) FlushTraffic() {
+	dirty := false
+	a.trafficDirty.Range(func(key, _ any) bool {
+		dirty = true
+		a.trafficDirty.Delete(key)
+		return true
+	})
+	if !dirty {
+		return
+	}
+	a.usersMu.RLock()
+	a.store.Update(func(c *Config) {
+		for i := range c.Users {
+			if u, ok := a.userIndex[c.Users[i].Username]; ok {
+				c.Users[i].TrafficUsed = atomic.LoadInt64(&u.TrafficUsed)
+			}
+		}
+	})
+	a.usersMu.RUnlock()
+}
+
+// StartTrafficFlusher runs a background goroutine to periodically flush traffic.
+func (a *App) StartTrafficFlusher(ctx context.Context) {
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			a.FlushTraffic()
+			return
+		case <-t.C:
+			a.FlushTraffic()
+		}
+	}
 }
 
 // --- Nested discovery ---
@@ -587,18 +758,61 @@ func (a *App) serveProxy(ctx context.Context, ln net.Listener, pc ProxyConfig) {
 		if err != nil {
 			return
 		}
-		go a.handleSOCKS5(c, pc.ExitVia)
+		go a.handleSOCKS5(c)
 	}
 }
 
-func (a *App) handleSOCKS5(conn net.Conn, exitVia string) {
+func (a *App) handleSOCKS5(conn net.Conn) {
 	defer conn.Close()
-	buf := make([]byte, 256)
+	buf := make([]byte, 512)
+
+	// SOCKS5 greeting
 	n, _ := conn.Read(buf)
 	if n < 2 || buf[0] != 0x05 {
 		return
 	}
-	conn.Write([]byte{0x05, 0x00})
+
+	// Check if users are configured
+	cfg := a.store.Get()
+	hasUsers := len(cfg.Users) > 0
+
+	var user *UserConfig
+	if hasUsers {
+		// Require username/password auth (RFC 1929, method 0x02)
+		conn.Write([]byte{0x05, 0x02})
+
+		// Read auth: {ver=0x01, ulen, username, plen, password}
+		n, _ = conn.Read(buf)
+		if n < 3 || buf[0] != 0x01 {
+			conn.Write([]byte{0x01, 0x01}) // auth failed
+			return
+		}
+		ulen := int(buf[1])
+		if n < 2+ulen+1 {
+			conn.Write([]byte{0x01, 0x01})
+			return
+		}
+		username := string(buf[2 : 2+ulen])
+		plen := int(buf[2+ulen])
+		if n < 3+ulen+plen {
+			conn.Write([]byte{0x01, 0x01})
+			return
+		}
+		password := string(buf[3+ulen : 3+ulen+plen])
+
+		var err error
+		user, err = a.LookupUser(username, password)
+		if err != nil {
+			conn.Write([]byte{0x01, 0x01}) // auth failed
+			return
+		}
+		conn.Write([]byte{0x01, 0x00}) // auth success
+	} else {
+		// No users configured — no auth required (backward compat)
+		conn.Write([]byte{0x05, 0x00})
+	}
+
+	// SOCKS5 request
 	n, _ = conn.Read(buf)
 	if n < 7 || buf[1] != 0x01 {
 		conn.Write([]byte{0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
@@ -616,6 +830,14 @@ func (a *App) handleSOCKS5(conn net.Conn, exitVia string) {
 	default:
 		conn.Write([]byte{0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		return
+	}
+
+	// Route based on user's exit_via (or direct if no user)
+	exitVia := ""
+	username := ""
+	if user != nil {
+		exitVia = user.ExitVia
+		username = user.Username
 	}
 
 	var remote net.Conn
@@ -636,8 +858,25 @@ func (a *App) handleSOCKS5(conn net.Conn, exitVia string) {
 	}
 	defer remote.Close()
 	conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
-	go func() { io.Copy(remote, conn); remote.Close() }()
-	io.Copy(conn, remote)
+
+	// Traffic counting per user
+	if username != "" {
+		var up, down int64
+		done := make(chan struct{})
+		go func() {
+			n, _ := io.Copy(remote, conn)
+			atomic.AddInt64(&up, n)
+			remote.Close()
+			done <- struct{}{}
+		}()
+		n2, _ := io.Copy(conn, remote)
+		atomic.AddInt64(&down, n2)
+		<-done
+		a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))
+	} else {
+		go func() { io.Copy(remote, conn); remote.Close() }()
+		io.Copy(conn, remote)
+	}
 }
 
 func splitPath(s string) []string {

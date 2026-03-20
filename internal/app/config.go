@@ -11,12 +11,25 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ProxyConfig defines a protocol listener that exits through the mesh.
+// UserConfig defines a client user with auth and exit routing.
+type UserConfig struct {
+	ID           string `yaml:"id" json:"id"`
+	Username     string `yaml:"username" json:"username"`
+	Password     string `yaml:"password" json:"password"`
+	ExitVia      string `yaml:"exit_via" json:"exit_via"`
+	TrafficLimit int64  `yaml:"traffic_limit" json:"traffic_limit"` // bytes, 0=unlimited
+	TrafficUsed  int64  `yaml:"traffic_used" json:"traffic_used"`
+	ExpiryDate   string `yaml:"expiry_date,omitempty" json:"expiry_date"`
+	Enabled      bool   `yaml:"enabled" json:"enabled"`
+}
+
+// ProxyConfig defines a protocol listener.
 type ProxyConfig struct {
 	ID       string `yaml:"id" json:"id"`
 	Protocol string `yaml:"protocol" json:"protocol"` // "socks5"
 	Listen   string `yaml:"listen" json:"listen"`
-	ExitVia  string `yaml:"exit_via" json:"exit_via"`
+	Enabled  bool   `yaml:"enabled" json:"enabled"`
+	ExitVia  string `yaml:"exit_via,omitempty" json:"exit_via,omitempty"` // legacy, migrated to users
 }
 
 // ConfigStore manages dynamic configuration with persistence.

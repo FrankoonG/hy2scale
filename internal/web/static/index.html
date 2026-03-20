@@ -49,6 +49,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4m-2.93-7.07-2.83 2.83m-8.48 8.48-2.83 2.83m0-14.14 2.83 2.83m8.48 8.48 2.83 2.83"/></svg>
         Nodes
       </a>
+      <a class="nav-item" data-page="users" onclick="switchPage('users')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        Users
+      </a>
       <a class="nav-item" data-page="proxies" onclick="switchPage('proxies')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
         Proxies
@@ -110,6 +114,20 @@
             <button class="btn-primary btn-sm" onclick="openAddDialog()">+ Add Node</button>
           </div>
           <div id="topology-tree"><div class="empty">Loading...</div></div>
+        </div>
+      </div>
+
+      <!-- Proxies Page -->
+      <!-- Users Page -->
+      <div class="page" id="page-users" style="display:none">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">Users</span>
+            <span class="card-count" id="user-count">0</span>
+            <span class="spacer"></span>
+            <button class="btn-primary btn-sm" onclick="openUserDialog()">+ Add User</button>
+          </div>
+          <div id="user-list"><div class="empty">Loading...</div></div>
         </div>
       </div>
 
@@ -275,6 +293,37 @@
     <div class="modal-footer">
       <button onclick="closeProxyDialog()">Cancel</button>
       <button class="btn-primary" onclick="submitAddProxy()">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add/Edit User Dialog -->
+<div class="modal-overlay" id="user-modal" style="display:none" onclick="if(event.target===this)closeUserDialog()">
+  <div class="modal" style="max-width:460px">
+    <div class="modal-header">
+      <h2 id="user-modal-title">Add User</h2>
+      <button class="btn-icon" onclick="closeUserDialog()">&#10005;</button>
+    </div>
+    <div class="modal-body" style="padding-top:16px">
+      <div class="form-col">
+        <div class="form-grid">
+          <div class="form-group"><label>Username *</label><input id="u-username"></div>
+          <div class="form-group"><label>Password *</label><div class="pw-wrap"><input id="u-password" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)">&#128065;</button></div></div>
+        </div>
+        <div class="form-group"><label>Exit Via</label><input id="u-exitvia" placeholder="e.g. au/fast-test (empty = direct)"></div>
+        <div class="form-grid">
+          <div class="form-group"><label>Traffic Limit (GB, 0=unlimited)</label><input id="u-limit" type="number" value="0"></div>
+          <div class="form-group"><label>Expiry Date</label><input id="u-expiry" type="date"></div>
+        </div>
+        <div class="form-group">
+          <label>Enabled</label>
+          <label class="toggle" style="margin-top:4px"><input type="checkbox" id="u-enabled" checked><span class="slider"></span></label>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button onclick="closeUserDialog()">Cancel</button>
+      <button class="btn-primary" id="user-submit" onclick="submitUser()">Add</button>
     </div>
   </div>
 </div>

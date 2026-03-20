@@ -93,6 +93,14 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("POST /api/proxies", s.addProxy)
 	authed.HandleFunc("PUT /api/proxies/{id}", s.updateProxy)
 	authed.HandleFunc("DELETE /api/proxies/{id}", s.removeProxy)
+	// Users
+	authed.HandleFunc("GET /api/users", s.getUsers)
+	authed.HandleFunc("POST /api/users", s.addUserAPI)
+	authed.HandleFunc("PUT /api/users/{id}", s.updateUserAPI)
+	authed.HandleFunc("DELETE /api/users/{id}", s.removeUserAPI)
+	authed.HandleFunc("PUT /api/users/{id}/toggle", s.toggleUserAPI)
+	authed.HandleFunc("PUT /api/users/{id}/reset-traffic", s.resetUserTrafficAPI)
+
 	authed.HandleFunc("PUT /api/settings/password", s.changePassword)
 	authed.HandleFunc("GET /api/settings/ui", s.getUISettings)
 	authed.HandleFunc("PUT /api/settings/ui", s.updateUISettings)
@@ -117,6 +125,7 @@ func (s *Server) Start(ctx context.Context) error {
 		"login":    true,
 		"nodes":    true,
 		"proxies":  true,
+		"users":    true,
 		"tls":      true,
 		"settings": true,
 	}
@@ -830,6 +839,84 @@ func (s *Server) updateProxy(w http.ResponseWriter, r *http.Request) {
 func (s *Server) removeProxy(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.app.RemoveProxy(id); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// --- Users ---
+
+func (s *Server) getUsers(w http.ResponseWriter, r *http.Request) {
+	cfg := s.app.Store().Get()
+	writeJSON(w, cfg.Users)
+}
+
+func (s *Server) addUserAPI(w http.ResponseWriter, r *http.Request) {
+	var u app.UserConfig
+	if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if u.Username == "" || u.Password == "" {
+		http.Error(w, "username and password required", 400)
+		return
+	}
+	if u.ID == "" {
+		b := make([]byte, 4)
+		rand.Read(b)
+		u.ID = hex.EncodeToString(b)
+	}
+	if err := s.app.AddUser(u); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) updateUserAPI(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var u app.UserConfig
+	if err := json.NewDecoder(r.Body).Decode(&u); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	u.ID = id
+	if err := s.app.UpdateUser(id, u); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) removeUserAPI(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.app.RemoveUser(id); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) toggleUserAPI(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if err := s.app.ToggleUser(id, body.Enabled); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) resetUserTrafficAPI(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := s.app.ResetUserTraffic(id); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}

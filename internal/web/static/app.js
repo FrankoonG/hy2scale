@@ -52,7 +52,7 @@ function api(path, opts) {
 function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 // ── Navigation / Router ──
-const pageTitles = { nodes: 'Nodes', proxies: 'Proxies', tls: 'TLS', settings: 'Settings' };
+const pageTitles = { nodes: 'Nodes', users: 'Users', proxies: 'Proxies', tls: 'TLS', settings: 'Settings' };
 
 function switchPage(name, push) {
   if (!pageTitles[name]) name = 'nodes';
@@ -61,6 +61,7 @@ function switchPage(name, push) {
   $(`#page-${name}`).style.display = '';
   $('#page-title').textContent = pageTitles[name];
   if (push !== false) history.pushState(null, '', basePath + '/' + name);
+  if (name === 'users') refreshUsers();
   if (name === 'settings') loadSettings();
   if (name === 'tls') refreshCerts();
 }
@@ -577,6 +578,119 @@ async function updateUISettings() {
     await api('/settings/ui', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ listen: listen || null, base_path: bp || null }) });
     $('#ui-ok').textContent = 'Saved. Restart the container to apply.';
   } catch (e) { $('#ui-error').textContent = String(e); }
+}
+
+// ── Users ──
+let editingUserId = null;
+
+async function refreshUsers() {
+  const users = await api('/users');
+  const el = $('#user-list');
+  $('#user-count').textContent = users?.length || 0;
+  if (!users?.length) {
+    el.innerHTML = '<div class="empty">No users. Click <b>+ Add User</b> to create one.</div>';
+    return;
+  }
+  el.innerHTML = `<table class="peer-table"><thead><tr>
+    <th style="width:50px">On</th>
+    <th>Username</th>
+    <th>Exit Via</th>
+    <th>Traffic</th>
+    <th>Expiry</th>
+    <th style="width:150px"></th>
+  </tr></thead><tbody>${users.map(u => {
+    const limitGB = u.traffic_limit ? (u.traffic_limit / 1073741824).toFixed(1) + ' GB' : '∞';
+    const usedGB = (u.traffic_used / 1073741824).toFixed(2) + ' GB';
+    const pct = u.traffic_limit ? Math.min(100, (u.traffic_used / u.traffic_limit * 100)).toFixed(0) : 0;
+    const expired = u.expiry_date && new Date(u.expiry_date) < new Date();
+    const expiryText = u.expiry_date || '—';
+    return `<tr class="${!u.enabled ? 'disabled' : ''}">
+      <td><label class="toggle"><input type="checkbox" ${u.enabled ? 'checked' : ''} onchange="toggleUser('${esc(u.id)}',this.checked)"><span class="slider"></span></label></td>
+      <td><b>${esc(u.username)}</b></td>
+      <td><span style="font-family:var(--mono);font-size:12px">${esc(u.exit_via) || '(direct)'}</span></td>
+      <td>
+        <span style="font-size:12px">${usedGB} / ${limitGB}</span>
+        ${u.traffic_limit ? `<div style="background:var(--border-light);height:3px;border-radius:2px;margin-top:3px"><div style="background:${pct > 90 ? 'var(--red)' : 'var(--primary)'};height:100%;width:${pct}%;border-radius:2px"></div></div>` : ''}
+      </td>
+      <td><span style="font-size:12px;${expired ? 'color:var(--red)' : ''}">${expiryText}</span></td>
+      <td style="text-align:right"><div class="act-group">
+        <button class="act-btn edit" onclick="editUser('${esc(u.id)}')">Edit</button>
+        <button class="act-btn warn" onclick="resetTraffic('${esc(u.id)}')">Reset</button>
+        <button class="act-btn danger" onclick="deleteUser('${esc(u.id)}','${esc(u.username)}')">Delete</button>
+      </div></td>
+    </tr>`;
+  }).join('')}</tbody></table>`;
+}
+
+function openUserDialog() {
+  editingUserId = null;
+  $('#user-modal-title').textContent = 'Add User';
+  $('#user-submit').textContent = 'Add';
+  ['u-username','u-password','u-exitvia','u-expiry'].forEach(id => $(`#${id}`).value = '');
+  $('#u-limit').value = '0';
+  $('#u-enabled').checked = true;
+  $('#user-modal').style.display = '';
+}
+
+async function editUser(id) {
+  const users = (await api('/users')).filter(u => u.id === id);
+  if (!users.length) return;
+  const u = users[0];
+  editingUserId = id;
+  $('#user-modal-title').textContent = `Edit: ${u.username}`;
+  $('#user-submit').textContent = 'Save';
+  $('#u-username').value = u.username;
+  $('#u-password').value = u.password;
+  $('#u-exitvia').value = u.exit_via || '';
+  $('#u-limit').value = u.traffic_limit ? (u.traffic_limit / 1073741824).toFixed(1) : '0';
+  $('#u-expiry').value = u.expiry_date || '';
+  $('#u-enabled').checked = u.enabled;
+  $('#user-modal').style.display = '';
+}
+
+function closeUserDialog() { $('#user-modal').style.display = 'none'; editingUserId = null; }
+
+async function submitUser() {
+  const username = $('#u-username').value.trim();
+  const password = $('#u-password').value;
+  if (!username || !password) { toast('Username and password required', 'error'); return; }
+  const limitGB = parseFloat($('#u-limit').value) || 0;
+  const body = {
+    username, password,
+    exit_via: $('#u-exitvia').value.trim(),
+    traffic_limit: Math.round(limitGB * 1073741824),
+    expiry_date: $('#u-expiry').value || '',
+    enabled: $('#u-enabled').checked,
+  };
+  try {
+    if (editingUserId) {
+      body.id = editingUserId;
+      await api(`/users/${editingUserId}`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      toast(`Updated ${username}`, 'success');
+    } else {
+      await api('/users', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      toast(`Added ${username}`, 'success');
+    }
+    closeUserDialog();
+    refreshUsers();
+  } catch(e) { toast(String(e), 'error'); }
+}
+
+async function toggleUser(id, enabled) {
+  try { await api(`/users/${id}/toggle`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({enabled}) }); refreshUsers(); }
+  catch(e) { toast(String(e), 'error'); }
+}
+
+async function resetTraffic(id) {
+  if (!await showConfirm('Reset Traffic', 'Reset traffic counter to 0?')) return;
+  try { await api(`/users/${id}/reset-traffic`, { method: 'PUT' }); refreshUsers(); toast('Traffic reset', 'success'); }
+  catch(e) { toast(String(e), 'error'); }
+}
+
+async function deleteUser(id, name) {
+  if (!await showConfirm('Delete User', `Delete user "${name}"?`)) return;
+  try { await api(`/users/${id}`, { method: 'DELETE' }); refreshUsers(); toast(`Deleted ${name}`, 'success'); }
+  catch(e) { toast(String(e), 'error'); }
 }
 
 // ── TLS ──
