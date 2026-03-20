@@ -496,9 +496,16 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			selfChildren = append(selfChildren, child)
 		}
 	}
-	sort.Slice(selfChildren, func(i, j int) bool { return selfChildren[i].Name < selfChildren[j].Name })
-
 	peerRates := s.app.Node().PeerRates()
+
+	// Add per-peer traffic for inbound children
+	for i, c := range selfChildren {
+		if pr, ok := peerRates[c.Name]; ok {
+			selfChildren[i].TxRate = pr.TxRate
+			selfChildren[i].RxRate = pr.RxRate
+		}
+	}
+	sort.Slice(selfChildren, func(i, j int) bool { return selfChildren[i].Name < selfChildren[j].Name })
 
 	result := make([]treeNode, 0, len(names)+1)
 	result = append(result, treeNode{
@@ -564,7 +571,9 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	start := time.Now()
 	subPeers, err := s.app.Node().PeersOfVia(ctx, path)
+	chainRTT := int(time.Since(start).Milliseconds())
 	if err != nil {
 		return nil
 	}
@@ -572,11 +581,11 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 	peerName := path[len(path)-1]
 	children := make([]topoSubPeer, 0, len(subPeers))
 	for _, sp := range subPeers {
-		// Only hide self nodeID
 		if sp.Name == myID {
 			continue
 		}
-		childLatency := 0 // nested children don't show latency
+		// Use chain RTT as the latency (measures full path to this peer's host)
+		childLatency := chainRTT
 		child := topoSubPeer{
 			Name:      sp.Name,
 			ExitNode:  sp.ExitNode,
