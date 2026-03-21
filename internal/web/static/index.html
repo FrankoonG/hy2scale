@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>hy2scale</title>
+<title>HY2 SCALE</title>
+<link rel="icon" type="image/svg+xml" id="favicon-link" href="logo.svg">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -26,8 +27,8 @@
 <!-- Login -->
 <div id="login-screen" class="login-screen">
   <div class="login-box">
-    <div class="logo">H</div>
-    <h1>hy2scale</h1>
+    <div class="logo"><img class="logo-img" alt="HY2 SCALE"></div>
+    <h1>HY2 SCALE</h1>
     <p>Sign in to manage your mesh network</p>
     <input id="login-user" placeholder="Username" autocomplete="username">
     <div class="pw-wrap"><input id="login-pass" placeholder="Password" type="password" autocomplete="current-password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
@@ -41,8 +42,11 @@
 <div id="app" class="app" style="display:none">
   <aside class="sidebar">
     <div class="sidebar-header">
-      <div class="logo">H</div>
-      <h1>hy2scale</h1>
+      <div class="logo"><img class="logo-img" alt="HY2 SCALE"></div>
+      <div>
+        <h1>HY2 SCALE</h1>
+        <span class="version-badge" id="version-badge"></span>
+      </div>
     </div>
     <nav class="sidebar-nav">
       <a class="nav-item active" data-page="nodes" onclick="switchPage('nodes')">
@@ -136,7 +140,8 @@
         <div class="proxy-tabs">
           <div class="proxy-tab active" data-ptab="socks5" onclick="switchProxyTab(this)">SOCKS5</div>
           <div class="proxy-tab" data-ptab="ss" onclick="switchProxyTab(this)">Shadowsocks</div>
-          <div class="proxy-tab" data-ptab="l2tp" onclick="switchProxyTab(this)">L2TP/IPsec</div>
+          <div class="proxy-tab" data-ptab="l2tp" onclick="switchProxyTab(this)">L2TP</div>
+          <div class="proxy-tab" data-ptab="ikev2" onclick="switchProxyTab(this)">IKEv2/IPsec</div>
         </div>
 
         <div class="proxy-panel active" id="ptab-socks5">
@@ -189,7 +194,6 @@
             </div>
           </div>
         </div>
-      </div>
 
         <div class="proxy-panel" id="ptab-l2tp" style="display:none">
           <div id="l2tp-warn" class="l2tp-warn" style="display:none">
@@ -206,12 +210,58 @@
                 </div>
               </div>
               <div class="form-group"><label>Address Pool (CIDR)</label><input id="l2tp-pool" placeholder="192.168.25.1/24"></div>
+              <div class="form-group"><label>MTU</label><input id="l2tp-mtu" type="number" placeholder="1280"></div>
               <div class="form-group"><label>IPsec Pre-Shared Key</label><div class="pw-wrap"><input id="l2tp-psk" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
-              <div style="font-size:12px;color:var(--text-muted)">Users authenticate via PPP CHAP with their hy2scale credentials. TCP traffic routed per user's exit_via. UDP exits locally. Requires NET_ADMIN capability.</div>
+              <div style="font-size:12px;color:var(--text-muted)">Users authenticate via PPP CHAP with their HY2 SCALE credentials. TCP traffic routed per user's exit_via. UDP exits locally. Requires NET_ADMIN capability.</div>
               <div><button class="btn-primary btn-sm" onclick="saveL2TP()">Save</button></div>
             </div>
           </div>
         </div>
+
+        <div class="proxy-panel" id="ptab-ikev2" style="display:none">
+          <div id="ikev2-warn" class="l2tp-warn" style="display:none">
+            Insufficient privileges — container requires <code>--cap-add NET_ADMIN</code> and <code>--network host</code> to enable IKEv2/IPsec.
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">IKEv2/IPsec Server</span></div>
+            <div class="form-col" style="max-width:450px">
+              <div class="form-grid">
+                <div class="form-group">
+                  <label>Auth Mode</label>
+                  <select id="ikev2-mode" onchange="ikev2ModeChanged()">
+                    <option value="mschapv2">EAP-MSCHAPv2 (Certificate)</option>
+                    <option value="psk">Pre-Shared Key</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label>Enabled</label>
+                  <label class="toggle" style="margin-top:4px"><input type="checkbox" id="ikev2-enabled"><span class="slider"></span></label>
+                </div>
+              </div>
+              <div class="form-group"><label>Local ID</label><input id="ikev2-local-id" placeholder="node ID"></div>
+              <div class="form-group"><label>Remote ID</label><input id="ikev2-remote-id" placeholder="optional, default %any"></div>
+              <div class="form-group"><label>Address Pool (CIDR)</label><input id="ikev2-pool" placeholder="192.168.26.1/24"></div>
+              <div class="form-group"><label>MTU</label><input id="ikev2-mtu" type="number" placeholder="1400"></div>
+
+              <div id="ikev2-mschapv2-fields">
+                <div class="form-group">
+                  <label>Server Certificate</label>
+                  <select id="ikev2-cert"></select>
+                </div>
+                <div style="font-size:12px;color:var(--text-muted)">Users authenticate with their HY2 SCALE username/password via EAP-MSCHAPv2. The selected certificate is used for server identity.</div>
+              </div>
+
+              <div id="ikev2-psk-fields" style="display:none">
+                <div class="form-group"><label>Pre-Shared Key</label><div class="pw-wrap"><input id="ikev2-psk" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+                <div class="form-group"><label>Exit Via</label><input id="ikev2-default-exit" placeholder="node ID or empty for direct" oninput="checkIKEv2ExitReachability()"><div id="ikev2-exit-status" style="font-size:12px;margin-top:2px"></div></div>
+                <div style="font-size:12px;color:var(--text-muted)">All clients sharing the same PSK use this exit path. No per-user routing.</div>
+              </div>
+
+              <div><button class="btn-primary btn-sm" onclick="saveIKEv2()">Save</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <!-- TLS Page -->
       <div class="page" id="page-tls" style="display:none">
@@ -220,8 +270,7 @@
             <span class="card-title">Certificates</span>
             <span class="card-count" id="cert-count">0</span>
             <span class="spacer"></span>
-            <button class="btn-primary btn-sm" onclick="openGenCertDialog()">Generate</button>
-            <button class="btn-sm" onclick="openImportCertDialog()" style="margin-left:4px">Import</button>
+            <button class="btn-primary btn-sm" onclick="openNewCertDialog()">New</button>
           </div>
           <div id="cert-list"><div class="empty">Loading...</div></div>
         </div>
@@ -229,26 +278,50 @@
 
       <!-- Settings Page -->
       <div class="page" id="page-settings" style="display:none">
-        <div class="card">
-          <div class="card-header"><span class="card-title">Credentials</span></div>
-          <div class="form-col" style="max-width:320px">
-            <div class="form-group"><label>Current Password</label><div class="pw-wrap"><input id="set-cur-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
-            <div class="form-group"><label>New Username (optional)</label><input id="set-new-user"></div>
-            <div class="form-group"><label>New Password</label><div class="pw-wrap"><input id="set-new-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
-            <div class="form-group"><label>Confirm Password</label><div class="pw-wrap"><input id="set-confirm-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
-            <div id="set-error" class="msg-error"></div>
-            <div id="set-ok" class="msg-ok"></div>
-            <button class="btn-primary" onclick="changePassword()">Update Credentials</button>
+        <div class="proxy-tabs">
+          <div class="proxy-tab active" data-settab="system" onclick="switchSettingsTab(this)">System</div>
+          <div class="proxy-tab" data-settab="web" onclick="switchSettingsTab(this)">Web</div>
+        </div>
+
+        <div class="settings-panel active" id="stab-system">
+          <div class="card">
+            <div class="card-header"><span class="card-title">System</span></div>
+            <div class="form-col" style="max-width:400px">
+              <div class="form-group"><label>VPN DNS Servers</label><input id="ui-dns" placeholder="8.8.8.8,1.1.1.1"></div>
+              <button class="btn-primary btn-sm" onclick="saveDNS()">Save</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title">Credentials</span></div>
+            <div class="form-col" style="max-width:400px">
+              <div class="form-group"><label>Current Password</label><div class="pw-wrap"><input id="set-cur-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+              <div class="form-group"><label>New Username (optional)</label><input id="set-new-user"></div>
+              <div class="form-group"><label>New Password</label><div class="pw-wrap"><input id="set-new-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+              <div class="form-group"><label>Confirm Password</label><div class="pw-wrap"><input id="set-confirm-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+              <div id="set-error" class="msg-error"></div>
+              <button class="btn-primary btn-sm" onclick="changePassword()">Update</button>
+            </div>
           </div>
         </div>
-        <div class="card">
-          <div class="card-header"><span class="card-title">Web UI</span><span class="badge badge-muted">restart required</span></div>
-          <div class="form-col" style="max-width:320px">
-            <div class="form-group"><label>Listen Address</label><input id="ui-listen" placeholder="0.0.0.0:5565"></div>
-            <div class="form-group"><label>Base Path</label><input id="ui-basepath" placeholder="/scale"></div>
-            <div id="ui-error" class="msg-error"></div>
-            <div id="ui-ok" class="msg-ok"></div>
-            <button class="btn-primary" onclick="updateUISettings()">Save</button>
+
+        <div class="settings-panel" id="stab-web" style="display:none">
+          <div class="card">
+            <div class="card-header"><span class="card-title">Web UI</span><span class="badge badge-muted">restart required</span></div>
+            <div class="form-col" style="max-width:400px">
+              <div class="form-group"><label>Listen Address</label><input id="ui-listen" placeholder="0.0.0.0:5565"></div>
+              <div class="form-group"><label>Base Path</label><input id="ui-basepath" placeholder="/scale"></div>
+              <div class="form-group">
+                <label>Force HTTPS</label>
+                <label class="toggle" style="margin-top:4px"><input type="checkbox" id="ui-https" onchange="toggleHttpsCert()"><span class="slider"></span></label>
+              </div>
+              <div class="form-group" id="ui-https-cert-group" style="display:none">
+                <label>TLS Certificate</label>
+                <select id="ui-https-cert"></select>
+              </div>
+              <div id="ui-error" class="msg-error"></div>
+              <div id="ui-ok" class="msg-ok"></div>
+              <button class="btn-primary btn-sm" onclick="updateUISettings()">Save</button>
+            </div>
           </div>
         </div>
       </div>
@@ -310,7 +383,7 @@
         <!-- TLS -->
         <div class="section-divider">TLS</div>
         <div class="form-grid">
-          <div class="form-group"><label>SNI (Server Name)</label><input id="add-sni" placeholder="auto: hy2scale"></div>
+          <div class="form-group"><label>SNI (Server Name)</label><input id="add-sni" placeholder="auto: HY2 SCALE"></div>
           <div class="form-group">
             <label>Skip Verify</label>
             <label class="toggle" style="margin-top:4px"><input type="checkbox" id="add-insecure" checked><span class="slider"></span></label>
@@ -398,47 +471,43 @@
 </div>
 
 <!-- Generate Cert Dialog -->
-<div class="modal-overlay" id="gen-cert-modal" style="display:none" onmousedown="if(event.target===this)closeGenCertDialog()">
-  <div class="modal" style="max-width:420px">
-    <div class="modal-header">
-      <h2>Generate Certificate</h2>
-      <button class="btn-icon" onclick="closeGenCertDialog()">&#10005;</button>
-    </div>
-    <div class="modal-body" style="padding-top:16px">
-      <div class="form-col">
-        <div class="form-group"><label>ID *</label><input id="gen-id" placeholder="e.g. my-server"></div>
-        <div class="form-group"><label>Display Name</label><input id="gen-name" placeholder="optional"></div>
-        <div class="form-group"><label>Domains * (comma separated)</label><input id="gen-domains" placeholder="e.g. example.com, *.example.com"></div>
-        <div class="form-group"><label>Validity (days)</label><input id="gen-days" type="number" value="365"></div>
-      </div>
-    </div>
-    <div class="modal-footer">
-      <button onclick="closeGenCertDialog()">Cancel</button>
-      <button class="btn-primary" onclick="submitGenCert()">Generate</button>
-    </div>
-  </div>
-</div>
-
-<!-- Import Cert Dialog -->
-<div class="modal-overlay" id="import-cert-modal" style="display:none" onmousedown="if(event.target===this)closeImportCertDialog()">
+<!-- New Certificate Dialog -->
+<div class="modal-overlay" id="new-cert-modal" style="display:none" onmousedown="if(event.target===this)closeNewCertDialog()">
   <div class="modal" style="max-width:520px">
     <div class="modal-header">
-      <h2>Import Certificate</h2>
-      <button class="btn-icon" onclick="closeImportCertDialog()">&#10005;</button>
+      <h2>New Certificate</h2>
+      <button class="btn-icon" onclick="closeNewCertDialog()">&#10005;</button>
     </div>
-    <div class="modal-body" style="padding-top:16px">
+    <div class="modal-body" style="padding-top:0">
+      <div style="display:flex;align-items:center;gap:8px;margin:12px 0">
+        <div class="proxy-tabs" style="margin-bottom:0">
+          <div class="proxy-tab active" data-certtab="paste" onclick="switchCertTab(this)">Manual Input</div>
+          <div class="proxy-tab" data-certtab="path" onclick="switchCertTab(this)">File Path</div>
+        </div>
+        <button id="cert-gen-icon" class="btn-icon" title="Generate self-signed certificate" onclick="generateCertPEM()" style="border:1px solid var(--border);border-radius:50%;width:28px;height:28px;padding:0;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg></button>
+      </div>
       <div class="form-col">
         <div class="form-grid">
-          <div class="form-group"><label>ID *</label><input id="imp-id" placeholder="e.g. my-cert"></div>
-          <div class="form-group"><label>Display Name</label><input id="imp-name" placeholder="optional"></div>
+          <div class="form-group"><label>ID *</label><input id="cert-id" placeholder="e.g. my-cert"></div>
+          <div class="form-group"><label>Display Name</label><input id="cert-name" placeholder="optional"></div>
         </div>
-        <div class="form-group"><label>Certificate (PEM) *</label><textarea id="imp-cert" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----" style="min-height:120px"></textarea></div>
-        <div class="form-group"><label>Private Key (PEM, optional)</label><textarea id="imp-key" placeholder="-----BEGIN EC PRIVATE KEY-----&#10;...&#10;-----END EC PRIVATE KEY-----" style="min-height:100px"></textarea></div>
+        <div id="cert-tab-paste">
+          <div class="form-col">
+            <div class="form-group"><label>Certificate (PEM) *</label><textarea id="cert-pem" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----" style="min-height:100px"></textarea></div>
+            <div class="form-group"><label>Private Key (PEM)</label><textarea id="cert-key-pem" placeholder="-----BEGIN EC PRIVATE KEY-----&#10;...&#10;-----END EC PRIVATE KEY-----" style="min-height:80px"></textarea></div>
+          </div>
+        </div>
+        <div id="cert-tab-path" style="display:none">
+          <div class="form-col">
+            <div class="form-group"><label>Certificate File Path *</label><input id="cert-path" placeholder="/path/to/cert.pem"></div>
+            <div class="form-group"><label>Private Key File Path</label><input id="cert-key-path" placeholder="/path/to/key.pem"></div>
+          </div>
+        </div>
       </div>
     </div>
     <div class="modal-footer">
-      <button onclick="closeImportCertDialog()">Cancel</button>
-      <button class="btn-primary" onclick="submitImportCert()">Import</button>
+      <button onclick="closeNewCertDialog()">Cancel</button>
+      <button class="btn-primary" id="cert-submit-btn" onclick="submitCertDialog()">New</button>
     </div>
   </div>
 </div>

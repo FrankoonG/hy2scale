@@ -75,8 +75,12 @@ type Config struct {
 	Proxies    []ProxyConfig         `yaml:"proxies" json:"proxies"`
 	SS         *SSConfig             `yaml:"ss,omitempty" json:"ss,omitempty"`
 	L2TP       *L2TPConfig           `yaml:"l2tp,omitempty" json:"l2tp,omitempty"`
-	UIListen   string                `yaml:"ui_listen,omitempty" json:"ui_listen,omitempty"`
-	UIBasePath string                `yaml:"ui_base_path,omitempty" json:"ui_base_path,omitempty"`
+	IKEv2      *IKEv2Config          `yaml:"ikev2,omitempty" json:"ikev2,omitempty"`
+	UIListen    string                `yaml:"ui_listen,omitempty" json:"ui_listen,omitempty"`
+	UIBasePath  string                `yaml:"ui_base_path,omitempty" json:"ui_base_path,omitempty"`
+	DNS         string                `yaml:"dns,omitempty" json:"dns,omitempty"`
+	ForceHTTPS  bool                  `yaml:"force_https,omitempty" json:"force_https,omitempty"`
+	HTTPSCertID string                `yaml:"https_cert_id,omitempty" json:"https_cert_id,omitempty"`
 }
 
 type proxyHandle struct {
@@ -171,6 +175,13 @@ func (a *App) Run(ctx context.Context) error {
 	if cfg.L2TP != nil {
 		if err := a.StartL2TP(*cfg.L2TP); err != nil {
 			log.Printf("[l2tp] start error: %v", err)
+		}
+	}
+
+	// Start IKEv2/IPsec
+	if cfg.IKEv2 != nil {
+		if err := a.StartIKEv2(*cfg.IKEv2); err != nil {
+			log.Printf("[ikev2] start error: %v", err)
 		}
 	}
 
@@ -433,6 +444,17 @@ func (a *App) LookupUser(username, password string) (*UserConfig, error) {
 	return u, nil
 }
 
+// syncVPNSecrets updates chap-secrets (L2TP) and EAP secrets (IKEv2) after user changes.
+func (a *App) syncVPNSecrets() {
+	cfg := a.store.Get()
+	if cfg.L2TP != nil && cfg.L2TP.Enabled {
+		a.updateChapSecrets()
+	}
+	if cfg.IKEv2 != nil && cfg.IKEv2.Enabled && cfg.IKEv2.Mode == "mschapv2" {
+		a.updateEAPSecrets()
+	}
+}
+
 func (a *App) AddUser(u UserConfig) error {
 	err := a.store.Update(func(c *Config) {
 		for _, existing := range c.Users {
@@ -444,6 +466,7 @@ func (a *App) AddUser(u UserConfig) error {
 	})
 	if err == nil {
 		a.rebuildUserIndex()
+		a.syncVPNSecrets()
 	}
 	return err
 }
@@ -452,7 +475,7 @@ func (a *App) UpdateUser(id string, u UserConfig) error {
 	err := a.store.Update(func(c *Config) {
 		for i, existing := range c.Users {
 			if existing.ID == id {
-				u.TrafficUsed = existing.TrafficUsed // preserve traffic
+				u.TrafficUsed = existing.TrafficUsed
 				c.Users[i] = u
 				return
 			}
@@ -460,6 +483,7 @@ func (a *App) UpdateUser(id string, u UserConfig) error {
 	})
 	if err == nil {
 		a.rebuildUserIndex()
+		a.syncVPNSecrets()
 	}
 	return err
 }
@@ -475,6 +499,7 @@ func (a *App) RemoveUser(id string) error {
 	})
 	if err == nil {
 		a.rebuildUserIndex()
+		a.syncVPNSecrets()
 	}
 	return err
 }

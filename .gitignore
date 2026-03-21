@@ -27,5 +27,8 @@ test_*.sh
 run-lossy-test.sh
 docker-compose.local-test.yml
 
+# Internal docs (not for git)
+docs/
+
 # Claude Code project instructions
 CLAUDE.md

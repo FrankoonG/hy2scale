@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -101,6 +102,10 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("GET /api/l2tp", s.getL2TPConfig)
 	authed.HandleFunc("PUT /api/l2tp", s.updateL2TPConfig)
 
+	// IKEv2 config
+	authed.HandleFunc("GET /api/ikev2", s.getIKEv2Config)
+	authed.HandleFunc("PUT /api/ikev2", s.updateIKEv2Config)
+
 	// Users
 	authed.HandleFunc("GET /api/users", s.getUsers)
 	authed.HandleFunc("POST /api/users", s.addUserAPI)
@@ -116,7 +121,9 @@ func (s *Server) Start(ctx context.Context) error {
 	// TLS
 	authed.HandleFunc("GET /api/tls", s.listCerts)
 	authed.HandleFunc("POST /api/tls/import", s.importCert)
+	authed.HandleFunc("POST /api/tls/import-path", s.importCertFromPath)
 	authed.HandleFunc("POST /api/tls/generate", s.generateCert)
+	authed.HandleFunc("GET /api/tls/{id}/pem", s.getCertPEM)
 	authed.HandleFunc("DELETE /api/tls/{id}", s.deleteCert)
 
 	apiMux.Handle("/api/", s.authMiddleware(authed))
@@ -160,6 +167,10 @@ func (s *Server) Start(ctx context.Context) error {
 					w.Header().Set("Content-Type", "application/javascript")
 				case strings.HasSuffix(path, ".html"):
 					w.Header().Set("Content-Type", "text/html")
+				case strings.HasSuffix(path, ".svg"):
+					w.Header().Set("Content-Type", "image/svg+xml")
+				case strings.HasSuffix(path, ".png"):
+					w.Header().Set("Content-Type", "image/png")
 				}
 				w.Write(data)
 				return
@@ -279,29 +290,45 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 // --- UI Settings (port, base path) ---
 
 func (s *Server) getUISettings(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]string{
-		"listen":    s.addr,
-		"base_path": s.basePath,
+	cfg := s.app.Store().Get()
+	dns := cfg.DNS
+	if dns == "" { dns = "8.8.8.8,1.1.1.1" }
+	writeJSON(w, map[string]any{
+		"listen":        s.addr,
+		"base_path":     s.basePath,
+		"dns":           dns,
+		"force_https":   cfg.ForceHTTPS,
+		"https_cert_id": cfg.HTTPSCertID,
 	})
 }
 
 func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
-	// Port and base path changes require restart — return info
 	var body struct {
-		Listen   *string `json:"listen"`
-		BasePath *string `json:"base_path"`
+		Listen      *string `json:"listen"`
+		BasePath    *string `json:"base_path"`
+		DNS         *string `json:"dns"`
+		ForceHTTPS  *bool   `json:"force_https"`
+		HTTPSCertID *string `json:"https_cert_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	// Store in app config for next restart
 	s.app.Store().Update(func(c *app.Config) {
 		if body.Listen != nil {
 			c.UIListen = *body.Listen
 		}
 		if body.BasePath != nil {
 			c.UIBasePath = *body.BasePath
+		}
+		if body.DNS != nil {
+			c.DNS = *body.DNS
+		}
+		if body.ForceHTTPS != nil {
+			c.ForceHTTPS = *body.ForceHTTPS
+		}
+		if body.HTTPSCertID != nil {
+			c.HTTPSCertID = *body.HTTPSCertID
 		}
 	})
 	writeJSON(w, map[string]string{"status": "ok", "note": "restart required for changes to take effect"})
@@ -321,13 +348,19 @@ func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Version is the application version. Update this on each release.
+const Version = "1.0.0"
+
 func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
+	limited := !app.CheckL2TPCapability() || !app.CheckHostNetwork()
 	writeJSON(w, map[string]any{
 		"node_id":   cfg.NodeID,
 		"name":      cfg.Name,
 		"exit_node": cfg.ExitNode,
 		"server":    cfg.Server,
+		"version":   Version,
+		"limited":   limited,
 	})
 }
 
@@ -890,11 +923,15 @@ func (s *Server) getL2TPConfig(w http.ResponseWriter, r *http.Request) {
 		result["enabled"] = cfg.L2TP.Enabled
 		result["pool"] = cfg.L2TP.Pool
 		result["psk"] = cfg.L2TP.PSK
+		result["proxy_port"] = cfg.L2TP.ProxyPort
+		result["mtu"] = cfg.L2TP.MTU
 	} else {
 		result["listen"] = "1701"
 		result["enabled"] = false
 		result["pool"] = "192.168.25.1/24"
 		result["psk"] = ""
+		result["proxy_port"] = 12345
+		result["mtu"] = 1280
 	}
 	writeJSON(w, result)
 }
@@ -913,6 +950,63 @@ func (s *Server) updateL2TPConfig(w http.ResponseWriter, r *http.Request) {
 		c.L2TP = &l2tp
 	})
 	writeJSON(w, map[string]string{"status": "ok", "note": "restart required for L2TP changes"})
+}
+
+// --- IKEv2 ---
+
+func (s *Server) getIKEv2Config(w http.ResponseWriter, r *http.Request) {
+	capable := app.CheckL2TPCapability()
+	hostNet := app.CheckHostNetwork()
+	cfg := s.app.Store().Get()
+	result := map[string]any{
+		"capable":      capable,
+		"host_network": hostNet,
+	}
+	nodeID := cfg.NodeID
+	if cfg.IKEv2 != nil {
+		result["enabled"] = cfg.IKEv2.Enabled
+		result["mode"] = cfg.IKEv2.Mode
+		result["pool"] = cfg.IKEv2.Pool
+		result["cert_id"] = cfg.IKEv2.CertID
+		result["psk"] = cfg.IKEv2.PSK
+		result["local_id"] = cfg.IKEv2.LocalID
+		result["remote_id"] = cfg.IKEv2.RemoteID
+		result["default_exit"] = cfg.IKEv2.DefaultExit
+		result["proxy_port"] = cfg.IKEv2.ProxyPort
+		result["mtu"] = cfg.IKEv2.MTU
+	} else {
+		result["enabled"] = false
+		result["mode"] = "mschapv2"
+		result["pool"] = "192.168.26.1/24"
+		result["cert_id"] = ""
+		result["psk"] = ""
+		result["local_id"] = nodeID
+		result["remote_id"] = ""
+		result["default_exit"] = ""
+		result["proxy_port"] = 12350
+		result["mtu"] = 1400
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) updateIKEv2Config(w http.ResponseWriter, r *http.Request) {
+	if !app.CheckL2TPCapability() {
+		http.Error(w, "container lacks NET_ADMIN capability", 403)
+		return
+	}
+	var ikev2 app.IKEv2Config
+	if err := json.NewDecoder(r.Body).Decode(&ikev2); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if ikev2.Mode != "mschapv2" && ikev2.Mode != "psk" {
+		http.Error(w, "mode must be 'mschapv2' or 'psk'", 400)
+		return
+	}
+	s.app.Store().Update(func(c *app.Config) {
+		c.IKEv2 = &ikev2
+	})
+	writeJSON(w, map[string]string{"status": "ok", "note": "restart required for IKEv2 changes"})
 }
 
 // --- Users ---
@@ -1028,6 +1122,51 @@ func (s *Server) importCert(w http.ResponseWriter, r *http.Request) {
 		body.Name = body.ID
 	}
 	if err := s.app.TLS().Import(body.ID, body.Name, body.Cert, body.Key); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) getCertPEM(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	certPEM, _ := s.app.TLS().GetPEM(id)
+	keyData, _ := os.ReadFile(s.app.TLS().KeyPath(id))
+	writeJSON(w, map[string]string{"cert": certPEM, "key": string(keyData)})
+}
+
+func (s *Server) importCertFromPath(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		CertPath string `json:"cert_path"`
+		KeyPath  string `json:"key_path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if body.ID == "" || body.CertPath == "" {
+		http.Error(w, "id and cert_path required", 400)
+		return
+	}
+	if body.Name == "" {
+		body.Name = body.ID
+	}
+	certData, err := os.ReadFile(body.CertPath)
+	if err != nil {
+		http.Error(w, "cannot read cert file: "+err.Error(), 400)
+		return
+	}
+	var keyData []byte
+	if body.KeyPath != "" {
+		keyData, err = os.ReadFile(body.KeyPath)
+		if err != nil {
+			http.Error(w, "cannot read key file: "+err.Error(), 400)
+			return
+		}
+	}
+	if err := s.app.TLS().Import(body.ID, body.Name, string(certData), string(keyData)); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
