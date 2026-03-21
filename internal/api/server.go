@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/FrankoonG/hy2scale/internal/app"
+	"github.com/FrankoonG/hy2scale/internal/relay"
 	"github.com/FrankoonG/hy2scale/internal/web"
 )
 
@@ -131,7 +132,8 @@ func (s *Server) Start(ctx context.Context) error {
 	// Static files with SPA fallback — inject basePath into index.html
 	staticFS, _ := fs.Sub(web.Static, "static")
 	rawIndex, _ := fs.ReadFile(staticFS, "index.html")
-	baseScript := "<script>window.__BASE__=\"" + s.basePath + "\";</script><script src=\"app.js\"></script>"
+	cacheBust := fmt.Sprintf("?v=%s", Version)
+	baseScript := "<script>window.__BASE__=\"" + s.basePath + "\";</script><script src=\"app.js" + cacheBust + "\"></script>"
 	indexBytes := []byte(strings.Replace(string(rawIndex), "<script src=\"app.js\"></script>", baseScript, 1))
 
 	// Known frontend routes that should serve index.html
@@ -172,6 +174,7 @@ func (s *Server) Start(ctx context.Context) error {
 				case strings.HasSuffix(path, ".png"):
 					w.Header().Set("Content-Type", "image/png")
 				}
+				w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 				w.Write(data)
 				return
 			}
@@ -349,7 +352,7 @@ func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // Version is the application version. Update this on each release.
-const Version = "1.0.0"
+const Version = "1.0.1"
 
 func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
@@ -574,9 +577,11 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		}
 		tn.Native = nativeMap[name]
 		if tn.Native {
-			tn.Nested = false // native hy2 never supports nested
-		} else if pc, ok := cfg.Peers[name]; ok {
-			tn.Nested = pc.Nested
+			tn.Nested = false
+		} else if pc, ok := cfg.Peers[name]; ok && !pc.Nested {
+			tn.Nested = false // explicitly disabled
+		} else {
+			tn.Nested = true // default: try to discover sub-peers
 		}
 		if tn.Connected && tn.Direction == "outbound" {
 			tn.LatencyMs = latencyCache[name]
@@ -618,11 +623,15 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 		case <-t.C:
 			cfg := s.app.Store().Get()
 			newCache := make(map[string][]topoSubPeer)
-			for name, pc := range cfg.Peers {
-				if !pc.Nested {
+			// Collect all connected non-native outbound peers
+			connectedPeers := s.app.Node().ConnectedPeerNames()
+			nativeMap := s.app.Node().NativeMap()
+			for _, name := range connectedPeers {
+				if nativeMap[name] {
 					continue
 				}
-				if !s.app.Node().HasPeer(name) {
+				// Skip if explicitly disabled in Peers config
+				if pc, ok := cfg.Peers[name]; ok && !pc.Nested {
 					continue
 				}
 				// Use a goroutine with timeout per peer to avoid blocking
@@ -655,24 +664,39 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 	if depth > 8 {
 		return nil
 	}
-	// Always use prober's cached peer list for the last hop
 	target := path[len(path)-1]
-	subPeers, ok := s.app.Node().PeersOfCached(target)
-	if !ok {
-		// Not in local cache — try via chain query (with timeout)
+	var subPeers []relay.PeerInfo
+	var err error
+	if len(path) == 1 {
+		// Direct peer: query directly
+		subPeers, err = s.app.Node().PeersOf(target)
+	} else {
+		// Multi-hop: query via chain
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		var err error
 		subPeers, err = s.app.Node().PeersOfVia(ctx, path)
-		if err != nil {
-			return nil
-		}
 	}
-	myID := s.app.Store().Get().NodeID
+	if err != nil {
+		return nil
+	}
+	cfg2 := s.app.Store().Get()
+	myID := cfg2.NodeID
+	myName := cfg2.Name
 	peerName := path[len(path)-1]
 	children := make([]topoSubPeer, 0, len(subPeers))
 	for _, sp := range subPeers {
-		if sp.Name == myID {
+		// Cycle detection: skip self (by ID or display name)
+		if sp.Name == myID || sp.Name == myName {
+			continue
+		}
+		inPath := false
+		for _, p := range path {
+			if p == sp.Name {
+				inPath = true
+				break
+			}
+		}
+		if inPath {
 			continue
 		}
 		// Use remote-reported latency (the remote node measured this itself)
@@ -686,18 +710,12 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 		}
 		if sp.Native {
 			child.Native = true
-		} else if pc, ok := cfg.Peers[sp.Name]; ok {
-			child.Nested = pc.Nested
+		} else if pc, ok := cfg.Peers[sp.Name]; ok && !pc.Nested {
+			child.Nested = false // explicitly disabled
+		} else {
+			child.Nested = true // default: discover sub-peers
 		}
-		// Cycle detection: don't recurse into a peer already in the path
-		inPath := false
-		for _, p := range path {
-			if p == sp.Name {
-				inPath = true
-				break
-			}
-		}
-		if child.Nested && !child.Native && !inPath {
+		if child.Nested && !child.Native {
 			childPath := append(append([]string{}, path...), sp.Name)
 			child.Children = s.loadSubPeers(childPath, childLatency, latencyCache, cfg, depth+1)
 		}

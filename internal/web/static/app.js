@@ -136,7 +136,7 @@ $('#login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLog
 $('#login-user').addEventListener('keydown', e => { if (e.key === 'Enter') $('#login-pass').focus(); });
 
 // ── Polling ──
-let pollTimer = null, lastTopoJSON = '';
+let pollTimer = null, lastTopoJSON = '', lastTopoStructKey = '';
 let connectedPeers = new Set(); // updated from topology
 
 let proxiesLoaded = false;
@@ -156,7 +156,7 @@ async function refresh() {
       }
     }
     const tasks = [refreshTopology(), refreshStats()];
-    if (!proxiesLoaded) { tasks.push(refreshProxies()); proxiesLoaded = true; }
+    if (!proxiesLoaded) { tasks.push(refreshProxies().catch(()=>{})); proxiesLoaded = true; }
     await Promise.all(tasks);
   } catch (e) { console.error(e); }
   clearInterval(pollTimer);
@@ -185,12 +185,17 @@ async function refreshStats() {
 }
 
 // ── Topology Table ──
-function latencyHTML(ms) {
+const syncingNodes = new Map(); // name -> { cachedLatency }
+
+function latencyHTML(ms, name) {
+  if (syncingNodes.has(name)) return '<span class="latency latency-sync">syncing</span>';
   if (ms === -1) return '<span class="latency latency-off">offline</span>';
   if (ms === 0) return '<span class="latency latency-na">—</span>';
   const cls = ms < 80 ? 'latency-good' : ms < 200 ? 'latency-med' : 'latency-bad';
   return `<span class="latency ${cls}">${ms}ms</span>`;
 }
+
+function isSyncing(name) { return syncingNodes.has(name); }
 
 function trafficHTML(tx, rx) {
   return `<span class="stat-up">${fmtRate(tx||0)}</span> <span style="color:var(--text-muted)">/</span> <span class="stat-down">${fmtRate(rx||0)}</span>`;
@@ -215,7 +220,7 @@ function nameLink(name, chain) {
 function parentRowHTML(n) {
   if (n.is_self) {
     return `<tr class="self-row${n.disabled ? ' disabled' : ''}">
-      <td class="col-latency"><span class="latency latency-good">∞ms</span></td>
+      <td class="col-status"><span class="latency latency-good">∞ms</span></td>
       <td class="col-dir">${dirHTML('local')}</td>
       <td class="col-name">
         <span class="peer-name-cell">${esc(n.name)}</span>
@@ -230,12 +235,15 @@ function parentRowHTML(n) {
     </tr>`;
   }
 
-  const chain = n.native ? [] : [n.name]; // native hy2 has no remote UI
+  const chain = n.native ? [] : [n.name];
   const nativeBadge = n.native ? ' <span class="badge badge-muted">NATIVE</span>' : '';
+  const syncing = syncingNodes.has(n.name);
+  const syncData = syncingNodes.get(n.name);
+  const nestedChecked = syncing ? syncData.enabled : n.nested;
   const nested = n.native
     ? '<label class="toggle toggle-disabled"><input type="checkbox" disabled><span class="slider"></span></label>'
     : (n.direction === 'outbound'
-      ? `<label class="toggle"><input type="checkbox" ${n.nested ? 'checked' : ''} onchange="toggleNested('${esc(n.name)}',this.checked)"><span class="slider"></span></label>`
+      ? `<label class="toggle"><input type="checkbox" ${nestedChecked ? 'checked' : ''} onchange="toggleNested('${esc(n.name)}',this.checked)"><span class="slider"></span></label>`
       : '');
   const actions = n.direction === 'outbound' ? `<div class="act-group">
     <button class="act-btn edit" onclick="openEditDialog('${esc(n.name)}')">Edit</button>
@@ -243,8 +251,8 @@ function parentRowHTML(n) {
     <button class="act-btn danger" onclick="removeClient('${esc(n.name)}')">Delete</button>
   </div>` : '';
 
-  return `<tr class="${n.disabled ? 'disabled' : ''}">
-    <td class="col-latency">${latencyHTML(n.latency_ms)}</td>
+  return `<tr class="${n.disabled ? 'disabled' : ''} ${syncing ? 'syncing' : ''}">
+    <td class="col-status">${latencyHTML(n.latency_ms, n.name)}</td>
     <td class="col-dir">${dirHTML(n.direction)}</td>
     <td class="col-name">
       ${n.native ? `<span class="peer-name-cell peer-rename" onclick="renameNative('${esc(n.name)}')">${esc(n.name)}</span>` : nameLink(n.name, chain)}${nativeBadge}
@@ -265,9 +273,12 @@ function childRowHTML(c, isLast, depth, parentChain, guides) {
   const dis = isNestedDisabled(c.via, c.name);
   const dir = c.direction ? dirHTML(c.direction) : '';
   const nativeBadge = c.native ? ' <span class="badge badge-muted">NATIVE</span>' : '';
+  const cSyncing = syncingNodes.has(c.name);
+  const cSyncData = syncingNodes.get(c.name);
+  const cNestedChecked = cSyncing ? cSyncData.enabled : c.nested;
   const nestedToggle = c.native
     ? '<label class="toggle toggle-disabled"><input type="checkbox" disabled><span class="slider"></span></label>'
-    : `<label class="toggle"><input type="checkbox" ${c.nested ? 'checked' : ''} onchange="toggleNested('${esc(c.name)}',this.checked)"><span class="slider"></span></label>`;
+    : `<label class="toggle"><input type="checkbox" ${cNestedChecked ? 'checked' : ''} onchange="toggleNested('${esc(c.name)}',this.checked)"><span class="slider"></span></label>`;
   const nameCell = c.native
     ? `<span class="peer-name-cell">${esc(c.name)}</span>`
     : nameLink(c.name, chain);
@@ -280,8 +291,8 @@ function childRowHTML(c, isLast, depth, parentChain, guides) {
   }
   treeHTML += `<span class="tree-branch${isLast ? ' tree-last' : ''}" aria-hidden="true"></span>`;
 
-  let html = `<tr class="sub-row${dis ? ' disabled' : ''}">
-    <td class="col-latency">${dis ? latencyHTML(-1) : latencyHTML(c.latency_ms)}</td>
+  let html = `<tr class="sub-row${dis ? ' disabled' : ''}${cSyncing ? ' syncing' : ''}">
+    <td class="col-status">${dis ? latencyHTML(-1, c.name) : latencyHTML(c.latency_ms, c.name)}</td>
     <td class="col-dir">${dir}</td>
     <td class="col-name">
       ${treeHTML}<span class="sub-name-wrap">
@@ -303,22 +314,47 @@ function childRowHTML(c, isLast, depth, parentChain, guides) {
   return html;
 }
 
+function topoStructureKey(topo) {
+  // Generate a key that only changes on structural changes, not latency
+  function nodeKey(n) {
+    let k = n.name + '|' + n.connected + '|' + n.nested + '|' + n.disabled + '|' + (n.native||'');
+    if (n.children) k += '[' + n.children.map(nodeKey).join(',') + ']';
+    return k;
+  }
+  return topo.map(nodeKey).join(';');
+}
+
 async function refreshTopology() {
   const topo = await api('/topology');
   const json = JSON.stringify(topo);
   if (json === lastTopoJSON) return;
+
+  // Check if user is selecting text — skip DOM update to preserve selection
+  const sel = window.getSelection();
+  const hasSelection = sel && sel.toString().length > 0;
+  const structKey = topoStructureKey(topo);
+  if (hasSelection && structKey === lastTopoStructKey) {
+    // Only latency changed, user is selecting — skip re-render
+    lastTopoJSON = json;
+    return;
+  }
   lastTopoJSON = json;
+  lastTopoStructKey = structKey;
 
   // Build connected peers set from all visible nodes
   const newConnected = new Set();
   function collectPeers(nodes) {
     for (const n of nodes) {
-      if (n.connected || n.is_self || n.native) newConnected.add(n.name);
+      if (n.connected || n.is_self || n.native || n.latency_ms > 0) newConnected.add(n.name);
       if (n.children) collectPeers(n.children);
     }
   }
   collectPeers(topo);
   connectedPeers = newConnected;
+
+  // Cache latencies and clear syncing for nodes with children
+  for (const n of topo) {
+  }
 
   const el = $('#topology-tree');
   if (!topo?.length) {
@@ -342,7 +378,7 @@ async function refreshTopology() {
 
   el.innerHTML = `<table class="peer-table">
     <thead><tr>
-      <th class="col-latency">Latency</th>
+      <th class="col-status">Status</th>
       <th class="col-dir">Dir</th>
       <th class="col-name">Node</th>
       <th class="col-traffic">Traffic</th>
@@ -355,8 +391,29 @@ async function refreshTopology() {
 }
 
 async function toggleNested(name, enabled) {
-  try { await api(`/peers/${name}/nested`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) }); lastTopoJSON = ''; refreshTopology(); }
-  catch (e) { toast(String(e), 'error'); }
+  syncingNodes.set(name, { enabled });
+  lastTopoJSON = ''; refreshTopology(); // immediate: gray + syncing + toggled checkbox
+
+  try {
+    await api(`/peers/${name}/nested`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+    // Poll until topology reflects the actual change
+    const poll = setInterval(async () => {
+      try {
+        const topo = await api('/topology');
+        const node = topo.find(n => n.name === name);
+        if (!node) return;
+        // Check if the nested flag in topology matches what we requested
+        if (node.nested === enabled) {
+          clearInterval(poll);
+          syncingNodes.delete(name);
+          lastTopoJSON = '';
+          refreshTopology();
+        }
+      } catch(e) {}
+    }, 1000);
+    // Safety timeout
+    setTimeout(() => { clearInterval(poll); syncingNodes.delete(name); lastTopoJSON = ''; refreshTopology(); }, 15000);
+  } catch (e) { syncingNodes.delete(name); toast(String(e), 'error'); lastTopoJSON = ''; refreshTopology(); }
 }
 
 async function toggleDisable(name, disabled) {

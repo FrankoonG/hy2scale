@@ -4,18 +4,14 @@ services:
     image: hy2scale
     container_name: hy2scale
     restart: unless-stopped
+    network_mode: bridge
     cap_add:
       - NET_ADMIN
-    devices:
-      - /dev/ppp:/dev/ppp
     device_cgroup_rules:
       - 'c 108:0 rwm'
     ports:
       - "5565:5565/tcp"
       - "5565:5565/udp"
-      - "500:500/udp"
-      - "4500:4500/udp"
-      - "1701:1701/udp"
     volumes:
       - hy2scale-data:/data
 
