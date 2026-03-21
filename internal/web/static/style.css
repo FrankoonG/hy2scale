@@ -23,7 +23,10 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 .sidebar{width:var(--sidebar-w);background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
 .sidebar-header{padding:20px 16px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border-light)}
 .sidebar-header h1{font-size:16px;font-weight:700;letter-spacing:-.3px}
-.sidebar-header .logo{width:28px;height:28px;background:var(--primary);border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:13px;flex-shrink:0}
+.sidebar-header .logo{width:28px;height:28px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden}
+.sidebar-header .logo img{width:28px;height:28px}
+.version-badge{display:inline-block;padding:1px 8px;font-size:10px;font-weight:600;color:#2ecc71;background:rgba(46,204,113,0.08);border:1px solid rgba(46,204,113,0.35);border-radius:10px;line-height:16px}
+.version-badge.limited{color:#e74c3c;background:rgba(231,76,60,0.08);border-color:rgba(231,76,60,0.35)}
 .sidebar-nav{flex:1;padding:8px;display:flex;flex-direction:column;gap:2px}
 .nav-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:var(--radius-sm);cursor:pointer;color:var(--text-secondary);font-size:13px;font-weight:500;transition:all .15s;white-space:nowrap;text-decoration:none}
 .nav-item:hover{background:var(--primary-light);color:var(--primary)}
@@ -140,6 +143,7 @@ a.peer-link:hover{text-decoration:underline}
 /* ── Forms ── */
 .form-row{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}
 .form-col{display:flex;flex-direction:column;gap:12px}
+.form-col>button{align-self:flex-start}
 .form-group{display:flex;flex-direction:column;gap:4px}
 .form-group label{font-size:12px;font-weight:500;color:var(--text-muted)}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
@@ -177,12 +181,13 @@ button.btn-icon:hover{color:var(--red);background:var(--red-bg)}
 /* ── Login ── */
 .login-screen{display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg)}
 .login-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:40px 32px;width:360px;box-shadow:var(--shadow-md);text-align:center}
-.login-box .logo{width:48px;height:48px;background:var(--primary);border-radius:12px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:20px;margin-bottom:16px}
+.login-box .logo{width:48px;height:48px;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:16px;overflow:hidden}
+.login-box .logo img{width:48px;height:48px}
 .login-box h1{font-size:20px;font-weight:700;margin-bottom:4px}
 .login-box p{font-size:13px;color:var(--text-muted);margin-bottom:24px}
 .login-box input{width:100%;margin-bottom:12px}
 .login-box button{margin-top:4px}
-.remember-me{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary);cursor:pointer;margin-bottom:8px;justify-content:center}
+.remember-me{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary);cursor:pointer;margin-bottom:8px}
 .remember-me input{width:auto;margin:0}
 
 /* ── Modal ── */

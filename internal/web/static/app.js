@@ -1,7 +1,14 @@
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 const basePath = window.__BASE__ || '';
-const tokenKey = 'token:' + basePath; // scope token per context to avoid conflicts
+const tokenKey = 'token:' + basePath;
+// Set logo images and favicon to correct basePath
+document.addEventListener('DOMContentLoaded', () => {
+  const logoUrl = basePath + '/logo.svg';
+  document.querySelectorAll('.logo-img').forEach(img => { img.src = logoUrl; });
+  const fav = document.getElementById('favicon-link');
+  if (fav) fav.href = logoUrl;
+});
 
 // ── Toast notifications ──
 function toast(msg, type) {
@@ -132,12 +139,25 @@ $('#login-user').addEventListener('keydown', e => { if (e.key === 'Enter') $('#l
 let pollTimer = null, lastTopoJSON = '';
 let connectedPeers = new Set(); // updated from topology
 
+let proxiesLoaded = false;
 async function refresh() {
   try {
     const node = await api('/node');
     $('#node-badge').textContent = node.node_id;
     $('#node-name-display').textContent = node.name !== node.node_id ? node.name : '';
-    await Promise.all([refreshTopology(), refreshProxies(), refreshStats()]);
+    if (node.version) {
+      const vb = $('#version-badge');
+      if (node.limited) {
+        vb.textContent = 'v' + node.version + ' Limited';
+        vb.classList.add('limited');
+      } else {
+        vb.textContent = 'v' + node.version;
+        vb.classList.remove('limited');
+      }
+    }
+    const tasks = [refreshTopology(), refreshStats()];
+    if (!proxiesLoaded) { tasks.push(refreshProxies()); proxiesLoaded = true; }
+    await Promise.all(tasks);
   } catch (e) { console.error(e); }
   clearInterval(pollTimer);
   pollTimer = setInterval(refresh, 5000);
@@ -534,6 +554,23 @@ function switchProxyTab(tab) {
   $$('.proxy-tab').forEach(t => t.classList.toggle('active', t === tab));
   $$('.proxy-panel').forEach(p => p.classList.toggle('active', p.id === 'ptab-' + tab.dataset.ptab));
   $$('.proxy-panel').forEach(p => p.style.display = p.classList.contains('active') ? '' : 'none');
+  if (tab.dataset.ptab === 'ikev2') refreshIKEv2Certs();
+}
+
+async function refreshIKEv2Certs() {
+  try {
+    const certs = await api('/tls');
+    const sel = $('#ikev2-cert');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">-- Select Certificate --</option>';
+    for (const c of certs) {
+      const opt = document.createElement('option');
+      opt.value = c.id;
+      opt.textContent = c.name || c.id;
+      if (c.id === cur) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  } catch(e) {}
 }
 
 async function refreshProxies() {
@@ -560,6 +597,7 @@ async function refreshProxies() {
     $('#l2tp-enabled').checked = l.enabled;
     $('#l2tp-pool').value = l.pool || '';
     $('#l2tp-psk').value = l.psk || '';
+    $('#l2tp-mtu').value = l.mtu || 1280;
     // Capability check
     const panel = $('#ptab-l2tp');
     const warn = $('#l2tp-warn');
@@ -576,6 +614,8 @@ async function refreshProxies() {
       panel.style.pointerEvents = '';
     }
   } catch(e) {}
+  // Load IKEv2 config
+  await loadIKEv2();
 }
 
 async function saveSocks5() {
@@ -616,37 +656,195 @@ async function saveL2TP() {
   const psk = $('#l2tp-psk').value.trim();
   if (enabled && (!listen || !pool || !psk)) { toast('Port, pool and PSK required', 'error'); return; }
   try {
-    await api('/l2tp', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ listen, enabled, pool, psk })});
+    const mtu = parseInt($('#l2tp-mtu').value) || 1280;
+    await api('/l2tp', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ listen, enabled, pool, psk, mtu })});
     toast('L2TP saved. Restart required for L2TP changes.', 'success');
   } catch(e) { toast(String(e), 'error'); }
 }
 
+// ── IKEv2/IPsec ──
+function ikev2ModeChanged() {
+  const mode = $('#ikev2-mode').value;
+  $('#ikev2-mschapv2-fields').style.display = mode === 'mschapv2' ? '' : 'none';
+  $('#ikev2-psk-fields').style.display = mode === 'psk' ? '' : 'none';
+  if (mode === 'psk') checkIKEv2ExitReachability();
+}
+
+async function checkIKEv2ExitReachability() {
+  const exitId = $('#ikev2-default-exit').value.trim();
+  const el = $('#ikev2-exit-status');
+  if (!exitId) { el.textContent = ''; return; }
+  try {
+    const topo = await api('/topology');
+    const peer = topo.find(p => p.name === exitId);
+    if (peer && peer.connected) {
+      el.innerHTML = '<span style="color:var(--accent)">&#x2713; ' + exitId + ' reachable</span>';
+    } else if (peer) {
+      el.innerHTML = '<span style="color:#e74c3c">&#x2717; ' + exitId + ' not connected</span>';
+    } else {
+      el.innerHTML = '<span style="color:#e74c3c">&#x2717; ' + exitId + ' not found</span>';
+    }
+  } catch(e) { el.textContent = ''; }
+}
+
+async function loadIKEv2() {
+  try {
+    const cfg = await api('/ikev2');
+    $('#ikev2-mode').value = cfg.mode || 'mschapv2';
+    $('#ikev2-enabled').checked = cfg.enabled;
+    $('#ikev2-pool').value = cfg.pool || '';
+    $('#ikev2-mtu').value = cfg.mtu || 1400;
+    $('#ikev2-local-id').value = cfg.local_id || '';
+    $('#ikev2-remote-id').value = cfg.remote_id || '';
+    $('#ikev2-psk').value = cfg.psk || '';
+    $('#ikev2-default-exit').value = cfg.default_exit || '';
+    ikev2ModeChanged();
+
+    // Load certs for dropdown
+    try {
+      const certs = await api('/tls');
+      const sel = $('#ikev2-cert');
+      sel.innerHTML = '<option value="">-- Select Certificate --</option>';
+      for (const c of certs) {
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.textContent = c.name || c.id;
+        if (c.id === cfg.cert_id) opt.selected = true;
+        sel.appendChild(opt);
+      }
+    } catch(e) {}
+
+    // Capability check
+    const panel = $('#ptab-ikev2');
+    const warn = $('#ikev2-warn');
+    const blocked = !cfg.capable || !cfg.host_network;
+    if (blocked) {
+      if (!cfg.capable) {
+        warn.textContent = 'Insufficient privileges — container requires --cap-add NET_ADMIN and --network host to enable IKEv2/IPsec.';
+      } else if (!cfg.host_network) {
+        warn.textContent = 'IKEv2/IPsec requires --network host. Docker port mapping cannot handle IPsec tunnel mode. Deploy with: docker run --network host --cap-add NET_ADMIN ...';
+      }
+      warn.style.display = '';
+      panel.querySelectorAll('.card').forEach(el => { el.style.opacity = '0.45'; el.style.pointerEvents = 'none'; });
+      warn.style.pointerEvents = 'auto';
+      warn.style.opacity = '1';
+    } else {
+      warn.style.display = 'none';
+      panel.querySelectorAll('.card').forEach(el => { el.style.opacity = ''; el.style.pointerEvents = ''; });
+    }
+  } catch(e) {}
+}
+
+async function saveIKEv2() {
+  const mode = $('#ikev2-mode').value;
+  const enabled = $('#ikev2-enabled').checked;
+  const pool = $('#ikev2-pool').value.trim();
+
+  if (enabled && !pool) { toast('Address pool required', 'error'); return; }
+
+  const mtu = parseInt($('#ikev2-mtu').value) || 1400;
+  const local_id = $('#ikev2-local-id').value.trim();
+  const remote_id = $('#ikev2-remote-id').value.trim();
+  const body = { enabled, mode, pool, mtu, local_id, remote_id };
+
+  if (mode === 'mschapv2') {
+    body.cert_id = $('#ikev2-cert').value;
+    if (enabled && !body.cert_id) { toast('Certificate required for MSCHAPv2 mode', 'error'); return; }
+  } else {
+    body.psk = $('#ikev2-psk').value.trim();
+    body.default_exit = $('#ikev2-default-exit').value.trim();
+    if (enabled && !body.psk) { toast('Pre-shared key required', 'error'); return; }
+  }
+
+  try {
+    await api('/ikev2', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    toast('IKEv2 saved. Restart required for changes.', 'success');
+  } catch(e) { toast(String(e), 'error'); }
+}
+
 // ── Settings ──
+function switchSettingsTab(tab) {
+  const t = tab.dataset.settab;
+  $$('[data-settab]').forEach(el => el.classList.toggle('active', el === tab));
+  $$('.settings-panel').forEach(p => p.style.display = p.id === 'stab-' + t ? '' : 'none');
+  if (t === 'web') refreshHttpsCerts();
+}
+
+async function refreshHttpsCerts() {
+  try {
+    const certs = await api('/tls');
+    const sel = $('#ui-https-cert');
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">-- Select Certificate --</option>';
+    for (const c of certs) {
+      const opt = document.createElement('option');
+      opt.value = c.id;
+      opt.textContent = c.name || c.id;
+      if (c.id === cur) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  } catch(e) {}
+}
+
 async function loadSettings() {
   try {
     const ui = await api('/settings/ui');
-    $('#ui-listen').value = ui.listen || ''; $('#ui-basepath').value = ui.base_path || '';
+    $('#ui-listen').value = ui.listen || '';
+    $('#ui-basepath').value = ui.base_path || '';
+    $('#ui-dns').value = ui.dns || '8.8.8.8,1.1.1.1';
+    $('#ui-https').checked = ui.force_https || false;
+    toggleHttpsCert();
+    // Load certs for HTTPS dropdown
+    try {
+      const certs = await api('/tls');
+      const sel = $('#ui-https-cert');
+      sel.innerHTML = '<option value="">-- Select Certificate --</option>';
+      for (const c of certs) {
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.textContent = c.name || c.id;
+        if (c.id === ui.https_cert_id) opt.selected = true;
+        sel.appendChild(opt);
+      }
+    } catch(e) {}
   } catch (e) {}
+}
+
+function toggleHttpsCert() {
+  $('#ui-https-cert-group').style.display = $('#ui-https').checked ? '' : 'none';
+}
+
+async function saveDNS() {
+  const dns = $('#ui-dns').value.trim();
+  try {
+    await api('/settings/ui', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dns }) });
+    toast('DNS saved. Restart required.', 'success');
+  } catch (e) { toast(String(e), 'error'); }
 }
 async function changePassword() {
   const cur = $('#set-cur-pass').value, newUser = $('#set-new-user').value.trim(),
     newPass = $('#set-new-pass').value, conf = $('#set-confirm-pass').value;
-  $('#set-error').textContent = ''; $('#set-ok').textContent = '';
+  $('#set-error').textContent = '';
   if (!cur) return void ($('#set-error').textContent = 'Current password is required');
   if (newPass && newPass !== conf) return void ($('#set-error').textContent = 'Passwords do not match');
   if (!newUser && !newPass) return void ($('#set-error').textContent = 'Enter a new username or password');
   try {
     await api('/settings/password', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ current_password: cur, new_username: newUser, new_password: newPass }) });
-    ['set-cur-pass','set-new-user','set-new-pass','set-confirm-pass'].forEach(id => $(`#${id}`).value = '');
     localStorage.removeItem('hy2scale_cred');
-    $('#set-ok').textContent = 'Updated. Redirecting to login...'; setTimeout(doLogout, 1500);
+    toast('Password updated. Redirecting to login...', 'success');
+    setTimeout(doLogout, 1500);
   } catch (e) { $('#set-error').textContent = String(e); }
 }
 async function updateUISettings() {
   const listen = $('#ui-listen').value.trim(), bp = $('#ui-basepath').value.trim();
+  const forceHttps = $('#ui-https').checked;
+  const httpsCertId = $('#ui-https-cert').value;
   $('#ui-error').textContent = ''; $('#ui-ok').textContent = '';
   try {
-    await api('/settings/ui', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ listen: listen || null, base_path: bp || null }) });
+    await api('/settings/ui', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+      listen: listen || null, base_path: bp || null,
+      force_https: forceHttps, https_cert_id: httpsCertId || null
+    }) });
     toast('Saved. Restart container to apply.', 'success');
   } catch (e) { $('#ui-error').textContent = String(e); }
 }
@@ -783,55 +981,100 @@ async function deleteUser(id, name) {
 }
 
 // ── TLS ──
+function certExpired(notAfter) {
+  if (!notAfter) return true;
+  try { return new Date(notAfter) < new Date(); } catch(e) { return true; }
+}
+
 async function refreshCerts() {
   const certs = await api('/tls');
   const el = $('#cert-list');
   $('#cert-count').textContent = certs?.length || 0;
   if (!certs?.length) {
-    el.innerHTML = '<div class="empty">No certificates. Click <b>Generate</b> to create a self-signed cert or <b>Import</b> to add an existing one.</div>';
+    el.innerHTML = '<div class="empty">No certificates. Click <b>New</b> to create or import one.</div>';
     return;
   }
   el.innerHTML = `<table class="peer-table"><thead><tr>
     <th>Name</th><th>Subject</th><th>Issuer</th><th>Expires</th><th>Key</th><th></th>
-  </tr></thead><tbody>${certs.map(c => `<tr>
-    <td><b>${esc(c.name)}</b><span class="peer-addr-sub">${esc(c.id)}</span></td>
+  </tr></thead><tbody>${certs.map(c => {
+    const expired = certExpired(c.not_after);
+    const rowStyle = expired ? 'opacity:0.45' : '';
+    return `<tr style="${rowStyle}">
+    <td><b>${esc(c.name)}</b><span class="peer-addr-sub">${esc(c.id)}</span>${expired ? ' <span class="badge badge-muted">expired</span>' : ''}</td>
     <td>${esc(c.subject)}</td>
     <td>${esc(c.issuer)}${c.is_ca ? ' <span class="badge badge-blue">CA</span>' : ''}</td>
     <td><span style="font-family:var(--mono);font-size:12px">${esc(c.not_after)}</span></td>
     <td>${c.key_file ? '<span class="badge badge-green">yes</span>' : '<span class="badge badge-muted">no</span>'}</td>
-    <td style="text-align:right"><button class="act-btn danger" onclick="deleteCert('${esc(c.id)}')">Delete</button></td>
-  </tr>`).join('')}</tbody></table>`;
+    <td style="text-align:right;white-space:nowrap"><button class="act-btn edit" onclick="editCert('${esc(c.id)}')">Edit</button> <button class="act-btn danger" onclick="deleteCert('${esc(c.id)}')">Delete</button></td>
+  </tr>`;}).join('')}</tbody></table>`;
 }
 
-function openGenCertDialog() { $('#gen-cert-modal').style.display = ''; }
-function closeGenCertDialog() { $('#gen-cert-modal').style.display = 'none'; }
-function openImportCertDialog() { $('#import-cert-modal').style.display = ''; }
-function closeImportCertDialog() { $('#import-cert-modal').style.display = 'none'; }
+function openNewCertDialog() {
+  // Clear all fields
+  ['cert-id','cert-name','cert-pem','cert-key-pem','cert-path','cert-key-path'].forEach(x => { const e = $(`#${x}`); if (e) e.value = ''; });
+  $('#cert-id').disabled = false;
+  $('#new-cert-modal').style.display = '';
+  $('#cert-submit-btn').textContent = 'New';
+  switchCertTab(document.querySelector('[data-certtab="paste"]'));
+}
+function closeNewCertDialog() { $('#new-cert-modal').style.display = 'none'; }
 
-async function submitGenCert() {
-  const id = $('#gen-id').value.trim(), name = $('#gen-name').value.trim(),
-    domains = $('#gen-domains').value.split(',').map(s => s.trim()).filter(Boolean),
-    days = parseInt($('#gen-days').value) || 365;
-  if (!id || !domains.length) { toast('ID and at least one domain are required', 'error'); return; }
+function switchCertTab(tab) {
+  const t = tab.dataset.certtab;
+  $$('[data-certtab]').forEach(el => el.classList.toggle('active', el === tab));
+  $('#cert-tab-paste').style.display = t === 'paste' ? '' : 'none';
+  $('#cert-tab-path').style.display = t === 'path' ? '' : 'none';
+  $('#cert-gen-icon').style.display = t === 'paste' ? '' : 'none';
+}
+
+async function generateCertPEM() {
+  const id = $('#cert-id').value.trim();
+  if (!id) { toast('Fill in ID first', 'error'); return; }
   try {
-    await api('/tls/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name, domains, days }) });
-    closeGenCertDialog();
-    ['gen-id','gen-name','gen-domains'].forEach(x => $(`#${x}`).value = '');
-    $('#gen-days').value = '365';
-    refreshCerts();
+    await api('/tls/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name: id, domains: [id], days: 3650 }) });
+    // Fetch the generated PEM and fill into fields
+    const pem = await api(`/tls/${id}/pem`);
+    if (pem.cert) $('#cert-pem').value = pem.cert;
+    if (pem.key) $('#cert-key-pem').value = pem.key;
+    toast('Certificate generated, review and save', 'success');
   } catch (e) { toast(String(e), 'error'); }
 }
 
-async function submitImportCert() {
-  const id = $('#imp-id').value.trim(), name = $('#imp-name').value.trim(),
-    cert = $('#imp-cert').value.trim(), key = $('#imp-key').value.trim();
-  if (!id || !cert) { toast('ID and certificate PEM are required', 'error'); return; }
+async function submitCertDialog() {
+  const id = $('#cert-id').value.trim(), name = $('#cert-name').value.trim();
+  if (!id) { toast('ID is required', 'error'); return; }
+
+  const pasteTab = $('#cert-tab-paste').style.display !== 'none';
+  if (pasteTab) {
+    const cert = $('#cert-pem').value.trim(), key = $('#cert-key-pem').value.trim();
+    if (!cert) { toast('Certificate PEM required', 'error'); return; }
+    try {
+      await api('/tls/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name: name || id, cert, key }) });
+      closeNewCertDialog(); refreshCerts(); toast('Certificate saved', 'success');
+    } catch (e) { toast(String(e), 'error'); }
+  } else {
+    const certPath = $('#cert-path').value.trim(), keyPath = $('#cert-key-path').value.trim();
+    if (!certPath) { toast('Certificate file path required', 'error'); return; }
+    try {
+      await api('/tls/import-path', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name: name || id, cert_path: certPath, key_path: keyPath }) });
+      closeNewCertDialog(); refreshCerts(); toast('Certificate saved', 'success');
+    } catch (e) { toast(String(e), 'error'); }
+  }
+}
+
+async function editCert(id) {
+  // Clear and pre-fill
+  ['cert-id','cert-name','cert-pem','cert-key-pem','cert-path','cert-key-path'].forEach(x => { const e = $(`#${x}`); if (e) e.value = ''; });
+  $('#cert-id').value = id;
+  $('#cert-id').disabled = true;
   try {
-    await api('/tls/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name, cert, key }) });
-    closeImportCertDialog();
-    ['imp-id','imp-name','imp-cert','imp-key'].forEach(x => $(`#${x}`).value = '');
-    refreshCerts();
-  } catch (e) { toast(String(e), 'error'); }
+    const pem = await api(`/tls/${id}/pem`);
+    if (pem.cert) $('#cert-pem').value = pem.cert;
+    if (pem.key) $('#cert-key-pem').value = pem.key;
+  } catch(e) {}
+  $('#new-cert-modal').style.display = '';
+  $('#cert-submit-btn').textContent = 'Save';
+  switchCertTab(document.querySelector('[data-certtab="paste"]'));
 }
 
 async function deleteCert(id) {
