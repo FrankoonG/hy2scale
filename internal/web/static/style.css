@@ -63,7 +63,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 .peer-table td{padding:10px;border-bottom:1px solid var(--border-light);font-size:13px;vertical-align:middle}
 .peer-table tr:last-child td{border-bottom:none}
 .peer-table tr.disabled td{opacity:.45}
-.peer-table .col-latency{width:75px;text-align:center}
+.peer-table .col-status{width:75px;text-align:center}
 .peer-table .col-dir{width:55px}
 .peer-table .col-name{min-width:80px}
 .peer-table .col-traffic{width:160px;font-size:11px;font-family:var(--mono);white-space:nowrap}
@@ -76,6 +76,8 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 .latency-bad{color:var(--red)}
 .latency-off{color:var(--red);font-weight:500;font-family:var(--font)}
 .latency-na{color:var(--text-muted)}
+.latency-sync{color:var(--orange);font-weight:500;font-family:var(--font)}
+tr.syncing{opacity:0.45;pointer-events:none}
 .peer-name-cell{font-weight:600}
 a.peer-link{color:var(--primary);text-decoration:none;cursor:pointer}
 a.peer-link:hover{text-decoration:underline}
@@ -231,5 +233,5 @@ button.btn-icon:hover{color:var(--red);background:var(--red-bg)}
   .content{padding:16px}
   .form-grid{grid-template-columns:1fr}
   .modal{max-width:95vw;margin:16px}
-  .peer-table .col-latency,.peer-table .col-dir{display:none}
+  .peer-table .col-status,.peer-table .col-dir{display:none}
 }
