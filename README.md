@@ -46,7 +46,7 @@ docker run -d --name hy2scale \
   --cap-add NET_ADMIN \
   --device-cgroup-rule='c 108:0 rwm' \
   -v hy2scale-data:/data \
-  hy2scale:latest
+  frankoong/hy2scale:latest
 ```
 
 Open `http://<host>:5565/scale/` — default login: `admin` / `admin`
@@ -59,7 +59,14 @@ Open `http://<host>:5565/scale/` — default login: `admin` / `admin`
 docker run -d --name hy2scale \
   -p 5565:5565/tcp -p 5565:5565/udp \
   -v hy2scale-data:/data \
-  hy2scale:latest
+  frankoong/hy2scale:latest
+```
+
+### Docker Hub
+
+```
+frankoong/hy2scale:latest
+frankoong/hy2scale:1.0.1
 ```
 
 ## Architecture
@@ -128,9 +135,11 @@ All configuration is managed through the web UI. No config files to edit. State 
     └── default.name
 ```
 
-## Building
+## Building from Source
 
 ```bash
+git clone https://github.com/FrankoonG/hy2scale.git
+cd hy2scale
 docker build -t hy2scale .
 ```
 
