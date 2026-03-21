@@ -1,22 +1,61 @@
 <p align="center">
-  <img src=".github/assets/logo.svg" width="80" alt="HY2 SCALE">
+  <img src=".github/assets/logo.svg" width="120" alt="HY2 SCALE">
 </p>
 
 <h1 align="center">HY2 SCALE</h1>
 
 <p align="center">
-  A mesh relay network built on <a href="https://github.com/apernet/hysteria">Hysteria 2</a> QUIC tunnels, with a web management UI for multi-node orchestration, user management, and VPN services.
+  A mesh relay network built on <a href="https://github.com/apernet/hysteria">Hysteria 2</a> QUIC tunnels.<br>
+  Connect devices across NATs, route traffic through any node, and run VPN services — all from a web UI.
 </p>
 
 ---
 
+## Why HY2 SCALE?
+
+Like Tailscale, HY2 SCALE lets devices behind NAT reach each other through relay nodes with public IPs. Unlike Tailscale:
+
+- **Built on Hysteria 2 (QUIC)** — Designed to saturate your ISP's rated bandwidth, not limited by traditional TCP-based tunnels. On lossy or high-latency links, QUIC's loss recovery outperforms WireGuard and OpenVPN.
+- **Any node is an exit** — Traffic can exit from any node in the mesh, including nodes behind NAT (reached via relay). A user in Tokyo can exit through a home server in Sydney that has no public IP.
+- **Any node is a VPN server** — Each node can serve L2TP/IPsec, IKEv2, SOCKS5, or Shadowsocks. Connect your phone's native VPN client directly to any node.
+- **No coordination server** — Nodes connect to each other directly. No central control plane, no account registration, no third-party dependency.
+
+## Concepts
+
+### Node
+
+A node is a machine running HY2 SCALE. Each node has a unique ID, runs a Hysteria 2 QUIC server, and connects to other nodes as peers. Nodes discover each other's sub-peers automatically, forming a multi-level mesh.
+
+A node can be:
+- A **cloud server** with a public IP (relay for NAT'd devices)
+- A **home server** behind NAT (reachable via a relay node)
+- A **NAS, router, or any Docker-capable device**
+
+### Exit
+
+An exit is the node where a user's traffic leaves the mesh and reaches the internet. Each user can be assigned a different exit node — or a chain of nodes (e.g., `Japan-01/US-01` routes through Japan-01, then exits from US-01).
+
+If no exit is specified, traffic exits directly from the node the user connected to.
+
+### VPN Server
+
+Every node can act as a VPN access point. When you enable L2TP, IKEv2, SOCKS5, or Shadowsocks on a node, users can connect to it using their device's built-in VPN client (iOS, macOS, Windows, Android — no app install required for L2TP and IKEv2). The node then routes the user's traffic through the mesh to their assigned exit.
+
+```
+┌──────────┐      ┌──────────────┐      ┌──────────┐      ┌──────────┐
+│  Phone   │─VPN─▶│  Node A      │─QUIC─▶│  Node B  │─QUIC─▶│  Node C  │──▶ Internet
+│ (iOS)    │      │  (L2TP/IKEv2)│      │  (relay) │      │  (exit)  │
+└──────────┘      └──────────────┘      └──────────┘      └──────────┘
+                   public IP             behind NAT        public IP
+```
+
 ## Features
 
-- **Mesh Topology** — Connect nodes in a peer-to-peer mesh with automatic discovery, nested peers, and multi-level nesting. Native Hysteria 2 servers are detected and integrated seamlessly.
+- **Mesh Topology** — Peer-to-peer mesh with automatic discovery, nested peers, and multi-level nesting. Native Hysteria 2 servers are detected and integrated seamlessly.
 
-- **Per-User Exit Routing** — Each user can be assigned a different exit path through the mesh. Traffic is transparently routed through relay chains (e.g., `Japan-01/US-01`) with per-user traffic accounting.
+- **Per-User Exit Routing** — Each user can be assigned a different exit path through the mesh. Traffic is transparently routed through relay chains with per-user traffic accounting.
 
-- **VPN Protocols** — Built-in SOCKS5, Shadowsocks, L2TP/IPsec, and IKEv2/IPsec servers. L2TP and IKEv2 support per-user exit routing via transparent proxy.
+- **VPN Protocols** — Built-in SOCKS5, Shadowsocks, L2TP/IPsec, and IKEv2/IPsec servers. L2TP and IKEv2 use the OS native VPN client — no third-party app needed.
 
 - **Real-Time Monitoring** — Live latency probing, per-peer traffic rates, connection status, and nested topology visualization in a single-page web UI.
 
@@ -116,7 +155,7 @@ docker run -d --name hy2scale \
   --cap-add NET_ADMIN \
   --device-cgroup-rule='c 108:0 rwm' \
   -v hy2scale-data:/data \
-  hy2scale:latest
+  frankoong/hy2scale:latest
 ```
 
 > Without `--network host`, the web UI shows **"v1.x.x Limited"** and L2TP/IKEv2 panels are disabled. This is because IPsec requires direct access to the host network stack — Docker port mapping cannot handle ESP tunnel/transport mode packets. All other features (mesh relay, SOCKS5, Shadowsocks, web UI) work normally with standard port mapping.
