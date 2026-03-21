@@ -130,7 +130,10 @@ func (n *Node) PeerRates() map[string]PeerTraffic {
 // SetLatency stores a latency measurement for a peer (called by prober or inbound report).
 func (n *Node) SetLatency(peerName string, ms int) {
 	n.latencyMu.Lock()
-	n.latencies[peerName] = ms
+	if ms > 0 || n.latencies[peerName] <= 0 {
+		// Only update if new value is valid, or no previous good value exists
+		n.latencies[peerName] = ms
+	}
 	n.latencyMu.Unlock()
 }
 
@@ -177,30 +180,12 @@ func (n *Node) StartLatencyProber(ctx context.Context) {
 					continue
 				}
 				go func(name string, p *peer) {
-					n.nestedMu.RLock()
-					isNested := n.nested[name]
-					n.nestedMu.RUnlock()
-
-					if isNested && !p.info.Native {
-						start := time.Now()
-						result, err := n.PeersOf(name)
-						rtt := time.Since(start)
-						if err == nil {
-							n.SetLatency(name, int(rtt.Milliseconds()))
-							n.peerRateMu.Lock()
-							n.peersOfCache[name] = result
-							n.peerRateMu.Unlock()
-						} else {
-							n.SetLatency(name, -1)
-						}
+					// Ping only — lightweight, no stream overhead
+					rtt := n.PingPeer(name)
+					if rtt >= 0 {
+						n.SetLatency(name, int(rtt.Milliseconds()))
 					} else {
-						// Non-nested: just ping for latency
-						rtt := n.PingPeer(name)
-						if rtt >= 0 {
-							n.SetLatency(name, int(rtt.Milliseconds()))
-						} else {
-							n.SetLatency(name, -1)
-						}
+						n.SetLatency(name, -1)
 					}
 				}(names[i], p)
 			}
@@ -644,13 +629,6 @@ func (n *Node) Peers() []PeerInfo {
 
 // PeersOf returns a peer's peers. Requires nested discovery enabled for that peer.
 func (n *Node) PeersOf(peerName string) ([]PeerInfo, error) {
-	n.nestedMu.RLock()
-	enabled := n.nested[peerName]
-	n.nestedMu.RUnlock()
-	if !enabled {
-		return nil, fmt.Errorf("relay: nested discovery not enabled for %q", peerName)
-	}
-
 	n.mu.RLock()
 	p, ok := n.peers[peerName]
 	n.mu.RUnlock()
@@ -740,6 +718,30 @@ func (n *Node) HasPeer(name string) bool {
 	defer n.mu.RUnlock()
 	_, ok := n.peers[name]
 	return ok
+}
+
+// ConnectedPeerNames returns names of all connected peers (outbound with active client).
+func (n *Node) ConnectedPeerNames() []string {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	var names []string
+	for name, p := range n.peers {
+		if p.client != nil {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// NativeMap returns a map of peer names to their native status.
+func (n *Node) NativeMap() map[string]bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	m := make(map[string]bool)
+	for name, p := range n.peers {
+		m[name] = p.info.Native
+	}
+	return m
 }
 
 // PingPeer measures round-trip latency to a peer. Returns -1 if unreachable.
