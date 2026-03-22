@@ -898,12 +898,7 @@ func (a *App) handleSOCKS5(conn net.Conn) {
 	if exitVia == "" {
 		remote, err = net.DialTimeout("tcp", addr, 10*time.Second)
 	} else {
-		parts := splitPath(exitVia)
-		if len(parts) == 1 {
-			remote, err = a.node.DialTCP(context.Background(), parts[0], addr)
-		} else {
-			remote, err = a.node.DialVia(context.Background(), parts, addr)
-		}
+		remote, err = a.dialExit(context.Background(), exitVia, addr)
 	}
 	if err != nil {
 		conn.Write([]byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
@@ -940,6 +935,22 @@ func splitPath(s string) []string {
 		}
 	}
 	return parts
+}
+
+// dialExit routes traffic through an exit path, stripping the local node name prefix.
+func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, error) {
+	parts := splitPath(exitVia)
+	// Strip leading self name (e.g. "AUB/64e7c9f5" on node AUB → ["64e7c9f5"])
+	if len(parts) > 0 && parts[0] == a.node.Name() {
+		parts = parts[1:]
+	}
+	if len(parts) == 0 {
+		return net.DialTimeout("tcp", addr, 10*time.Second)
+	}
+	if len(parts) == 1 {
+		return a.node.DialTCP(ctx, parts[0], addr)
+	}
+	return a.node.DialVia(ctx, parts, addr)
 }
 
 func splitOn(s string, sep byte) []string {

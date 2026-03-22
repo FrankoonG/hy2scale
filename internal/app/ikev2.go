@@ -482,12 +482,7 @@ func (a *App) handleIKEv2Transparent(conn net.Conn, cfg IKEv2Config) {
 		remote, err = net.DialTimeout("tcp", origDst, 10*time.Second)
 	} else {
 		log.Printf("[ikev2] dial via %s to %s", exitVia, origDst)
-		parts := splitPath(exitVia)
-		if len(parts) == 1 {
-			remote, err = a.node.DialTCP(context.Background(), parts[0], origDst)
-		} else {
-			remote, err = a.node.DialVia(context.Background(), parts, origDst)
-		}
+		remote, err = a.dialExit(context.Background(), exitVia, origDst)
 	}
 	if err != nil {
 		log.Printf("[ikev2] dial error: %v", err)
