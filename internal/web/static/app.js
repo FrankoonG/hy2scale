@@ -58,17 +58,29 @@ function api(path, opts) {
 
 function esc(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
+// ── Sidebar toggle (mobile) ──
+function toggleSidebar() {
+  document.querySelector('.sidebar').classList.toggle('open');
+  document.getElementById('sidebar-overlay').classList.toggle('open');
+}
+function closeSidebar() {
+  document.querySelector('.sidebar').classList.remove('open');
+  document.getElementById('sidebar-overlay').classList.remove('open');
+}
+
 // ── Navigation / Router ──
 const pageTitles = { nodes: 'Nodes', users: 'Users', proxies: 'Proxies', tls: 'TLS', settings: 'Settings' };
 
 function switchPage(name, push) {
   if (!pageTitles[name]) name = 'nodes';
+  closeSidebar();
   $$('.nav-item[data-page]').forEach(n => n.classList.toggle('active', n.dataset.page === name));
   $$('.page').forEach(p => p.style.display = 'none');
   $(`#page-${name}`).style.display = '';
   $('#page-title').textContent = pageTitles[name];
   if (push !== false) history.pushState(null, '', basePath + '/' + name);
   if (name === 'users') refreshUsers();
+  if (name === 'proxies') refreshProxies();
   if (name === 'settings') loadSettings();
   if (name === 'tls') refreshCerts();
 }
@@ -351,6 +363,7 @@ async function refreshTopology() {
   }
   collectPeers(topo);
   connectedPeers = newConnected;
+  buildExitPaths(topo);
 
   // Cache latencies and clear syncing for nodes with children
   for (const n of topo) {
@@ -376,7 +389,9 @@ async function refreshTopology() {
     }
   }
 
-  el.innerHTML = `<table class="peer-table">
+  const scrollEl = el.querySelector('.table-scroll');
+  const scrollLeft = scrollEl ? scrollEl.scrollLeft : 0;
+  el.innerHTML = `<div class="table-scroll"><table class="peer-table">
     <thead><tr>
       <th class="col-status">Status</th>
       <th class="col-dir">Dir</th>
@@ -386,7 +401,8 @@ async function refreshTopology() {
       <th class="col-actions"></th>
     </tr></thead>
     <tbody>${rows}</tbody>
-  </table>`;
+  </table></div>`;
+  if (scrollLeft) { const s = el.querySelector('.table-scroll'); if (s) s.scrollLeft = scrollLeft; }
   $('#peer-count').textContent = count;
 }
 
@@ -611,7 +627,8 @@ function switchProxyTab(tab) {
   $$('.proxy-tab').forEach(t => t.classList.toggle('active', t === tab));
   $$('.proxy-panel').forEach(p => p.classList.toggle('active', p.id === 'ptab-' + tab.dataset.ptab));
   $$('.proxy-panel').forEach(p => p.style.display = p.classList.contains('active') ? '' : 'none');
-  if (tab.dataset.ptab === 'ikev2') refreshIKEv2Certs();
+  // Reload data for the active tab to clear unsaved changes
+  refreshProxies();
 }
 
 async function refreshIKEv2Certs() {
@@ -631,6 +648,14 @@ async function refreshIKEv2Certs() {
 }
 
 async function refreshProxies() {
+  // Load Hysteria status
+  try {
+    const node = await api('/node');
+    const srv = node.server;
+    $('#hy2-port').value = srv?.listen?.replace(/.*:/, '') || '5565';
+    $('#hy2-status').value = srv ? 'Enabled' : 'Disabled';
+    $('#hy2-user-auth').checked = node.hy2_user_auth || false;
+  } catch(e) {}
   // Load SOCKS5 config
   try {
     const proxies = await api('/proxies');
@@ -658,21 +683,32 @@ async function refreshProxies() {
     // Capability check
     const panel = $('#ptab-l2tp');
     const warn = $('#l2tp-warn');
-    if (!l.capable) {
+    const blocked = !l.capable || !l.host_network;
+    if (blocked) {
+      if (!l.capable) {
+        warn.textContent = 'Insufficient privileges — container requires --cap-add NET_ADMIN and --network host to enable L2TP.';
+      } else if (!l.host_network) {
+        warn.textContent = 'L2TP requires --network host. Docker port mapping cannot handle IPsec transport mode. Deploy with: docker run --network host --cap-add NET_ADMIN ...';
+      }
       warn.style.display = '';
-      panel.querySelectorAll('input,select,button').forEach(el => { el.disabled = true; });
-      panel.style.opacity = '0.5';
-      panel.style.pointerEvents = 'none';
+      panel.querySelectorAll('.card').forEach(el => { el.style.opacity = '0.45'; el.style.pointerEvents = 'none'; });
       warn.style.pointerEvents = 'auto';
       warn.style.opacity = '1';
     } else {
       warn.style.display = 'none';
-      panel.style.opacity = '';
-      panel.style.pointerEvents = '';
+      panel.querySelectorAll('.card').forEach(el => { el.style.opacity = ''; el.style.pointerEvents = ''; });
     }
   } catch(e) {}
   // Load IKEv2 config
   await loadIKEv2();
+}
+
+async function saveHy2UserAuth() {
+  const enabled = $('#hy2-user-auth').checked;
+  try {
+    await api('/node', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hy2_user_auth: enabled }) });
+    toast('Hysteria user auth ' + (enabled ? 'enabled' : 'disabled'), 'success');
+  } catch (e) { toast(String(e), 'error'); }
 }
 
 async function saveSocks5() {
@@ -824,7 +860,7 @@ function switchSettingsTab(tab) {
   const t = tab.dataset.settab;
   $$('[data-settab]').forEach(el => el.classList.toggle('active', el === tab));
   $$('.settings-panel').forEach(p => p.style.display = p.id === 'stab-' + t ? '' : 'none');
-  if (t === 'web') refreshHttpsCerts();
+  loadSettings();
 }
 
 async function refreshHttpsCerts() {
@@ -907,6 +943,148 @@ async function updateUISettings() {
 }
 
 // ── Exit Via rendering with reachability colors ──
+// ── Exit Via Autocomplete ──
+let _exitPaths = []; // cached list of all reachable exit paths
+
+function buildExitPaths(topo) {
+  const paths = [];
+  function walk(nodes, prefix) {
+    for (const n of nodes) {
+      if (n.is_self) continue;
+      const p = prefix ? prefix + '/' + n.name : n.name;
+      paths.push(p);
+      if (n.children) walk(n.children, p);
+    }
+  }
+  walk(topo, '');
+  _exitPaths = paths;
+}
+
+function setupExitAutocomplete(inputEl) {
+  if (inputEl._acSetup) return;
+  inputEl._acSetup = true;
+  const wrap = document.createElement('div');
+  wrap.className = 'autocomplete-wrap';
+  inputEl.parentNode.insertBefore(wrap, inputEl);
+  wrap.appendChild(inputEl);
+  const list = document.createElement('div');
+  list.className = 'autocomplete-list';
+  document.body.appendChild(list);
+
+  let activeIdx = -1;
+
+  function positionList() {
+    const rect = inputEl.getBoundingClientRect();
+    list.style.left = rect.left + 'px';
+    list.style.top = rect.bottom + 'px';
+    list.style.width = rect.width + 'px';
+  }
+
+  function update() {
+    const val = inputEl.value.trim().toLowerCase();
+    const matches = _exitPaths.filter(p => !val || p.toLowerCase().includes(val));
+    if (!matches.length || (matches.length === 1 && matches[0].toLowerCase() === val)) {
+      list.classList.remove('open'); return;
+    }
+    activeIdx = -1;
+    list.innerHTML = matches.slice(0, 15).map((p, i) => {
+      const parts = p.split('/');
+      const last = parts.pop();
+      const prefix = parts.length ? parts.join('/') + '/' : '';
+      return `<div class="autocomplete-item" data-val="${p}">${prefix}<b>${last}</b></div>`;
+    }).join('');
+    positionList();
+    list.classList.add('open');
+  }
+
+  inputEl.addEventListener('input', update);
+  inputEl.addEventListener('focus', update);
+  inputEl.addEventListener('blur', () => setTimeout(() => list.classList.remove('open'), 150));
+  inputEl.addEventListener('keydown', e => {
+    const items = list.querySelectorAll('.autocomplete-item');
+    if (e.key === 'ArrowDown') { e.preventDefault(); activeIdx = Math.min(activeIdx + 1, items.length - 1); items.forEach((it, i) => it.classList.toggle('active', i === activeIdx)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); activeIdx = Math.max(activeIdx - 1, 0); items.forEach((it, i) => it.classList.toggle('active', i === activeIdx)); }
+    else if (e.key === 'Enter' && activeIdx >= 0) { e.preventDefault(); inputEl.value = items[activeIdx].dataset.val; list.classList.remove('open'); inputEl.dispatchEvent(new Event('input')); }
+    else if (e.key === 'Escape') { list.classList.remove('open'); }
+  });
+  list.addEventListener('mousedown', e => {
+    const item = e.target.closest('.autocomplete-item');
+    if (item) { inputEl.value = item.dataset.val; list.classList.remove('open'); inputEl.dispatchEvent(new Event('input')); }
+  });
+}
+
+// ── Custom Select (replaces native <select>) ──
+function setupCustomSelect(selectEl) {
+  if (selectEl._csSetup) return;
+  selectEl._csSetup = true;
+  selectEl.style.display = 'none';
+
+  const wrap = document.createElement('div');
+  wrap.className = 'custom-select-wrap';
+  selectEl.parentNode.insertBefore(wrap, selectEl);
+  wrap.appendChild(selectEl);
+
+  const btn = document.createElement('div');
+  btn.className = 'custom-select-btn';
+  btn.tabIndex = 0;
+  wrap.appendChild(btn);
+
+  const list = document.createElement('div');
+  list.className = 'custom-select-list';
+  document.body.appendChild(list);
+
+  function getLabel() {
+    const opt = selectEl.options[selectEl.selectedIndex];
+    return opt ? opt.textContent : '';
+  }
+  btn.textContent = getLabel();
+
+  function positionList() {
+    const rect = btn.getBoundingClientRect();
+    list.style.left = rect.left + 'px';
+    list.style.top = rect.bottom + 'px';
+    list.style.width = rect.width + 'px';
+  }
+
+  function buildItems() {
+    list.innerHTML = '';
+    for (const opt of selectEl.options) {
+      const item = document.createElement('div');
+      item.className = 'custom-select-item' + (opt.selected ? ' selected' : '');
+      item.textContent = opt.textContent;
+      item.dataset.val = opt.value;
+      list.appendChild(item);
+    }
+  }
+
+  btn.addEventListener('click', () => {
+    buildItems();
+    positionList();
+    list.classList.toggle('open');
+  });
+  btn.addEventListener('blur', () => setTimeout(() => list.classList.remove('open'), 150));
+  list.addEventListener('mousedown', e => {
+    const item = e.target.closest('.custom-select-item');
+    if (item) {
+      selectEl.value = item.dataset.val;
+      btn.textContent = item.textContent;
+      list.classList.remove('open');
+      selectEl.dispatchEvent(new Event('change'));
+    }
+  });
+
+  // Sync when select changes programmatically
+  selectEl.addEventListener('change', () => { btn.textContent = getLabel(); });
+  // Observe option changes
+  new MutationObserver(() => { btn.textContent = getLabel(); }).observe(selectEl, { childList: true, subtree: true, attributes: true });
+  // Patch .value setter to keep button in sync
+  const desc = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+  Object.defineProperty(selectEl, 'value', {
+    get() { return desc.get.call(this); },
+    set(v) { desc.set.call(this, v); btn.textContent = getLabel(); }
+  });
+}
+
 function exitViaHTML(path) {
   if (!path) return '<span style="color:var(--text-muted)">(direct)</span>';
   const hops = path.split('/').filter(Boolean);
@@ -928,6 +1106,15 @@ function exitViaHTML(path) {
 let editingUserId = null;
 
 async function refreshUsers() {
+  // Ensure connectedPeers is populated for exit_via reachability
+  if (connectedPeers.size === 0) {
+    try {
+      const topo = await api('/topology');
+      const s = new Set();
+      (function collect(nodes) { for (const n of nodes) { if (n.connected || n.is_self || n.native || n.latency_ms > 0) s.add(n.name); if (n.children) collect(n.children); } })(topo);
+      connectedPeers = s;
+    } catch(e) {}
+  }
   const users = await api('/users');
   const el = $('#user-list');
   $('#user-count').textContent = users?.length || 0;
@@ -935,10 +1122,10 @@ async function refreshUsers() {
     el.innerHTML = '<div class="empty">No users. Click <b>+ Add User</b> to create one.</div>';
     return;
   }
-  el.innerHTML = `<table class="peer-table user-table"><thead><tr>
+  el.innerHTML = `<div class="table-scroll"><table class="peer-table user-table"><thead><tr>
     <th style="width:50px">On</th>
     <th style="width:120px">Username</th>
-    <th>Exit Via</th>
+    <th style="min-width:180px">Exit Via</th>
     <th class="col-right" style="width:130px">Traffic</th>
     <th class="col-right" style="width:90px">Expiry</th>
     <th style="width:150px"></th>
@@ -963,7 +1150,7 @@ async function refreshUsers() {
         <button class="act-btn danger" onclick="deleteUser('${esc(u.id)}','${esc(u.username)}')">Delete</button>
       </div></td>
     </tr>`;
-  }).join('')}</tbody></table>`;
+  }).join('')}</tbody></table></div>`;
 }
 
 function openUserDialog() {
@@ -1051,7 +1238,7 @@ async function refreshCerts() {
     el.innerHTML = '<div class="empty">No certificates. Click <b>New</b> to create or import one.</div>';
     return;
   }
-  el.innerHTML = `<table class="peer-table"><thead><tr>
+  el.innerHTML = `<div class="table-scroll"><table class="peer-table"><thead><tr>
     <th>Name</th><th>Subject</th><th>Issuer</th><th>Expires</th><th>Key</th><th></th>
   </tr></thead><tbody>${certs.map(c => {
     const expired = certExpired(c.not_after);
@@ -1063,7 +1250,48 @@ async function refreshCerts() {
     <td><span style="font-family:var(--mono);font-size:12px">${esc(c.not_after)}</span></td>
     <td>${c.key_file ? '<span class="badge badge-green">yes</span>' : '<span class="badge badge-muted">no</span>'}</td>
     <td style="text-align:right;white-space:nowrap"><button class="act-btn edit" onclick="editCert('${esc(c.id)}')">Edit</button> <button class="act-btn danger" onclick="deleteCert('${esc(c.id)}')">Delete</button></td>
-  </tr>`;}).join('')}</tbody></table>`;
+  </tr>`;}).join('')}</tbody></table></div>`;
+}
+
+function setupPEMDragDrop(textarea, type) {
+  if (!textarea) return;
+  textarea.addEventListener('dragover', e => { e.preventDefault(); textarea.classList.add('drag-over'); });
+  textarea.addEventListener('dragleave', () => textarea.classList.remove('drag-over'));
+  textarea.addEventListener('drop', e => {
+    e.preventDefault();
+    textarea.classList.remove('drag-over');
+    const file = e.dataTransfer?.files?.[0];
+    if (!file) return;
+    // Check file extension
+    const ext = file.name.split('.').pop().toLowerCase();
+    const validExts = ['pem', 'crt', 'cer', 'key', 'pub', 'txt'];
+    if (!validExts.includes(ext)) {
+      toast(`Invalid file type ".${ext}". Expected: ${validExts.join(', ')}`, 'error');
+      return;
+    }
+    if (file.size > 65536) {
+      toast('File too large (max 64KB)', 'error');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const content = reader.result.trim();
+      if (type === 'cert') {
+        if (!content.includes('-----BEGIN CERTIFICATE') && !content.includes('-----BEGIN TRUSTED')) {
+          toast('File does not appear to be a valid PEM certificate', 'error');
+          return;
+        }
+      } else if (type === 'key') {
+        if (!content.includes('-----BEGIN') || !content.includes('PRIVATE KEY')) {
+          toast('File does not appear to be a valid PEM private key', 'error');
+          return;
+        }
+      }
+      textarea.value = content;
+    };
+    reader.onerror = () => toast('Failed to read file', 'error');
+    reader.readAsText(file);
+  });
 }
 
 function openNewCertDialog() {
@@ -1170,4 +1398,14 @@ async function deleteCert(id) {
   if (sessionStorage.getItem(tokenKey) && location.pathname.replace(basePath, '').replace(/^\/+/, '') !== 'login') {
     refresh();
   }
+  // Setup PEM drag-drop on cert textareas
+  setupPEMDragDrop($('#cert-pem'), 'cert');
+  setupPEMDragDrop($('#cert-key-pem'), 'key');
+  // Setup exit via autocomplete
+  const uExit = $('#u-exitvia');
+  if (uExit) setupExitAutocomplete(uExit);
+  const ikExit = $('#ikev2-default-exit');
+  if (ikExit) setupExitAutocomplete(ikExit);
+  // Setup custom selects for all <select> elements
+  $$('select').forEach(sel => setupCustomSelect(sel));
 })();
