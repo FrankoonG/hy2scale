@@ -148,12 +148,7 @@ func (a *App) handleSS(conn net.Conn, method string) {
 		if exitVia == "" {
 			remote, err = net.DialTimeout("tcp", addr, 10*time.Second)
 		} else {
-			parts := splitPath(exitVia)
-			if len(parts) == 1 {
-				remote, err = a.node.DialTCP(a.appCtx, parts[0], addr)
-			} else {
-				remote, err = a.node.DialVia(a.appCtx, parts, addr)
-			}
+			remote, err = a.dialExit(a.appCtx, exitVia, addr)
 		}
 		if err != nil {
 			return
@@ -268,12 +263,7 @@ func (a *App) handleSSNone(conn net.Conn) {
 	if exitVia == "" {
 		remote, err = net.DialTimeout("tcp", addr, 10*time.Second)
 	} else {
-		parts := splitPath(exitVia)
-		if len(parts) == 1 {
-			remote, err = a.node.DialTCP(a.appCtx, parts[0], addr)
-		} else {
-			remote, err = a.node.DialVia(a.appCtx, parts, addr)
-		}
+		remote, err = a.dialExit(a.appCtx, exitVia, addr)
 	}
 	if err != nil {
 		return

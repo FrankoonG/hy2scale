@@ -371,7 +371,7 @@ func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // Version is the application version. Update this on each release.
-const Version = "1.0.2"
+const Version = "1.0.3"
 
 func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
@@ -551,7 +551,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				ExitNode:  p.ExitNode,
 				Direction: "inbound",
 				Via:       cfg.NodeID,
-				LatencyMs: 0,
+				LatencyMs: latencyCache[p.Name],
 			}
 			if pc, ok := cfg.Peers[p.Name]; ok {
 				child.Nested = pc.Nested
