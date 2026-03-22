@@ -79,6 +79,8 @@ type Config struct {
 	IKEv2      *IKEv2Config          `yaml:"ikev2,omitempty" json:"ikev2,omitempty"`
 	UIListen    string                `yaml:"ui_listen,omitempty" json:"ui_listen,omitempty"`
 	UIBasePath  string                `yaml:"ui_base_path,omitempty" json:"ui_base_path,omitempty"`
+	WebUsername string                `yaml:"web_username,omitempty" json:"web_username,omitempty"`
+	WebPassword string                `yaml:"web_password,omitempty" json:"web_password,omitempty"`
 	DNS         string                `yaml:"dns,omitempty" json:"dns,omitempty"`
 	ForceHTTPS  bool                  `yaml:"force_https,omitempty" json:"force_https,omitempty"`
 	HTTPSCertID string                `yaml:"https_cert_id,omitempty" json:"https_cert_id,omitempty"`
@@ -127,6 +129,15 @@ func New(dataDir string) (*App, error) {
 func (a *App) Store() *ConfigStore { return a.store }
 func (a *App) Node() *relay.Node   { return a.node }
 func (a *App) TLS() *TLSStore     { return a.tls }
+
+func (a *App) GetConfig() Config { return a.store.Get() }
+
+func (a *App) UpdateWebCredentials(username, passHash string) {
+	a.store.Update(func(c *Config) {
+		c.WebUsername = username
+		c.WebPassword = passHash
+	})
+}
 
 // PersistNodeID writes the node ID to the persistent file.
 func (a *App) PersistNodeID(id string) {
