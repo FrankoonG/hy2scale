@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -44,7 +45,7 @@ type Server struct {
 
 	mu         sync.RWMutex
 	username   string
-	password   string
+	passHash   string // SHA-256 hex of password
 	sessions   map[string]time.Time
 	oldNodeIDs map[string]string
 
@@ -53,17 +54,31 @@ type Server struct {
 	subPeersCache map[string][]topoSubPeer
 }
 
+func sha256Hex(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
+}
+
 func NewServer(a *app.App, addr, basePath string) *Server {
 	bp := strings.TrimRight(basePath, "/")
 	if bp != "" && !strings.HasPrefix(bp, "/") {
 		bp = "/" + bp
 	}
+	cfg := a.GetConfig()
+	username := cfg.WebUsername
+	passHash := cfg.WebPassword // stored as SHA-256 hex
+	if username == "" {
+		username = "admin"
+	}
+	if passHash == "" {
+		passHash = sha256Hex("admin")
+	}
 	return &Server{
 		app:        a,
 		addr:       addr,
 		basePath:   bp,
-		username:   "admin",
-		password:   "admin",
+		username:   username,
+		passHash:   passHash,
 		oldNodeIDs:    make(map[string]string),
 		subPeersCache: make(map[string][]topoSubPeer),
 		sessions: make(map[string]time.Time),
@@ -232,9 +247,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	// Client sends SHA-256(password) hex; compare against stored hash
 	s.mu.RLock()
 	ok := subtle.ConstantTimeCompare([]byte(body.Username), []byte(s.username)) == 1 &&
-		subtle.ConstantTimeCompare([]byte(body.Password), []byte(s.password)) == 1
+		subtle.ConstantTimeCompare([]byte(body.Password), []byte(s.passHash)) == 1
 	s.mu.RUnlock()
 	if !ok {
 		http.Error(w, "invalid credentials", 401)
@@ -274,9 +290,10 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	// All password fields are SHA-256 hex from client
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if subtle.ConstantTimeCompare([]byte(body.CurrentPassword), []byte(s.password)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(body.CurrentPassword), []byte(s.passHash)) != 1 {
 		http.Error(w, "current password incorrect", 403)
 		return
 	}
@@ -284,8 +301,10 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 		s.username = body.NewUsername
 	}
 	if body.NewPassword != "" {
-		s.password = body.NewPassword
+		s.passHash = body.NewPassword
 	}
+	// Persist credentials to config (stored as SHA-256 hex)
+	s.app.UpdateWebCredentials(s.username, s.passHash)
 	s.sessions = make(map[string]time.Time)
 	writeJSON(w, map[string]string{"status": "ok"})
 }
