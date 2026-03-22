@@ -66,7 +66,8 @@ type SOCKS5Config struct {
 type Config struct {
 	NodeID     string                `yaml:"node_id" json:"node_id"`
 	Name       string                `yaml:"name" json:"name"`
-	ExitNode   bool                  `yaml:"exit_node" json:"exit_node"`
+	ExitNode     bool                  `yaml:"exit_node" json:"exit_node"`
+	Hy2UserAuth  bool                  `yaml:"hy2_user_auth,omitempty" json:"hy2_user_auth"`
 	Server     *ServerConfig         `yaml:"server" json:"server"`
 	Clients    []ClientEntry         `yaml:"clients" json:"clients"`
 	Peers      map[string]PeerConfig `yaml:"peers" json:"peers"`

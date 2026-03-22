@@ -352,27 +352,29 @@ func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // Version is the application version. Update this on each release.
-const Version = "1.0.1"
+const Version = "1.0.2"
 
 func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
 	limited := !app.CheckL2TPCapability() || !app.CheckHostNetwork()
 	writeJSON(w, map[string]any{
-		"node_id":   cfg.NodeID,
-		"name":      cfg.Name,
-		"exit_node": cfg.ExitNode,
-		"server":    cfg.Server,
-		"version":   Version,
-		"limited":   limited,
+		"node_id":       cfg.NodeID,
+		"name":          cfg.Name,
+		"exit_node":     cfg.ExitNode,
+		"server":        cfg.Server,
+		"version":       Version,
+		"limited":       limited,
+		"hy2_user_auth": cfg.Hy2UserAuth,
 	})
 }
 
 func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		NodeID   *string          `json:"node_id"`
-		Name     *string          `json:"name"`
-		ExitNode *bool            `json:"exit_node"`
-		Server   *app.ServerConfig `json:"server"`
+		NodeID      *string          `json:"node_id"`
+		Name        *string          `json:"name"`
+		ExitNode    *bool            `json:"exit_node"`
+		Server      *app.ServerConfig `json:"server"`
+		Hy2UserAuth *bool            `json:"hy2_user_auth"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), 400)
@@ -402,6 +404,9 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 			} else {
 				c.Server = body.Server
 			}
+		}
+		if body.Hy2UserAuth != nil {
+			c.Hy2UserAuth = *body.Hy2UserAuth
 		}
 	})
 
@@ -932,9 +937,11 @@ func (s *Server) updateSSConfig(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getL2TPConfig(w http.ResponseWriter, r *http.Request) {
 	capable := app.CheckL2TPCapability()
+	hostNet := app.CheckHostNetwork()
 	cfg := s.app.Store().Get()
 	result := map[string]any{
-		"capable": capable,
+		"capable":      capable,
+		"host_network": hostNet,
 	}
 	if cfg.L2TP != nil {
 		result["listen"] = cfg.L2TP.Listen
