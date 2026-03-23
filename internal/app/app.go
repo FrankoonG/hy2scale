@@ -689,7 +689,10 @@ func (a *App) connectLoop(ctx context.Context, cl ClientEntry) {
 }
 
 func (a *App) connect(ctx context.Context, cl ClientEntry) error {
-	addr, _ := net.ResolveUDPAddr("udp", cl.Addr)
+	addr, err := net.ResolveUDPAddr("udp", cl.Addr)
+	if err != nil {
+		return fmt.Errorf("invalid address %q: %w", cl.Addr, err)
+	}
 
 	// TLS
 	tlsCfg := hyclient.TLSConfig{

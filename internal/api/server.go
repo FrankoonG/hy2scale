@@ -371,11 +371,12 @@ func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // Version is the application version. Update this on each release.
-const Version = "1.0.3"
+const Version = "1.0.4"
 
 func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
-	limited := !app.CheckL2TPCapability() || !app.CheckHostNetwork()
+	capOK, _ := app.CheckCapability()
+	limited := !capOK || !app.CheckHostNetwork()
 	writeJSON(w, map[string]any{
 		"node_id":       cfg.NodeID,
 		"name":          cfg.Name,
@@ -820,6 +821,10 @@ func (s *Server) updateClient(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "addr and password required", 400)
 		return
 	}
+	if _, err := net.ResolveUDPAddr("udp", cl.Addr); err != nil {
+		http.Error(w, fmt.Sprintf("invalid address %q: %v", cl.Addr, err), 400)
+		return
+	}
 	// Look up by URL path name, update with body (may include rename)
 	oldName := name
 	if cl.Name == "" {
@@ -840,6 +845,10 @@ func (s *Server) addClient(w http.ResponseWriter, r *http.Request) {
 	}
 	if cl.Name == "" || cl.Addr == "" || cl.Password == "" {
 		http.Error(w, "name, addr, password required", 400)
+		return
+	}
+	if _, err := net.ResolveUDPAddr("udp", cl.Addr); err != nil {
+		http.Error(w, fmt.Sprintf("invalid address %q: %v", cl.Addr, err), 400)
 		return
 	}
 	if err := s.app.AddClient(cl); err != nil {
@@ -955,7 +964,8 @@ func (s *Server) updateSSConfig(w http.ResponseWriter, r *http.Request) {
 // --- L2TP ---
 
 func (s *Server) getL2TPConfig(w http.ResponseWriter, r *http.Request) {
-	capable := app.CheckL2TPCapability()
+	capOK, _ := app.CheckL2TPCapability()
+	capable := capOK
 	hostNet := app.CheckHostNetwork()
 	cfg := s.app.Store().Get()
 	result := map[string]any{
@@ -981,8 +991,8 @@ func (s *Server) getL2TPConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateL2TPConfig(w http.ResponseWriter, r *http.Request) {
-	if !app.CheckL2TPCapability() {
-		http.Error(w, "container lacks NET_ADMIN capability or /dev/ppp", 403)
+	if ok, reason := app.CheckL2TPCapability(); !ok {
+		http.Error(w, "L2TP unavailable: "+reason, 403)
 		return
 	}
 	var l2tp app.L2TPConfig
@@ -999,7 +1009,8 @@ func (s *Server) updateL2TPConfig(w http.ResponseWriter, r *http.Request) {
 // --- IKEv2 ---
 
 func (s *Server) getIKEv2Config(w http.ResponseWriter, r *http.Request) {
-	capable := app.CheckL2TPCapability()
+	capOK, _ := app.CheckCapability()
+	capable := capOK
 	hostNet := app.CheckHostNetwork()
 	cfg := s.app.Store().Get()
 	result := map[string]any{
@@ -1034,8 +1045,8 @@ func (s *Server) getIKEv2Config(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateIKEv2Config(w http.ResponseWriter, r *http.Request) {
-	if !app.CheckL2TPCapability() {
-		http.Error(w, "container lacks NET_ADMIN capability", 403)
+	if ok, reason := app.CheckCapability(); !ok {
+		http.Error(w, "IKEv2 unavailable: "+reason, 403)
 		return
 	}
 	var ikev2 app.IKEv2Config
