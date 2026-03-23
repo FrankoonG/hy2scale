@@ -95,8 +95,8 @@ func (a *App) StartIKEv2(cfg IKEv2Config) error {
 	if !cfg.Enabled {
 		return nil
 	}
-	if !CheckL2TPCapability() {
-		log.Printf("[ikev2] disabled: container lacks NET_ADMIN")
+	if ok, reason := CheckCapability(); !ok {
+		log.Printf("[ikev2] disabled: %s", reason)
 		return fmt.Errorf("insufficient privileges")
 	}
 

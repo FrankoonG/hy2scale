@@ -89,23 +89,36 @@ func (s *pppSession) Lookup(ip string) (string, bool) {
 	return u, ok
 }
 
-// CheckL2TPCapability tests if the container has NET_ADMIN and /dev/ppp.
-func CheckL2TPCapability() bool {
-	// Test 1: can we create a dummy interface? (requires NET_ADMIN)
-	err := exec.Command("ip", "link", "add", "hy2cap_test", "type", "dummy").Run()
-	if err != nil {
-		return false
+// CheckCapability tests if the runtime has NET_ADMIN.
+// Returns (ok, reason) where reason explains what failed.
+func CheckCapability() (bool, string) {
+	// NET_ADMIN check — try bridge (kernel built-in), fall back to iptables
+	if exec.Command("ip", "link", "add", "hy2cap_test", "type", "bridge").Run() == nil {
+		exec.Command("ip", "link", "del", "hy2cap_test").Run()
+		return true, ""
 	}
-	exec.Command("ip", "link", "del", "hy2cap_test").Run()
+	if exec.Command("iptables-legacy", "-L", "-n").Run() == nil {
+		return true, ""
+	}
+	if exec.Command("iptables", "-L", "-n").Run() == nil {
+		return true, ""
+	}
+	return false, "no NET_ADMIN capability (bridge creation, iptables-legacy, and iptables all failed)"
+}
 
-	// Test 2: does /dev/ppp exist? Try to create it if missing.
+// CheckL2TPCapability tests if the runtime has NET_ADMIN and /dev/ppp.
+// Returns (ok, reason).
+func CheckL2TPCapability() (bool, string) {
+	if ok, reason := CheckCapability(); !ok {
+		return false, reason
+	}
+	// Does /dev/ppp exist? Try to create it if missing.
 	if _, err := os.Stat("/dev/ppp"); err != nil {
-		// Try mknod /dev/ppp c 108 0
 		if exec.Command("mknod", "/dev/ppp", "c", "108", "0").Run() != nil {
-			return false
+			return false, "/dev/ppp not found and mknod failed (missing device or privileges)"
 		}
 	}
-	return true
+	return true, ""
 }
 
 // StartL2TP sets up xl2tpd, strongswan, iptables, and the transparent proxy.
@@ -113,8 +126,8 @@ func (a *App) StartL2TP(cfg L2TPConfig) error {
 	if !cfg.Enabled || cfg.Pool == "" {
 		return nil
 	}
-	if !CheckL2TPCapability() {
-		log.Printf("[l2tp] disabled: container lacks NET_ADMIN or /dev/ppp")
+	if ok, reason := CheckL2TPCapability(); !ok {
+		log.Printf("[l2tp] disabled: %s", reason)
 		return fmt.Errorf("insufficient privileges")
 	}
 
