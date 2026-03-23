@@ -1332,7 +1332,10 @@ func (s *Server) downloadWGPeerConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	endpoint := r.URL.Query().Get("endpoint")
-	dns := cfg.DNS // use global DNS from Settings
+	dns := cfg.DNS
+	if dns == "" {
+		dns = "1.1.1.1, 8.8.8.8"
+	}
 	conf := app.GenerateWireGuardClientConfig(*cfg.WireGuard, *peer, endpoint, dns)
 	w.Header().Set("Content-Type", "text/plain")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.conf", name))
