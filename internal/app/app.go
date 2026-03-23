@@ -77,6 +77,7 @@ type Config struct {
 	SS         *SSConfig             `yaml:"ss,omitempty" json:"ss,omitempty"`
 	L2TP       *L2TPConfig           `yaml:"l2tp,omitempty" json:"l2tp,omitempty"`
 	IKEv2      *IKEv2Config          `yaml:"ikev2,omitempty" json:"ikev2,omitempty"`
+	WireGuard  *WireGuardConfig      `yaml:"wireguard,omitempty" json:"wireguard,omitempty"`
 	UIListen    string                `yaml:"ui_listen,omitempty" json:"ui_listen,omitempty"`
 	UIBasePath  string                `yaml:"ui_base_path,omitempty" json:"ui_base_path,omitempty"`
 	WebUsername string                `yaml:"web_username,omitempty" json:"web_username,omitempty"`
@@ -194,6 +195,13 @@ func (a *App) Run(ctx context.Context) error {
 	if cfg.IKEv2 != nil {
 		if err := a.StartIKEv2(*cfg.IKEv2); err != nil {
 			log.Printf("[ikev2] start error: %v", err)
+		}
+	}
+
+	// Start WireGuard
+	if cfg.WireGuard != nil {
+		if err := a.StartWireGuard(*cfg.WireGuard); err != nil {
+			log.Printf("[wireguard] start error: %v", err)
 		}
 	}
 

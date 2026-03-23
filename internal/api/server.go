@@ -23,6 +23,7 @@ import (
 	"github.com/FrankoonG/hy2scale/internal/app"
 	"github.com/FrankoonG/hy2scale/internal/relay"
 	"github.com/FrankoonG/hy2scale/internal/web"
+	qrcode "github.com/skip2/go-qrcode"
 )
 
 type topoSubPeer struct {
@@ -123,6 +124,16 @@ func (s *Server) Start(ctx context.Context) error {
 	// IKEv2 config
 	authed.HandleFunc("GET /api/ikev2", s.getIKEv2Config)
 	authed.HandleFunc("PUT /api/ikev2", s.updateIKEv2Config)
+
+	// WireGuard
+	authed.HandleFunc("GET /api/wireguard", s.getWireGuardConfig)
+	authed.HandleFunc("PUT /api/wireguard", s.updateWireGuardConfig)
+	authed.HandleFunc("POST /api/wireguard/generate-key", s.generateWGKey)
+	authed.HandleFunc("POST /api/wireguard/peers", s.addWGPeer)
+	authed.HandleFunc("PUT /api/wireguard/peers/{name}", s.updateWGPeer)
+	authed.HandleFunc("DELETE /api/wireguard/peers/{name}", s.removeWGPeer)
+	authed.HandleFunc("GET /api/wireguard/peers/{name}/config", s.downloadWGPeerConfig)
+	authed.HandleFunc("GET /api/wireguard/qr", s.wireGuardQR)
 
 	// Users
 	authed.HandleFunc("GET /api/users", s.getUsers)
@@ -736,24 +747,45 @@ func (s *Server) fetchSubPeersViaHTTP(peerName string) []topoSubPeer {
 	}
 	cfg := s.app.Store().Get()
 	myID := cfg.NodeID
+	parentLatency := s.app.Node().GetLatency(peerName)
 	children := make([]topoSubPeer, 0, len(remotePeers))
 	for _, rp := range remotePeers {
 		if rp.Name == myID {
 			continue
+		}
+		childLatency := rp.LatencyMs
+		if childLatency > 0 && parentLatency > 0 {
+			childLatency += parentLatency
 		}
 		child := topoSubPeer{
 			Name:      rp.Name,
 			ExitNode:  rp.ExitNode,
 			Direction: rp.Direction,
 			Via:       peerName,
-			LatencyMs: rp.LatencyMs,
+			LatencyMs: childLatency,
 			Nested:    true,
 			Native:    rp.Native,
-			Children:  rp.Children,
+			Children:  addLatencyOffset(rp.Children, parentLatency),
 		}
 		children = append(children, child)
 	}
 	return children
+}
+
+// addLatencyOffset recursively adds an offset to all latency values in a sub-peer tree.
+func addLatencyOffset(children []topoSubPeer, offset int) []topoSubPeer {
+	if offset <= 0 || len(children) == 0 {
+		return children
+	}
+	result := make([]topoSubPeer, len(children))
+	copy(result, children)
+	for i := range result {
+		if result[i].LatencyMs > 0 {
+			result[i].LatencyMs += offset
+		}
+		result[i].Children = addLatencyOffset(result[i].Children, offset)
+	}
+	return result
 }
 
 // loadSubPeers loads nested peers. path is the chain from local to the peer being queried.
@@ -796,8 +828,11 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 		if inPath {
 			continue
 		}
-		// Use remote-reported latency (the remote node measured this itself)
+		// Cumulative latency: parent's latency + remote-reported latency to this child
 		childLatency := sp.LatencyMs
+		if childLatency > 0 && parentLatency > 0 {
+			childLatency += parentLatency
+		}
 		child := topoSubPeer{
 			Name:      sp.Name,
 			ExitNode:  sp.ExitNode,
@@ -1134,6 +1169,189 @@ func (s *Server) updateIKEv2Config(w http.ResponseWriter, r *http.Request) {
 		c.IKEv2 = &ikev2
 	})
 	writeJSON(w, map[string]string{"status": "ok", "note": "restart required for IKEv2 changes"})
+}
+
+// --- WireGuard ---
+
+func (s *Server) getWireGuardConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := s.app.Store().Get()
+	result := map[string]any{
+		"running": app.WireGuardRunning(),
+	}
+	if cfg.WireGuard != nil {
+		result["enabled"] = cfg.WireGuard.Enabled
+		result["listen_port"] = cfg.WireGuard.ListenPort
+		result["private_key"] = cfg.WireGuard.PrivateKey
+		result["address"] = cfg.WireGuard.Address
+		result["dns"] = cfg.WireGuard.DNS
+		result["mtu"] = cfg.WireGuard.MTU
+		result["peers"] = cfg.WireGuard.Peers
+		if cfg.WireGuard.PrivateKey != "" {
+			pub, _ := app.PublicKeyFromPrivate(cfg.WireGuard.PrivateKey)
+			result["public_key"] = pub
+		}
+	} else {
+		result["enabled"] = false
+		result["listen_port"] = 51820
+		result["private_key"] = ""
+		result["address"] = "10.0.0.1/24"
+		result["dns"] = ""
+		result["mtu"] = 1420
+		result["peers"] = []app.WireGuardPeer{}
+		result["public_key"] = ""
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) updateWireGuardConfig(w http.ResponseWriter, r *http.Request) {
+	var wg app.WireGuardConfig
+	if err := json.NewDecoder(r.Body).Decode(&wg); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	// Preserve existing peers when updating server config
+	cfg := s.app.Store().Get()
+	if cfg.WireGuard != nil && len(wg.Peers) == 0 {
+		wg.Peers = cfg.WireGuard.Peers
+	}
+	s.app.Store().Update(func(c *app.Config) {
+		c.WireGuard = &wg
+	})
+	// Restart WireGuard
+	app.StopWireGuard()
+	if wg.Enabled {
+		if err := s.app.StartWireGuard(wg); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) generateWGKey(w http.ResponseWriter, r *http.Request) {
+	priv, pub := app.GenerateWireGuardKey()
+	writeJSON(w, map[string]string{"private_key": priv, "public_key": pub})
+}
+
+func (s *Server) addWGPeer(w http.ResponseWriter, r *http.Request) {
+	var peer app.WireGuardPeer
+	if err := json.NewDecoder(r.Body).Decode(&peer); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if peer.Name == "" || peer.PublicKey == "" || peer.AllowedIPs == "" {
+		http.Error(w, "name, public_key, allowed_ips required", 400)
+		return
+	}
+	s.app.Store().Update(func(c *app.Config) {
+		if c.WireGuard == nil {
+			c.WireGuard = &app.WireGuardConfig{}
+		}
+		c.WireGuard.Peers = append(c.WireGuard.Peers, peer)
+	})
+	// Restart WireGuard to apply new peer
+	cfg := s.app.Store().Get()
+	if cfg.WireGuard != nil && cfg.WireGuard.Enabled {
+		app.StopWireGuard()
+		s.app.StartWireGuard(*cfg.WireGuard)
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) updateWGPeer(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var updated app.WireGuardPeer
+	if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	needRestart := false
+	s.app.Store().Update(func(c *app.Config) {
+		if c.WireGuard == nil {
+			return
+		}
+		for i, p := range c.WireGuard.Peers {
+			if p.Name == name {
+				// Check if WG-level fields changed (requires device restart)
+				if p.PublicKey != updated.PublicKey || p.AllowedIPs != updated.AllowedIPs || p.Keepalive != updated.Keepalive {
+					needRestart = true
+				}
+				c.WireGuard.Peers[i] = updated
+				break
+			}
+		}
+	})
+	if needRestart {
+		cfg := s.app.Store().Get()
+		if cfg.WireGuard != nil && cfg.WireGuard.Enabled {
+			app.StopWireGuard()
+			s.app.StartWireGuard(*cfg.WireGuard)
+		}
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) removeWGPeer(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	s.app.Store().Update(func(c *app.Config) {
+		if c.WireGuard == nil {
+			return
+		}
+		peers := make([]app.WireGuardPeer, 0, len(c.WireGuard.Peers))
+		for _, p := range c.WireGuard.Peers {
+			if p.Name != name {
+				peers = append(peers, p)
+			}
+		}
+		c.WireGuard.Peers = peers
+	})
+	cfg := s.app.Store().Get()
+	if cfg.WireGuard != nil && cfg.WireGuard.Enabled {
+		app.StopWireGuard()
+		s.app.StartWireGuard(*cfg.WireGuard)
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) downloadWGPeerConfig(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	cfg := s.app.Store().Get()
+	if cfg.WireGuard == nil {
+		http.Error(w, "wireguard not configured", 404)
+		return
+	}
+	var peer *app.WireGuardPeer
+	for _, p := range cfg.WireGuard.Peers {
+		if p.Name == name {
+			peer = &p
+			break
+		}
+	}
+	if peer == nil {
+		http.Error(w, "peer not found", 404)
+		return
+	}
+	endpoint := r.URL.Query().Get("endpoint")
+	dns := cfg.DNS // use global DNS from Settings
+	conf := app.GenerateWireGuardClientConfig(*cfg.WireGuard, *peer, endpoint, dns)
+	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.conf", name))
+	w.Write([]byte(conf))
+}
+
+func (s *Server) wireGuardQR(w http.ResponseWriter, r *http.Request) {
+	text := r.URL.Query().Get("text")
+	if text == "" {
+		http.Error(w, "missing text", 400)
+		return
+	}
+	png, err := qrcode.Encode(text, qrcode.Medium, 512)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Write(png)
 }
 
 // --- Users ---
