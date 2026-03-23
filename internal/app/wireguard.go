@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/netip"
@@ -218,6 +217,16 @@ func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 			srcIP := id.RemoteAddress.String()
 			exitVia := findPeerExitVia(cfg, srcIP)
 
+			// Find peer name for session username
+			peerName := ""
+			for _, p := range cfg.Peers {
+				ip := strings.SplitN(strings.TrimSpace(p.AllowedIPs), "/", 2)[0]
+				if ip == srcIP {
+					peerName = p.Name
+					break
+				}
+			}
+
 			var remote net.Conn
 			var err error
 			if exitVia == "" {
@@ -226,14 +235,17 @@ func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 				remote, err = a.dialExit(context.Background(), exitVia, dstAddr)
 			}
 			if err != nil {
-				log.Printf("[wg-tcp] dial %s failed: %v", dstAddr, err)
 				return
 			}
 			defer remote.Close()
 
+			ctx, cancel := context.WithCancel(context.Background())
+			sid := a.Sessions.Add(peerName, srcIP, "wireguard", cancel)
+			defer func() { a.Sessions.Remove(sid); cancel() }()
+
 			done := make(chan struct{})
-			go func() { io.Copy(remote, wgConn); done <- struct{}{} }()
-			io.Copy(wgConn, remote)
+			go func() { copyCtx(ctx, remote, wgConn); done <- struct{}{} }()
+			copyCtx(ctx, wgConn, remote)
 			<-done
 		}()
 	})
