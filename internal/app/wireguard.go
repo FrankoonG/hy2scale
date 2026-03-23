@@ -6,15 +6,23 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/netip"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/crypto/curve25519"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
+
+	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
+	"gvisor.dev/gvisor/pkg/waiter"
 )
 
 // WireGuardConfig stored in config.yaml.
@@ -99,17 +107,21 @@ func (a *App) StartWireGuard(cfg WireGuardConfig) error {
 
 	localAddr, _ := netip.ParseAddr(gateway)
 
-	// Create netstack TUN with SOCKS5 proxy on virtual interface
-	tunDev, err := createWGNetstack(
+	// Create custom netstack TUN (HandleLocal=false for transparent forwarding)
+	tunDev, gvStack, err := createWGNetstack(
 		[]netip.Addr{localAddr},
-		parseDNSAddrs(cfg.DNS),
-		cfg.MTU, a, cfg,
+		cfg.MTU,
 	)
 	if err != nil {
 		return fmt.Errorf("wireguard: create tun: %w", err)
 	}
 
-	// Create WireGuard device with error logging
+	// Install TCP/UDP forwarders BEFORE creating WireGuard device
+	// (must be registered before any packets arrive)
+	installTCPForwarder(gvStack, a, cfg)
+	installUDPForwarder(gvStack, a, cfg)
+
+	// Create WireGuard device
 	dev := device.NewDevice(tunDev, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "[wg] "))
 
 	ipc := fmt.Sprintf("private_key=%s\nlisten_port=%d\n",
@@ -186,6 +198,96 @@ func StopWireGuard() {
 	}
 }
 
+// installTCPForwarder intercepts all TCP via gvisor's tcp.Forwarder.
+func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
+	tcpFwd := tcp.NewForwarder(s, 0, 65535, func(r *tcp.ForwarderRequest) {
+		id := r.ID()
+		dstAddr := net.JoinHostPort(id.LocalAddress.String(), fmt.Sprintf("%d", id.LocalPort))
+
+		var wq waiter.Queue
+		ep, tcpErr := r.CreateEndpoint(&wq)
+		if tcpErr != nil {
+			r.Complete(true)
+			return
+		}
+		r.Complete(false)
+		wgConn := gonet.NewTCPConn(&wq, ep)
+
+		go func() {
+			defer wgConn.Close()
+			srcIP := id.RemoteAddress.String()
+			exitVia := findPeerExitVia(cfg, srcIP)
+
+			var remote net.Conn
+			var err error
+			if exitVia == "" {
+				remote, err = net.DialTimeout("tcp", dstAddr, 10*time.Second)
+			} else {
+				remote, err = a.dialExit(context.Background(), exitVia, dstAddr)
+			}
+			if err != nil {
+				return
+			}
+			defer remote.Close()
+
+			done := make(chan struct{})
+			go func() { io.Copy(remote, wgConn); done <- struct{}{} }()
+			io.Copy(wgConn, remote)
+			<-done
+		}()
+	})
+	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
+}
+
+// installUDPForwarder intercepts all UDP via gvisor's udp.Forwarder.
+func installUDPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
+	udpFwd := udp.NewForwarder(s, func(r *udp.ForwarderRequest) {
+		id := r.ID()
+		dstAddr := net.JoinHostPort(id.LocalAddress.String(), fmt.Sprintf("%d", id.LocalPort))
+
+		var wq waiter.Queue
+		ep, err := r.CreateEndpoint(&wq)
+		if err != nil {
+			return
+		}
+		udpConn := gonet.NewUDPConn(&wq, ep)
+
+		go func() {
+			defer udpConn.Close()
+			remote, derr := net.DialTimeout("udp", dstAddr, 5*time.Second)
+			if derr != nil {
+				return
+			}
+			defer remote.Close()
+			remote.SetDeadline(time.Now().Add(30 * time.Second))
+			udpConn.SetDeadline(time.Now().Add(30 * time.Second))
+
+			done := make(chan struct{})
+			go func() {
+				buf := make([]byte, 4096)
+				for {
+					n, e := udpConn.Read(buf)
+					if e != nil || n == 0 {
+						break
+					}
+					remote.Write(buf[:n])
+				}
+				done <- struct{}{}
+			}()
+			buf := make([]byte, 4096)
+			for {
+				n, e := remote.Read(buf)
+				if e != nil || n == 0 {
+					break
+				}
+				udpConn.Write(buf[:n])
+			}
+			<-done
+		}()
+	})
+	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
+}
+
 // GenerateWireGuardClientConfig generates a .conf file for a WireGuard peer.
 func GenerateWireGuardClientConfig(serverCfg WireGuardConfig, peer WireGuardPeer, endpoint, dns string) string {
 	serverPub, _ := PublicKeyFromPrivate(serverCfg.PrivateKey)
@@ -204,23 +306,13 @@ func GenerateWireGuardClientConfig(serverCfg WireGuardConfig, peer WireGuardPeer
 	if endpoint != "" {
 		b.WriteString(fmt.Sprintf("Endpoint = %s:%d\n", endpoint, serverCfg.ListenPort))
 	}
-	// Route WG subnet through tunnel; use SOCKS5 proxy for internet
-	gateway, _, _ := parseWGAddress(serverCfg.Address)
-	subnet := serverCfg.Address // e.g. 10.0.0.1/24
-	if idx := strings.Index(subnet, "/"); idx > 0 {
-		// Convert to network: 10.0.0.0/24
-		base := net.ParseIP(gateway).To4()
-		if base != nil {
-			mask := net.CIDRMask(24, 32)
-			network := net.IP(make([]byte, 4))
-			for i := range base {
-				network[i] = base[i] & mask[i]
-			}
-			subnet = fmt.Sprintf("%s/24", network)
-		}
+	b.WriteString("AllowedIPs = 0.0.0.0/0, ::/0\n")
+	if endpoint != "" {
+		// Add routing scripts to ensure all traffic goes through WG tunnel
+		b.WriteString(fmt.Sprintf("# PostUp/PostDown for full-tunnel routing:\n"))
+		b.WriteString(fmt.Sprintf("# PostUp = ip route add %s via $(ip route | grep default | awk '{print $3}'); ip route del default; ip route add default dev wg0\n", endpoint))
+		b.WriteString(fmt.Sprintf("# PostDown = ip route del %s; ip route add default via $(ip route | grep %s | awk '{print $3}')\n", endpoint, endpoint))
 	}
-	b.WriteString(fmt.Sprintf("AllowedIPs = %s\n", subnet))
-	b.WriteString(fmt.Sprintf("# SOCKS5 proxy: %s:1080 (set as system proxy for internet access)\n", gateway))
 	if peer.Keepalive > 0 {
 		b.WriteString(fmt.Sprintf("PersistentKeepalive = %d\n", peer.Keepalive))
 	}
