@@ -1,6 +1,6 @@
 module github.com/FrankoonG/hy2scale
 
-go 1.24.0
+go 1.24.1
 
 toolchain go1.24.13
 
@@ -12,6 +12,7 @@ require (
 )
 
 exclude golang.zx2c4.com/wireguard/tun/netstack v0.0.0-20220703234212-c31a7b1ab478
+
 
 require (
 	github.com/apernet/quic-go v0.59.1-0.20260217092621-db4786c77a22 // indirect
