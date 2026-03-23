@@ -122,7 +122,7 @@ function switchPage(name, push) {
   $(`#page-${name}`).style.display = '';
   $('#page-title').textContent = pageTitles[name];
   if (push !== false) history.pushState(null, '', basePath + '/' + name);
-  if (name === 'users') refreshUsers();
+  if (name === 'users') { refreshUsers(); refreshSessions(); }
   if (name === 'proxies') refreshProxies();
   if (name === 'settings') loadSettings();
   if (name === 'tls') refreshCerts();
@@ -226,6 +226,9 @@ async function refresh() {
     }
     const tasks = [refreshTopology(), refreshStats()];
     if (!proxiesLoaded) { tasks.push(refreshProxies().catch(()=>{})); proxiesLoaded = true; }
+    // Refresh sessions on users page
+    const curPage = document.querySelector('.page:not([style*="display:none"]),.page:not([style*="display: none"])');
+    if (curPage && curPage.id === 'page-users') tasks.push(refreshSessions().catch(()=>{}));
     await Promise.all(tasks);
   } catch (e) { console.error(e); }
   clearInterval(pollTimer);
@@ -928,8 +931,14 @@ async function loadWireGuard() {
     $('#wg-pubkey').value = wg.public_key || '';
     // DNS reuses Settings page value, not shown in WG panel
     $('#wg-mtu').value = wg.mtu || 1420;
-    $('#wg-status').textContent = wg.running ? '● Running' : '';
-    $('#wg-status').style.color = wg.running ? '#27ae60' : '';
+    const wgConn = wg.connected || 0;
+    if (wg.running) {
+      $('#wg-status').textContent = wgConn > 0 ? '● ' + wgConn + ' connected' : '● Running';
+      $('#wg-status').style.color = '#27ae60';
+    } else {
+      $('#wg-status').textContent = '';
+      $('#wg-status').style.color = '';
+    }
     _wgPeers = wg.peers || [];
     renderWGPeers();
   } catch(e) {}
@@ -1268,10 +1277,14 @@ function buildExitPaths(topo) {
   const paths = [];
   function walk(nodes, prefix) {
     for (const n of nodes) {
-      if (n.is_self) continue;
-      const p = prefix ? prefix + '/' + n.name : n.name;
-      paths.push(p);
-      if (n.children) walk(n.children, p);
+      if (!n.is_self) {
+        const p = prefix ? prefix + '/' + n.name : n.name;
+        paths.push(p);
+        if (n.children) walk(n.children, p);
+      } else if (n.children) {
+        // Self node's inbound children are also valid exit targets
+        walk(n.children, '');
+      }
     }
   }
   walk(topo, '');
@@ -1422,6 +1435,44 @@ function exitViaHTML(path) {
 
 // ── Users ──
 let editingUserId = null;
+
+async function refreshSessions() {
+  try {
+    const data = await api('/sessions');
+    const sessions = data.sessions || [];
+    $('#session-count').textContent = sessions.length;
+    const el = $('#session-list');
+    if (!sessions.length) {
+      el.innerHTML = '<div class="empty">No active connections</div>';
+      return;
+    }
+    el.innerHTML = `<div class="table-scroll"><table class="peer-table user-table"><thead><tr>
+      <th style="width:100px">User</th>
+      <th style="width:100px">IP</th>
+      <th style="width:70px">Protocol</th>
+      <th style="width:100px">Traffic</th>
+      <th style="width:80px">Duration</th>
+      <th style="width:60px"></th>
+    </tr></thead><tbody>${sessions.map(s => {
+      const dur = s.duration;
+      const h = Math.floor(dur/3600), m = Math.floor((dur%3600)/60), sec = dur%60;
+      const durStr = h > 0 ? h+'h'+m+'m' : m > 0 ? m+'m'+sec+'s' : sec+'s';
+      const tx = fmtBytes(s.tx_bytes), rx = fmtBytes(s.rx_bytes);
+      return `<tr>
+        <td><b>${esc(s.username || '-')}</b></td>
+        <td style="font-family:var(--mono);font-size:12px">${esc(s.remote_ip)}</td>
+        <td><span style="font-size:12px;padding:1px 6px;background:var(--bg-subtle);border-radius:3px">${esc(s.protocol)}</span></td>
+        <td style="font-size:12px"><span class="stat-up">${tx}</span> / <span class="stat-down">${rx}</span></td>
+        <td style="font-size:12px">${durStr}</td>
+        <td><button class="act-btn danger" onclick="kickSession('${esc(s.id)}')">Kick</button></td>
+      </tr>`;
+    }).join('')}</tbody></table></div>`;
+  } catch(e) {}
+}
+async function kickSession(id) {
+  try { await api('/sessions/' + encodeURIComponent(id), { method: 'DELETE' }); refreshSessions(); toast('Session kicked', 'success'); }
+  catch(e) { toast(String(e), 'error'); }
+}
 
 async function refreshUsers() {
   // Ensure connectedPeers is populated for exit_via reachability

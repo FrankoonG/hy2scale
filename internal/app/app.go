@@ -107,6 +107,7 @@ type App struct {
 	usersMu      sync.RWMutex
 	userIndex    map[string]*UserConfig // username → user (for fast auth lookup)
 	trafficDirty sync.Map              // username → true (needs flush)
+	Sessions     *SessionManager
 }
 
 func New(dataDir string) (*App, error) {
@@ -124,6 +125,7 @@ func New(dataDir string) (*App, error) {
 		dataDir:      dataDir,
 		clientCancel: make(map[string]context.CancelFunc),
 		proxyHandles: make(map[string]*proxyHandle),
+		Sessions:     NewSessionManager(),
 	}, nil
 }
 
@@ -918,23 +920,60 @@ func (a *App) handleSOCKS5(conn net.Conn) {
 	defer remote.Close()
 	conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 
-	// Traffic counting per user
+	// Session tracking
+	remoteIP := ""
+	if ta, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+		remoteIP = ta.IP.String()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	sid := a.Sessions.Add(username, remoteIP, "socks5", cancel)
+	sess := a.Sessions.Get(sid)
+
+	// Traffic counting per user with session tracking
+	var up, down int64
+	done := make(chan struct{})
+	go func() {
+		n, _ := copyCtx(ctx, remote, conn)
+		atomic.AddInt64(&up, n)
+		remote.Close()
+		done <- struct{}{}
+	}()
+	n2, _ := copyCtx(ctx, conn, remote)
+	atomic.AddInt64(&down, n2)
+	<-done
+	cancel()
+	if sess != nil {
+		sess.TxBytes.Store(atomic.LoadInt64(&up))
+		sess.RxBytes.Store(atomic.LoadInt64(&down))
+	}
+	a.Sessions.Remove(sid)
 	if username != "" {
-		var up, down int64
-		done := make(chan struct{})
-		go func() {
-			n, _ := io.Copy(remote, conn)
-			atomic.AddInt64(&up, n)
-			remote.Close()
-			done <- struct{}{}
-		}()
-		n2, _ := io.Copy(conn, remote)
-		atomic.AddInt64(&down, n2)
-		<-done
 		a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))
-	} else {
-		go func() { io.Copy(remote, conn); remote.Close() }()
-		io.Copy(conn, remote)
+	}
+}
+
+// copyCtx copies data respecting context cancellation.
+func copyCtx(ctx context.Context, dst io.Writer, src io.Reader) (int64, error) {
+	done := make(chan struct{})
+	var n int64
+	var err error
+	go func() {
+		n, err = io.Copy(dst, src)
+		close(done)
+	}()
+	select {
+	case <-done:
+		return n, err
+	case <-ctx.Done():
+		// Force close to unblock io.Copy
+		if c, ok := src.(net.Conn); ok {
+			c.Close()
+		}
+		if c, ok := dst.(net.Conn); ok {
+			c.Close()
+		}
+		<-done
+		return n, ctx.Err()
 	}
 }
 

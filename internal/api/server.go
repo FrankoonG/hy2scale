@@ -135,6 +135,10 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("GET /api/wireguard/peers/{name}/config", s.downloadWGPeerConfig)
 	authed.HandleFunc("GET /api/wireguard/qr", s.wireGuardQR)
 
+	// Sessions (active connections)
+	authed.HandleFunc("GET /api/sessions", s.getSessions)
+	authed.HandleFunc("DELETE /api/sessions/{id}", s.kickSession)
+
 	// Users
 	authed.HandleFunc("GET /api/users", s.getUsers)
 	authed.HandleFunc("POST /api/users", s.addUserAPI)
@@ -1175,8 +1179,10 @@ func (s *Server) updateIKEv2Config(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getWireGuardConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
+	counts := s.app.Sessions.CountByProtocol()
 	result := map[string]any{
-		"running": app.WireGuardRunning(),
+		"running":    app.WireGuardRunning(),
+		"connected":  counts["wireguard"],
 	}
 	if cfg.WireGuard != nil {
 		result["enabled"] = cfg.WireGuard.Enabled
@@ -1355,6 +1361,25 @@ func (s *Server) wireGuardQR(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "image/png")
 	w.Write(png)
+}
+
+// --- Sessions ---
+
+func (s *Server) getSessions(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]any{
+		"sessions": s.app.Sessions.List(),
+		"counts":   s.app.Sessions.CountByProtocol(),
+		"total":    s.app.Sessions.Count(),
+	})
+}
+
+func (s *Server) kickSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if s.app.Sessions.Kick(id) {
+		writeJSON(w, map[string]string{"status": "ok"})
+	} else {
+		http.Error(w, "session not found", 404)
+	}
 }
 
 // --- Users ---
