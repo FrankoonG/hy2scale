@@ -388,7 +388,7 @@ func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // Version is the application version. Update this on each release.
-const Version = "1.0.5"
+const Version = "1.1.0"
 
 func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
@@ -1179,10 +1179,9 @@ func (s *Server) updateIKEv2Config(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getWireGuardConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
-	counts := s.app.Sessions.CountByProtocol()
 	result := map[string]any{
-		"running":    app.WireGuardRunning(),
-		"connected":  counts["wireguard"],
+		"running":   app.WireGuardRunning(),
+		"connected": app.WireGuardConnectedCount(),
 	}
 	if cfg.WireGuard != nil {
 		result["enabled"] = cfg.WireGuard.Enabled
@@ -1367,9 +1366,8 @@ func (s *Server) wireGuardQR(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
-		"sessions": s.app.Sessions.List(),
-		"counts":   s.app.Sessions.CountByProtocol(),
-		"total":    s.app.Sessions.Count(),
+		"devices": s.app.Sessions.List(),
+		"total":   s.app.Sessions.Count(),
 	})
 }
 

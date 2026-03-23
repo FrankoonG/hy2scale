@@ -920,16 +920,14 @@ func (a *App) handleSOCKS5(conn net.Conn) {
 	defer remote.Close()
 	conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 
-	// Session tracking
+	// Session tracking — aggregated per device (username+IP+protocol)
 	remoteIP := ""
 	if ta, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
 		remoteIP = ta.IP.String()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	sid := a.Sessions.Add(username, remoteIP, "socks5", cancel)
-	sess := a.Sessions.Get(sid)
+	sid := a.Sessions.Connect(username, remoteIP, "socks5", cancel)
 
-	// Traffic counting per user with session tracking
 	var up, down int64
 	done := make(chan struct{})
 	go func() {
@@ -942,11 +940,7 @@ func (a *App) handleSOCKS5(conn net.Conn) {
 	atomic.AddInt64(&down, n2)
 	<-done
 	cancel()
-	if sess != nil {
-		sess.TxBytes.Store(atomic.LoadInt64(&up))
-		sess.RxBytes.Store(atomic.LoadInt64(&down))
-	}
-	a.Sessions.Remove(sid)
+	a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))
 	if username != "" {
 		a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))
 	}

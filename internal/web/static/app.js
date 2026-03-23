@@ -114,8 +114,10 @@ function closeSidebar() {
 // ── Navigation / Router ──
 const pageTitles = { nodes: 'Nodes', users: 'Users', proxies: 'Proxies', tls: 'TLS', settings: 'Settings' };
 
+let _currentPage = 'nodes';
 function switchPage(name, push) {
   if (!pageTitles[name]) name = 'nodes';
+  _currentPage = name;
   closeSidebar();
   $$('.nav-item[data-page]').forEach(n => n.classList.toggle('active', n.dataset.page === name));
   $$('.page').forEach(p => p.style.display = 'none');
@@ -226,9 +228,9 @@ async function refresh() {
     }
     const tasks = [refreshTopology(), refreshStats()];
     if (!proxiesLoaded) { tasks.push(refreshProxies().catch(()=>{})); proxiesLoaded = true; }
-    // Refresh sessions on users page
-    const curPage = document.querySelector('.page:not([style*="display:none"]),.page:not([style*="display: none"])');
-    if (curPage && curPage.id === 'page-users') tasks.push(refreshSessions().catch(()=>{}));
+    // Live-refresh based on current page
+    if (_currentPage === 'users') tasks.push(refreshSessions().catch(()=>{}));
+    if (_currentPage === 'proxies') tasks.push(loadWireGuard().catch(()=>{}));
     await Promise.all(tasks);
   } catch (e) { console.error(e); }
   clearInterval(pollTimer);
@@ -931,9 +933,9 @@ async function loadWireGuard() {
     $('#wg-pubkey').value = wg.public_key || '';
     // DNS reuses Settings page value, not shown in WG panel
     $('#wg-mtu').value = wg.mtu || 1420;
-    const wgConn = wg.connected || 0;
     if (wg.running) {
-      $('#wg-status').textContent = wgConn > 0 ? '● ' + wgConn + ' connected' : '● Running';
+      const c = wg.connected || 0;
+      $('#wg-status').textContent = c > 0 ? '● ' + c + ' connected' : '● Running';
       $('#wg-status').style.color = '#27ae60';
     } else {
       $('#wg-status').textContent = '';
@@ -1439,38 +1441,40 @@ let editingUserId = null;
 async function refreshSessions() {
   try {
     const data = await api('/sessions');
-    const sessions = data.sessions || [];
-    $('#session-count').textContent = sessions.length;
+    const devices = data.devices || [];
+    $('#session-count').textContent = devices.length;
     const el = $('#session-list');
-    if (!sessions.length) {
+    if (!devices.length) {
       el.innerHTML = '<div class="empty">No active connections</div>';
       return;
     }
     el.innerHTML = `<div class="table-scroll"><table class="peer-table user-table"><thead><tr>
       <th style="width:100px">User</th>
-      <th style="width:100px">IP</th>
-      <th style="width:70px">Protocol</th>
-      <th style="width:100px">Traffic</th>
-      <th style="width:80px">Duration</th>
-      <th style="width:60px"></th>
-    </tr></thead><tbody>${sessions.map(s => {
-      const dur = s.duration;
+      <th style="width:110px">IP</th>
+      <th style="width:65px">Proxy</th>
+      <th style="width:40px">Conn</th>
+      <th style="width:110px">Traffic</th>
+      <th style="width:75px">Duration</th>
+      <th style="width:50px"></th>
+    </tr></thead><tbody>${devices.map(d => {
+      const dur = d.duration;
       const h = Math.floor(dur/3600), m = Math.floor((dur%3600)/60), sec = dur%60;
       const durStr = h > 0 ? h+'h'+m+'m' : m > 0 ? m+'m'+sec+'s' : sec+'s';
-      const tx = fmtBytes(s.tx_bytes), rx = fmtBytes(s.rx_bytes);
+      const tx = fmtBytes(d.tx_bytes), rx = fmtBytes(d.rx_bytes);
       return `<tr>
-        <td><b>${esc(s.username || '-')}</b></td>
-        <td style="font-family:var(--mono);font-size:12px">${esc(s.remote_ip)}</td>
-        <td><span style="font-size:12px;padding:1px 6px;background:var(--bg-subtle);border-radius:3px">${esc(s.protocol)}</span></td>
+        <td><b>${esc(d.username || '-')}</b></td>
+        <td style="font-family:var(--mono);font-size:12px">${esc(d.remote_ip)}</td>
+        <td><span style="font-size:12px;padding:1px 6px;background:var(--bg-subtle);border-radius:3px">${esc(d.protocol)}</span></td>
+        <td>${d.conn_count}</td>
         <td style="font-size:12px"><span class="stat-up">${tx}</span> / <span class="stat-down">${rx}</span></td>
         <td style="font-size:12px">${durStr}</td>
-        <td><button class="act-btn danger" onclick="kickSession('${esc(s.id)}')">Kick</button></td>
+        <td><button class="act-btn danger" onclick="kickDevice('${esc(d.key)}')">Kick</button></td>
       </tr>`;
     }).join('')}</tbody></table></div>`;
   } catch(e) {}
 }
-async function kickSession(id) {
-  try { await api('/sessions/' + encodeURIComponent(id), { method: 'DELETE' }); refreshSessions(); toast('Session kicked', 'success'); }
+async function kickDevice(key) {
+  try { await api('/sessions/' + encodeURIComponent(key), { method: 'DELETE' }); refreshSessions(); toast('Device kicked', 'success'); }
   catch(e) { toast(String(e), 'error'); }
 }
 
