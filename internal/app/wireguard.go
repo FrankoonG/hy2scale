@@ -226,6 +226,7 @@ func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 				remote, err = a.dialExit(context.Background(), exitVia, dstAddr)
 			}
 			if err != nil {
+				log.Printf("[wg-tcp] dial %s failed: %v", dstAddr, err)
 				return
 			}
 			defer remote.Close()
@@ -307,12 +308,6 @@ func GenerateWireGuardClientConfig(serverCfg WireGuardConfig, peer WireGuardPeer
 		b.WriteString(fmt.Sprintf("Endpoint = %s:%d\n", endpoint, serverCfg.ListenPort))
 	}
 	b.WriteString("AllowedIPs = 0.0.0.0/0, ::/0\n")
-	if endpoint != "" {
-		// Add routing scripts to ensure all traffic goes through WG tunnel
-		b.WriteString(fmt.Sprintf("# PostUp/PostDown for full-tunnel routing:\n"))
-		b.WriteString(fmt.Sprintf("# PostUp = ip route add %s via $(ip route | grep default | awk '{print $3}'); ip route del default; ip route add default dev wg0\n", endpoint))
-		b.WriteString(fmt.Sprintf("# PostDown = ip route del %s; ip route add default via $(ip route | grep %s | awk '{print $3}')\n", endpoint, endpoint))
-	}
 	if peer.Keepalive > 0 {
 		b.WriteString(fmt.Sprintf("PersistentKeepalive = %d\n", peer.Keepalive))
 	}
