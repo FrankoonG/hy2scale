@@ -10,12 +10,14 @@
 package relay
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -636,23 +638,41 @@ func (n *Node) PeersOf(peerName string) ([]PeerInfo, error) {
 		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
 	}
 
-	if p.client == nil {
-		return nil, fmt.Errorf("relay: peer %q is inbound, cannot query (no client)", peerName)
-	}
-
 	type result struct {
 		peers []PeerInfo
 		err   error
 	}
 	ch := make(chan result, 1)
 	go func() {
-		stream, err := p.client.TCP(streamListPeers)
-		if err != nil {
-			ch <- result{nil, err}
-			return
+		var data []byte
+		var err error
+		if p.client != nil {
+			stream, serr := p.client.TCP(streamListPeers)
+			if serr != nil {
+				ch <- result{nil, serr}
+				return
+			}
+			defer stream.Close()
+			data, err = io.ReadAll(stream)
+		} else {
+			// Inbound peer: query via HTTP through reverse tunnel to their API
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			conn, cerr := n.DialTCP(ctx, peerName, "127.0.0.1:5565")
+			if cerr != nil {
+				ch <- result{nil, cerr}
+				return
+			}
+			defer conn.Close()
+			fmt.Fprintf(conn, "GET /scale/api/internal/peers HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+			resp, rerr := http.ReadResponse(bufio.NewReader(conn), nil)
+			if rerr != nil {
+				ch <- result{nil, rerr}
+				return
+			}
+			defer resp.Body.Close()
+			data, err = io.ReadAll(resp.Body)
 		}
-		defer stream.Close()
-		data, err := io.ReadAll(stream)
 		if err != nil {
 			ch <- result{nil, err}
 			return
@@ -726,11 +746,20 @@ func (n *Node) ConnectedPeerNames() []string {
 	defer n.mu.RUnlock()
 	var names []string
 	for name, p := range n.peers {
-		if p.client != nil {
+		// Include both outbound (has client) and inbound (has ctrlW) peers
+		if p.client != nil || p.ctrlW != nil {
 			names = append(names, name)
 		}
 	}
 	return names
+}
+
+// IsInbound returns true if the peer is connected inbound (no client).
+func (n *Node) IsInbound(name string) bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	p, ok := n.peers[name]
+	return ok && p.client == nil
 }
 
 // NativeMap returns a map of peer names to their native status.
