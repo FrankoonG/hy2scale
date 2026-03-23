@@ -6,23 +6,15 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/netip"
 	"strings"
 	"sync"
-	"time"
 
 	"golang.org/x/crypto/curve25519"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
-
-	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
-	"gvisor.dev/gvisor/pkg/tcpip/stack"
-	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
-	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
-	"gvisor.dev/gvisor/pkg/waiter"
 )
 
 // WireGuardConfig stored in config.yaml.
@@ -107,10 +99,11 @@ func (a *App) StartWireGuard(cfg WireGuardConfig) error {
 
 	localAddr, _ := netip.ParseAddr(gateway)
 
-	// Create custom userspace TUN with HandleLocal=false for VPN forwarding
-	tunDev, gvStack, err := createForwardingTUN(
+	// Create netstack TUN with SOCKS5 proxy on virtual interface
+	tunDev, err := createWGNetstack(
 		[]netip.Addr{localAddr},
-		cfg.MTU,
+		parseDNSAddrs(cfg.DNS),
+		cfg.MTU, a, cfg,
 	)
 	if err != nil {
 		return fmt.Errorf("wireguard: create tun: %w", err)
@@ -148,10 +141,6 @@ func (a *App) StartWireGuard(cfg WireGuardConfig) error {
 		return fmt.Errorf("wireguard: device up: %w", err)
 	}
 
-	// Install TCP/UDP forwarders on the gvisor stack
-	installTCPForwarder(gvStack, a, cfg)
-	installUDPForwarder(gvStack, a, cfg)
-
 	ctx, cancel := context.WithCancel(a.appCtx)
 
 	wgMu.Lock()
@@ -165,104 +154,6 @@ func (a *App) StartWireGuard(cfg WireGuardConfig) error {
 	_ = ctx
 	log.Printf("[wireguard] listening on :%d, address %s", cfg.ListenPort, cfg.Address)
 	return nil
-}
-
-// installTCPForwarder sets up gvisor TCP forwarding for all incoming connections.
-func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
-	tcpFwd := tcp.NewForwarder(s, 0, 65535, func(r *tcp.ForwarderRequest) {
-		id := r.ID()
-		dstAddr := net.JoinHostPort(id.LocalAddress.String(), fmt.Sprintf("%d", id.LocalPort))
-		log.Printf("[wireguard] TCP %s:%d → %s", id.RemoteAddress, id.RemotePort, dstAddr)
-
-		var wq waiter.Queue
-		ep, tcpErr := r.CreateEndpoint(&wq)
-		if tcpErr != nil {
-			r.Complete(true)
-			return
-		}
-		r.Complete(false)
-		wgConn := gonet.NewTCPConn(&wq, ep)
-
-		go func() {
-			defer wgConn.Close()
-
-			// Find peer's exit_via by source IP
-			srcIP := id.RemoteAddress.String()
-			exitVia := findPeerExitVia(cfg, srcIP)
-
-			var remote net.Conn
-			var err error
-			if exitVia == "" {
-				remote, err = net.DialTimeout("tcp", dstAddr, 10*time.Second)
-			} else {
-				remote, err = a.dialExit(context.Background(), exitVia, dstAddr)
-			}
-			if err != nil {
-				return
-			}
-			defer remote.Close()
-
-			done := make(chan struct{})
-			go func() { io.Copy(remote, wgConn); done <- struct{}{} }()
-			io.Copy(wgConn, remote)
-			<-done
-		}()
-	})
-	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
-}
-
-// installUDPForwarder sets up DNS and general UDP forwarding.
-func installUDPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
-
-	udpFwd := udp.NewForwarder(s, func(r *udp.ForwarderRequest) {
-		id := r.ID()
-		dstAddr := net.JoinHostPort(id.LocalAddress.String(), fmt.Sprintf("%d", id.LocalPort))
-
-		var wq waiter.Queue
-		ep, tcpErr := r.CreateEndpoint(&wq)
-		if tcpErr != nil {
-			return
-		}
-		udpConn := gonet.NewUDPConn(&wq, ep)
-
-		go func() {
-			defer udpConn.Close()
-			// Simple UDP relay
-			remote, err := net.DialTimeout("udp", dstAddr, 5*time.Second)
-			if err != nil {
-				return
-			}
-			defer remote.Close()
-
-			// Set deadlines
-			remote.SetDeadline(time.Now().Add(30 * time.Second))
-			udpConn.SetDeadline(time.Now().Add(30 * time.Second))
-
-			done := make(chan struct{})
-			go func() {
-				buf := make([]byte, 4096)
-				for {
-					n, err := udpConn.Read(buf)
-					if err != nil || n == 0 {
-						break
-					}
-					remote.Write(buf[:n])
-				}
-				done <- struct{}{}
-			}()
-
-			buf := make([]byte, 4096)
-			for {
-				n, err := remote.Read(buf)
-				if err != nil || n == 0 {
-					break
-				}
-				udpConn.Write(buf[:n])
-			}
-			<-done
-		}()
-	})
-	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
 }
 
 // findPeerExitVia finds the exit_via for a WG peer by their tunnel IP.
@@ -313,7 +204,23 @@ func GenerateWireGuardClientConfig(serverCfg WireGuardConfig, peer WireGuardPeer
 	if endpoint != "" {
 		b.WriteString(fmt.Sprintf("Endpoint = %s:%d\n", endpoint, serverCfg.ListenPort))
 	}
-	b.WriteString("AllowedIPs = 0.0.0.0/0, ::/0\n")
+	// Route WG subnet through tunnel; use SOCKS5 proxy for internet
+	gateway, _, _ := parseWGAddress(serverCfg.Address)
+	subnet := serverCfg.Address // e.g. 10.0.0.1/24
+	if idx := strings.Index(subnet, "/"); idx > 0 {
+		// Convert to network: 10.0.0.0/24
+		base := net.ParseIP(gateway).To4()
+		if base != nil {
+			mask := net.CIDRMask(24, 32)
+			network := net.IP(make([]byte, 4))
+			for i := range base {
+				network[i] = base[i] & mask[i]
+			}
+			subnet = fmt.Sprintf("%s/24", network)
+		}
+	}
+	b.WriteString(fmt.Sprintf("AllowedIPs = %s\n", subnet))
+	b.WriteString(fmt.Sprintf("# SOCKS5 proxy: %s:1080 (set as system proxy for internet access)\n", gateway))
 	if peer.Keepalive > 0 {
 		b.WriteString(fmt.Sprintf("PersistentKeepalive = %d\n", peer.Keepalive))
 	}
