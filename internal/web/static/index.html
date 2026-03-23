@@ -145,6 +145,7 @@
           <div class="proxy-tab" data-ptab="ss" onclick="switchProxyTab(this)">Shadowsocks</div>
           <div class="proxy-tab" data-ptab="l2tp" onclick="switchProxyTab(this)">L2TP</div>
           <div class="proxy-tab" data-ptab="ikev2" onclick="switchProxyTab(this)">IKEv2/IPsec</div>
+          <div class="proxy-tab" data-ptab="wireguard" onclick="switchProxyTab(this)">WireGuard</div>
         </div>
 
         <div class="proxy-panel active" id="ptab-hy2">
@@ -281,6 +282,93 @@
 
               <div><button class="btn-primary btn-sm" onclick="saveIKEv2()">Save</button></div>
             </div>
+          </div>
+        </div>
+
+        <div class="proxy-panel" id="ptab-wireguard" style="display:none">
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">WireGuard Server</span>
+              <span id="wg-status" style="margin-left:8px;font-size:12px"></span>
+            </div>
+            <div class="form-col" style="max-width:500px">
+              <div class="form-grid">
+                <div class="form-group"><label>Listen Port</label><input id="wg-port" type="number" value="51820"></div>
+                <div class="form-group">
+                  <label>Enabled</label>
+                  <label class="toggle" style="margin-top:4px"><input type="checkbox" id="wg-enabled"><span class="slider"></span></label>
+                </div>
+              </div>
+              <div class="form-group"><label>Address (CIDR)</label><input id="wg-address" placeholder="10.0.0.1/24"></div>
+              <div class="form-group">
+                <label>Private Key</label>
+                <div style="display:flex;gap:4px;align-items:center">
+                  <input id="wg-privkey" style="flex:1" onchange="wgPrivKeyChanged()">
+                  <button class="btn-icon" onclick="generateWGServerKey()" title="Generate key pair" style="border:1px solid var(--border);border-radius:50%;width:28px;height:28px;padding:0;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg></button>
+                </div>
+              </div>
+              <div class="form-group"><label>Public Key</label><input id="wg-pubkey" readonly style="color:var(--text-muted)"></div>
+              <!-- DNS reuses Settings → System DNS -->
+              <div class="form-group"><label>MTU</label><input id="wg-mtu" type="number" value="1420"></div>
+              <div><button class="btn-primary btn-sm" onclick="saveWireGuard()">Save</button></div>
+            </div>
+          </div>
+          <div class="card" style="margin-top:12px">
+            <div class="card-header">
+              <span class="card-title">Peers</span>
+              <span class="card-count" id="wg-peer-count">0</span>
+              <span class="spacer"></span>
+              <button class="btn-primary btn-sm" onclick="openWGPeerDialog()">+ Add Peer</button>
+            </div>
+            <div id="wg-peer-list"><div class="empty">No peers</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- WireGuard Peer Dialog (Add/Edit) -->
+      <div class="modal-overlay" id="wg-peer-dialog" style="display:none" onmousedown="if(event.target===this)closeWGPeerDialog()">
+        <div class="modal" style="max-width:460px">
+          <div class="modal-header">
+            <h2 id="wgp-modal-title">Add WireGuard Peer</h2>
+            <button class="btn-icon" onclick="closeWGPeerDialog()">&#10005;</button>
+          </div>
+          <div class="modal-body" style="padding-top:16px">
+            <div class="form-col">
+              <div class="form-group"><label>Name *</label><input id="wgp-name" placeholder="phone"></div>
+              <div class="form-group">
+                <label>Public Key *</label>
+                <div style="display:flex;gap:4px;align-items:center">
+                  <input id="wgp-pubkey" style="flex:1" onchange="validateWGKey(this)">
+                  <button class="btn-icon" onclick="generateWGPeerKeys()" title="Generate key pair" style="border:1px solid var(--border);border-radius:50%;width:28px;height:28px;padding:0;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg></button>
+                </div>
+              </div>
+              <div class="form-group"><label>Private Key</label><input id="wgp-privkey" onchange="validateWGKey(this)" placeholder="stored for config download"></div>
+              <div class="form-group"><label>Allowed IPs *</label><input id="wgp-allowedips" placeholder="10.0.0.2/32"></div>
+              <div class="form-group"><label>Exit Via</label><input id="wgp-exitvia" placeholder="e.g. au/node (empty = direct)"></div>
+              <div class="form-group"><label>Keepalive (seconds)</label><input id="wgp-keepalive" type="number" value="25"></div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button onclick="closeWGPeerDialog()">Cancel</button>
+            <button class="btn-primary" id="wgp-submit" onclick="submitWGPeer()">Add</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- WireGuard Peer Detail (QR + Download) -->
+      <div class="modal-overlay" id="wg-peer-detail" style="display:none" onmousedown="if(event.target===this)closeWGPeerDetail()">
+        <div class="modal" style="max-width:360px">
+          <div class="modal-header">
+            <h2 id="wgp-detail-title">Peer</h2>
+            <button class="btn-icon" onclick="closeWGPeerDetail()">&#10005;</button>
+          </div>
+          <div class="modal-body" style="padding:16px;text-align:center">
+            <canvas id="wgp-qr-canvas" style="width:256px;height:256px;border:1px solid var(--border);border-radius:8px"></canvas>
+            <pre id="wgp-detail-conf" style="text-align:left;font-size:11px;background:var(--bg-subtle);border:1px solid var(--border);border-radius:6px;padding:10px;margin:12px 0 0;max-height:160px;overflow:auto;white-space:pre-wrap;word-break:break-all"></pre>
+          </div>
+          <div class="modal-footer">
+            <button onclick="closeWGPeerDetail()">Close</button>
+            <button class="btn-primary" onclick="downloadFromDetail()">Download .conf</button>
           </div>
         </div>
       </div>
