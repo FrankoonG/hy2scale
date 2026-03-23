@@ -90,6 +90,8 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Login (no auth)
 	apiMux.HandleFunc("POST /api/login", s.login)
+	// Internal peer list (no auth, used for reverse nested discovery)
+	apiMux.HandleFunc("GET /api/internal/peers", s.internalPeers)
 
 	// Authed API routes
 	authed := http.NewServeMux()
@@ -371,7 +373,7 @@ func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // Version is the application version. Update this on each release.
-const Version = "1.0.4"
+const Version = "1.0.5"
 
 func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
@@ -475,6 +477,23 @@ func (s *Server) getPeers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
+// internalPeers returns relay.PeerInfo list (no auth, for reverse nested discovery).
+// internalPeers returns peers with cached sub-peer children (no auth, for reverse nested discovery).
+func (s *Server) internalPeers(w http.ResponseWriter, r *http.Request) {
+	peers := s.app.Node().Peers()
+	type peerWithChildren struct {
+		relay.PeerInfo
+		Children []topoSubPeer `json:"children,omitempty"`
+	}
+	result := make([]peerWithChildren, 0, len(peers))
+	for _, p := range peers {
+		pc := peerWithChildren{PeerInfo: p}
+		pc.Children = s.getCachedSubPeers(p.Name)
+		result = append(result, pc)
+	}
+	writeJSON(w, result)
+}
+
 // getTopology returns a tree structure: direct peers with their nested sub-peers.
 func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	peers := s.app.Node().Peers()
@@ -554,19 +573,24 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				Via:       cfg.NodeID,
 				LatencyMs: latencyCache[p.Name],
 			}
-			if pc, ok := cfg.Peers[p.Name]; ok {
-				child.Nested = pc.Nested
+			if pc, ok := cfg.Peers[p.Name]; ok && !pc.Nested {
+				child.Nested = false // explicitly disabled
+			} else {
+				child.Nested = true // default: discover sub-peers
 			}
 			selfChildren = append(selfChildren, child)
 		}
 	}
 	peerRates := s.app.Node().PeerRates()
 
-	// Add per-peer traffic for inbound children
+	// Add per-peer traffic and sub-peers for inbound children
 	for i, c := range selfChildren {
 		if pr, ok := peerRates[c.Name]; ok {
 			selfChildren[i].TxRate = pr.TxRate
 			selfChildren[i].RxRate = pr.RxRate
+		}
+		if c.Nested {
+			selfChildren[i].Children = s.getCachedSubPeers(c.Name)
 		}
 	}
 	sort.Slice(selfChildren, func(i, j int) bool { return selfChildren[i].Name < selfChildren[j].Name })
@@ -659,22 +683,16 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 				if pc, ok := cfg.Peers[name]; ok && !pc.Nested {
 					continue
 				}
-				// Use a goroutine with timeout per peer to avoid blocking
 				ch := make(chan []topoSubPeer, 1)
 				go func(n string) {
-					latencyCache := make(map[string]int)
-					for _, p := range s.app.Node().Peers() {
-						latencyCache[p.Name] = s.app.Node().GetLatency(p.Name)
-					}
-					ch <- s.loadSubPeers([]string{n}, latencyCache[n], latencyCache, cfg, 0)
+					ch <- s.fetchSubPeersViaHTTP(n)
 				}(name)
 				select {
 				case children := <-ch:
 					if children != nil {
 						newCache[name] = children
 					}
-				case <-time.After(8 * time.Second):
-					// Skip this peer if loading takes too long
+				case <-time.After(10 * time.Second):
 				}
 			}
 			s.subPeersMu.Lock()
@@ -682,6 +700,60 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 			s.subPeersMu.Unlock()
 		}
 	}
+}
+
+// fetchSubPeersViaHTTP queries an inbound peer's topology via HTTP reverse tunnel.
+// The peer returns its peers with pre-cached children, so no recursion is needed.
+func (s *Server) fetchSubPeersViaHTTP(peerName string) []topoSubPeer {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	conn, err := s.app.Node().DialTCP(ctx, peerName, "127.0.0.1:5565")
+	if err != nil {
+		return nil
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "GET /scale/api/internal/peers HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil
+	}
+	type peerWithChildren struct {
+		Name      string        `json:"name"`
+		ExitNode  bool          `json:"exit_node"`
+		Direction string        `json:"direction"`
+		Native    bool          `json:"native"`
+		LatencyMs int           `json:"latency_ms"`
+		Children  []topoSubPeer `json:"children,omitempty"`
+	}
+	var remotePeers []peerWithChildren
+	if err := json.Unmarshal(data, &remotePeers); err != nil {
+		return nil
+	}
+	cfg := s.app.Store().Get()
+	myID := cfg.NodeID
+	children := make([]topoSubPeer, 0, len(remotePeers))
+	for _, rp := range remotePeers {
+		if rp.Name == myID {
+			continue
+		}
+		child := topoSubPeer{
+			Name:      rp.Name,
+			ExitNode:  rp.ExitNode,
+			Direction: rp.Direction,
+			Via:       peerName,
+			LatencyMs: rp.LatencyMs,
+			Nested:    true,
+			Native:    rp.Native,
+			Children:  rp.Children,
+		}
+		children = append(children, child)
+	}
+	return children
 }
 
 // loadSubPeers loads nested peers. path is the chain from local to the peer being queried.
