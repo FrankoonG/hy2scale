@@ -6,11 +6,13 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/curve25519"
@@ -51,8 +53,9 @@ type wgInstance struct {
 }
 
 var (
-	wgMu      sync.Mutex
-	wgRunning *wgInstance
+	wgMu         sync.Mutex
+	wgRunning    *wgInstance
+	wgConnected  sync.Map // srcIP → connCount (atomic int32)
 )
 
 // GenerateWireGuardKey returns (privateKey, publicKey) base64.
@@ -197,6 +200,33 @@ func StopWireGuard() {
 	}
 }
 
+// WireGuardConnectedCount returns the number of WG peers with active connections.
+func WireGuardConnectedCount() int {
+	count := 0
+	wgConnected.Range(func(_, v any) bool {
+		if c := v.(*atomic.Int32); c.Load() > 0 {
+			count++
+		}
+		return true
+	})
+	return count
+}
+
+func wgConnAdd(srcIP string) {
+	v, _ := wgConnected.LoadOrStore(srcIP, &atomic.Int32{})
+	v.(*atomic.Int32).Add(1)
+}
+func wgConnDel(srcIP string) {
+	v, ok := wgConnected.Load(srcIP)
+	if !ok {
+		return
+	}
+	c := v.(*atomic.Int32)
+	if c.Add(-1) <= 0 {
+		wgConnected.Delete(srcIP)
+	}
+}
+
 // installTCPForwarder intercepts all TCP via gvisor's tcp.Forwarder.
 func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 	tcpFwd := tcp.NewForwarder(s, 0, 65535, func(r *tcp.ForwarderRequest) {
@@ -215,17 +245,9 @@ func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 		go func() {
 			defer wgConn.Close()
 			srcIP := id.RemoteAddress.String()
+			wgConnAdd(srcIP)
+			defer wgConnDel(srcIP)
 			exitVia := findPeerExitVia(cfg, srcIP)
-
-			// Find peer name for session username
-			peerName := ""
-			for _, p := range cfg.Peers {
-				ip := strings.SplitN(strings.TrimSpace(p.AllowedIPs), "/", 2)[0]
-				if ip == srcIP {
-					peerName = p.Name
-					break
-				}
-			}
 
 			var remote net.Conn
 			var err error
@@ -239,13 +261,9 @@ func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 			}
 			defer remote.Close()
 
-			ctx, cancel := context.WithCancel(context.Background())
-			sid := a.Sessions.Add(peerName, srcIP, "wireguard", cancel)
-			defer func() { a.Sessions.Remove(sid); cancel() }()
-
 			done := make(chan struct{})
-			go func() { copyCtx(ctx, remote, wgConn); done <- struct{}{} }()
-			copyCtx(ctx, wgConn, remote)
+			go func() { io.Copy(remote, wgConn); done <- struct{}{} }()
+			io.Copy(wgConn, remote)
 			<-done
 		}()
 	})
