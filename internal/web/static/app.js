@@ -262,8 +262,8 @@ async function refreshStats() {
 const syncingNodes = new Map(); // name -> { cachedLatency }
 
 function latencyHTML(ms, name) {
-  if (syncingNodes.has(name)) return '<span class="latency latency-sync">syncing</span>';
-  if (ms === -1) return '<span class="latency latency-off">offline</span>';
+  if (syncingNodes.has(name)) return '<span class="latency latency-sync">' + t('nodes.syncing') + '</span>';
+  if (ms === -1) return '<span class="latency latency-off">' + t('nodes.offline') + '</span>';
   if (ms === 0) return '<span class="latency latency-na">—</span>';
   const cls = ms < 80 ? 'latency-good' : ms < 200 ? 'latency-med' : 'latency-bad';
   return `<span class="latency ${cls}">${ms}ms</span>`;
@@ -298,13 +298,13 @@ function parentRowHTML(n) {
       <td class="col-dir">${dirHTML('local')}</td>
       <td class="col-name">
         <span class="peer-name-cell">${esc(n.name)}</span>
-        ${n.addr ? `<span class="peer-addr-sub">${esc(n.addr)} (UDP)</span>` : '<span class="peer-addr-sub">no hy2 server</span>'}
+        ${n.addr ? `<span class="peer-addr-sub">${esc(n.addr)} (UDP)</span>` : `<span class="peer-addr-sub">${t('nodes.noHy2Server')}</span>`}
       </td>
       <td class="col-traffic">${trafficHTML(0, 0)}</td>
       <td class="col-nested"><label class="toggle toggle-disabled"><input type="checkbox" checked disabled><span class="slider"></span></label></td>
       <td class="col-actions"><div class="act-group">
-        <button class="act-btn edit" onclick="openEditSelf()">Edit</button>
-        <button class="act-btn ${n.disabled ? 'enable' : 'warn'}" onclick="toggleSelfDisable(${!n.disabled})">${n.disabled ? 'Enable' : 'Disable'}</button>
+        <button class="act-btn edit" onclick="openEditSelf()">${t('app.edit')}</button>
+        <button class="act-btn ${n.disabled ? 'enable' : 'warn'}" onclick="toggleSelfDisable(${!n.disabled})">${n.disabled ? t('app.enable') : t('app.disable')}</button>
       </div></td>
     </tr>`;
   }
@@ -320,9 +320,9 @@ function parentRowHTML(n) {
       ? `<label class="toggle"><input type="checkbox" ${nestedChecked ? 'checked' : ''} onchange="toggleNested('${esc(n.name)}',this.checked)"><span class="slider"></span></label>`
       : '');
   const actions = n.direction === 'outbound' ? `<div class="act-group">
-    <button class="act-btn edit" onclick="openEditDialog('${esc(n.name)}')">Edit</button>
-    <button class="act-btn ${n.disabled ? 'enable' : 'warn'}" onclick="toggleDisable('${esc(n.name)}',${!n.disabled})">${n.disabled ? 'Enable' : 'Disable'}</button>
-    <button class="act-btn danger" onclick="removeClient('${esc(n.name)}')">Delete</button>
+    <button class="act-btn edit" onclick="openEditDialog('${esc(n.name)}')">${t('app.edit')}</button>
+    <button class="act-btn ${n.disabled ? 'enable' : 'warn'}" onclick="toggleDisable('${esc(n.name)}',${!n.disabled})">${n.disabled ? t('app.enable') : t('app.disable')}</button>
+    <button class="act-btn danger" onclick="removeClient('${esc(n.name)}')">${t('app.delete')}</button>
   </div>` : '';
 
   return `<tr class="${n.disabled ? 'disabled' : ''} ${syncing ? 'syncing' : ''}">
@@ -356,7 +356,7 @@ function childRowHTML(c, isLast, depth, parentChain, guides) {
   const nameCell = c.native
     ? `<span class="peer-name-cell">${esc(c.name)}</span>`
     : nameLink(c.name, chain);
-  const actions = `<button class="act-btn ${dis ? 'enable' : 'warn'}" onclick="toggleNestedDisable('${esc(c.via)}','${esc(c.name)}',${!dis})">${dis ? 'Enable' : 'Disable'}</button>`;
+  const actions = `<button class="act-btn ${dis ? 'enable' : 'warn'}" onclick="toggleNestedDisable('${esc(c.via)}','${esc(c.name)}',${!dis})">${dis ? t('app.enable') : t('app.disable')}</button>`;
 
   // Build guide lines for ancestor depths + current branch
   let treeHTML = '';
@@ -433,7 +433,7 @@ async function refreshTopology() {
 
   const el = $('#topology-tree');
   if (!topo?.length) {
-    el.innerHTML = '<div class="empty">No connections. Click <b>+ Add Node</b> to connect.</div>';
+    el.innerHTML = '<div class="empty" data-i18n="nodes.noConnections" data-i18n-html>' + t('nodes.noConnections') + '</div>';
     $('#peer-count').textContent = '0';
     return;
   }
@@ -455,11 +455,11 @@ async function refreshTopology() {
   const scrollLeft = scrollEl ? scrollEl.scrollLeft : 0;
   el.innerHTML = `<div class="table-scroll"><table class="peer-table">
     <thead><tr>
-      <th class="col-status">Status</th>
-      <th class="col-dir">Dir</th>
-      <th class="col-name">Node</th>
-      <th class="col-traffic">Traffic</th>
-      <th class="col-nested">Nested</th>
+      <th class="col-status">${t('nodes.status')}</th>
+      <th class="col-dir">${t('nodes.dir')}</th>
+      <th class="col-name">${t('nodes.node')}</th>
+      <th class="col-traffic">${t('nodes.traffic')}</th>
+      <th class="col-nested">${t('nodes.nested')}</th>
       <th class="col-actions"></th>
     </tr></thead>
     <tbody>${rows}</tbody>
@@ -508,15 +508,15 @@ async function renameNative(currentName) {
   container.appendChild(input);
   $('#confirm-msg').textContent = '';
   $('#confirm-msg').appendChild(container);
-  $('#confirm-title').textContent = 'Rename Node';
+  $('#confirm-title').textContent = t('nodes.renameTitle');
   $('#confirm-ok').style.background = 'var(--primary)';
   $('#confirm-ok').style.borderColor = 'var(--primary)';
-  $('#confirm-ok').textContent = 'Save';
+  $('#confirm-ok').textContent = t('app.save');
   $('#confirm-modal').style.display = '';
   input.focus();
   input.select();
   const ok = await new Promise(resolve => {
-    const done = (v) => { $('#confirm-modal').style.display = 'none'; $('#confirm-ok').style.background = ''; $('#confirm-ok').style.borderColor = ''; $('#confirm-ok').textContent = 'Confirm'; resolve(v); };
+    const done = (v) => { $('#confirm-modal').style.display = 'none'; $('#confirm-ok').style.background = ''; $('#confirm-ok').style.borderColor = ''; $('#confirm-ok').textContent = t('app.confirm'); resolve(v); };
     $('#confirm-ok').onclick = () => done(true);
     $('#confirm-cancel').onclick = () => done(false);
     input.addEventListener('keydown', e => { if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); });
@@ -529,7 +529,7 @@ async function renameNative(currentName) {
     const cl = await api(`/clients/${encodeURIComponent(currentName)}`);
     cl.name = newName;
     await api(`/clients/${encodeURIComponent(currentName)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cl) });
-    toast(`Renamed to ${newName}`, 'success');
+    toast(t('nodes.renamed', {name: newName}), 'success');
     lastTopoJSON = ''; refreshTopology();
   } catch (e) { toast(String(e), 'error'); }
 }
@@ -545,8 +545,8 @@ function toggleNestedDisable(via, name, disabled) {
 }
 
 async function removeClient(name) {
-  if (!await showConfirm('Delete Node', `Remove connection to "${name}"?`)) return;
-  try { await api(`/clients/${name}`, { method: 'DELETE' }); lastTopoJSON = ''; refreshTopology(); toast(`Deleted ${name}`, 'success'); }
+  if (!await showConfirm(t('nodes.deleteTitle'), t('nodes.deleteConfirm', {name}))) return;
+  try { await api(`/clients/${name}`, { method: 'DELETE' }); lastTopoJSON = ''; refreshTopology(); toast(t('nodes.deleted', {name}), 'success'); }
   catch (e) { toast(String(e), 'error'); }
 }
 
@@ -555,8 +555,8 @@ let editingNode = null; // null = add mode, string = edit mode (name)
 
 function openAddDialog() {
   editingNode = null;
-  $('#add-node-modal-title').textContent = 'Add Node Connection';
-  $('#add-node-submit').textContent = 'Connect';
+  $('#add-node-modal-title').textContent = t('nodes.addTitle');
+  $('#add-node-submit').textContent = t('nodes.connect');
   ['add-addr','add-pass','add-sni','add-ca','add-tx','add-rx','add-isw','add-msw','add-icw','add-mcw'].forEach(id => $(`#${id}`).value = '');
   $('#add-addr').disabled = false;
   $('#add-insecure').checked = true; $('#add-fastopen').checked = false;
@@ -568,8 +568,8 @@ async function openEditDialog(name) {
   try {
     const cl = await api(`/clients/${encodeURIComponent(name)}`);
     editingNode = name;
-    $('#add-node-modal-title').textContent = `Edit: ${name}`;
-    $('#add-node-submit').textContent = 'Save';
+    $('#add-node-modal-title').textContent = t('nodes.editPrefix', {name});
+    $('#add-node-submit').textContent = t('app.save');
     $('#add-addr').value = cl.addr || ''; $('#add-addr').disabled = true;
     $('#add-pass').value = cl.password || '';
     $('#add-sni').value = cl.sni || '';
@@ -592,7 +592,7 @@ function closeAddDialog() { $('#add-node-modal').style.display = 'none'; editing
 
 async function submitAddNode() {
   const addr = $('#add-addr').value.trim(), password = $('#add-pass').value.trim();
-  if (!addr || !password) { toast('Address and password are required', 'error'); return; }
+  if (!addr || !password) { toast(t('nodes.addrPassRequired'), 'error'); return; }
   const name = editingNode || addr; // use addr as temp name; remote ID replaces it after connect
   const body = {
     name, addr, password,
@@ -611,7 +611,7 @@ async function submitAddNode() {
     }
     const wasEdit = !!editingNode;
     closeAddDialog();
-    toast(wasEdit ? `Updated ${name}` : `Connected to ${name}`, 'success');
+    toast(wasEdit ? t('nodes.updated', {name}) : t('nodes.connectedTo', {name}), 'success');
     lastTopoJSON = ''; setTimeout(refreshTopology, 1000);
   } catch (e) { toast(String(e), 'error'); }
 }
@@ -626,7 +626,7 @@ async function openEditSelf() {
     // Populate TLS cert dropdown
     const sel = $('#self-srv-tls');
     const currentCert = n.server?.tls_cert || '';
-    sel.innerHTML = '<option value="">Self-signed (auto)</option>';
+    sel.innerHTML = `<option value="">${t('nodes.selfSignedAuto')}</option>`;
     if (certs?.length) {
       for (const c of certs) {
         if (!c.key_file) continue; // need private key
@@ -648,7 +648,7 @@ async function submitEditSelf() {
   const srvPass = $('#self-srv-pass').value.trim();
   const tlsId = $('#self-srv-tls').value;
 
-  if (!nodeId) { $('#self-error').textContent = 'Node ID is required'; return; }
+  if (!nodeId) { $('#self-error').textContent = t('nodes.nodeIdRequired'); return; }
 
   const body = { node_id: nodeId, name: nodeId, exit_node: true };
   if (srvListen || srvPass) {
@@ -665,7 +665,7 @@ async function submitEditSelf() {
 
   try {
     await api('/node', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    toast('Node settings saved. Server changes require restart.', 'success');
+    toast(t('nodes.settingsSaved'), 'success');
     $('#node-badge').textContent = nodeId;
     $('#node-name-display').textContent = '';
     lastTopoJSON = ''; refreshTopology();
@@ -698,7 +698,7 @@ async function refreshIKEv2Certs() {
     const certs = await api('/tls');
     const sel = $('#ikev2-cert');
     const cur = sel.value;
-    sel.innerHTML = '<option value="">-- Select Certificate --</option>';
+    sel.innerHTML = `<option value="">${t('ikev2.selectCert')}</option>`;
     for (const c of certs) {
       const opt = document.createElement('option');
       opt.value = c.id;
@@ -748,9 +748,9 @@ async function refreshProxies() {
     const blocked = !l.capable || !l.host_network;
     if (blocked) {
       if (!l.capable) {
-        warn.textContent = 'Insufficient privileges — container requires --cap-add NET_ADMIN and --network host to enable L2TP.';
+        warn.textContent = t('l2tp.warnText');
       } else if (!l.host_network) {
-        warn.textContent = 'L2TP requires --network host. Docker port mapping cannot handle IPsec transport mode. Deploy with: docker run --network host --cap-add NET_ADMIN ...';
+        warn.textContent = t('l2tp.warnHostNetwork');
       }
       warn.style.display = '';
       panel.querySelectorAll('.card').forEach(el => { el.style.opacity = '0.45'; el.style.pointerEvents = 'none'; });
@@ -771,14 +771,14 @@ async function saveHy2UserAuth() {
   const enabled = $('#hy2-user-auth').checked;
   try {
     await api('/node', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hy2_user_auth: enabled }) });
-    toast('Hysteria user auth ' + (enabled ? 'enabled' : 'disabled'), 'success');
+    toast(enabled ? t('hy2.authEnabled') : t('hy2.authDisabled'), 'success');
   } catch (e) { toast(String(e), 'error'); }
 }
 
 async function saveSocks5() {
   const port = $('#sk5-port').value.trim();
   const enabled = $('#sk5-enabled').checked;
-  if (!port) { toast('Port required', 'error'); return; }
+  if (!port) { toast(t('error.portRequired'), 'error'); return; }
   if (enabled) {
     const ok = await checkPortConflicts([{port: parseInt(port), proto: 'tcp', desc: 'SOCKS5', inputId: '#sk5-port'}]);
     if (!ok) return;
@@ -793,7 +793,7 @@ async function saveSocks5() {
     await api('/proxies', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
       id: 'socks5', protocol: 'socks5', listen: '0.0.0.0:' + port, enabled
     })});
-    toast('SOCKS5 saved', 'success');
+    toast(t('socks5.saved'), 'success');
   } catch(e) { toast(String(e), 'error'); }
 }
 
@@ -801,7 +801,7 @@ async function saveSS() {
   const port = $('#ss-port').value.trim();
   const enabled = $('#ss-enabled').checked;
   const method = $('#ss-method').value;
-  if (!port) { toast('Port required', 'error'); return; }
+  if (!port) { toast(t('error.portRequired'), 'error'); return; }
   if (enabled) {
     const ok = await checkPortConflicts([{port: parseInt(port), proto: 'tcp', desc: 'Shadowsocks', inputId: '#ss-port'}]);
     if (!ok) return;
@@ -810,7 +810,7 @@ async function saveSS() {
     await api('/ss', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
       listen: '0.0.0.0:' + port, enabled, method
     })});
-    toast('Shadowsocks saved', 'success');
+    toast(t('ss.saved'), 'success');
   } catch(e) { toast(String(e), 'error'); }
 }
 
@@ -819,7 +819,7 @@ async function saveL2TP() {
   const enabled = $('#l2tp-enabled').checked;
   const pool = $('#l2tp-pool').value.trim();
   const psk = $('#l2tp-psk').value.trim();
-  if (enabled && (!listen || !pool || !psk)) { toast('Port, pool and PSK required', 'error'); return; }
+  if (enabled && (!listen || !pool || !psk)) { toast(t('l2tp.portPoolPskRequired'), 'error'); return; }
   const port = parseInt(listen) || 1701;
   if (enabled) {
     const ok = await checkPortConflicts([
@@ -832,7 +832,7 @@ async function saveL2TP() {
   try {
     const mtu = parseInt($('#l2tp-mtu').value) || 1280;
     await api('/l2tp', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ listen, enabled, pool, psk, mtu })});
-    toast('L2TP saved. Restart required for L2TP changes.', 'success');
+    toast(t('l2tp.saved'), 'success');
   } catch(e) { toast(String(e), 'error'); }
 }
 
@@ -852,11 +852,11 @@ async function checkIKEv2ExitReachability() {
     const topo = await api('/topology');
     const peer = topo.find(p => p.name === exitId);
     if (peer && peer.connected) {
-      el.innerHTML = '<span style="color:var(--accent)">&#x2713; ' + exitId + ' reachable</span>';
+      el.innerHTML = '<span style="color:var(--accent)">' + t('ikev2.reachable', {name: exitId}) + '</span>';
     } else if (peer) {
-      el.innerHTML = '<span style="color:#e74c3c">&#x2717; ' + exitId + ' not connected</span>';
+      el.innerHTML = '<span style="color:#e74c3c">' + t('ikev2.notConnected', {name: exitId}) + '</span>';
     } else {
-      el.innerHTML = '<span style="color:#e74c3c">&#x2717; ' + exitId + ' not found</span>';
+      el.innerHTML = '<span style="color:#e74c3c">' + t('ikev2.notFound', {name: exitId}) + '</span>';
     }
   } catch(e) { el.textContent = ''; }
 }
@@ -878,7 +878,7 @@ async function loadIKEv2() {
     try {
       const certs = await api('/tls');
       const sel = $('#ikev2-cert');
-      sel.innerHTML = '<option value="">-- Select Certificate --</option>';
+      sel.innerHTML = `<option value="">${t('ikev2.selectCert')}</option>`;
       for (const c of certs) {
         const opt = document.createElement('option');
         opt.value = c.id;
@@ -894,9 +894,9 @@ async function loadIKEv2() {
     const blocked = !cfg.capable || !cfg.host_network;
     if (blocked) {
       if (!cfg.capable) {
-        warn.textContent = 'Insufficient privileges — container requires --cap-add NET_ADMIN and --network host to enable IKEv2/IPsec.';
+        warn.textContent = t('ikev2.warnText');
       } else if (!cfg.host_network) {
-        warn.textContent = 'IKEv2/IPsec requires --network host. Docker port mapping cannot handle IPsec tunnel mode. Deploy with: docker run --network host --cap-add NET_ADMIN ...';
+        warn.textContent = t('ikev2.warnHostNetwork');
       }
       warn.style.display = '';
       panel.querySelectorAll('.card').forEach(el => { el.style.opacity = '0.45'; el.style.pointerEvents = 'none'; });
@@ -914,7 +914,7 @@ async function saveIKEv2() {
   const enabled = $('#ikev2-enabled').checked;
   const pool = $('#ikev2-pool').value.trim();
 
-  if (enabled && !pool) { toast('Address pool required', 'error'); return; }
+  if (enabled && !pool) { toast(t('ikev2.poolRequired'), 'error'); return; }
 
   const mtu = parseInt($('#ikev2-mtu').value) || 1400;
   const local_id = $('#ikev2-local-id').value.trim();
@@ -923,11 +923,11 @@ async function saveIKEv2() {
 
   if (mode === 'mschapv2') {
     body.cert_id = $('#ikev2-cert').value;
-    if (enabled && !body.cert_id) { toast('Certificate required for MSCHAPv2 mode', 'error'); return; }
+    if (enabled && !body.cert_id) { toast(t('ikev2.certRequired'), 'error'); return; }
   } else {
     body.psk = $('#ikev2-psk').value.trim();
     body.default_exit = $('#ikev2-default-exit').value.trim();
-    if (enabled && !body.psk) { toast('Pre-shared key required', 'error'); return; }
+    if (enabled && !body.psk) { toast(t('ikev2.pskRequired'), 'error'); return; }
   }
 
   if (enabled) {
@@ -939,7 +939,7 @@ async function saveIKEv2() {
   }
   try {
     await api('/ikev2', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
-    toast('IKEv2 saved. Restart required for changes.', 'success');
+    toast(t('ikev2.saved'), 'success');
   } catch(e) { toast(String(e), 'error'); }
 }
 
@@ -959,7 +959,7 @@ async function loadWireGuard() {
     $('#wg-mtu').value = wg.mtu || 1420;
     if (wg.running) {
       const c = wg.connected || 0;
-      $('#wg-status').textContent = c > 0 ? '● ' + c + ' connected' : '● Running';
+      $('#wg-status').textContent = c > 0 ? '● ' + t('wg.connectedStatus', {count: c}) : '● ' + t('wg.runningStatus');
       $('#wg-status').style.color = '#27ae60';
     } else {
       $('#wg-status').textContent = '';
@@ -973,14 +973,14 @@ function renderWGPeers() {
   const el = $('#wg-peer-list');
   $('#wg-peer-count').textContent = _wgPeers.length;
   if (!_wgPeers.length) {
-    el.innerHTML = '<div class="empty">No peers. Click <b>+ Add Peer</b> to create one.</div>';
+    el.innerHTML = '<div class="empty" data-i18n="wg.noPeers" data-i18n-html>' + t('wg.noPeers') + '</div>';
     return;
   }
   el.innerHTML = `<div class="table-scroll"><table class="peer-table user-table"><thead><tr>
-    <th style="width:120px">Name</th>
-    <th style="min-width:180px">Exit Via</th>
-    <th style="width:130px">Allowed IPs</th>
-    <th style="width:50px">KA</th>
+    <th style="width:120px">${t('wg.peerName')}</th>
+    <th style="min-width:180px">${t('wg.peerExitVia')}</th>
+    <th style="width:130px">${t('wg.peerAllowedIPs')}</th>
+    <th style="width:50px">${t('wg.ka')}</th>
     <th style="width:150px"></th>
   </tr></thead><tbody>${_wgPeers.map(p => {
     return `<tr>
@@ -989,8 +989,8 @@ function renderWGPeers() {
       <td style="font-family:var(--mono);font-size:12px">${esc(p.allowed_ips)}</td>
       <td>${p.keepalive || '-'}</td>
       <td style="text-align:right"><div class="act-group">
-        <button class="act-btn edit" onclick="editWGPeer('${esc(p.name)}')">Edit</button>
-        <button class="act-btn danger" onclick="removeWGPeer('${esc(p.name)}')">Delete</button>
+        <button class="act-btn edit" onclick="editWGPeer('${esc(p.name)}')">${t('app.edit')}</button>
+        <button class="act-btn danger" onclick="removeWGPeer('${esc(p.name)}')">${t('app.delete')}</button>
       </div></td>
     </tr>`;
   }).join('')}</tbody></table></div>`;
@@ -1005,7 +1005,7 @@ async function generateWGServerKey() {
 function wgPrivKeyChanged() {
   const v = $('#wg-privkey').value.trim();
   if (!v) { $('#wg-pubkey').value = ''; return; }
-  if (!isValidWGKey(v)) { toast('Invalid WireGuard private key (must be 44-char base64)', 'error'); return; }
+  if (!isValidWGKey(v)) { toast(t('wg.invalidPrivKeyShort'), 'error'); return; }
   $('#wg-pubkey').value = '(save to derive)';
 }
 function isValidWGKey(k) {
@@ -1014,7 +1014,7 @@ function isValidWGKey(k) {
 function validateWGKey(input) {
   const v = input.value.trim();
   if (v && !isValidWGKey(v)) {
-    toast('Invalid WireGuard key — must be 44-character base64 (32 bytes)', 'error');
+    toast(t('wg.invalidKeyLong'), 'error');
     input.style.borderColor = '#e74c3c';
   } else {
     input.style.borderColor = '';
@@ -1052,10 +1052,10 @@ async function checkPortConflicts(ports) {
             errEl.style.cssText = 'color:#e74c3c;font-size:12px;margin-top:2px';
             el.parentNode.appendChild(errEl);
           }
-          errEl.textContent = `Port ${c.port}/${c.proto} is already in use`;
+          errEl.textContent = t('port.conflict', {port: c.port, proto: c.proto});
         }
       }
-      toast(`Port ${c.port}/${c.proto} is already in use`, 'error');
+      toast(t('port.conflict', {port: c.port, proto: c.proto}), 'error');
     }
     return false;
   } catch(e) { return true; /* allow if check fails */ }
@@ -1063,7 +1063,7 @@ async function checkPortConflicts(ports) {
 
 async function saveWireGuard() {
   const privKey = $('#wg-privkey').value.trim();
-  if (privKey && !isValidWGKey(privKey)) { toast('Invalid private key format', 'error'); return; }
+  if (privKey && !isValidWGKey(privKey)) { toast(t('wg.invalidPrivKeyFormat'), 'error'); return; }
   const enabled = $('#wg-enabled').checked;
   const port = parseInt($('#wg-port').value) || 51820;
   // Check port conflicts when enabling
@@ -1082,15 +1082,15 @@ async function saveWireGuard() {
       dns: '',
       mtu: parseInt($('#wg-mtu').value) || 1420,
     }) });
-    toast('WireGuard saved', 'success');
+    toast(t('wg.saved'), 'success');
     loadWireGuard();
   } catch(e) { toast(String(e), 'error'); }
 }
 function closeWGPeerDialog() { $('#wg-peer-dialog').style.display = 'none'; editingWGPeer = null; }
 async function openWGPeerDialog() {
   editingWGPeer = null;
-  $('#wgp-modal-title').textContent = 'Add WireGuard Peer';
-  $('#wgp-submit').textContent = 'Add';
+  $('#wgp-modal-title').textContent = t('wg.addPeerTitle');
+  $('#wgp-submit').textContent = t('app.add');
   $('#wgp-name').value = '';
   $('#wgp-name').readOnly = false;
   $('#wgp-exitvia').value = '';
@@ -1119,8 +1119,8 @@ function editWGPeer(name) {
   const p = _wgPeers.find(x => x.name === name);
   if (!p) return;
   editingWGPeer = name;
-  $('#wgp-modal-title').textContent = 'Edit: ' + name;
-  $('#wgp-submit').textContent = 'Save';
+  $('#wgp-modal-title').textContent = t('wg.editPeerPrefix', {name});
+  $('#wgp-submit').textContent = t('app.save');
   $('#wgp-name').value = p.name;
   $('#wgp-name').readOnly = true;
   $('#wgp-pubkey').value = p.public_key || '';
@@ -1147,19 +1147,19 @@ async function submitWGPeer() {
   const privKey = $('#wgp-privkey').value.trim();
   const allowedIPs = $('#wgp-allowedips').value.trim();
   const exitVia = $('#wgp-exitvia').value.trim();
-  if (!name) { toast('Name is required', 'error'); return; }
-  if (!pubKey || !isValidWGKey(pubKey)) { toast('Valid public key is required', 'error'); return; }
-  if (privKey && !isValidWGKey(privKey)) { toast('Invalid private key format', 'error'); return; }
-  if (!allowedIPs) { toast('Allowed IPs is required', 'error'); return; }
+  if (!name) { toast(t('wg.nameRequired'), 'error'); return; }
+  if (!pubKey || !isValidWGKey(pubKey)) { toast(t('wg.pubKeyRequired'), 'error'); return; }
+  if (privKey && !isValidWGKey(privKey)) { toast(t('wg.invalidPrivKeyFormat'), 'error'); return; }
+  if (!allowedIPs) { toast(t('wg.allowedIpsRequired'), 'error'); return; }
   const body = { name, public_key: pubKey, private_key: privKey, allowed_ips: allowedIPs,
     exit_via: exitVia, keepalive: parseInt($('#wgp-keepalive').value) || 0 };
   try {
     if (editingWGPeer) {
       await api('/wireguard/peers/' + encodeURIComponent(editingWGPeer), { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
-      toast('Peer updated', 'success');
+      toast(t('wg.peerUpdated'), 'success');
     } else {
       await api('/wireguard/peers', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
-      toast('Peer added', 'success');
+      toast(t('wg.peerAdded'), 'success');
     }
     $('#wg-peer-dialog').style.display = 'none';
     editingWGPeer = null;
@@ -1167,10 +1167,10 @@ async function submitWGPeer() {
   } catch(e) { toast(String(e), 'error'); }
 }
 async function removeWGPeer(name) {
-  if (!confirm('Remove peer "' + name + '"?')) return;
+  if (!await showConfirm(t('app.delete'), t('wg.deleteConfirm', {name}))) return;
   try {
     await api('/wireguard/peers/' + encodeURIComponent(name), { method: 'DELETE' });
-    toast('Peer removed', 'success');
+    toast(t('wg.peerRemoved'), 'success');
     loadWireGuard();
   } catch(e) { toast(String(e), 'error'); }
 }
@@ -1293,7 +1293,7 @@ async function loadSettings() {
     try {
       const certs = await api('/tls');
       const sel = $('#ui-https-cert');
-      sel.innerHTML = '<option value="">-- Select Certificate --</option>';
+      sel.innerHTML = `<option value="">${t('ikev2.selectCert')}</option>`;
       for (const c of certs) {
         const opt = document.createElement('option');
         opt.value = c.id;
@@ -1313,22 +1313,22 @@ async function saveDNS() {
   const dns = $('#ui-dns').value.trim();
   try {
     await api('/settings/ui', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dns }) });
-    toast('DNS saved. Restart required.', 'success');
+    toast(t('settings.dnsSaved'), 'success');
   } catch (e) { toast(String(e), 'error'); }
 }
 async function changePassword() {
   const cur = $('#set-cur-pass').value, newUser = $('#set-new-user').value.trim(),
     newPass = $('#set-new-pass').value, conf = $('#set-confirm-pass').value;
   $('#set-error').textContent = '';
-  if (!cur) return void ($('#set-error').textContent = 'Current password is required');
-  if (newPass && newPass !== conf) return void ($('#set-error').textContent = 'Passwords do not match');
-  if (!newUser && !newPass) return void ($('#set-error').textContent = 'Enter a new username or password');
+  if (!cur) return void ($('#set-error').textContent = t('settings.passwordRequired'));
+  if (newPass && newPass !== conf) return void ($('#set-error').textContent = t('error.passwordMismatch'));
+  if (!newUser && !newPass) return void ($('#set-error').textContent = t('settings.enterNewCreds'));
   try {
     const curHash = await sha256(cur);
     const newPassHash = newPass ? await sha256(newPass) : '';
     await api('/settings/password', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ current_password: curHash, new_username: newUser, new_password: newPassHash }) });
     localStorage.removeItem('hy2scale_cred');
-    toast('Password updated. Redirecting to login...', 'success');
+    toast(t('settings.passwordUpdated'), 'success');
     setTimeout(doLogout, 1500);
   } catch (e) { $('#set-error').textContent = String(e); }
 }
@@ -1344,7 +1344,7 @@ async function updateUISettings() {
       force_https: forceHttps, https_cert_id: httpsCertId || null,
       session_timeout_h: sessionTimeoutH
     }) });
-    toast('Saved. Restart container to apply.', 'success');
+    toast(t('settings.saved'), 'success');
   } catch (e) { $('#ui-error').textContent = String(e); }
 }
 
@@ -1522,16 +1522,16 @@ async function refreshSessions() {
     $('#session-count').textContent = devices.length;
     const el = $('#session-list');
     if (!devices.length) {
-      el.innerHTML = '<div class="empty">No active connections</div>';
+      el.innerHTML = '<div class="empty" data-i18n="devices.noDevices">' + t('devices.noDevices') + '</div>';
       return;
     }
     el.innerHTML = `<div class="table-scroll"><table class="peer-table user-table"><thead><tr>
-      <th style="width:100px">User</th>
-      <th style="width:110px">IP</th>
-      <th style="width:65px">Proxy</th>
-      <th style="width:40px">Conn</th>
-      <th style="width:110px">Traffic</th>
-      <th style="width:75px">Duration</th>
+      <th style="width:100px">${t('devices.user')}</th>
+      <th style="width:110px">${t('devices.ip')}</th>
+      <th style="width:65px">${t('devices.proxy')}</th>
+      <th style="width:40px">${t('devices.conn')}</th>
+      <th style="width:110px">${t('devices.traffic')}</th>
+      <th style="width:75px">${t('devices.duration')}</th>
       <th style="width:50px"></th>
     </tr></thead><tbody>${devices.map(d => {
       const dur = d.duration;
@@ -1545,13 +1545,13 @@ async function refreshSessions() {
         <td>${d.conn_count}</td>
         <td style="font-size:12px"><span class="stat-up">${tx}</span> / <span class="stat-down">${rx}</span></td>
         <td style="font-size:12px">${durStr}</td>
-        <td><button class="act-btn danger" onclick="kickDevice('${esc(d.key)}')">Kick</button></td>
+        <td><button class="act-btn danger" onclick="kickDevice('${esc(d.key)}')">${t('devices.kick')}</button></td>
       </tr>`;
     }).join('')}</tbody></table></div>`;
   } catch(e) {}
 }
 async function kickDevice(key) {
-  try { await api('/sessions/' + encodeURIComponent(key), { method: 'DELETE' }); refreshSessions(); toast('Device kicked', 'success'); }
+  try { await api('/sessions/' + encodeURIComponent(key), { method: 'DELETE' }); refreshSessions(); toast(t('devices.kicked'), 'success'); }
   catch(e) { toast(String(e), 'error'); }
 }
 
@@ -1569,15 +1569,15 @@ async function refreshUsers() {
   const el = $('#user-list');
   $('#user-count').textContent = users?.length || 0;
   if (!users?.length) {
-    el.innerHTML = '<div class="empty">No users. Click <b>+ Add User</b> to create one.</div>';
+    el.innerHTML = '<div class="empty" data-i18n="users.noUsers" data-i18n-html>' + t('users.noUsers') + '</div>';
     return;
   }
   el.innerHTML = `<div class="table-scroll"><table class="peer-table user-table"><thead><tr>
-    <th style="width:50px">On</th>
-    <th style="width:120px">Username</th>
-    <th style="min-width:180px">Exit Via</th>
-    <th class="col-right" style="width:130px">Traffic</th>
-    <th class="col-right" style="width:90px">Expiry</th>
+    <th style="width:50px">${t('users.on')}</th>
+    <th style="width:120px">${t('users.username')}</th>
+    <th style="min-width:180px">${t('users.exitVia')}</th>
+    <th class="col-right" style="width:130px">${t('users.traffic')}</th>
+    <th class="col-right" style="width:90px">${t('users.expiry')}</th>
     <th style="width:150px"></th>
   </tr></thead><tbody>${users.map(u => {
     const limitGB = u.traffic_limit ? (u.traffic_limit / 1073741824).toFixed(1) + ' GB' : '∞';
@@ -1595,9 +1595,9 @@ async function refreshUsers() {
       </td>
       <td class="col-right"><span style="font-size:12px;${expired ? 'color:var(--red)' : ''}">${expiryText}</span></td>
       <td style="text-align:right"><div class="act-group">
-        <button class="act-btn edit" onclick="editUser('${esc(u.id)}')">Edit</button>
-        <button class="act-btn warn" onclick="resetTraffic('${esc(u.id)}')">Reset</button>
-        <button class="act-btn danger" onclick="deleteUser('${esc(u.id)}','${esc(u.username)}')">Delete</button>
+        <button class="act-btn edit" onclick="editUser('${esc(u.id)}')">${t('app.edit')}</button>
+        <button class="act-btn warn" onclick="resetTraffic('${esc(u.id)}')">${t('users.reset')}</button>
+        <button class="act-btn danger" onclick="deleteUser('${esc(u.id)}','${esc(u.username)}')">${t('app.delete')}</button>
       </div></td>
     </tr>`;
   }).join('')}</tbody></table></div>`;
@@ -1605,8 +1605,8 @@ async function refreshUsers() {
 
 function openUserDialog() {
   editingUserId = null;
-  $('#user-modal-title').textContent = 'Add User';
-  $('#user-submit').textContent = 'Add';
+  $('#user-modal-title').textContent = t('users.addTitle');
+  $('#user-submit').textContent = t('app.add');
   ['u-username','u-password','u-exitvia','u-expiry'].forEach(id => $(`#${id}`).value = '');
   $('#u-limit').value = '0';
   $('#u-enabled').checked = true;
@@ -1618,8 +1618,8 @@ async function editUser(id) {
   if (!users.length) return;
   const u = users[0];
   editingUserId = id;
-  $('#user-modal-title').textContent = `Edit: ${u.username}`;
-  $('#user-submit').textContent = 'Save';
+  $('#user-modal-title').textContent = t('users.editPrefix', {name: u.username});
+  $('#user-submit').textContent = t('app.save');
   $('#u-username').value = u.username;
   $('#u-password').value = u.password;
   $('#u-exitvia').value = u.exit_via || '';
@@ -1634,7 +1634,7 @@ function closeUserDialog() { $('#user-modal').style.display = 'none'; editingUse
 async function submitUser() {
   const username = $('#u-username').value.trim();
   const password = $('#u-password').value;
-  if (!username || !password) { toast('Username and password required', 'error'); return; }
+  if (!username || !password) { toast(t('users.usernamePassRequired'), 'error'); return; }
   const limitGB = parseFloat($('#u-limit').value) || 0;
   const body = {
     username, password,
@@ -1647,10 +1647,10 @@ async function submitUser() {
     if (editingUserId) {
       body.id = editingUserId;
       await api(`/users/${editingUserId}`, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
-      toast(`Updated ${username}`, 'success');
+      toast(t('users.updated', {name: username}), 'success');
     } else {
       await api('/users', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
-      toast(`Added ${username}`, 'success');
+      toast(t('users.added', {name: username}), 'success');
     }
     closeUserDialog();
     refreshUsers();
@@ -1663,14 +1663,14 @@ async function toggleUser(id, enabled) {
 }
 
 async function resetTraffic(id) {
-  if (!await showConfirm('Reset Traffic', 'Reset traffic counter to 0?')) return;
-  try { await api(`/users/${id}/reset-traffic`, { method: 'PUT' }); refreshUsers(); toast('Traffic reset', 'success'); }
+  if (!await showConfirm(t('users.resetTitle'), t('users.resetConfirm'))) return;
+  try { await api(`/users/${id}/reset-traffic`, { method: 'PUT' }); refreshUsers(); toast(t('users.trafficReset'), 'success'); }
   catch(e) { toast(String(e), 'error'); }
 }
 
 async function deleteUser(id, name) {
-  if (!await showConfirm('Delete User', `Delete user "${name}"?`)) return;
-  try { await api(`/users/${id}`, { method: 'DELETE' }); refreshUsers(); toast(`Deleted ${name}`, 'success'); }
+  if (!await showConfirm(t('users.deleteTitle'), t('users.deleteConfirm', {name}))) return;
+  try { await api(`/users/${id}`, { method: 'DELETE' }); refreshUsers(); toast(t('users.deleted', {name}), 'success'); }
   catch(e) { toast(String(e), 'error'); }
 }
 
@@ -1685,21 +1685,21 @@ async function refreshCerts() {
   const el = $('#cert-list');
   $('#cert-count').textContent = certs?.length || 0;
   if (!certs?.length) {
-    el.innerHTML = '<div class="empty">No certificates. Click <b>New</b> to create or import one.</div>';
+    el.innerHTML = '<div class="empty" data-i18n="tls.noCerts" data-i18n-html>' + t('tls.noCerts') + '</div>';
     return;
   }
   el.innerHTML = `<div class="table-scroll"><table class="peer-table"><thead><tr>
-    <th>Name</th><th>Subject</th><th>Issuer</th><th>Expires</th><th>Key</th><th></th>
+    <th>${t('tls.name')}</th><th>${t('tls.subject')}</th><th>${t('tls.issuer')}</th><th>${t('tls.expires')}</th><th>${t('tls.hasKey')}</th><th></th>
   </tr></thead><tbody>${certs.map(c => {
     const expired = certExpired(c.not_after);
     const rowStyle = expired ? 'opacity:0.45' : '';
     return `<tr style="${rowStyle}">
-    <td><b>${esc(c.name)}</b><span class="peer-addr-sub">${esc(c.id)}</span>${expired ? ' <span class="badge badge-muted">expired</span>' : ''}</td>
+    <td><b>${esc(c.name)}</b><span class="peer-addr-sub">${esc(c.id)}</span>${expired ? ` <span class="badge badge-muted">${t('tls.expired')}</span>` : ''}</td>
     <td>${esc(c.subject)}</td>
     <td>${esc(c.issuer)}${c.is_ca ? ' <span class="badge badge-blue">CA</span>' : ''}</td>
     <td><span style="font-family:var(--mono);font-size:12px">${esc(c.not_after)}</span></td>
-    <td>${c.key_file ? '<span class="badge badge-green">yes</span>' : '<span class="badge badge-muted">no</span>'}</td>
-    <td style="text-align:right;white-space:nowrap"><button class="act-btn edit" onclick="editCert('${esc(c.id)}')">Edit</button> <button class="act-btn danger" onclick="deleteCert('${esc(c.id)}')">Delete</button></td>
+    <td>${c.key_file ? `<span class="badge badge-green">${t('app.yes')}</span>` : `<span class="badge badge-muted">${t('app.no')}</span>`}</td>
+    <td style="text-align:right;white-space:nowrap"><button class="act-btn edit" onclick="editCert('${esc(c.id)}')">${t('app.edit')}</button> <button class="act-btn danger" onclick="deleteCert('${esc(c.id)}')">${t('app.delete')}</button></td>
   </tr>`;}).join('')}</tbody></table></div>`;
 }
 
@@ -1749,7 +1749,7 @@ function openNewCertDialog() {
   ['cert-id','cert-name','cert-pem','cert-key-pem','cert-path','cert-key-path'].forEach(x => { const e = $(`#${x}`); if (e) e.value = ''; });
   $('#cert-id').disabled = false;
   $('#new-cert-modal').style.display = '';
-  $('#cert-submit-btn').textContent = 'New';
+  $('#cert-submit-btn').textContent = t('tls.new');
   switchCertTab(document.querySelector('[data-certtab="paste"]'));
 }
 function closeNewCertDialog() { $('#new-cert-modal').style.display = 'none'; }
@@ -1764,35 +1764,35 @@ function switchCertTab(tab) {
 
 async function generateCertPEM() {
   const id = $('#cert-id').value.trim();
-  if (!id) { toast('Fill in ID first', 'error'); return; }
+  if (!id) { toast(t('tls.fillIdFirst'), 'error'); return; }
   try {
     await api('/tls/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name: id, domains: [id], days: 3650 }) });
     // Fetch the generated PEM and fill into fields
     const pem = await api(`/tls/${id}/pem`);
     if (pem.cert) $('#cert-pem').value = pem.cert;
     if (pem.key) $('#cert-key-pem').value = pem.key;
-    toast('Certificate generated, review and save', 'success');
+    toast(t('tls.certGenerated'), 'success');
   } catch (e) { toast(String(e), 'error'); }
 }
 
 async function submitCertDialog() {
   const id = $('#cert-id').value.trim(), name = $('#cert-name').value.trim();
-  if (!id) { toast('ID is required', 'error'); return; }
+  if (!id) { toast(t('tls.idRequired'), 'error'); return; }
 
   const pasteTab = $('#cert-tab-paste').style.display !== 'none';
   if (pasteTab) {
     const cert = $('#cert-pem').value.trim(), key = $('#cert-key-pem').value.trim();
-    if (!cert) { toast('Certificate PEM required', 'error'); return; }
+    if (!cert) { toast(t('tls.certPemRequired'), 'error'); return; }
     try {
       await api('/tls/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name: name || id, cert, key }) });
-      closeNewCertDialog(); refreshCerts(); toast('Certificate saved', 'success');
+      closeNewCertDialog(); refreshCerts(); toast(t('tls.certSaved'), 'success');
     } catch (e) { toast(String(e), 'error'); }
   } else {
     const certPath = $('#cert-path').value.trim(), keyPath = $('#cert-key-path').value.trim();
-    if (!certPath) { toast('Certificate file path required', 'error'); return; }
+    if (!certPath) { toast(t('tls.certPathRequired'), 'error'); return; }
     try {
       await api('/tls/import-path', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name: name || id, cert_path: certPath, key_path: keyPath }) });
-      closeNewCertDialog(); refreshCerts(); toast('Certificate saved', 'success');
+      closeNewCertDialog(); refreshCerts(); toast(t('tls.certSaved'), 'success');
     } catch (e) { toast(String(e), 'error'); }
   }
 }
@@ -1808,13 +1808,13 @@ async function editCert(id) {
     if (pem.key) $('#cert-key-pem').value = pem.key;
   } catch(e) {}
   $('#new-cert-modal').style.display = '';
-  $('#cert-submit-btn').textContent = 'Save';
+  $('#cert-submit-btn').textContent = t('app.save');
   switchCertTab(document.querySelector('[data-certtab="paste"]'));
 }
 
 async function deleteCert(id) {
-  if (!await showConfirm('Delete Certificate', `Delete certificate "${id}"?`)) return;
-  try { await api(`/tls/${id}`, { method: 'DELETE' }); refreshCerts(); toast(`Deleted ${id}`, 'success'); } catch (e) { toast(String(e), 'error'); }
+  if (!await showConfirm(t('tls.deleteTitle'), t('tls.deleteConfirm', {id}))) return;
+  try { await api(`/tls/${id}`, { method: 'DELETE' }); refreshCerts(); toast(t('tls.deleted', {id}), 'success'); } catch (e) { toast(String(e), 'error'); }
 }
 
 // ── Language Switcher ──
