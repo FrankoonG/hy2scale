@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -169,40 +170,93 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}
 
-	// Start hy2 server if configured
+	// Start hy2 server if configured — check port first
 	if cfg.Server != nil {
+		port := 5565
+		if cfg.Server.Listen != "" {
+			if _, p, err := net.SplitHostPort(cfg.Server.Listen); err == nil {
+				if pn, err := strconv.Atoi(p); err == nil {
+					port = pn
+				}
+			}
+		}
+		conflicts := CheckPorts([]PortConflict{{Port: port, Proto: "udp", Desc: "hy2 server"}})
+		if len(conflicts) > 0 {
+			return fmt.Errorf("FATAL: hy2 server port %d/udp is already in use — cannot start", port)
+		}
 		if err := a.restartServer(); err != nil {
 			return err
 		}
 	}
 
-	// Start proxies
+	// Start proxies (SOCKS5 etc) — check port before each
 	for _, pc := range cfg.Proxies {
+		if pc.Enabled {
+			if _, p, err := net.SplitHostPort(pc.Listen); err == nil {
+				if pn, _ := strconv.Atoi(p); pn > 0 {
+					if c := CheckPorts([]PortConflict{{Port: pn, Proto: "tcp", Desc: pc.Protocol}}); len(c) > 0 {
+						log.Printf("[%s] port %d/tcp in use — proxy disabled", pc.Protocol, pn)
+						continue
+					}
+				}
+			}
+		}
 		a.StartProxy(pc)
 	}
 
 	// Start SS server if configured
-	if cfg.SS != nil {
-		a.StartSS(*cfg.SS)
+	if cfg.SS != nil && cfg.SS.Enabled {
+		if _, p, err := net.SplitHostPort(cfg.SS.Listen); err == nil {
+			if pn, _ := strconv.Atoi(p); pn > 0 {
+				if c := CheckPorts([]PortConflict{{Port: pn, Proto: "tcp", Desc: "shadowsocks"}}); len(c) > 0 {
+					log.Printf("[ss] port %d/tcp in use — shadowsocks disabled", pn)
+					cfg.SS = nil
+				}
+			}
+		}
+		if cfg.SS != nil {
+			a.StartSS(*cfg.SS)
+		}
 	}
 
 	// Start L2TP server if configured
-	if cfg.L2TP != nil {
-		if err := a.StartL2TP(*cfg.L2TP); err != nil {
+	if cfg.L2TP != nil && cfg.L2TP.Enabled {
+		lPort := 1701
+		if cfg.L2TP.Listen != "" {
+			if pn, err := strconv.Atoi(cfg.L2TP.Listen); err == nil {
+				lPort = pn
+			}
+		}
+		if c := CheckPorts([]PortConflict{{Port: lPort, Proto: "udp", Desc: "l2tp"}}); len(c) > 0 {
+			log.Printf("[l2tp] port %d/udp in use — l2tp disabled", lPort)
+		} else if err := a.StartL2TP(*cfg.L2TP); err != nil {
 			log.Printf("[l2tp] start error: %v", err)
 		}
 	}
 
 	// Start IKEv2/IPsec
-	if cfg.IKEv2 != nil {
-		if err := a.StartIKEv2(*cfg.IKEv2); err != nil {
+	if cfg.IKEv2 != nil && cfg.IKEv2.Enabled {
+		if c := CheckPorts([]PortConflict{
+			{Port: 500, Proto: "udp", Desc: "IKE"},
+			{Port: 4500, Proto: "udp", Desc: "IKE NAT-T"},
+		}); len(c) > 0 {
+			for _, cc := range c {
+				log.Printf("[ikev2] port %d/%s in use — ikev2 disabled", cc.Port, cc.Proto)
+			}
+		} else if err := a.StartIKEv2(*cfg.IKEv2); err != nil {
 			log.Printf("[ikev2] start error: %v", err)
 		}
 	}
 
 	// Start WireGuard
-	if cfg.WireGuard != nil {
-		if err := a.StartWireGuard(*cfg.WireGuard); err != nil {
+	if cfg.WireGuard != nil && cfg.WireGuard.Enabled {
+		wgPort := cfg.WireGuard.ListenPort
+		if wgPort == 0 {
+			wgPort = 51820
+		}
+		if c := CheckPorts([]PortConflict{{Port: wgPort, Proto: "udp", Desc: "wireguard"}}); len(c) > 0 {
+			log.Printf("[wireguard] port %d/udp in use — wireguard disabled", wgPort)
+		} else if err := a.StartWireGuard(*cfg.WireGuard); err != nil {
 			log.Printf("[wireguard] start error: %v", err)
 		}
 	}
