@@ -472,19 +472,30 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 	})
 
 	cfg := s.app.Store().Get()
+	oldName := s.app.Node().Name()
 	s.app.Node().SetName(cfg.Name)
 	s.app.Node().SetExit(cfg.ExitNode)
 
+	needReconnect := false
 	if body.NodeID != nil {
 		s.app.PersistNodeID(cfg.NodeID)
 		if oldID != cfg.NodeID {
-			// Track old→new mapping for remote proxy compatibility
 			s.mu.Lock()
 			s.oldNodeIDs[oldID] = cfg.NodeID
 			s.mu.Unlock()
-			// Reconnect all peers so they see the new ID
-			go s.app.ReconnectAll()
+			needReconnect = true
 		}
+	}
+	// Reconnect if name or ID changed so peers see the new identity
+	if cfg.Name != oldName {
+		needReconnect = true
+	}
+	if needReconnect {
+		// Restart hy2 server to drop inbound connections (they'll reconnect and see new name)
+		go func() {
+			s.app.ReconnectAll()
+			s.app.RestartServer()
+		}()
 	}
 	writeJSON(w, map[string]string{"status": "ok", "note": "server config changes require restart"})
 }
