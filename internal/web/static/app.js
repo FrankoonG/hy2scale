@@ -194,7 +194,7 @@ async function doLogin() {
 }
 function doLogout() {
   sessionStorage.removeItem(tokenKey);
-  localStorage.removeItem('hy2scale_cred');
+  // Keep hy2scale_cred for "remember me" pre-fill on next login
   clearInterval(pollTimer);
   showLogin();
 }
