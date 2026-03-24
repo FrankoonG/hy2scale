@@ -1,0 +1,146 @@
+# Multi-node demo with fixed IPs, artificial latency, and native hy2
+#
+# Topology:
+#              hub (10.99.0.10)
+#             /       |        \
+#    sg (.20)    jp (.30)    native-hy2 (.50) [NATIVE]
+#       |        /       \
+#   au (.21)  us1(.31)  us2(.32)
+#       |
+#   nz (.22)
+
+networks:
+  mesh:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.99.0.0/24
+
+services:
+  hub:
+    image: hy2scale
+    container_name: demo-hub
+    cap_add: [NET_ADMIN]
+    device_cgroup_rules: ['c 108:0 rwm']
+    networks:
+      mesh:
+        ipv4_address: 10.99.0.10
+    ports:
+      - "15565:5565/tcp"
+      - "15565:5565/udp"
+    volumes:
+      - hub-data:/data
+
+  au:
+    image: hy2scale
+    container_name: demo-au
+    cap_add: [NET_ADMIN]
+    device_cgroup_rules: ['c 108:0 rwm']
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache iproute2 >/dev/null 2>&1; tc qdisc add dev eth0 root netem delay 5ms 2>/dev/null; exec hy2scale"]
+    networks:
+      mesh:
+        ipv4_address: 10.99.0.20
+    ports:
+      - "5566:5565/tcp"
+      - "5566:5565/udp"
+    volumes:
+      - au-data:/data
+
+  au-r1:
+    image: hy2scale
+    container_name: demo-au-r1
+    cap_add: [NET_ADMIN]
+    device_cgroup_rules: ['c 108:0 rwm']
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache iproute2 >/dev/null 2>&1; tc qdisc add dev eth0 root netem delay 20ms 2>/dev/null; exec hy2scale"]
+    networks:
+      mesh:
+        ipv4_address: 10.99.0.21
+    ports:
+      - "5570:5565/tcp"
+      - "5570:5565/udp"
+    volumes:
+      - au-r1-data:/data
+
+  au-r1-a:
+    image: hy2scale
+    container_name: demo-au-r1-a
+    cap_add: [NET_ADMIN]
+    device_cgroup_rules: ['c 108:0 rwm']
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache iproute2 >/dev/null 2>&1; tc qdisc add dev eth0 root netem delay 15ms 2>/dev/null; exec hy2scale"]
+    networks:
+      mesh:
+        ipv4_address: 10.99.0.22
+    ports:
+      - "5572:5565/tcp"
+      - "5572:5565/udp"
+    volumes:
+      - au-r1-a-data:/data
+
+  jp:
+    image: hy2scale
+    container_name: demo-jp
+    cap_add: [NET_ADMIN]
+    device_cgroup_rules: ['c 108:0 rwm']
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache iproute2 >/dev/null 2>&1; tc qdisc add dev eth0 root netem delay 50ms 2>/dev/null; exec hy2scale"]
+    networks:
+      mesh:
+        ipv4_address: 10.99.0.30
+    ports:
+      - "5567:5565/tcp"
+      - "5567:5565/udp"
+    volumes:
+      - jp-data:/data
+
+  jp-r1:
+    image: hy2scale
+    container_name: demo-jp-r1
+    cap_add: [NET_ADMIN]
+    device_cgroup_rules: ['c 108:0 rwm']
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache iproute2 >/dev/null 2>&1; tc qdisc add dev eth0 root netem delay 30ms 2>/dev/null; exec hy2scale"]
+    networks:
+      mesh:
+        ipv4_address: 10.99.0.31
+    ports:
+      - "5568:5565/tcp"
+      - "5568:5565/udp"
+    volumes:
+      - jp-r1-data:/data
+
+  jp-r2:
+    image: hy2scale
+    container_name: demo-jp-r2
+    cap_add: [NET_ADMIN]
+    device_cgroup_rules: ['c 108:0 rwm']
+    entrypoint: ["/bin/sh", "-c", "apk add --no-cache iproute2 >/dev/null 2>&1; tc qdisc add dev eth0 root netem delay 80ms 2>/dev/null; exec hy2scale"]
+    networks:
+      mesh:
+        ipv4_address: 10.99.0.32
+    ports:
+      - "5569:5565/tcp"
+      - "5569:5565/udp"
+    volumes:
+      - jp-r2-data:/data
+
+  native-hy2:
+    image: tobyxdd/hysteria:v2
+    container_name: demo-native-hy2
+    networks:
+      mesh:
+        ipv4_address: 10.99.0.50
+    ports:
+      - "5571:5571/tcp"
+      - "5571:5571/udp"
+    volumes:
+      - ./native-hy2.yaml:/etc/hysteria/config.yaml:ro
+      - native-hy2-data:/etc/hysteria/certs
+    command: ["server", "-c", "/etc/hysteria/config.yaml"]
+
+volumes:
+  hub-data:
+  au-data:
+  au-r1-data:
+  au-r1-a-data:
+  jp-data:
+  jp-r1-data:
+  jp-r2-data:
+  native-hy2-data:
