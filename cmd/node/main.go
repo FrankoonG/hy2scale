@@ -49,11 +49,26 @@ func main() {
 	}
 
 	srv := api.NewServer(a, listenAddr, bp)
+
+	// Start API/UI server — fatal if port conflict
+	apiReady := make(chan error, 1)
 	go func() {
-		if err := srv.Start(ctx); err != nil && ctx.Err() == nil {
-			fmt.Fprintf(os.Stderr, "api: %v\n", err)
+		err := srv.Start(ctx)
+		if err != nil && ctx.Err() == nil {
+			apiReady <- err
 		}
 	}()
+	// Give the API server a moment to bind
+	go func() {
+		select {
+		case err := <-apiReady:
+			fmt.Fprintf(os.Stderr, "FATAL: API/UI server failed to start on %s: %v\n", listenAddr, err)
+			fmt.Fprintf(os.Stderr, "Another process may be using port %s. Exiting.\n", listenAddr)
+			os.Exit(1)
+		case <-ctx.Done():
+		}
+	}()
+
 	go srv.StartSubPeersUpdater(ctx)
 
 	if err := a.Run(ctx); err != nil && ctx.Err() == nil {
