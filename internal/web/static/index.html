@@ -444,9 +444,10 @@
                 <label>TLS Certificate</label>
                 <select id="ui-https-cert"></select>
               </div>
+              <div class="form-group"><label data-i18n="settings.sessionTimeout">Session Timeout (hours)</label><input id="ui-session-timeout" type="number" placeholder="12" value="12"></div>
               <div id="ui-error" class="msg-error"></div>
               <div id="ui-ok" class="msg-ok"></div>
-              <button class="btn-primary btn-sm" onclick="updateUISettings()">Save</button>
+              <button class="btn-primary btn-sm" onclick="updateUISettings()" data-i18n="app.save">Save</button>
             </div>
           </div>
         </div>

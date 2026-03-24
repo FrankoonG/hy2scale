@@ -278,9 +278,17 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	token := s.generateToken()
 	s.mu.Lock()
-	s.sessions[token] = time.Now().Add(24 * time.Hour)
+	s.sessions[token] = time.Now().Add(s.sessionTimeout())
 	s.mu.Unlock()
 	writeJSON(w, map[string]string{"token": token})
+}
+
+func (s *Server) sessionTimeout() time.Duration {
+	cfg := s.app.Store().Get()
+	if cfg.SessionTimeoutH > 0 {
+		return time.Duration(cfg.SessionTimeoutH) * time.Hour
+	}
+	return 12 * time.Hour // default 12h
 }
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
@@ -296,6 +304,10 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			http.Error(w, "unauthorized", 401)
 			return
 		}
+		// Refresh session on activity
+		s.mu.Lock()
+		s.sessions[token] = time.Now().Add(s.sessionTimeout())
+		s.mu.Unlock()
 		next.ServeHTTP(w, r)
 	})
 }
@@ -335,22 +347,26 @@ func (s *Server) getUISettings(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
 	dns := cfg.DNS
 	if dns == "" { dns = "8.8.8.8,1.1.1.1" }
+	sessionH := cfg.SessionTimeoutH
+	if sessionH == 0 { sessionH = 12 }
 	writeJSON(w, map[string]any{
-		"listen":        s.addr,
-		"base_path":     s.basePath,
-		"dns":           dns,
-		"force_https":   cfg.ForceHTTPS,
-		"https_cert_id": cfg.HTTPSCertID,
+		"listen":             s.addr,
+		"base_path":          s.basePath,
+		"dns":                dns,
+		"force_https":        cfg.ForceHTTPS,
+		"https_cert_id":      cfg.HTTPSCertID,
+		"session_timeout_h":  sessionH,
 	})
 }
 
 func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Listen      *string `json:"listen"`
-		BasePath    *string `json:"base_path"`
-		DNS         *string `json:"dns"`
-		ForceHTTPS  *bool   `json:"force_https"`
-		HTTPSCertID *string `json:"https_cert_id"`
+		Listen          *string `json:"listen"`
+		BasePath        *string `json:"base_path"`
+		DNS             *string `json:"dns"`
+		ForceHTTPS      *bool   `json:"force_https"`
+		HTTPSCertID     *string `json:"https_cert_id"`
+		SessionTimeoutH *int    `json:"session_timeout_h"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), 400)
@@ -371,6 +387,9 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.HTTPSCertID != nil {
 			c.HTTPSCertID = *body.HTTPSCertID
+		}
+		if body.SessionTimeoutH != nil {
+			c.SessionTimeoutH = *body.SessionTimeoutH
 		}
 	})
 	writeJSON(w, map[string]string{"status": "ok", "note": "restart required for changes to take effect"})

@@ -93,7 +93,7 @@ function api(path, opts) {
   const token = sessionStorage.getItem(tokenKey);
   if (token) headers['Authorization'] = 'Bearer ' + token;
   return fetch(basePath + '/api' + path, { ...opts, headers }).then(r => {
-    if (r.status === 401) { doLogout(); throw 'session expired'; }
+    if (r.status === 401) { sessionExpired(); throw 'session expired'; }
     if (!r.ok) return r.text().then(msg => { throw msg });
     return r.json();
   });
@@ -156,7 +156,7 @@ function showLogin() {
   const saved = JSON.parse(localStorage.getItem('hy2scale_cred') || 'null');
   if (saved) {
     $('#login-user').value = saved.u;
-    // Don't prefill password field (we only store hash now)
+    $('#login-pass').value = '********'; // visual indicator, actual hash used on submit
     $('#login-remember').checked = true;
   }
 }
@@ -169,9 +169,16 @@ async function doLogin() {
   const username = $('#login-user').value.trim(), password = $('#login-pass').value;
   $('#login-error').textContent = '';
   try {
-    const passHash = await sha256(password);
+    // If password is the placeholder and we have saved hash, use it
+    let passHash;
+    const saved = JSON.parse(localStorage.getItem('hy2scale_cred') || 'null');
+    if (password === '********' && saved && saved.h) {
+      passHash = saved.h;
+    } else {
+      passHash = sha256(password);
+    }
     const r = await fetch(basePath + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password: passHash }) });
-    if (!r.ok) { $('#login-error').textContent = 'Invalid username or password'; return; }
+    if (!r.ok) { $('#login-error').textContent = t('error.invalidCredentials'); return; }
     sessionStorage.setItem(tokenKey, (await r.json()).token);
     // Remember credentials (store hash, not plaintext)
     if ($('#login-remember').checked) {
@@ -185,22 +192,15 @@ async function doLogin() {
     refresh();
   } catch (e) { $('#login-error').textContent = String(e); }
 }
-async function doLogout() {
+function doLogout() {
+  sessionStorage.removeItem(tokenKey);
+  localStorage.removeItem('hy2scale_cred');
+  clearInterval(pollTimer);
+  showLogin();
+}
+function sessionExpired() {
   sessionStorage.removeItem(tokenKey);
   clearInterval(pollTimer);
-  // Try auto-login with saved credentials before showing login screen
-  const saved = JSON.parse(localStorage.getItem('hy2scale_cred') || 'null');
-  if (saved && saved.h) {
-    try {
-      const r = await fetch(basePath + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: saved.u, password: saved.h }) });
-      if (r.ok) {
-        sessionStorage.setItem(tokenKey, (await r.json()).token);
-        refresh();
-        return;
-      }
-    } catch(e) {}
-    localStorage.removeItem('hy2scale_cred');
-  }
   showLogin();
 }
 $('#login-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
@@ -1287,6 +1287,7 @@ async function loadSettings() {
     $('#ui-basepath').value = ui.base_path || '';
     $('#ui-dns').value = ui.dns || '8.8.8.8,1.1.1.1';
     $('#ui-https').checked = ui.force_https || false;
+    $('#ui-session-timeout').value = ui.session_timeout_h || 12;
     toggleHttpsCert();
     // Load certs for HTTPS dropdown
     try {
@@ -1337,9 +1338,11 @@ async function updateUISettings() {
   const httpsCertId = $('#ui-https-cert').value;
   $('#ui-error').textContent = ''; $('#ui-ok').textContent = '';
   try {
+    const sessionTimeoutH = parseInt($('#ui-session-timeout').value) || 12;
     await api('/settings/ui', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
       listen: listen || null, base_path: bp || null,
-      force_https: forceHttps, https_cert_id: httpsCertId || null
+      force_https: forceHttps, https_cert_id: httpsCertId || null,
+      session_timeout_h: sessionTimeoutH
     }) });
     toast('Saved. Restart container to apply.', 'success');
   } catch (e) { $('#ui-error').textContent = String(e); }
@@ -1853,29 +1856,8 @@ document.addEventListener('click', e => {
   await I18N.load(I18N.lang);
   updateLangButtons();
 
-  if (!sessionStorage.getItem(tokenKey)) {
-    // Try auto-login
-    let loggedIn = false;
-
-    const saved = JSON.parse(localStorage.getItem('hy2scale_cred') || 'null');
-    if (saved) {
-      // Migrate old plaintext format (p) to hash format (h)
-      const passHash = saved.h || (saved.p ? await sha256(saved.p) : null);
-      if (passHash) {
-        try {
-          const r = await fetch(basePath + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: saved.u, password: passHash }) });
-          if (r.ok) {
-            sessionStorage.setItem(tokenKey, (await r.json()).token);
-            loggedIn = true;
-            // Upgrade stored cred to hash format
-            if (saved.p) localStorage.setItem('hy2scale_cred', JSON.stringify({ u: saved.u, h: passHash }));
-          } else if (!window.__PROXY__) {
-            localStorage.removeItem('hy2scale_cred');
-          }
-        } catch (e) {}
-      }
-    }
-  }
+  // No auto-login: user must click Sign In every time
+  // Session token in sessionStorage persists only within the browser tab
   routeFromURL();
   if (sessionStorage.getItem(tokenKey) && location.pathname.replace(basePath, '').replace(/^\/+/, '') !== 'login') {
     refresh();

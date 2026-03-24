@@ -85,7 +85,8 @@ type Config struct {
 	WebPassword string                `yaml:"web_password,omitempty" json:"web_password,omitempty"`
 	DNS         string                `yaml:"dns,omitempty" json:"dns,omitempty"`
 	ForceHTTPS  bool                  `yaml:"force_https,omitempty" json:"force_https,omitempty"`
-	HTTPSCertID string                `yaml:"https_cert_id,omitempty" json:"https_cert_id,omitempty"`
+	HTTPSCertID     string                `yaml:"https_cert_id,omitempty" json:"https_cert_id,omitempty"`
+	SessionTimeoutH int                   `yaml:"session_timeout_h,omitempty" json:"session_timeout_h,omitempty"` // hours, default 12
 }
 
 type proxyHandle struct {
