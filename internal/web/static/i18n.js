@@ -13,7 +13,10 @@ const I18N = {
 
   async load(code) {
     try {
-      const url = (window.__BASE__ || '') + '/i18n/' + code + '.json';
+      const base = window.__BASE__ || '';
+      // Cache bust: use version from script tag query string
+      const ver = document.querySelector('script[src*="i18n.js"]')?.src?.split('?')[1] || '';
+      const url = base + '/i18n/' + code + '.json' + (ver ? '?' + ver : '');
       const r = await fetch(url);
       if (!r.ok) return false;
       I18N.strings = await r.json();

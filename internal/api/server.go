@@ -168,8 +168,10 @@ func (s *Server) Start(ctx context.Context) error {
 	staticFS, _ := fs.Sub(web.Static, "static")
 	rawIndex, _ := fs.ReadFile(staticFS, "index.html")
 	cacheBust := fmt.Sprintf("?v=%s", Version)
-	baseScript := "<script>window.__BASE__=\"" + s.basePath + "\";</script><script src=\"app.js" + cacheBust + "\"></script>"
-	indexBytes := []byte(strings.Replace(string(rawIndex), "<script src=\"app.js\"></script>", baseScript, 1))
+	baseScript := "<script>window.__BASE__=\"" + s.basePath + "\";</script><script src=\"i18n.js" + cacheBust + "\"></script><script src=\"app.js" + cacheBust + "\"></script>"
+	indexHTML := strings.Replace(string(rawIndex), "<script src=\"i18n.js\"></script>", "", 1)
+	indexHTML = strings.Replace(indexHTML, "<script src=\"app.js\"></script>", baseScript, 1)
+	indexBytes := []byte(indexHTML)
 
 	// Known frontend routes that should serve index.html
 	frontendRoutes := map[string]bool{
