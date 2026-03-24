@@ -200,6 +200,69 @@ func StopWireGuard() {
 	}
 }
 
+// WGAddPeer adds a peer to the running WireGuard device without restarting.
+func WGAddPeer(peer WireGuardPeer) error {
+	wgMu.Lock()
+	defer wgMu.Unlock()
+	if wgRunning == nil {
+		return fmt.Errorf("wireguard not running")
+	}
+	pubBytes, err := base64.StdEncoding.DecodeString(peer.PublicKey)
+	if err != nil || len(pubBytes) != 32 {
+		return fmt.Errorf("invalid public key")
+	}
+	ipc := fmt.Sprintf("public_key=%s\n", hex.EncodeToString(pubBytes))
+	for _, aip := range strings.Split(peer.AllowedIPs, ",") {
+		aip = strings.TrimSpace(aip)
+		if aip != "" {
+			ipc += fmt.Sprintf("allowed_ip=%s\n", aip)
+		}
+	}
+	if peer.Keepalive > 0 {
+		ipc += fmt.Sprintf("persistent_keepalive_interval=%d\n", peer.Keepalive)
+	}
+	return wgRunning.dev.IpcSet(ipc)
+}
+
+// WGRemovePeer removes a peer from the running WireGuard device without restarting.
+func WGRemovePeer(publicKey string) error {
+	wgMu.Lock()
+	defer wgMu.Unlock()
+	if wgRunning == nil {
+		return fmt.Errorf("wireguard not running")
+	}
+	pubBytes, err := base64.StdEncoding.DecodeString(publicKey)
+	if err != nil || len(pubBytes) != 32 {
+		return fmt.Errorf("invalid public key")
+	}
+	ipc := fmt.Sprintf("public_key=%s\nremove=true\n", hex.EncodeToString(pubBytes))
+	return wgRunning.dev.IpcSet(ipc)
+}
+
+// WGUpdatePeer updates a peer's WG-level config without restarting the device.
+func WGUpdatePeer(peer WireGuardPeer) error {
+	wgMu.Lock()
+	defer wgMu.Unlock()
+	if wgRunning == nil {
+		return fmt.Errorf("wireguard not running")
+	}
+	pubBytes, err := base64.StdEncoding.DecodeString(peer.PublicKey)
+	if err != nil || len(pubBytes) != 32 {
+		return fmt.Errorf("invalid public key")
+	}
+	ipc := fmt.Sprintf("public_key=%s\nupdate_only=true\nreplace_allowed_ips=true\n", hex.EncodeToString(pubBytes))
+	for _, aip := range strings.Split(peer.AllowedIPs, ",") {
+		aip = strings.TrimSpace(aip)
+		if aip != "" {
+			ipc += fmt.Sprintf("allowed_ip=%s\n", aip)
+		}
+	}
+	if peer.Keepalive > 0 {
+		ipc += fmt.Sprintf("persistent_keepalive_interval=%d\n", peer.Keepalive)
+	}
+	return wgRunning.dev.IpcSet(ipc)
+}
+
 // WireGuardConnectedCount returns the number of WG peers with active connections.
 func WireGuardConnectedCount() int {
 	count := 0
