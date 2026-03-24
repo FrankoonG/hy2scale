@@ -1254,11 +1254,9 @@ func (s *Server) addWGPeer(w http.ResponseWriter, r *http.Request) {
 		}
 		c.WireGuard.Peers = append(c.WireGuard.Peers, peer)
 	})
-	// Restart WireGuard to apply new peer
-	cfg := s.app.Store().Get()
-	if cfg.WireGuard != nil && cfg.WireGuard.Enabled {
-		app.StopWireGuard()
-		s.app.StartWireGuard(*cfg.WireGuard)
+	// Hot-add peer without restarting device
+	if err := app.WGAddPeer(peer); err != nil {
+		log.Printf("[wireguard] hot-add peer %s: %v (will apply on next restart)", peer.Name, err)
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }
@@ -1270,27 +1268,30 @@ func (s *Server) updateWGPeer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	needRestart := false
+	var oldPub string
+	var wgFieldsChanged bool
 	s.app.Store().Update(func(c *app.Config) {
 		if c.WireGuard == nil {
 			return
 		}
 		for i, p := range c.WireGuard.Peers {
 			if p.Name == name {
-				// Check if WG-level fields changed (requires device restart)
-				if p.PublicKey != updated.PublicKey || p.AllowedIPs != updated.AllowedIPs || p.Keepalive != updated.Keepalive {
-					needRestart = true
-				}
+				oldPub = p.PublicKey
+				wgFieldsChanged = p.PublicKey != updated.PublicKey ||
+					p.AllowedIPs != updated.AllowedIPs ||
+					p.Keepalive != updated.Keepalive
 				c.WireGuard.Peers[i] = updated
 				break
 			}
 		}
 	})
-	if needRestart {
-		cfg := s.app.Store().Get()
-		if cfg.WireGuard != nil && cfg.WireGuard.Enabled {
-			app.StopWireGuard()
-			s.app.StartWireGuard(*cfg.WireGuard)
+	// Hot-update: if public key changed, remove old + add new; otherwise just update
+	if wgFieldsChanged {
+		if oldPub != updated.PublicKey && oldPub != "" {
+			app.WGRemovePeer(oldPub)
+			app.WGAddPeer(updated)
+		} else {
+			app.WGUpdatePeer(updated)
 		}
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
@@ -1298,22 +1299,24 @@ func (s *Server) updateWGPeer(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) removeWGPeer(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
+	var removedPub string
 	s.app.Store().Update(func(c *app.Config) {
 		if c.WireGuard == nil {
 			return
 		}
 		peers := make([]app.WireGuardPeer, 0, len(c.WireGuard.Peers))
 		for _, p := range c.WireGuard.Peers {
-			if p.Name != name {
+			if p.Name == name {
+				removedPub = p.PublicKey
+			} else {
 				peers = append(peers, p)
 			}
 		}
 		c.WireGuard.Peers = peers
 	})
-	cfg := s.app.Store().Get()
-	if cfg.WireGuard != nil && cfg.WireGuard.Enabled {
-		app.StopWireGuard()
-		s.app.StartWireGuard(*cfg.WireGuard)
+	// Hot-remove peer without restarting device
+	if removedPub != "" {
+		app.WGRemovePeer(removedPub)
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }
