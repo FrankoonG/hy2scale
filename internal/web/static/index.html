@@ -27,6 +27,10 @@
 
 <!-- Login -->
 <div id="login-screen" class="login-screen">
+  <div class="lang-switcher" style="position:absolute;top:16px;right:16px">
+    <button class="lang-btn" id="login-lang-btn" onclick="toggleLangMenu(this)" title="Language"></button>
+    <div class="lang-menu" id="login-lang-menu" style="display:none"></div>
+  </div>
   <div class="login-box">
     <div class="logo"><img class="logo-img" alt="HY2 SCALE"></div>
     <h1 data-i18n="app.title">HY2 SCALE</h1>
@@ -87,9 +91,7 @@
       <span class="node-badge" id="node-badge"></span>
       <span id="node-name-display" style="font-size:13px;color:var(--text-secondary)"></span>
       <div class="lang-switcher" id="lang-switcher">
-        <button class="lang-btn" onclick="toggleLangMenu()" title="Language">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-        </button>
+        <button class="lang-btn" id="lang-btn" onclick="toggleLangMenu()" title="Language"></button>
         <div class="lang-menu" id="lang-menu" style="display:none"></div>
       </div>
     </div>
