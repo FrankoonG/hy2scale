@@ -675,6 +675,13 @@ func (a *App) SetNested(peer string, enabled bool) error {
 
 // --- Internal ---
 
+// RestartServer is the public wrapper for restartServer.
+func (a *App) RestartServer() {
+	if err := a.restartServer(); err != nil {
+		log.Printf("[server] restart error: %v", err)
+	}
+}
+
 // restartServer stops the current hy2 server (if running) and starts a new one.
 // This disconnects all inbound peers, forcing them to reconnect and discover the new ID.
 func (a *App) restartServer() error {
@@ -841,9 +848,11 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 					delete(cfg.Peers, oldName)
 				}
 			})
-			// Also update relay's nested discovery
+			// Clean up old name from relay
 			a.node.SetNestedDiscovery(remoteID, a.node.IsNestedEnabled(oldName))
 			a.node.SetNestedDiscovery(oldName, false)
+			// Clear old latency so topology doesn't show stale entry
+			a.node.SetLatency(oldName, 0)
 		}
 	})
 	if err == relay.ErrNotHy2scale && ctx.Err() == nil {
