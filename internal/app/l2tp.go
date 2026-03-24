@@ -60,6 +60,39 @@ func (s *pppSession) Unregister(ip string) {
 
 // iptRun runs an iptables command, checking for duplicates first.
 // For -I (insert) and -A (append), it checks with -C first.
+// iptCmd resolves the iptables command. If the container's iptables doesn't work
+// but host root is mounted at /host, use chroot to run the host's iptables.
+// This handles iKuai routers where container iptables is incompatible with the kernel.
+var iptUseChroot = sync.OnceValue(func() bool {
+	// Test if native iptables-legacy works
+	if exec.Command("iptables-legacy", "-L", "-n").Run() == nil {
+		return false
+	}
+	// Check if host root is mounted and its iptables works
+	if _, err := os.Stat("/host/usr/sbin/iptables"); err == nil {
+		if exec.Command("chroot", "/host", "/usr/sbin/iptables", "-L", "-n").Run() == nil {
+			log.Printf("[iptables] using chroot /host for iptables (host kernel compat)")
+			return true
+		}
+	}
+	return false
+})
+
+func iptExec(prog string, args ...string) *exec.Cmd {
+	if iptUseChroot() {
+		// Map prog name to host path
+		hostProg := prog
+		switch prog {
+		case "iptables-legacy":
+			hostProg = "/usr/sbin/iptables"
+		case "iptables":
+			hostProg = "/usr/sbin/iptables"
+		}
+		return exec.Command("chroot", append([]string{"/host", hostProg}, args...)...)
+	}
+	return exec.Command(prog, args...)
+}
+
 func iptRun(prog string, args ...string) {
 	// Try -C (check) first to detect duplicates
 	for i, a := range args {
@@ -67,19 +100,21 @@ func iptRun(prog string, args ...string) {
 			checkArgs := make([]string, len(args))
 			copy(checkArgs, args)
 			checkArgs[i] = "-C"
-			// Remove position argument after -I (e.g. "-I DOCKER-USER 1" → "-C DOCKER-USER")
 			if a == "-I" && i+2 < len(checkArgs) {
 				if _, err := fmt.Sscanf(checkArgs[i+2], "%d", new(int)); err == nil {
 					checkArgs = append(checkArgs[:i+2], checkArgs[i+3:]...)
 				}
 			}
-			if exec.Command(prog, checkArgs...).Run() == nil {
+			if iptExec(prog, checkArgs...).Run() == nil {
 				return // rule already exists
 			}
 			break
 		}
 	}
-	run(prog, args...)
+	cmd := iptExec(prog, args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("[iptables] %s %v: %s", prog, args, string(out))
+	}
 }
 
 func (s *pppSession) Lookup(ip string) (string, bool) {
@@ -103,7 +138,11 @@ func CheckCapability() (bool, string) {
 	if exec.Command("iptables", "-L", "-n").Run() == nil {
 		return true, ""
 	}
-	return false, "no NET_ADMIN capability (bridge creation, iptables-legacy, and iptables all failed)"
+	// Try host iptables via chroot (for iKuai/incompatible kernel)
+	if exec.Command("chroot", "/host", "/usr/sbin/iptables", "-L", "-n").Run() == nil {
+		return true, ""
+	}
+	return false, "no NET_ADMIN capability (bridge creation, iptables-legacy, iptables, and chroot /host all failed)"
 }
 
 // CheckL2TPCapability tests if the runtime has NET_ADMIN and /dev/ppp.
