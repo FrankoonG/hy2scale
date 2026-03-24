@@ -1843,6 +1843,13 @@ async function switchLang(code) {
   updateLangButtons();
   const titles = { nodes: t('nav.nodes'), users: t('nav.users'), proxies: t('nav.proxies'), tls: t('nav.tls'), settings: t('nav.settings') };
   if (titles[_currentPage]) $('#page-title').textContent = titles[_currentPage];
+  // Re-render dynamic lists to update button text and table headers
+  try {
+    if (_currentPage === 'nodes') { lastTopoJSON = ''; refreshTopology(); }
+    if (_currentPage === 'users') { refreshUsers(); refreshSessions(); }
+    if (_currentPage === 'proxies') { proxiesLoaded = false; refreshProxies(); }
+    if (_currentPage === 'tls') refreshCerts();
+  } catch(e) {}
 }
 document.addEventListener('click', e => {
   if (!e.target.closest('.lang-switcher')) {
