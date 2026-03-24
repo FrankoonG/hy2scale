@@ -112,7 +112,7 @@ function closeSidebar() {
 }
 
 // ── Navigation / Router ──
-const pageTitles = { nodes: 'Nodes', users: 'Users', proxies: 'Proxies', tls: 'TLS', settings: 'Settings' };
+const pageTitles = { nodes: 'nav.nodes', users: 'nav.users', proxies: 'nav.proxies', tls: 'nav.tls', settings: 'nav.settings' };
 
 let _currentPage = 'nodes';
 function switchPage(name, push) {
@@ -122,7 +122,7 @@ function switchPage(name, push) {
   $$('.nav-item[data-page]').forEach(n => n.classList.toggle('active', n.dataset.page === name));
   $$('.page').forEach(p => p.style.display = 'none');
   $(`#page-${name}`).style.display = '';
-  $('#page-title').textContent = pageTitles[name];
+  $('#page-title').textContent = t(pageTitles[name]);
   if (push !== false) history.pushState(null, '', basePath + '/' + name);
   if (name === 'users') { refreshUsers(); refreshSessions(); }
   if (name === 'proxies') refreshProxies();
@@ -1814,8 +1814,34 @@ async function deleteCert(id) {
   try { await api(`/tls/${id}`, { method: 'DELETE' }); refreshCerts(); toast(`Deleted ${id}`, 'success'); } catch (e) { toast(String(e), 'error'); }
 }
 
+// ── Language Switcher ──
+function toggleLangMenu() {
+  const menu = $('#lang-menu');
+  if (menu.style.display === 'none') {
+    menu.innerHTML = I18N.available.map(l =>
+      `<div class="lang-menu-item ${l.code === I18N.lang ? 'active' : ''}" onclick="switchLang('${l.code}')">${l.name}</div>`
+    ).join('');
+    menu.style.display = '';
+  } else {
+    menu.style.display = 'none';
+  }
+}
+async function switchLang(code) {
+  await I18N.load(code);
+  $('#lang-menu').style.display = 'none';
+  // Update dynamic page title
+  const titles = { nodes: t('nav.nodes'), users: t('nav.users'), proxies: t('nav.proxies'), tls: t('nav.tls'), settings: t('nav.settings') };
+  if (titles[_currentPage]) $('#page-title').textContent = titles[_currentPage];
+}
+document.addEventListener('click', e => {
+  if (!e.target.closest('.lang-switcher')) $('#lang-menu').style.display = 'none';
+});
+
 // ── Init ──
 (async function init() {
+  // Load i18n
+  await I18N.load(I18N.lang);
+
   if (!sessionStorage.getItem(tokenKey)) {
     // Try auto-login
     let loggedIn = false;
