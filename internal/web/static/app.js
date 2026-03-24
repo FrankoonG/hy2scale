@@ -94,7 +94,7 @@ function api(path, opts) {
   if (token) headers['Authorization'] = 'Bearer ' + token;
   return fetch(basePath + '/api' + path, { ...opts, headers }).then(r => {
     if (r.status === 401) { doLogout(); throw 'session expired'; }
-    if (!r.ok) return r.text().then(t => { throw t });
+    if (!r.ok) return r.text().then(msg => { throw msg });
     return r.json();
   });
 }
@@ -1815,9 +1815,17 @@ async function deleteCert(id) {
 }
 
 // ── Language Switcher ──
-function toggleLangMenu() {
-  const menu = $('#lang-menu');
+function updateLangButtons() {
+  const code = I18N.lang.toUpperCase();
+  document.querySelectorAll('.lang-btn').forEach(btn => { btn.textContent = code; });
+}
+function toggleLangMenu(btn) {
+  // Find the nearest lang-menu sibling
+  const switcher = (btn || document.getElementById('lang-btn')).closest('.lang-switcher');
+  const menu = switcher.querySelector('.lang-menu');
   if (menu.style.display === 'none') {
+    // Close all other lang menus
+    document.querySelectorAll('.lang-menu').forEach(m => m.style.display = 'none');
     menu.innerHTML = I18N.available.map(l =>
       `<div class="lang-menu-item ${l.code === I18N.lang ? 'active' : ''}" onclick="switchLang('${l.code}')">${l.name}</div>`
     ).join('');
@@ -1828,19 +1836,22 @@ function toggleLangMenu() {
 }
 async function switchLang(code) {
   await I18N.load(code);
-  $('#lang-menu').style.display = 'none';
-  // Update dynamic page title
+  document.querySelectorAll('.lang-menu').forEach(m => m.style.display = 'none');
+  updateLangButtons();
   const titles = { nodes: t('nav.nodes'), users: t('nav.users'), proxies: t('nav.proxies'), tls: t('nav.tls'), settings: t('nav.settings') };
   if (titles[_currentPage]) $('#page-title').textContent = titles[_currentPage];
 }
 document.addEventListener('click', e => {
-  if (!e.target.closest('.lang-switcher')) $('#lang-menu').style.display = 'none';
+  if (!e.target.closest('.lang-switcher')) {
+    document.querySelectorAll('.lang-menu').forEach(m => m.style.display = 'none');
+  }
 });
 
 // ── Init ──
 (async function init() {
   // Load i18n
   await I18N.load(I18N.lang);
+  updateLangButtons();
 
   if (!sessionStorage.getItem(tokenKey)) {
     // Try auto-login
