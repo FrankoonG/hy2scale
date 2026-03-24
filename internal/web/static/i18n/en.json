@@ -1,7 +1,6 @@
 {
   "_lang": "English",
   "_code": "en",
-
   "app.title": "HY2 SCALE",
   "app.subtitle": "Sign in to manage your mesh network",
   "app.signin": "Sign in",
@@ -18,13 +17,11 @@
   "app.delete": "Delete",
   "app.enabled": "Enabled",
   "app.loading": "Loading...",
-
   "nav.nodes": "Nodes",
   "nav.users": "Users",
   "nav.proxies": "Proxies",
   "nav.tls": "TLS",
   "nav.settings": "Settings",
-
   "nodes.title": "Network Topology",
   "nodes.addNode": "+ Add Node",
   "nodes.addTitle": "Add Node Connection",
@@ -45,14 +42,12 @@
   "nodes.node": "Node",
   "nodes.traffic": "Traffic",
   "nodes.nested": "Nested",
-
   "stats.totalTraffic": "Total Traffic",
   "stats.uploadDownload": "upload / download",
   "stats.connections": "Connections",
   "stats.activeConns": "active connections",
   "stats.peers": "Peers",
   "stats.connectedPeers": "connected peers",
-
   "users.title": "Users",
   "users.addUser": "+ Add User",
   "users.addTitle": "Add User",
@@ -66,7 +61,6 @@
   "users.on": "On",
   "users.reset": "Reset",
   "users.noUsers": "No users. Click <b>+ Add User</b> to create one.",
-
   "devices.title": "Active Devices",
   "devices.noDevices": "No active connections",
   "devices.user": "User",
@@ -77,7 +71,6 @@
   "devices.duration": "Duration",
   "devices.kick": "Kick",
   "devices.kicked": "Device kicked",
-
   "proxies.title": "Proxies",
   "proxies.hy2": "Hysteria 2",
   "proxies.socks5": "SOCKS5",
@@ -85,21 +78,17 @@
   "proxies.l2tp": "L2TP",
   "proxies.ikev2": "IKEv2/IPsec",
   "proxies.wireguard": "WireGuard",
-
   "hy2.title": "Hysteria 2 Server",
   "hy2.port": "Server Port",
   "hy2.userAuth": "Require User Auth",
   "hy2.userAuthDesc": "When enabled, hy2 clients must authenticate with a valid user's credentials.",
-
   "socks5.title": "SOCKS5 Proxy",
   "socks5.port": "Listen Port",
   "socks5.saved": "SOCKS5 saved",
-
   "ss.title": "Shadowsocks Server",
   "ss.port": "Listen Port",
   "ss.method": "Encryption Method",
   "ss.saved": "Shadowsocks saved",
-
   "l2tp.title": "L2TP/IPsec Server",
   "l2tp.warn": "Insufficient privileges — container requires <code>--cap-add NET_ADMIN</code> and <code>--network host</code> to enable L2TP/IPsec.",
   "l2tp.port": "Listen Port",
@@ -107,7 +96,6 @@
   "l2tp.psk": "Pre-Shared Key",
   "l2tp.mtu": "MTU",
   "l2tp.saved": "L2TP saved. Restart required for L2TP changes.",
-
   "ikev2.title": "IKEv2/IPsec Server",
   "ikev2.warn": "Insufficient privileges — container requires <code>--cap-add NET_ADMIN</code> and <code>--network host</code> to enable IKEv2/IPsec.",
   "ikev2.mode": "Auth Mode",
@@ -123,7 +111,6 @@
   "ikev2.defaultExit": "Exit Via",
   "ikev2.pskDesc": "All clients sharing the same PSK use this exit path. No per-user routing.",
   "ikev2.saved": "IKEv2 saved. Restart required for changes.",
-
   "wg.title": "WireGuard Server",
   "wg.port": "Listen Port",
   "wg.address": "Address (CIDR)",
@@ -149,7 +136,6 @@
   "wg.noPeers": "No peers. Click <b>+ Add Peer</b> to create one.",
   "wg.generateKey": "Generate key pair",
   "wg.download": "Download",
-
   "tls.title": "Certificates",
   "tls.new": "New",
   "tls.newTitle": "New Certificate",
@@ -162,7 +148,6 @@
   "tls.certPath": "Certificate File Path",
   "tls.keyPath": "Private Key File Path",
   "tls.generate": "Generate self-signed certificate",
-
   "settings.title": "Settings",
   "settings.system": "System",
   "settings.web": "Web",
@@ -179,9 +164,9 @@
   "settings.uiBasePath": "UI Base Path",
   "settings.forceHttps": "Force HTTPS",
   "settings.httpsCert": "HTTPS Certificate",
-
   "port.conflict": "Port {port}/{proto} is already in use",
   "error.invalidCredentials": "Invalid username or password",
   "error.passwordMismatch": "Passwords do not match",
-  "error.required": "required"
+  "error.required": "required",
+  "settings.sessionTimeout": "Session Timeout (hours)"
 }
