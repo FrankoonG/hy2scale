@@ -135,6 +135,9 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("GET /api/wireguard/peers/{name}/config", s.downloadWGPeerConfig)
 	authed.HandleFunc("GET /api/wireguard/qr", s.wireGuardQR)
 
+	// Port check
+	authed.HandleFunc("POST /api/check-ports", s.checkPorts)
+
 	// Sessions (active connections)
 	authed.HandleFunc("GET /api/sessions", s.getSessions)
 	authed.HandleFunc("DELETE /api/sessions/{id}", s.kickSession)
@@ -1366,6 +1369,16 @@ func (s *Server) wireGuardQR(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Sessions ---
+
+func (s *Server) checkPorts(w http.ResponseWriter, r *http.Request) {
+	var req []app.PortConflict
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	conflicts := app.CheckPorts(req)
+	writeJSON(w, map[string]any{"conflicts": conflicts})
+}
 
 func (s *Server) getSessions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
