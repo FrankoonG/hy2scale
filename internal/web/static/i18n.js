@@ -32,21 +32,28 @@ const I18N = {
 
   // Apply translations to all data-i18n elements
   apply() {
-    document.querySelectorAll('[data-i18n]').forEach(el => {
-      const key = el.getAttribute('data-i18n');
-      const val = I18N.strings[key];
-      if (val !== undefined) {
-        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
-          el.placeholder = val;
-        } else if (el.hasAttribute('data-i18n-html')) {
-          el.innerHTML = val;
-        } else {
-          el.textContent = val;
+    const doApply = () => {
+      document.querySelectorAll('[data-i18n]').forEach(el => {
+        const key = el.getAttribute('data-i18n');
+        const val = I18N.strings[key];
+        if (val !== undefined) {
+          if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+            el.placeholder = val;
+          } else if (el.hasAttribute('data-i18n-html')) {
+            el.innerHTML = val;
+          } else {
+            el.textContent = val;
+          }
         }
-      }
-    });
-    // Update page title
-    document.title = I18N.strings['app.title'] || 'HY2 SCALE';
+      });
+      document.title = I18N.strings['app.title'] || 'HY2 SCALE';
+    };
+    // If DOM not ready yet, wait for it
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', doApply);
+    } else {
+      doApply();
+    }
   },
 
   // Get a translated string by key, with optional placeholder replacement
