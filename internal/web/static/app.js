@@ -779,6 +779,10 @@ async function saveSocks5() {
   const port = $('#sk5-port').value.trim();
   const enabled = $('#sk5-enabled').checked;
   if (!port) { toast('Port required', 'error'); return; }
+  if (enabled) {
+    const ok = await checkPortConflicts([{port: parseInt(port), proto: 'tcp', desc: 'SOCKS5', inputId: '#sk5-port'}]);
+    if (!ok) return;
+  }
   try {
     // Delete existing socks5 proxies first
     const proxies = await api('/proxies');
@@ -798,6 +802,10 @@ async function saveSS() {
   const enabled = $('#ss-enabled').checked;
   const method = $('#ss-method').value;
   if (!port) { toast('Port required', 'error'); return; }
+  if (enabled) {
+    const ok = await checkPortConflicts([{port: parseInt(port), proto: 'tcp', desc: 'Shadowsocks', inputId: '#ss-port'}]);
+    if (!ok) return;
+  }
   try {
     await api('/ss', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
       listen: '0.0.0.0:' + port, enabled, method
@@ -812,6 +820,15 @@ async function saveL2TP() {
   const pool = $('#l2tp-pool').value.trim();
   const psk = $('#l2tp-psk').value.trim();
   if (enabled && (!listen || !pool || !psk)) { toast('Port, pool and PSK required', 'error'); return; }
+  const port = parseInt(listen) || 1701;
+  if (enabled) {
+    const ok = await checkPortConflicts([
+      {port, proto: 'udp', desc: 'L2TP', inputId: '#l2tp-port'},
+      {port: 500, proto: 'udp', desc: 'IKE'},
+      {port: 4500, proto: 'udp', desc: 'IKE NAT-T'},
+    ]);
+    if (!ok) return;
+  }
   try {
     const mtu = parseInt($('#l2tp-mtu').value) || 1280;
     await api('/l2tp', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ listen, enabled, pool, psk, mtu })});
@@ -913,6 +930,13 @@ async function saveIKEv2() {
     if (enabled && !body.psk) { toast('Pre-shared key required', 'error'); return; }
   }
 
+  if (enabled) {
+    const ok = await checkPortConflicts([
+      {port: 500, proto: 'udp', desc: 'IKE'},
+      {port: 4500, proto: 'udp', desc: 'IKE NAT-T'},
+    ]);
+    if (!ok) return;
+  }
   try {
     await api('/ikev2', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
     toast('IKEv2 saved. Restart required for changes.', 'success');
@@ -996,16 +1020,66 @@ function validateWGKey(input) {
     input.style.borderColor = '';
   }
 }
+// Check if ports are available before enabling a proxy.
+// ports: [{port, proto, desc, inputId}], returns true if all OK.
+async function checkPortConflicts(ports) {
+  try {
+    // Clear previous errors
+    ports.forEach(p => {
+      if (p.inputId) {
+        const el = $(p.inputId);
+        if (el) { el.style.borderColor = ''; el.title = ''; }
+        const err = document.getElementById('port-err-' + p.port);
+        if (err) err.remove();
+      }
+    });
+    const r = await api('/check-ports', { method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(ports.map(p => ({port: p.port, proto: p.proto, desc: p.desc})))
+    });
+    const conflicts = r.conflicts || [];
+    if (conflicts.length === 0) return true;
+    for (const c of conflicts) {
+      const match = ports.find(p => p.port === c.port && p.proto === c.proto);
+      if (match && match.inputId) {
+        const el = $(match.inputId);
+        if (el) {
+          el.style.borderColor = '#e74c3c';
+          // Insert error message below input
+          let errEl = document.getElementById('port-err-' + c.port);
+          if (!errEl) {
+            errEl = document.createElement('div');
+            errEl.id = 'port-err-' + c.port;
+            errEl.style.cssText = 'color:#e74c3c;font-size:12px;margin-top:2px';
+            el.parentNode.appendChild(errEl);
+          }
+          errEl.textContent = `Port ${c.port}/${c.proto} is already in use`;
+        }
+      }
+      toast(`Port ${c.port}/${c.proto} is already in use`, 'error');
+    }
+    return false;
+  } catch(e) { return true; /* allow if check fails */ }
+}
+
 async function saveWireGuard() {
   const privKey = $('#wg-privkey').value.trim();
   if (privKey && !isValidWGKey(privKey)) { toast('Invalid private key format', 'error'); return; }
+  const enabled = $('#wg-enabled').checked;
+  const port = parseInt($('#wg-port').value) || 51820;
+  // Check port conflicts when enabling
+  if (enabled) {
+    const ok = await checkPortConflicts([
+      {port, proto: 'udp', desc: 'WireGuard', inputId: '#wg-port'}
+    ]);
+    if (!ok) return;
+  }
   try {
     await api('/wireguard', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({
-      enabled: $('#wg-enabled').checked,
-      listen_port: parseInt($('#wg-port').value) || 51820,
+      enabled,
+      listen_port: port,
       private_key: privKey,
       address: $('#wg-address').value,
-      dns: '',  // uses global DNS from Settings
+      dns: '',
       mtu: parseInt($('#wg-mtu').value) || 1420,
     }) });
     toast('WireGuard saved', 'success');
