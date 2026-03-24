@@ -16,11 +16,11 @@
 <!-- Confirm Dialog -->
 <div class="modal-overlay" id="confirm-modal" style="display:none" onmousedown="if(event.target===this)document.getElementById('confirm-cancel').click()">
   <div class="modal" style="max-width:360px">
-    <div class="modal-header"><h2 id="confirm-title">Confirm</h2></div>
+    <div class="modal-header"><h2 id="confirm-title" data-i18n="app.confirm">Confirm</h2></div>
     <div class="modal-body" style="padding:16px 24px"><p id="confirm-msg"></p></div>
     <div class="modal-footer">
-      <button id="confirm-cancel">Cancel</button>
-      <button class="btn-primary" id="confirm-ok" style="background:var(--red);border-color:var(--red)">Confirm</button>
+      <button id="confirm-cancel" data-i18n="app.cancel">Cancel</button>
+      <button class="btn-primary" id="confirm-ok" style="background:var(--red);border-color:var(--red)" data-i18n="app.confirm">Confirm</button>
     </div>
   </div>
 </div>
@@ -36,7 +36,7 @@
     <h1 data-i18n="app.title">HY2 SCALE</h1>
     <p data-i18n="app.subtitle">Sign in to manage your mesh network</p>
     <input id="login-user" data-i18n="app.username" placeholder="Username" autocomplete="username">
-    <div class="pw-wrap"><input id="login-pass" placeholder="Password" type="password" autocomplete="current-password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
+    <div class="pw-wrap"><input id="login-pass" data-i18n="app.password" placeholder="Password" type="password" autocomplete="current-password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
     <label class="remember-me"><input type="checkbox" id="login-remember"> <span data-i18n="app.remember">Remember me</span></label>
     <div id="login-error" class="msg-error" style="margin-bottom:8px"></div>
     <button class="btn-primary btn-full" onclick="doLogin()" data-i18n="app.signin">Sign in</button>
@@ -101,34 +101,34 @@
       <div class="page active" id="page-nodes">
         <div class="stats-grid">
           <div class="stat-card">
-            <div class="stat-label">Total Traffic</div>
+            <div class="stat-label" data-i18n="stats.totalTraffic">Total Traffic</div>
             <div class="stat-value"><span class="stat-up" id="s-tx-total">0 B</span> <span class="sep">/</span> <span class="stat-down" id="s-rx-total">0 B</span></div>
-            <div class="stat-sub">upload / download</div>
+            <div class="stat-sub" data-i18n="stats.uploadDownload">upload / download</div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">Realtime Speed</div>
+            <div class="stat-label" data-i18n="stats.realtimeSpeed">Realtime Speed</div>
             <div class="stat-value"><span class="stat-up" id="s-tx-rate">0 B/s</span> <span class="sep">/</span> <span class="stat-down" id="s-rx-rate">0 B/s</span></div>
-            <div class="stat-sub">upload / download</div>
+            <div class="stat-sub" data-i18n="stats.uploadDownload">upload / download</div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">Connections</div>
+            <div class="stat-label" data-i18n="stats.connections">Connections</div>
             <div class="stat-value" id="s-conns">0</div>
-            <div class="stat-sub">active streams</div>
+            <div class="stat-sub" data-i18n="stats.activeStreams">active streams</div>
           </div>
           <div class="stat-card">
-            <div class="stat-label">Exit Clients</div>
+            <div class="stat-label" data-i18n="stats.exitClients">Exit Clients</div>
             <div class="stat-value" id="s-exits">0</div>
-            <div class="stat-sub">using this node as exit</div>
+            <div class="stat-sub" data-i18n="stats.usingAsExit">using this node as exit</div>
           </div>
         </div>
         <div class="card">
           <div class="card-header">
-            <span class="card-title">Network Topology</span>
+            <span class="card-title" data-i18n="nodes.title">Network Topology</span>
             <span class="card-count" id="peer-count">0</span>
             <span class="spacer"></span>
-            <button class="btn-primary btn-sm" onclick="openAddDialog()">+ Add Node</button>
+            <button class="btn-primary btn-sm" onclick="openAddDialog()" data-i18n="nodes.addNode">+ Add Node</button>
           </div>
-          <div id="topology-tree"><div class="empty">Loading...</div></div>
+          <div id="topology-tree"><div class="empty" data-i18n="app.loading">Loading...</div></div>
         </div>
       </div>
 
@@ -137,82 +137,82 @@
       <div class="page" id="page-users" style="display:none">
         <div class="card">
           <div class="card-header">
-            <span class="card-title">Users</span>
+            <span class="card-title" data-i18n="users.title">Users</span>
             <span class="card-count" id="user-count">0</span>
             <span class="spacer"></span>
-            <button class="btn-primary btn-sm" onclick="openUserDialog()">+ Add User</button>
+            <button class="btn-primary btn-sm" onclick="openUserDialog()" data-i18n="users.addUser">+ Add User</button>
           </div>
-          <div id="user-list"><div class="empty">Loading...</div></div>
+          <div id="user-list"><div class="empty" data-i18n="app.loading">Loading...</div></div>
         </div>
         <div class="card" style="margin-top:12px">
           <div class="card-header">
-            <span class="card-title">Active Devices</span>
+            <span class="card-title" data-i18n="devices.title">Active Devices</span>
             <span class="card-count" id="session-count">0</span>
           </div>
-          <div id="session-list"><div class="empty">No active connections</div></div>
+          <div id="session-list"><div class="empty" data-i18n="devices.noDevices">No active connections</div></div>
         </div>
       </div>
 
       <!-- Proxies Page -->
       <div class="page" id="page-proxies" style="display:none">
         <div class="proxy-tabs">
-          <div class="proxy-tab active" data-ptab="hy2" onclick="switchProxyTab(this)">Hysteria 2</div>
-          <div class="proxy-tab" data-ptab="socks5" onclick="switchProxyTab(this)">SOCKS5</div>
-          <div class="proxy-tab" data-ptab="ss" onclick="switchProxyTab(this)">Shadowsocks</div>
-          <div class="proxy-tab" data-ptab="l2tp" onclick="switchProxyTab(this)">L2TP</div>
-          <div class="proxy-tab" data-ptab="ikev2" onclick="switchProxyTab(this)">IKEv2/IPsec</div>
-          <div class="proxy-tab" data-ptab="wireguard" onclick="switchProxyTab(this)">WireGuard</div>
+          <div class="proxy-tab active" data-ptab="hy2" onclick="switchProxyTab(this)" data-i18n="proxies.hy2">Hysteria 2</div>
+          <div class="proxy-tab" data-ptab="socks5" onclick="switchProxyTab(this)" data-i18n="proxies.socks5">SOCKS5</div>
+          <div class="proxy-tab" data-ptab="ss" onclick="switchProxyTab(this)" data-i18n="proxies.ss">Shadowsocks</div>
+          <div class="proxy-tab" data-ptab="l2tp" onclick="switchProxyTab(this)" data-i18n="proxies.l2tp">L2TP</div>
+          <div class="proxy-tab" data-ptab="ikev2" onclick="switchProxyTab(this)" data-i18n="proxies.ikev2">IKEv2/IPsec</div>
+          <div class="proxy-tab" data-ptab="wireguard" onclick="switchProxyTab(this)" data-i18n="proxies.wireguard">WireGuard</div>
         </div>
 
         <div class="proxy-panel active" id="ptab-hy2">
           <div class="card">
-            <div class="card-header"><span class="card-title">Hysteria 2</span></div>
+            <div class="card-header"><span class="card-title" data-i18n="proxies.hy2">Hysteria 2</span></div>
             <div class="form-col" style="max-width:400px">
               <div class="form-grid">
-                <div class="form-group"><label>Listen Port</label><input id="hy2-port" type="number" disabled style="opacity:0.5"></div>
-                <div class="form-group"><label>Server Status</label><input id="hy2-status" disabled style="opacity:0.5" value="Loading..."></div>
+                <div class="form-group"><label data-i18n="hy2.port">Listen Port</label><input id="hy2-port" type="number" disabled style="opacity:0.5"></div>
+                <div class="form-group"><label data-i18n="hy2.serverStatus">Server Status</label><input id="hy2-status" disabled style="opacity:0.5" value="Loading..."></div>
               </div>
-              <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px">Server listen address and status are configured in the Nodes page (Edit Self). The settings above are read-only.</div>
+              <div style="font-size:12px;color:var(--text-muted);margin-bottom:4px" data-i18n="hy2.readOnlyNote">Server listen address and status are configured in the Nodes page (Edit Self). The settings above are read-only.</div>
               <div class="form-group">
-                <label>Allow User Auth</label>
+                <label data-i18n="hy2.allowUserAuth">Allow User Auth</label>
                 <label class="toggle" style="margin-top:4px"><input type="checkbox" id="hy2-user-auth"><span class="slider"></span></label>
               </div>
-              <div style="font-size:12px;color:var(--text-muted)">When enabled, hy2 clients can authenticate with their username/password. Each user's traffic is routed through their assigned exit node. When disabled, only the system password is accepted (no per-user routing).</div>
-              <div><button class="btn-primary btn-sm" onclick="saveHy2UserAuth()">Save</button></div>
+              <div style="font-size:12px;color:var(--text-muted)" data-i18n="hy2.userAuthDescLong">When enabled, hy2 clients can authenticate with their username/password. Each user's traffic is routed through their assigned exit node. When disabled, only the system password is accepted (no per-user routing).</div>
+              <div><button class="btn-primary btn-sm" onclick="saveHy2UserAuth()" data-i18n="app.save">Save</button></div>
             </div>
           </div>
         </div>
 
         <div class="proxy-panel" id="ptab-socks5" style="display:none">
           <div class="card">
-            <div class="card-header"><span class="card-title">SOCKS5 Server</span></div>
+            <div class="card-header"><span class="card-title" data-i18n="socks5.server">SOCKS5 Server</span></div>
             <div class="form-col" style="max-width:400px">
               <div class="form-grid">
-                <div class="form-group"><label>Listen Port</label><input id="sk5-port" type="number" placeholder="1080"></div>
+                <div class="form-group"><label data-i18n="socks5.port">Listen Port</label><input id="sk5-port" type="number" placeholder="1080"></div>
                 <div class="form-group">
-                  <label>Enabled</label>
+                  <label data-i18n="app.enabled">Enabled</label>
                   <label class="toggle" style="margin-top:4px"><input type="checkbox" id="sk5-enabled"><span class="slider"></span></label>
                 </div>
               </div>
-              <div style="font-size:12px;color:var(--text-muted)">Users authenticate via SOCKS5 username/password. Exit path is determined by the user's configuration.</div>
-              <div><button class="btn-primary btn-sm" onclick="saveSocks5()">Save</button></div>
+              <div style="font-size:12px;color:var(--text-muted)" data-i18n="socks5.desc">Users authenticate via SOCKS5 username/password. Exit path is determined by the user's configuration.</div>
+              <div><button class="btn-primary btn-sm" onclick="saveSocks5()" data-i18n="app.save">Save</button></div>
             </div>
           </div>
         </div>
 
         <div class="proxy-panel" id="ptab-ss" style="display:none">
           <div class="card">
-            <div class="card-header"><span class="card-title">Shadowsocks Server</span></div>
+            <div class="card-header"><span class="card-title" data-i18n="ss.server">Shadowsocks Server</span></div>
             <div class="form-col" style="max-width:400px">
               <div class="form-grid">
-                <div class="form-group"><label>Listen Port</label><input id="ss-port" type="number" placeholder="8388"></div>
+                <div class="form-group"><label data-i18n="ss.port">Listen Port</label><input id="ss-port" type="number" placeholder="8388"></div>
                 <div class="form-group">
-                  <label>Enabled</label>
+                  <label data-i18n="app.enabled">Enabled</label>
                   <label class="toggle" style="margin-top:4px"><input type="checkbox" id="ss-enabled"><span class="slider"></span></label>
                 </div>
               </div>
               <div class="form-group">
-                <label>Encryption Method</label>
+                <label data-i18n="ss.method">Encryption Method</label>
                 <select id="ss-method">
                   <optgroup label="AEAD">
                     <option value="aes-128-gcm">aes-128-gcm</option>
@@ -228,75 +228,75 @@
                   </optgroup>
                 </select>
               </div>
-              <div style="font-size:12px;color:var(--text-muted)">Each user's password is used as the SS key. The server tries all enabled user passwords to identify the connecting client.</div>
-              <div><button class="btn-primary btn-sm" onclick="saveSS()">Save</button></div>
+              <div style="font-size:12px;color:var(--text-muted)" data-i18n="ss.desc">Each user's password is used as the SS key. The server tries all enabled user passwords to identify the connecting client.</div>
+              <div><button class="btn-primary btn-sm" onclick="saveSS()" data-i18n="app.save">Save</button></div>
             </div>
           </div>
         </div>
 
         <div class="proxy-panel" id="ptab-l2tp" style="display:none">
-          <div id="l2tp-warn" class="l2tp-warn" style="display:none">
+          <div id="l2tp-warn" class="l2tp-warn" style="display:none" data-i18n="l2tp.warn" data-i18n-html>
             Insufficient privileges — container requires <code>--cap-add NET_ADMIN</code> and <code>--device /dev/ppp</code> to enable L2TP/IPsec.
           </div>
           <div class="card">
-            <div class="card-header"><span class="card-title">L2TP/IPsec Server</span></div>
+            <div class="card-header"><span class="card-title" data-i18n="l2tp.title">L2TP/IPsec Server</span></div>
             <div class="form-col" style="max-width:400px">
               <div class="form-grid">
-                <div class="form-group"><label>UDP Port</label><input id="l2tp-port" type="number" value="1701"></div>
+                <div class="form-group"><label data-i18n="l2tp.udpPort">UDP Port</label><input id="l2tp-port" type="number" value="1701"></div>
                 <div class="form-group">
-                  <label>Enabled</label>
+                  <label data-i18n="app.enabled">Enabled</label>
                   <label class="toggle" style="margin-top:4px"><input type="checkbox" id="l2tp-enabled"><span class="slider"></span></label>
                 </div>
               </div>
-              <div class="form-group"><label>Address Pool (CIDR)</label><input id="l2tp-pool" placeholder="192.168.25.1/24"></div>
-              <div class="form-group"><label>MTU</label><input id="l2tp-mtu" type="number" placeholder="1280"></div>
-              <div class="form-group"><label>IPsec Pre-Shared Key</label><div class="pw-wrap"><input id="l2tp-psk" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
-              <div style="font-size:12px;color:var(--text-muted)">Users authenticate via PPP CHAP with their HY2 SCALE credentials. TCP traffic routed per user's exit_via. UDP exits locally. Requires NET_ADMIN capability.</div>
-              <div><button class="btn-primary btn-sm" onclick="saveL2TP()">Save</button></div>
+              <div class="form-group"><label data-i18n="l2tp.pool">Address Pool (CIDR)</label><input id="l2tp-pool" placeholder="192.168.25.1/24"></div>
+              <div class="form-group"><label data-i18n="l2tp.mtu">MTU</label><input id="l2tp-mtu" type="number" placeholder="1280"></div>
+              <div class="form-group"><label data-i18n="l2tp.ipsecPsk">IPsec Pre-Shared Key</label><div class="pw-wrap"><input id="l2tp-psk" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+              <div style="font-size:12px;color:var(--text-muted)" data-i18n="l2tp.desc">Users authenticate via PPP CHAP with their HY2 SCALE credentials. TCP traffic routed per user's exit_via. UDP exits locally. Requires NET_ADMIN capability.</div>
+              <div><button class="btn-primary btn-sm" onclick="saveL2TP()" data-i18n="app.save">Save</button></div>
             </div>
           </div>
         </div>
 
         <div class="proxy-panel" id="ptab-ikev2" style="display:none">
-          <div id="ikev2-warn" class="l2tp-warn" style="display:none">
+          <div id="ikev2-warn" class="l2tp-warn" style="display:none" data-i18n="ikev2.warn" data-i18n-html>
             Insufficient privileges — container requires <code>--cap-add NET_ADMIN</code> and <code>--network host</code> to enable IKEv2/IPsec.
           </div>
           <div class="card">
-            <div class="card-header"><span class="card-title">IKEv2/IPsec Server</span></div>
+            <div class="card-header"><span class="card-title" data-i18n="ikev2.title">IKEv2/IPsec Server</span></div>
             <div class="form-col" style="max-width:450px">
               <div class="form-grid">
                 <div class="form-group">
-                  <label>Auth Mode</label>
+                  <label data-i18n="ikev2.mode">Auth Mode</label>
                   <select id="ikev2-mode" onchange="ikev2ModeChanged()">
-                    <option value="mschapv2">EAP-MSCHAPv2 (Certificate)</option>
-                    <option value="psk">Pre-Shared Key</option>
+                    <option value="mschapv2" data-i18n="ikev2.modeMschapv2">EAP-MSCHAPv2 (Certificate)</option>
+                    <option value="psk" data-i18n="ikev2.modePsk">Pre-Shared Key</option>
                   </select>
                 </div>
                 <div class="form-group">
-                  <label>Enabled</label>
+                  <label data-i18n="app.enabled">Enabled</label>
                   <label class="toggle" style="margin-top:4px"><input type="checkbox" id="ikev2-enabled"><span class="slider"></span></label>
                 </div>
               </div>
-              <div class="form-group"><label>Local ID</label><input id="ikev2-local-id" placeholder="node ID"></div>
-              <div class="form-group"><label>Remote ID</label><input id="ikev2-remote-id" placeholder="optional, default %any"></div>
-              <div class="form-group"><label>Address Pool (CIDR)</label><input id="ikev2-pool" placeholder="192.168.26.1/24"></div>
-              <div class="form-group"><label>MTU</label><input id="ikev2-mtu" type="number" placeholder="1400"></div>
+              <div class="form-group"><label data-i18n="ikev2.localId">Local ID</label><input id="ikev2-local-id" placeholder="node ID"></div>
+              <div class="form-group"><label data-i18n="ikev2.remoteId">Remote ID</label><input id="ikev2-remote-id" placeholder="optional, default %any"></div>
+              <div class="form-group"><label data-i18n="ikev2.pool">Address Pool (CIDR)</label><input id="ikev2-pool" placeholder="192.168.26.1/24"></div>
+              <div class="form-group"><label data-i18n="ikev2.mtu">MTU</label><input id="ikev2-mtu" type="number" placeholder="1400"></div>
 
               <div id="ikev2-mschapv2-fields">
                 <div class="form-group">
-                  <label>Server Certificate</label>
+                  <label data-i18n="ikev2.cert">Server Certificate</label>
                   <select id="ikev2-cert"></select>
                 </div>
-                <div style="font-size:12px;color:var(--text-muted)">Users authenticate with their HY2 SCALE username/password via EAP-MSCHAPv2. The selected certificate is used for server identity.</div>
+                <div style="font-size:12px;color:var(--text-muted)" data-i18n="ikev2.certDesc">Users authenticate with their HY2 SCALE username/password via EAP-MSCHAPv2. The selected certificate is used for server identity.</div>
               </div>
 
               <div id="ikev2-psk-fields" style="display:none">
-                <div class="form-group"><label>Pre-Shared Key</label><div class="pw-wrap"><input id="ikev2-psk" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
-                <div class="form-group"><label>Exit Via</label><input id="ikev2-default-exit" placeholder="node ID or empty for direct" oninput="checkIKEv2ExitReachability()"><div id="ikev2-exit-status" style="font-size:12px;margin-top:2px"></div></div>
-                <div style="font-size:12px;color:var(--text-muted)">All clients sharing the same PSK use this exit path. No per-user routing.</div>
+                <div class="form-group"><label data-i18n="ikev2.psk">Pre-Shared Key</label><div class="pw-wrap"><input id="ikev2-psk" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+                <div class="form-group"><label data-i18n="ikev2.defaultExit">Exit Via</label><input id="ikev2-default-exit" placeholder="node ID or empty for direct" oninput="checkIKEv2ExitReachability()"><div id="ikev2-exit-status" style="font-size:12px;margin-top:2px"></div></div>
+                <div style="font-size:12px;color:var(--text-muted)" data-i18n="ikev2.pskDesc">All clients sharing the same PSK use this exit path. No per-user routing.</div>
               </div>
 
-              <div><button class="btn-primary btn-sm" onclick="saveIKEv2()">Save</button></div>
+              <div><button class="btn-primary btn-sm" onclick="saveIKEv2()" data-i18n="app.save">Save</button></div>
             </div>
           </div>
         </div>
@@ -304,39 +304,39 @@
         <div class="proxy-panel" id="ptab-wireguard" style="display:none">
           <div class="card">
             <div class="card-header">
-              <span class="card-title">WireGuard Server</span>
+              <span class="card-title" data-i18n="wg.title">WireGuard Server</span>
               <span id="wg-status" style="margin-left:8px;font-size:12px"></span>
             </div>
             <div class="form-col" style="max-width:500px">
               <div class="form-grid">
-                <div class="form-group"><label>Listen Port</label><input id="wg-port" type="number" value="51820"></div>
+                <div class="form-group"><label data-i18n="wg.port">Listen Port</label><input id="wg-port" type="number" value="51820"></div>
                 <div class="form-group">
-                  <label>Enabled</label>
+                  <label data-i18n="app.enabled">Enabled</label>
                   <label class="toggle" style="margin-top:4px"><input type="checkbox" id="wg-enabled"><span class="slider"></span></label>
                 </div>
               </div>
-              <div class="form-group"><label>Address (CIDR)</label><input id="wg-address" placeholder="10.0.0.1/24"></div>
+              <div class="form-group"><label data-i18n="wg.address">Address (CIDR)</label><input id="wg-address" placeholder="10.0.0.1/24"></div>
               <div class="form-group">
-                <label>Private Key</label>
+                <label data-i18n="wg.privKey">Private Key</label>
                 <div style="display:flex;gap:4px;align-items:center">
                   <input id="wg-privkey" style="flex:1" onchange="wgPrivKeyChanged()">
                   <button class="btn-icon" onclick="generateWGServerKey()" title="Generate key pair" style="border:1px solid var(--border);border-radius:50%;width:28px;height:28px;padding:0;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg></button>
                 </div>
               </div>
-              <div class="form-group"><label>Public Key</label><input id="wg-pubkey" readonly style="color:var(--text-muted)"></div>
+              <div class="form-group"><label data-i18n="wg.pubKey">Public Key</label><input id="wg-pubkey" readonly style="color:var(--text-muted)"></div>
               <!-- DNS reuses Settings → System DNS -->
-              <div class="form-group"><label>MTU</label><input id="wg-mtu" type="number" value="1420"></div>
-              <div><button class="btn-primary btn-sm" onclick="saveWireGuard()">Save</button></div>
+              <div class="form-group"><label data-i18n="wg.mtu">MTU</label><input id="wg-mtu" type="number" value="1420"></div>
+              <div><button class="btn-primary btn-sm" onclick="saveWireGuard()" data-i18n="app.save">Save</button></div>
             </div>
           </div>
           <div class="card" style="margin-top:12px">
             <div class="card-header">
-              <span class="card-title">Peers</span>
+              <span class="card-title" data-i18n="wg.peers">Peers</span>
               <span class="card-count" id="wg-peer-count">0</span>
               <span class="spacer"></span>
-              <button class="btn-primary btn-sm" onclick="openWGPeerDialog()">+ Add Peer</button>
+              <button class="btn-primary btn-sm" onclick="openWGPeerDialog()" data-i18n="wg.addPeer">+ Add Peer</button>
             </div>
-            <div id="wg-peer-list"><div class="empty">No peers</div></div>
+            <div id="wg-peer-list"><div class="empty" data-i18n="wg.noPeersShort">No peers</div></div>
           </div>
         </div>
       </div>
@@ -345,28 +345,28 @@
       <div class="modal-overlay" id="wg-peer-dialog" style="display:none" onmousedown="if(event.target===this)closeWGPeerDialog()">
         <div class="modal" style="max-width:460px">
           <div class="modal-header">
-            <h2 id="wgp-modal-title">Add WireGuard Peer</h2>
+            <h2 id="wgp-modal-title" data-i18n="wg.addPeerTitle">Add WireGuard Peer</h2>
             <button class="btn-icon" onclick="closeWGPeerDialog()">&#10005;</button>
           </div>
           <div class="modal-body" style="padding-top:16px">
             <div class="form-col">
-              <div class="form-group"><label>Name *</label><input id="wgp-name" placeholder="phone"></div>
+              <div class="form-group"><label data-i18n="wg.peerName">Name *</label><input id="wgp-name" placeholder="phone"></div>
               <div class="form-group">
-                <label>Public Key *</label>
+                <label data-i18n="wg.peerPubKey">Public Key *</label>
                 <div style="display:flex;gap:4px;align-items:center">
                   <input id="wgp-pubkey" style="flex:1" onchange="validateWGKey(this)">
                   <button class="btn-icon" onclick="generateWGPeerKeys()" title="Generate key pair" style="border:1px solid var(--border);border-radius:50%;width:28px;height:28px;padding:0;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg></button>
                 </div>
               </div>
-              <div class="form-group"><label>Private Key</label><input id="wgp-privkey" onchange="validateWGKey(this)" placeholder="stored for config download"></div>
-              <div class="form-group"><label>Allowed IPs *</label><input id="wgp-allowedips" placeholder="10.0.0.2/32"></div>
-              <div class="form-group"><label>Exit Via</label><input id="wgp-exitvia" placeholder="e.g. au/node (empty = direct)"></div>
-              <div class="form-group"><label>Keepalive (seconds)</label><input id="wgp-keepalive" type="number" value="25"></div>
+              <div class="form-group"><label data-i18n="wg.peerPrivKey">Private Key</label><input id="wgp-privkey" onchange="validateWGKey(this)" placeholder="stored for config download"></div>
+              <div class="form-group"><label data-i18n="wg.peerAllowedIPs">Allowed IPs *</label><input id="wgp-allowedips" placeholder="10.0.0.2/32"></div>
+              <div class="form-group"><label data-i18n="wg.peerExitVia">Exit Via</label><input id="wgp-exitvia" placeholder="e.g. au/node (empty = direct)"></div>
+              <div class="form-group"><label data-i18n="wg.peerKeepalive">Keepalive (seconds)</label><input id="wgp-keepalive" type="number" value="25"></div>
             </div>
           </div>
           <div class="modal-footer">
-            <button onclick="closeWGPeerDialog()">Cancel</button>
-            <button class="btn-primary" id="wgp-submit" onclick="submitWGPeer()">Add</button>
+            <button onclick="closeWGPeerDialog()" data-i18n="app.cancel">Cancel</button>
+            <button class="btn-primary" id="wgp-submit" onclick="submitWGPeer()" data-i18n="app.add">Add</button>
           </div>
         </div>
       </div>
@@ -383,8 +383,8 @@
             <pre id="wgp-detail-conf" style="text-align:left;font-size:11px;background:var(--bg-subtle);border:1px solid var(--border);border-radius:6px;padding:10px;margin:12px 0 0;max-height:160px;overflow:auto;white-space:pre-wrap;word-break:break-all"></pre>
           </div>
           <div class="modal-footer">
-            <button onclick="closeWGPeerDetail()">Close</button>
-            <button class="btn-primary" onclick="downloadFromDetail()">Download .conf</button>
+            <button onclick="closeWGPeerDetail()" data-i18n="app.close">Close</button>
+            <button class="btn-primary" onclick="downloadFromDetail()" data-i18n="wg.downloadConf">Download .conf</button>
           </div>
         </div>
       </div>
@@ -393,55 +393,55 @@
       <div class="page" id="page-tls" style="display:none">
         <div class="card">
           <div class="card-header">
-            <span class="card-title">Certificates</span>
+            <span class="card-title" data-i18n="tls.title">Certificates</span>
             <span class="card-count" id="cert-count">0</span>
             <span class="spacer"></span>
-            <button class="btn-primary btn-sm" onclick="openNewCertDialog()">New</button>
+            <button class="btn-primary btn-sm" onclick="openNewCertDialog()" data-i18n="tls.new">New</button>
           </div>
-          <div id="cert-list"><div class="empty">Loading...</div></div>
+          <div id="cert-list"><div class="empty" data-i18n="app.loading">Loading...</div></div>
         </div>
       </div>
 
       <!-- Settings Page -->
       <div class="page" id="page-settings" style="display:none">
         <div class="proxy-tabs">
-          <div class="proxy-tab active" data-settab="system" onclick="switchSettingsTab(this)">System</div>
-          <div class="proxy-tab" data-settab="web" onclick="switchSettingsTab(this)">Web</div>
+          <div class="proxy-tab active" data-settab="system" onclick="switchSettingsTab(this)" data-i18n="settings.system">System</div>
+          <div class="proxy-tab" data-settab="web" onclick="switchSettingsTab(this)" data-i18n="settings.web">Web</div>
         </div>
 
         <div class="settings-panel active" id="stab-system">
           <div class="card">
-            <div class="card-header"><span class="card-title">System</span></div>
+            <div class="card-header"><span class="card-title" data-i18n="settings.system">System</span></div>
             <div class="form-col" style="max-width:400px">
-              <div class="form-group"><label>VPN DNS Servers</label><input id="ui-dns" placeholder="8.8.8.8,1.1.1.1"></div>
-              <button class="btn-primary btn-sm" onclick="saveDNS()">Save</button>
+              <div class="form-group"><label data-i18n="settings.vpnDns">VPN DNS Servers</label><input id="ui-dns" placeholder="8.8.8.8,1.1.1.1"></div>
+              <button class="btn-primary btn-sm" onclick="saveDNS()" data-i18n="app.save">Save</button>
             </div>
           </div>
           <div class="card">
-            <div class="card-header"><span class="card-title">Credentials</span></div>
+            <div class="card-header"><span class="card-title" data-i18n="settings.credentials">Credentials</span></div>
             <div class="form-col" style="max-width:400px">
-              <div class="form-group"><label>Current Password</label><div class="pw-wrap"><input id="set-cur-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
-              <div class="form-group"><label>New Username (optional)</label><input id="set-new-user"></div>
-              <div class="form-group"><label>New Password</label><div class="pw-wrap"><input id="set-new-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
-              <div class="form-group"><label>Confirm Password</label><div class="pw-wrap"><input id="set-confirm-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+              <div class="form-group"><label data-i18n="settings.currentPassword">Current Password</label><div class="pw-wrap"><input id="set-cur-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+              <div class="form-group"><label data-i18n="settings.newUsernameOpt">New Username (optional)</label><input id="set-new-user"></div>
+              <div class="form-group"><label data-i18n="settings.newPassword">New Password</label><div class="pw-wrap"><input id="set-new-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+              <div class="form-group"><label data-i18n="settings.confirmPassword">Confirm Password</label><div class="pw-wrap"><input id="set-confirm-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
               <div id="set-error" class="msg-error"></div>
-              <button class="btn-primary btn-sm" onclick="changePassword()">Update</button>
+              <button class="btn-primary btn-sm" onclick="changePassword()" data-i18n="settings.update">Update</button>
             </div>
           </div>
         </div>
 
         <div class="settings-panel" id="stab-web" style="display:none">
           <div class="card">
-            <div class="card-header"><span class="card-title">Web UI</span><span class="badge badge-muted">restart required</span></div>
+            <div class="card-header"><span class="card-title" data-i18n="settings.webUi">Web UI</span><span class="badge badge-muted" data-i18n="settings.restartRequired">restart required</span></div>
             <div class="form-col" style="max-width:400px">
-              <div class="form-group"><label>Listen Address</label><input id="ui-listen" placeholder="0.0.0.0:5565"></div>
-              <div class="form-group"><label>Base Path</label><input id="ui-basepath" placeholder="/scale"></div>
+              <div class="form-group"><label data-i18n="settings.listenAddress">Listen Address</label><input id="ui-listen" placeholder="0.0.0.0:5565"></div>
+              <div class="form-group"><label data-i18n="settings.basePath">Base Path</label><input id="ui-basepath" placeholder="/scale"></div>
               <div class="form-group">
-                <label>Force HTTPS</label>
+                <label data-i18n="settings.forceHttps">Force HTTPS</label>
                 <label class="toggle" style="margin-top:4px"><input type="checkbox" id="ui-https" onchange="toggleHttpsCert()"><span class="slider"></span></label>
               </div>
               <div class="form-group" id="ui-https-cert-group" style="display:none">
-                <label>TLS Certificate</label>
+                <label data-i18n="settings.tlsCert">TLS Certificate</label>
                 <select id="ui-https-cert"></select>
               </div>
               <div class="form-group"><label data-i18n="settings.sessionTimeout">Session Timeout (hours)</label><input id="ui-session-timeout" type="number" placeholder="12" value="12"></div>
@@ -460,28 +460,28 @@
 <div class="modal-overlay" id="edit-self-modal" style="display:none" onmousedown="if(event.target===this)closeEditSelf()">
   <div class="modal" style="max-width:480px">
     <div class="modal-header">
-      <h2>Edit Local Node</h2>
+      <h2 data-i18n="nodes.editSelf">Edit Local Node</h2>
       <button class="btn-icon" onclick="closeEditSelf()">&#10005;</button>
     </div>
     <div class="modal-body" style="padding-top:16px">
       <div class="form-col">
-        <div class="form-group"><label>Node ID</label><input id="self-nodeid"></div>
-        <div class="section-divider">hy2 Server <span class="badge badge-muted" style="margin-left:4px">restart required</span></div>
+        <div class="form-group"><label data-i18n="settings.nodeId">Node ID</label><input id="self-nodeid"></div>
+        <div class="section-divider"><span data-i18n="nodes.hy2Server">hy2 Server</span> <span class="badge badge-muted" style="margin-left:4px" data-i18n="settings.restartRequired">restart required</span></div>
         <div class="form-grid">
-          <div class="form-group"><label>Listen (UDP)</label><input id="self-srv-listen" placeholder="0.0.0.0:5565"></div>
-          <div class="form-group"><label>Password</label><div class="pw-wrap"><input id="self-srv-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+          <div class="form-group"><label data-i18n="nodes.listenUdp">Listen (UDP)</label><input id="self-srv-listen" placeholder="0.0.0.0:5565"></div>
+          <div class="form-group"><label data-i18n="nodes.password">Password</label><div class="pw-wrap"><input id="self-srv-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
         </div>
         <div class="form-group">
-          <label>TLS Certificate</label>
-          <select id="self-srv-tls"><option value="">Self-signed (auto)</option></select>
+          <label data-i18n="settings.tlsCert">TLS Certificate</label>
+          <select id="self-srv-tls"><option value="" data-i18n="nodes.selfSignedAuto">Self-signed (auto)</option></select>
         </div>
         <div class="msg-error" id="self-error"></div>
         <div class="msg-ok" id="self-ok"></div>
       </div>
     </div>
     <div class="modal-footer">
-      <button onclick="closeEditSelf()">Cancel</button>
-      <button class="btn-primary" onclick="submitEditSelf()">Save</button>
+      <button onclick="closeEditSelf()" data-i18n="app.cancel">Cancel</button>
+      <button class="btn-primary" onclick="submitEditSelf()" data-i18n="app.save">Save</button>
     </div>
   </div>
 </div>
@@ -490,54 +490,54 @@
 <div class="modal-overlay" id="add-node-modal" style="display:none" onmousedown="if(event.target===this)closeAddDialog()">
   <div class="modal">
     <div class="modal-header">
-      <h2 id="add-node-modal-title">Add Node Connection</h2>
+      <h2 id="add-node-modal-title" data-i18n="nodes.addTitle">Add Node Connection</h2>
       <button class="btn-icon" onclick="closeAddDialog()">&#10005;</button>
     </div>
     <div class="modal-body" style="padding-top:16px">
       <div class="form-col">
         <!-- Connection -->
         <div class="form-grid">
-          <div class="form-group"><label>Address *</label><input id="add-addr" placeholder="host:port"></div>
-          <div class="form-group"><label>Password *</label><div class="pw-wrap"><input id="add-pass" type="password" placeholder="Auth password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
-          <div class="form-group"><label>Upload (Mbps)</label><input id="add-tx" type="number" placeholder="0 = 1000 Mbps"></div>
-          <div class="form-group"><label>Download (Mbps)</label><input id="add-rx" type="number" placeholder="0 = 1000 Mbps"></div>
+          <div class="form-group"><label data-i18n="nodes.address">Address *</label><input id="add-addr" placeholder="host:port"></div>
+          <div class="form-group"><label data-i18n="nodes.password">Password *</label><div class="pw-wrap"><input id="add-pass" type="password" placeholder="Auth password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+          <div class="form-group"><label data-i18n="nodes.upload">Upload (Mbps)</label><input id="add-tx" type="number" placeholder="0 = 1000 Mbps"></div>
+          <div class="form-group"><label data-i18n="nodes.download">Download (Mbps)</label><input id="add-rx" type="number" placeholder="0 = 1000 Mbps"></div>
           <div class="form-group">
-            <label>Fast Open</label>
+            <label data-i18n="nodes.fastOpen">Fast Open</label>
             <label class="toggle" style="margin-top:4px"><input type="checkbox" id="add-fastopen"><span class="slider"></span></label>
           </div>
         </div>
 
         <!-- TLS -->
-        <div class="section-divider">TLS</div>
+        <div class="section-divider" data-i18n="nodes.tls">TLS</div>
         <div class="form-grid">
-          <div class="form-group"><label>SNI (Server Name)</label><input id="add-sni" placeholder="auto: HY2 SCALE"></div>
+          <div class="form-group"><label data-i18n="nodes.sni">SNI (Server Name)</label><input id="add-sni" placeholder="auto: HY2 SCALE"></div>
           <div class="form-group">
-            <label>Skip Verify</label>
+            <label data-i18n="nodes.skipVerify">Skip Verify</label>
             <label class="toggle" style="margin-top:4px"><input type="checkbox" id="add-insecure" checked><span class="slider"></span></label>
           </div>
         </div>
         <div class="form-group">
-          <label>CA Certificate (PEM)</label>
+          <label data-i18n="nodes.caCert">CA Certificate (PEM)</label>
           <textarea id="add-ca" placeholder="Paste CA cert PEM here (optional)..."></textarea>
         </div>
 
         <!-- QUIC Advanced -->
         <div class="section-divider" style="cursor:pointer" onclick="$('#quic-advanced').style.display=$('#quic-advanced').style.display==='none'?'':'none'; this.querySelector('.adv-arrow').classList.toggle('open',$('#quic-advanced').style.display!=='none')">
-          QUIC Advanced <svg class="adv-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="transition:transform .2s;vertical-align:middle;margin-left:4px"><polyline points="6 9 12 15 18 9"/></svg>
+          <span data-i18n="nodes.quicAdvanced">QUIC Advanced</span> <svg class="adv-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="transition:transform .2s;vertical-align:middle;margin-left:4px"><polyline points="6 9 12 15 18 9"/></svg>
         </div>
         <div id="quic-advanced" style="display:none">
           <div class="form-grid">
-            <div class="form-group"><label>Init Stream Window</label><input id="add-isw" type="number" placeholder="67108864 (64MB)"></div>
-            <div class="form-group"><label>Max Stream Window</label><input id="add-msw" type="number" placeholder="67108864 (64MB)"></div>
-            <div class="form-group"><label>Init Conn Window</label><input id="add-icw" type="number" placeholder="134217728 (128MB)"></div>
-            <div class="form-group"><label>Max Conn Window</label><input id="add-mcw" type="number" placeholder="134217728 (128MB)"></div>
+            <div class="form-group"><label data-i18n="nodes.initStreamWindow">Init Stream Window</label><input id="add-isw" type="number" placeholder="67108864 (64MB)"></div>
+            <div class="form-group"><label data-i18n="nodes.maxStreamWindow">Max Stream Window</label><input id="add-msw" type="number" placeholder="67108864 (64MB)"></div>
+            <div class="form-group"><label data-i18n="nodes.initConnWindow">Init Conn Window</label><input id="add-icw" type="number" placeholder="134217728 (128MB)"></div>
+            <div class="form-group"><label data-i18n="nodes.maxConnWindow">Max Conn Window</label><input id="add-mcw" type="number" placeholder="134217728 (128MB)"></div>
           </div>
         </div>
       </div>
     </div>
     <div class="modal-footer">
-      <button onclick="closeAddDialog()">Cancel</button>
-      <button class="btn-primary" id="add-node-submit" onclick="submitAddNode()">Connect</button>
+      <button onclick="closeAddDialog()" data-i18n="app.cancel">Cancel</button>
+      <button class="btn-primary" id="add-node-submit" onclick="submitAddNode()" data-i18n="nodes.connect">Connect</button>
     </div>
   </div>
 </div>
@@ -570,29 +570,29 @@
 <div class="modal-overlay" id="user-modal" style="display:none" onmousedown="if(event.target===this)closeUserDialog()">
   <div class="modal" style="max-width:460px">
     <div class="modal-header">
-      <h2 id="user-modal-title">Add User</h2>
+      <h2 id="user-modal-title" data-i18n="users.addTitle">Add User</h2>
       <button class="btn-icon" onclick="closeUserDialog()">&#10005;</button>
     </div>
     <div class="modal-body" style="padding-top:16px">
       <div class="form-col">
         <div class="form-grid">
-          <div class="form-group"><label>Username *</label><input id="u-username"></div>
-          <div class="form-group"><label>Password *</label><div class="pw-wrap"><input id="u-password" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+          <div class="form-group"><label data-i18n="users.username">Username *</label><input id="u-username"></div>
+          <div class="form-group"><label data-i18n="users.password">Password *</label><div class="pw-wrap"><input id="u-password" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
         </div>
-        <div class="form-group"><label>Exit Via</label><input id="u-exitvia" placeholder="e.g. au/fast-test (empty = direct)"></div>
+        <div class="form-group"><label data-i18n="users.exitVia">Exit Via</label><input id="u-exitvia" data-i18n="users.exitViaHint" placeholder="e.g. au/fast-test (empty = direct)"></div>
         <div class="form-grid">
-          <div class="form-group"><label>Traffic Limit (GB, 0=unlimited)</label><input id="u-limit" type="number" value="0"></div>
-          <div class="form-group"><label>Expiry Date</label><input id="u-expiry" type="date"></div>
+          <div class="form-group"><label data-i18n="users.trafficLimit">Traffic Limit (GB, 0=unlimited)</label><input id="u-limit" type="number" value="0"></div>
+          <div class="form-group"><label data-i18n="users.expiryDate">Expiry Date</label><input id="u-expiry" type="date"></div>
         </div>
         <div class="form-group">
-          <label>Enabled</label>
+          <label data-i18n="app.enabled">Enabled</label>
           <label class="toggle" style="margin-top:4px"><input type="checkbox" id="u-enabled" checked><span class="slider"></span></label>
         </div>
       </div>
     </div>
     <div class="modal-footer">
-      <button onclick="closeUserDialog()">Cancel</button>
-      <button class="btn-primary" id="user-submit" onclick="submitUser()">Add</button>
+      <button onclick="closeUserDialog()" data-i18n="app.cancel">Cancel</button>
+      <button class="btn-primary" id="user-submit" onclick="submitUser()" data-i18n="app.add">Add</button>
     </div>
   </div>
 </div>
@@ -602,39 +602,39 @@
 <div class="modal-overlay" id="new-cert-modal" style="display:none" onmousedown="if(event.target===this)closeNewCertDialog()">
   <div class="modal" style="max-width:520px">
     <div class="modal-header">
-      <h2>New Certificate</h2>
+      <h2 data-i18n="tls.newTitle">New Certificate</h2>
       <button class="btn-icon" onclick="closeNewCertDialog()">&#10005;</button>
     </div>
     <div class="modal-body" style="padding-top:0">
       <div style="display:flex;align-items:center;gap:8px;margin:12px 0">
         <div class="proxy-tabs" style="margin-bottom:0">
-          <div class="proxy-tab active" data-certtab="paste" onclick="switchCertTab(this)">Manual Input</div>
-          <div class="proxy-tab" data-certtab="path" onclick="switchCertTab(this)">File Path</div>
+          <div class="proxy-tab active" data-certtab="paste" onclick="switchCertTab(this)" data-i18n="tls.manualInput">Manual Input</div>
+          <div class="proxy-tab" data-certtab="path" onclick="switchCertTab(this)" data-i18n="tls.filePath">File Path</div>
         </div>
         <button id="cert-gen-icon" class="btn-icon" title="Generate self-signed certificate" onclick="generateCertPEM()" style="border:1px solid var(--border);border-radius:50%;width:28px;height:28px;padding:0;display:flex;align-items:center;justify-content:center"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg></button>
       </div>
       <div class="form-col">
         <div class="form-grid">
-          <div class="form-group"><label>ID *</label><input id="cert-id" placeholder="e.g. my-cert"></div>
-          <div class="form-group"><label>Display Name</label><input id="cert-name" placeholder="optional"></div>
+          <div class="form-group"><label data-i18n="tls.id">ID *</label><input id="cert-id" placeholder="e.g. my-cert"></div>
+          <div class="form-group"><label data-i18n="tls.name">Display Name</label><input id="cert-name" placeholder="optional"></div>
         </div>
         <div id="cert-tab-paste">
           <div class="form-col">
-            <div class="form-group"><label>Certificate (PEM) *</label><textarea id="cert-pem" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----" style="min-height:100px"></textarea></div>
-            <div class="form-group"><label>Private Key (PEM)</label><textarea id="cert-key-pem" placeholder="-----BEGIN EC PRIVATE KEY-----&#10;...&#10;-----END EC PRIVATE KEY-----" style="min-height:80px"></textarea></div>
+            <div class="form-group"><label data-i18n="tls.certPem">Certificate (PEM) *</label><textarea id="cert-pem" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----" style="min-height:100px"></textarea></div>
+            <div class="form-group"><label data-i18n="tls.keyPem">Private Key (PEM)</label><textarea id="cert-key-pem" placeholder="-----BEGIN EC PRIVATE KEY-----&#10;...&#10;-----END EC PRIVATE KEY-----" style="min-height:80px"></textarea></div>
           </div>
         </div>
         <div id="cert-tab-path" style="display:none">
           <div class="form-col">
-            <div class="form-group"><label>Certificate File Path *</label><input id="cert-path" placeholder="/path/to/cert.pem"></div>
-            <div class="form-group"><label>Private Key File Path</label><input id="cert-key-path" placeholder="/path/to/key.pem"></div>
+            <div class="form-group"><label data-i18n="tls.certPath">Certificate File Path *</label><input id="cert-path" placeholder="/path/to/cert.pem"></div>
+            <div class="form-group"><label data-i18n="tls.keyPath">Private Key File Path</label><input id="cert-key-path" placeholder="/path/to/key.pem"></div>
           </div>
         </div>
       </div>
     </div>
     <div class="modal-footer">
-      <button onclick="closeNewCertDialog()">Cancel</button>
-      <button class="btn-primary" id="cert-submit-btn" onclick="submitCertDialog()">New</button>
+      <button onclick="closeNewCertDialog()" data-i18n="app.cancel">Cancel</button>
+      <button class="btn-primary" id="cert-submit-btn" onclick="submitCertDialog()" data-i18n="tls.new">New</button>
     </div>
   </div>
 </div>
