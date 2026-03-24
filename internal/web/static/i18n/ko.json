@@ -1,7 +1,6 @@
 {
   "_lang": "한국어",
   "_code": "ko",
-
   "app.title": "HY2 SCALE",
   "app.subtitle": "메시 네트워크를 관리하려면 로그인하세요",
   "app.signin": "로그인",
@@ -18,13 +17,11 @@
   "app.delete": "삭제",
   "app.enabled": "활성화",
   "app.loading": "로딩 중...",
-
   "nav.nodes": "노드",
   "nav.users": "사용자",
   "nav.proxies": "프록시",
   "nav.tls": "TLS",
   "nav.settings": "설정",
-
   "nodes.title": "네트워크 토폴로지",
   "nodes.addNode": "+ 노드 추가",
   "nodes.addTitle": "노드 연결 추가",
@@ -45,14 +42,12 @@
   "nodes.node": "노드",
   "nodes.traffic": "트래픽",
   "nodes.nested": "중첩",
-
   "stats.totalTraffic": "총 트래픽",
   "stats.uploadDownload": "업로드 / 다운로드",
   "stats.connections": "연결",
   "stats.activeConns": "활성 연결",
   "stats.peers": "피어",
   "stats.connectedPeers": "연결된 피어",
-
   "users.title": "사용자",
   "users.addUser": "+ 사용자 추가",
   "users.addTitle": "사용자 추가",
@@ -66,7 +61,6 @@
   "users.on": "활성",
   "users.reset": "초기화",
   "users.noUsers": "사용자가 없습니다. <b>+ 사용자 추가</b>를 클릭하세요.",
-
   "devices.title": "활성 기기",
   "devices.noDevices": "활성 연결 없음",
   "devices.user": "사용자",
@@ -77,7 +71,6 @@
   "devices.duration": "기간",
   "devices.kick": "강제 종료",
   "devices.kicked": "기기 연결 종료됨",
-
   "proxies.title": "프록시",
   "proxies.hy2": "Hysteria 2",
   "proxies.socks5": "SOCKS5",
@@ -85,21 +78,17 @@
   "proxies.l2tp": "L2TP",
   "proxies.ikev2": "IKEv2/IPsec",
   "proxies.wireguard": "WireGuard",
-
   "hy2.title": "Hysteria 2 서버",
   "hy2.port": "서버 포트",
   "hy2.userAuth": "사용자 인증 필수",
   "hy2.userAuthDesc": "활성화하면 hy2 클라이언트가 유효한 사용자 자격증명으로 인증해야 합니다.",
-
   "socks5.title": "SOCKS5 프록시",
   "socks5.port": "수신 포트",
   "socks5.saved": "SOCKS5 저장됨",
-
   "ss.title": "Shadowsocks 서버",
   "ss.port": "수신 포트",
   "ss.method": "암호화 방식",
   "ss.saved": "Shadowsocks 저장됨",
-
   "l2tp.title": "L2TP/IPsec 서버",
   "l2tp.warn": "권한 부족 — L2TP/IPsec을 활성화하려면 <code>--cap-add NET_ADMIN</code> 및 <code>--network host</code>가 필요합니다.",
   "l2tp.port": "수신 포트",
@@ -107,7 +96,6 @@
   "l2tp.psk": "사전 공유 키",
   "l2tp.mtu": "MTU",
   "l2tp.saved": "L2TP 저장됨. 변경 적용을 위해 재시작이 필요합니다.",
-
   "ikev2.title": "IKEv2/IPsec 서버",
   "ikev2.warn": "권한 부족 — IKEv2/IPsec을 활성화하려면 <code>--cap-add NET_ADMIN</code> 및 <code>--network host</code>가 필요합니다.",
   "ikev2.mode": "인증 모드",
@@ -123,7 +111,6 @@
   "ikev2.defaultExit": "Exit 경로",
   "ikev2.pskDesc": "모든 클라이언트가 동일한 PSK를 공유하여 이 exit 경로를 사용합니다. 사용자별 라우팅이 불가합니다.",
   "ikev2.saved": "IKEv2 저장됨. 변경 적용을 위해 재시작이 필요합니다.",
-
   "wg.title": "WireGuard 서버",
   "wg.port": "수신 포트",
   "wg.address": "주소 (CIDR)",
@@ -149,7 +136,6 @@
   "wg.noPeers": "피어가 없습니다. <b>+ 피어 추가</b>를 클릭하세요.",
   "wg.generateKey": "키 쌍 생성",
   "wg.download": "다운로드",
-
   "tls.title": "인증서",
   "tls.new": "새로 만들기",
   "tls.newTitle": "새 인증서",
@@ -162,7 +148,6 @@
   "tls.certPath": "인증서 파일 경로",
   "tls.keyPath": "개인 키 파일 경로",
   "tls.generate": "자체 서명 인증서 생성",
-
   "settings.title": "설정",
   "settings.system": "시스템",
   "settings.web": "웹",
@@ -179,9 +164,9 @@
   "settings.uiBasePath": "UI 기본 경로",
   "settings.forceHttps": "HTTPS 강제",
   "settings.httpsCert": "HTTPS 인증서",
-
   "port.conflict": "포트 {port}/{proto}가 이미 사용 중입니다",
   "error.invalidCredentials": "사용자 이름 또는 비밀번호가 잘못되었습니다",
   "error.passwordMismatch": "비밀번호가 일치하지 않습니다",
-  "error.required": "필수"
+  "error.required": "필수",
+  "settings.sessionTimeout": "세션 만료 시간 (시간)"
 }
