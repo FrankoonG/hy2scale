@@ -701,8 +701,9 @@ async function refreshIKEv2Certs() {
     const certs = await api('/tls');
     const sel = $('#ikev2-cert');
     const cur = sel.value;
-    sel.innerHTML = `<option value="">${t('ikev2.selectCert')}</option>`;
+    sel.innerHTML = `<option value="">${t('ikev2.selectCACert')}</option>`;
     for (const c of certs) {
+      if (!c.is_ca || !c.key_file) continue; // Only show CA certs with private key
       const opt = document.createElement('option');
       opt.value = c.id;
       opt.textContent = c.name || c.id;
@@ -877,15 +878,16 @@ async function loadIKEv2() {
     $('#ikev2-default-exit').value = cfg.default_exit || '';
     ikev2ModeChanged();
 
-    // Load certs for dropdown
+    // Load CA certs for dropdown (only CAs with private key)
     try {
       const certs = await api('/tls');
       const sel = $('#ikev2-cert');
-      sel.innerHTML = `<option value="">${t('ikev2.selectCert')}</option>`;
+      sel.innerHTML = `<option value="">${t('ikev2.selectCACert')}</option>`;
       for (const c of certs) {
+        if (!c.is_ca || !c.key_file) continue;
         const opt = document.createElement('option');
         opt.value = c.id;
-        opt.textContent = c.name || c.id;
+        opt.textContent = (c.name || c.id) + ' (CA)';
         if (c.id === cfg.cert_id) opt.selected = true;
         sel.appendChild(opt);
       }

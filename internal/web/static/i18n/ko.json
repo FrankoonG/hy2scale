@@ -172,6 +172,7 @@
   "ikev2.pskDesc": "모든 클라이언트가 동일한 PSK를 공유하여 이 exit 경로를 사용합니다. 사용자별 라우팅이 불가합니다.",
   "ikev2.saved": "IKEv2 저장됨. 변경 적용을 위해 재시작이 필요합니다.",
   "ikev2.selectCert": "-- 인증서 선택 --",
+  "ikev2.selectCACert": "-- CA 인증서 선택 --",
   "ikev2.poolRequired": "주소 풀은 필수입니다",
   "ikev2.certRequired": "MSCHAPv2 모드에는 인증서가 필요합니다",
   "ikev2.pskRequired": "사전 공유 키는 필수입니다",

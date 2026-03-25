@@ -2,8 +2,6 @@ package app
 
 import (
 	"context"
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"log"
 	"net"
@@ -89,20 +87,7 @@ pools {
 `, localID, remoteID, ipRange, strings.ReplaceAll(dns, " ", ", "))
 
 	case "mschapv2":
-		// Read cert to extract CN for server identity (iKuai clients use this for EAP secret lookup)
-		serverCN := localID
-		if certData, err := os.ReadFile(a.tls.CertPath(cfg.CertID)); err == nil {
-			if block, _ := pem.Decode(certData); block != nil {
-				if cert, err := x509.ParseCertificate(block.Bytes); err == nil {
-					// Prefer SAN DNS name, fall back to CN
-					if len(cert.DNSNames) > 0 {
-						serverCN = cert.DNSNames[0]
-					} else if cert.Subject.CommonName != "" {
-						serverCN = cert.Subject.CommonName
-					}
-				}
-			}
-		}
+		// Server identity = localID (matches auto-generated cert CN/SAN)
 		conf = fmt.Sprintf(`connections {
     ikev2-mschapv2 {
         version = 2
@@ -140,7 +125,7 @@ pools {
         dns = %s
     }
 }
-`, serverCN, ipRange, strings.ReplaceAll(dns, " ", ", "))
+`, localID, ipRange, strings.ReplaceAll(dns, " ", ", "))
 	}
 
 	os.WriteFile("/etc/swanctl/conf.d/ikev2.conf", []byte(conf), 0644)
@@ -306,31 +291,38 @@ conn ikev2-psk
 `, localID, remoteID, ipRange, dns)
 
 	case "mschapv2":
-		// Copy cert/key to strongswan dirs
-		certPath := a.tls.CertPath(cfg.CertID)
-		keyPath := a.tls.KeyPath(cfg.CertID)
-		if _, err := os.Stat(certPath); err != nil {
-			return fmt.Errorf("ikev2: cert %s not found", cfg.CertID)
+		// cert_id points to a CA cert — auto-sign a server cert on each startup
+		caInfo, err := a.tls.Get(cfg.CertID)
+		if err != nil {
+			return fmt.Errorf("ikev2: CA cert %s not found", cfg.CertID)
 		}
-		certData, _ := os.ReadFile(certPath)
-		keyData, _ := os.ReadFile(keyPath)
+		if !caInfo.IsCA {
+			return fmt.Errorf("ikev2: cert %s is not a CA certificate", cfg.CertID)
+		}
+		// Auto-generate server cert: CN=localID, SAN=DNS:localID, signed by CA
+		log.Printf("[ikev2] auto-signing server cert: CN=%s (CA=%s)", localID, cfg.CertID)
+		if err := a.tls.SignWithCA(cfg.CertID, "__ikev2_auto__", "IKEv2 Auto", localID, 3650); err != nil {
+			return fmt.Errorf("ikev2: auto-sign cert failed: %w", err)
+		}
+		// Install auto-generated server cert
+		certData, _ := os.ReadFile(a.tls.CertPath("__ikev2_auto__"))
+		keyData, _ := os.ReadFile(a.tls.KeyPath("__ikev2_auto__"))
+		os.MkdirAll("/etc/ipsec.d/certs", 0755)
+		os.MkdirAll("/etc/ipsec.d/private", 0755)
 		os.WriteFile("/etc/ipsec.d/certs/ikev2-server.cert.pem", certData, 0644)
 		os.WriteFile("/etc/ipsec.d/private/ikev2-server.key.pem", keyData, 0600)
-		// If this cert was signed by a CA, also install the CA cert
-		if caID := a.tls.CAParent(cfg.CertID); caID != "" {
-			caData, _ := os.ReadFile(a.tls.CertPath(caID))
-			if len(caData) > 0 {
-				os.MkdirAll("/etc/ipsec.d/cacerts", 0755)
-				os.WriteFile("/etc/ipsec.d/cacerts/ca.pem", caData, 0644)
-				os.MkdirAll("/etc/swanctl/x509ca", 0755)
-				os.WriteFile("/etc/swanctl/x509ca/ca.pem", caData, 0644)
-				log.Printf("[ikev2] installed CA cert from %s for cert chain", caID)
-			}
-		}
-		// Symlink swanctl dirs → ipsec.d dirs (both stroke and vici use the same files)
+		// Install CA cert for cert chain verification
+		caData, _ := os.ReadFile(a.tls.CertPath(cfg.CertID))
+		os.MkdirAll("/etc/ipsec.d/cacerts", 0755)
+		os.WriteFile("/etc/ipsec.d/cacerts/ca.pem", caData, 0644)
+		os.MkdirAll("/etc/swanctl/x509ca", 0755)
+		os.WriteFile("/etc/swanctl/x509ca/ca.pem", caData, 0644)
+		// Symlink swanctl dirs → ipsec.d dirs
 		os.MkdirAll("/etc/swanctl", 0755)
 		os.Symlink("/etc/ipsec.d/certs", "/etc/swanctl/x509")
 		os.Symlink("/etc/ipsec.d/private", "/etc/swanctl/private")
+		// Clean up temp cert from TLS store (keep only in ipsec dirs)
+		a.tls.Delete("__ikev2_auto__")
 
 		connConf = fmt.Sprintf(`
 conn ikev2-mschapv2
