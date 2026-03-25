@@ -159,6 +159,7 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("POST /api/tls/import", s.importCert)
 	authed.HandleFunc("POST /api/tls/import-path", s.importCertFromPath)
 	authed.HandleFunc("POST /api/tls/generate", s.generateCert)
+	authed.HandleFunc("POST /api/tls/sign", s.signCertWithCA)
 	authed.HandleFunc("GET /api/tls/{id}/pem", s.getCertPEM)
 	authed.HandleFunc("DELETE /api/tls/{id}", s.deleteCert)
 
@@ -413,6 +414,10 @@ func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 
 // Version is the application version. Update this on each release.
 const Version = "1.1.2"
+
+func init() {
+	app.AppVersion = Version
+}
 
 func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
@@ -1615,6 +1620,35 @@ func (s *Server) generateCert(w http.ResponseWriter, r *http.Request) {
 		body.Days = 365
 	}
 	if err := s.app.TLS().Generate(body.ID, body.Name, body.Domains, body.Days); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) signCertWithCA(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		CAID string `json:"ca_id"`
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		CN   string `json:"cn"`
+		Days int    `json:"days"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if body.CAID == "" || body.ID == "" || body.CN == "" {
+		http.Error(w, "ca_id, id, and cn required", 400)
+		return
+	}
+	if body.Name == "" {
+		body.Name = body.CN
+	}
+	if body.Days <= 0 {
+		body.Days = 7300
+	}
+	if err := s.app.TLS().SignWithCA(body.CAID, body.ID, body.Name, body.CN, body.Days); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}

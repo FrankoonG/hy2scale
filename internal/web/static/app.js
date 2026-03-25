@@ -934,11 +934,15 @@ async function saveIKEv2() {
   }
 
   if (enabled) {
-    const ok = await checkPortConflicts([
-      {port: 500, proto: 'udp', desc: 'IKE'},
-      {port: 4500, proto: 'udp', desc: 'IKE NAT-T'},
-    ]);
-    if (!ok) return;
+    // Skip port check if L2TP is enabled (they share strongswan on 500/4500)
+    const l2tpEnabled = $('#l2tp-enabled') && $('#l2tp-enabled').checked;
+    if (!l2tpEnabled) {
+      const ok = await checkPortConflicts([
+        {port: 500, proto: 'udp', desc: 'IKE'},
+        {port: 4500, proto: 'udp', desc: 'IKE NAT-T'},
+      ]);
+      if (!ok) return;
+    }
   }
   try {
     await api('/ikev2', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
@@ -1747,19 +1751,44 @@ function setupPEMDragDrop(textarea, type) {
   });
 }
 
-function openNewCertDialog() {
-  // Clear all fields
-  ['cert-id','cert-name','cert-pem','cert-key-pem','cert-path','cert-key-path'].forEach(x => { const e = $(`#${x}`); if (e) e.value = ''; });
+async function openNewCertDialog() {
+  ['cert-id','cert-name','cert-pem','cert-key-pem','cert-path','cert-key-path','cert-ca-cn'].forEach(x => { const e = $(`#${x}`); if (e) e.value = ''; });
   $('#cert-id').disabled = false;
   $('#new-cert-modal').style.display = '';
   $('#cert-submit-btn').textContent = t('tls.new');
+  // Populate CA select with CA certs that have private keys
+  const sel = $('#cert-ca-select');
+  sel.innerHTML = '<option value="">\u2014 ' + t('tls.noneSelfSigned') + ' \u2014</option>';
+  try {
+    const certs = await api('/tls');
+    (certs || []).filter(c => c.is_ca && c.key_file).forEach(c => {
+      sel.innerHTML += `<option value="${esc(c.id)}">${esc(c.name)} (${esc(c.subject)})</option>`;
+    });
+  } catch(e) {}
+  sel.onchange = onCaSelectChange;
+  sel.value = '';
+  $('#cert-ca-cn-group').style.display = 'none';
+  $('#cert-ca-group').style.display = '';
   switchCertTab(document.querySelector('[data-certtab="paste"]'));
 }
 function closeNewCertDialog() { $('#new-cert-modal').style.display = 'none'; }
 
+function onCaSelectChange() {
+  const hasCa = $('#cert-ca-select').value !== '';
+  $('#cert-ca-cn-group').style.display = hasCa ? '' : 'none';
+  // When CA selected, hide manual input (cert will be auto-generated)
+  $('#cert-tab-paste').style.display = hasCa ? 'none' : '';
+  $('#cert-tab-path').style.display = 'none';
+  // Hide/show tab bar and gen button based on CA mode
+  $$('[data-certtab]').forEach(el => el.style.display = hasCa ? 'none' : '');
+  $('#cert-gen-icon').style.display = hasCa ? 'none' : '';
+}
+
 function switchCertTab(tab) {
+  if (!tab) return;
   const t = tab.dataset.certtab;
   $$('[data-certtab]').forEach(el => el.classList.toggle('active', el === tab));
+  if ($('#cert-ca-select').value) return; // CA mode hides tabs
   $('#cert-tab-paste').style.display = t === 'paste' ? '' : 'none';
   $('#cert-tab-path').style.display = t === 'path' ? '' : 'none';
   $('#cert-gen-icon').style.display = t === 'paste' ? '' : 'none';
@@ -1768,9 +1797,21 @@ function switchCertTab(tab) {
 async function generateCertPEM() {
   const id = $('#cert-id').value.trim();
   if (!id) { toast(t('tls.fillIdFirst'), 'error'); return; }
+  // If CA is selected, use CA signing instead of self-signed
+  const caId = $('#cert-ca-select') ? $('#cert-ca-select').value : '';
+  if (caId) {
+    const cn = ($('#cert-ca-cn') ? $('#cert-ca-cn').value.trim() : '') || id;
+    try {
+      await api('/tls/sign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ca_id: caId, id, name: $('#cert-name').value.trim() || id, cn, days: 7300 }) });
+      const pem = await api(`/tls/${id}/pem`);
+      if (pem.cert) $('#cert-pem').value = pem.cert;
+      if (pem.key) $('#cert-key-pem').value = pem.key;
+      toast(t('tls.certSignedByCA'), 'success');
+    } catch (e) { toast(String(e), 'error'); }
+    return;
+  }
   try {
     await api('/tls/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name: id, domains: [id], days: 3650 }) });
-    // Fetch the generated PEM and fill into fields
     const pem = await api(`/tls/${id}/pem`);
     if (pem.cert) $('#cert-pem').value = pem.cert;
     if (pem.key) $('#cert-key-pem').value = pem.key;
@@ -1781,6 +1822,17 @@ async function generateCertPEM() {
 async function submitCertDialog() {
   const id = $('#cert-id').value.trim(), name = $('#cert-name').value.trim();
   if (!id) { toast(t('tls.idRequired'), 'error'); return; }
+
+  // CA signing mode
+  const caId = $('#cert-ca-select') ? $('#cert-ca-select').value : '';
+  if (caId) {
+    const cn = ($('#cert-ca-cn') ? $('#cert-ca-cn').value.trim() : '') || id;
+    try {
+      await api('/tls/sign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ca_id: caId, id, name: name || cn, cn, days: 7300 }) });
+      closeNewCertDialog(); refreshCerts(); toast(t('tls.certSignedByCA'), 'success');
+    } catch (e) { toast(String(e), 'error'); }
+    return;
+  }
 
   const pasteTab = $('#cert-tab-paste').style.display !== 'none';
   if (pasteTab) {
@@ -1801,7 +1853,6 @@ async function submitCertDialog() {
 }
 
 async function editCert(id) {
-  // Clear and pre-fill
   ['cert-id','cert-name','cert-pem','cert-key-pem','cert-path','cert-key-path'].forEach(x => { const e = $(`#${x}`); if (e) e.value = ''; });
   $('#cert-id').value = id;
   $('#cert-id').disabled = true;
@@ -1812,6 +1863,8 @@ async function editCert(id) {
   } catch(e) {}
   $('#new-cert-modal').style.display = '';
   $('#cert-submit-btn').textContent = t('app.save');
+  $('#cert-ca-group').style.display = 'none'; // Hide CA options in edit mode
+  $('#cert-ca-cn-group').style.display = 'none';
   switchCertTab(document.querySelector('[data-certtab="paste"]'));
 }
 

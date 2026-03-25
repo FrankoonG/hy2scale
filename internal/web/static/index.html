@@ -618,6 +618,13 @@
           <div class="form-group"><label data-i18n="tls.id">ID *</label><input id="cert-id" placeholder="e.g. my-cert"></div>
           <div class="form-group"><label data-i18n="tls.name">Display Name</label><input id="cert-name" placeholder="optional"></div>
         </div>
+        <div class="form-group" id="cert-ca-group" style="display:none">
+          <label data-i18n="tls.signWithCA">Sign with CA</label>
+          <select id="cert-ca-select"><option value="">— None (self-signed) —</option></select>
+        </div>
+        <div id="cert-ca-cn-group" style="display:none">
+          <div class="form-group"><label data-i18n="tls.commonName">Common Name (CN) *</label><input id="cert-ca-cn" placeholder="e.g. vpn.example.com"></div>
+        </div>
         <div id="cert-tab-paste">
           <div class="form-col">
             <div class="form-group"><label data-i18n="tls.certPem">Certificate (PEM) *</label><textarea id="cert-pem" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----" style="min-height:100px"></textarea></div>
