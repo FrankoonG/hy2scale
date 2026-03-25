@@ -236,18 +236,25 @@ func (a *App) Run(ctx context.Context) error {
 	}
 
 	// Start IKEv2/IPsec
+	// Skip port check if L2TP already started strongswan (shared 500/4500)
 	if cfg.IKEv2 != nil && cfg.IKEv2.Enabled {
-		if c := CheckPorts([]PortConflict{
-			{Port: 500, Proto: "udp", Desc: "IKE"},
-			{Port: 4500, Proto: "udp", Desc: "IKE NAT-T"},
-		}); len(c) > 0 {
-			for _, cc := range c {
-				log.Printf("[ikev2] port %d/%s in use — ikev2 disabled", cc.Port, cc.Proto)
+		l2tpActive := cfg.L2TP != nil && cfg.L2TP.Enabled
+		if !l2tpActive {
+			if c := CheckPorts([]PortConflict{
+				{Port: 500, Proto: "udp", Desc: "IKE"},
+				{Port: 4500, Proto: "udp", Desc: "IKE NAT-T"},
+			}); len(c) > 0 {
+				for _, cc := range c {
+					log.Printf("[ikev2] port %d/%s in use — ikev2 disabled", cc.Port, cc.Proto)
+				}
+				goto skipIKEv2
 			}
-		} else if err := a.StartIKEv2(*cfg.IKEv2); err != nil {
+		}
+		if err := a.StartIKEv2(*cfg.IKEv2); err != nil {
 			log.Printf("[ikev2] start error: %v", err)
 		}
 	}
+	skipIKEv2:
 
 	// Start WireGuard
 	if cfg.WireGuard != nil && cfg.WireGuard.Enabled {
