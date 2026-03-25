@@ -36,6 +36,108 @@ func (c *IKEv2Config) proxyPort() int {
 	return c.ProxyPort
 }
 
+func (c *IKEv2Config) mtuVal() int {
+	if c.MTU <= 0 {
+		return 1400
+	}
+	return c.MTU
+}
+
+// writeSwanctlIKEv2 generates swanctl.conf for IKEv2 with xfrm interface support (if_id).
+func (a *App) writeSwanctlIKEv2(cfg IKEv2Config, localID, remoteID, ipRange, dns string) {
+	os.MkdirAll("/etc/swanctl/conf.d", 0755)
+	os.MkdirAll("/etc/swanctl/secrets.d", 0755)
+
+	var conf string
+	switch cfg.Mode {
+	case "psk":
+		conf = fmt.Sprintf(`connections {
+    ikev2-psk {
+        version = 2
+        local_addrs = %%any
+        local-1 {
+            auth = psk
+            id = %s
+        }
+        remote-1 {
+            auth = psk
+            id = %s
+        }
+        pools = ikev2pool
+        children {
+            ikev2-psk {
+                local_ts = 0.0.0.0/0
+                remote_ts = 0.0.0.0/0
+                if_id_in = %%unique
+                if_id_out = %%unique
+                updown = /etc/ipsec.d/ikev2-updown.sh
+                esp_proposals = aes256-sha256,aes128-sha256
+                rekey_time = 0s
+                dpd_action = clear
+            }
+        }
+    }
+}
+pools {
+    ikev2pool {
+        addrs = %s
+        dns = %s
+    }
+}
+`, localID, remoteID, ipRange, strings.ReplaceAll(dns, " ", ", "))
+
+	case "mschapv2":
+		conf = fmt.Sprintf(`connections {
+    ikev2-mschapv2 {
+        version = 2
+        local_addrs = %%any
+        send_certreq = no
+        send_cert = always
+        local-1 {
+            auth = pubkey
+            certs = ikev2-server.cert.pem
+        }
+        remote-1 {
+            auth = eap-mschapv2
+            eap_id = %%identity
+        }
+        pools = ikev2pool
+        children {
+            ikev2-mschapv2 {
+                local_ts = 0.0.0.0/0
+                remote_ts = 0.0.0.0/0
+                if_id_in = %%unique
+                if_id_out = %%unique
+                updown = /etc/ipsec.d/ikev2-updown.sh
+                esp_proposals = aes256-sha256,aes128-sha256
+                rekey_time = 0s
+                dpd_action = clear
+            }
+        }
+    }
+}
+pools {
+    ikev2pool {
+        addrs = %s
+        dns = %s
+    }
+}
+`, ipRange, strings.ReplaceAll(dns, " ", ", "))
+	}
+
+	os.WriteFile("/etc/swanctl/conf.d/ikev2.conf", []byte(conf), 0644)
+
+	// Write secrets
+	if cfg.Mode == "psk" && cfg.PSK != "" {
+		secrets := fmt.Sprintf("secrets {\n    ike-psk {\n        secret = \"%s\"\n    }\n}\n", cfg.PSK)
+		os.WriteFile("/etc/swanctl/secrets.d/ikev2.conf", []byte(secrets), 0644)
+	}
+	// Ensure base swanctl.conf exists
+	os.WriteFile("/etc/swanctl/swanctl.conf", []byte("include conf.d/*.conf\ninclude secrets.d/*.conf\n"), 0644)
+
+	log.Printf("[ikev2] swanctl config written with if_id for xfrm interface mode")
+}
+
 // getDNS returns DNS servers from the global config, space-separated for strongswan.
 func (a *App) getDNS() string {
 	dns := a.store.Get().DNS
@@ -208,8 +310,10 @@ conn ikev2-mschapv2
 		return fmt.Errorf("ikev2: unknown mode %q", cfg.Mode)
 	}
 
-	// Append IKEv2 conn to ipsec.conf (L2TP may have written the base config)
-	appendToIPSecConf(connConf)
+	// Append IKEv2 conn to ipsec.conf (only in standard mode; compat uses swanctl)
+	if !TunCaptureActive() {
+		appendToIPSecConf(connConf)
+	}
 
 	// Update secrets
 	if cfg.Mode == "psk" && cfg.PSK != "" {
@@ -253,13 +357,50 @@ conn ikev2-mschapv2
 			"-s", subnet, "-j", "MASQUERADE")
 		go a.runIKEv2Proxy(gateway, proxyPort, hooksPort, cfg)
 	} else {
-		// Compat mode: TUN capture with gvisor netstack
-		log.Printf("[ikev2] iptables unavailable, using TUN capture mode (compat)")
+		// Compat mode: xfrm interface + TUN capture (swanctl with if_id)
+		log.Printf("[ikev2] iptables unavailable, using xfrm interface + TUN capture (compat)")
 		if err := ensureTunCapture(a, subnet); err != nil {
 			log.Printf("[ikev2] TUN capture failed: %v", err)
 			return err
 		}
-		// Hooks server still needed for IKEv2 session tracking
+
+		// Generate swanctl-style updown script that creates xfrm interface
+		// and routes traffic to the TUN capture device
+		xfrmUpdown := fmt.Sprintf(`#!/bin/sh
+case "$PLUTO_VERB" in
+  up-client|up-client-v6)
+    IFID="${PLUTO_IF_ID_OUT%%%%/*}"
+    IFNAME="ikec${IFID}"
+    ip link del "$IFNAME" 2>/dev/null
+    ip link add "$IFNAME" type xfrm dev lo if_id "$IFID"
+    ip link set "$IFNAME" mtu %d up
+    if [ -n "$PLUTO_PEER_SOURCEIP" ]; then
+      ip route add "$PLUTO_PEER_SOURCEIP" dev "$IFNAME" 2>/dev/null
+      # Disable rp_filter and route xfrm traffic to TUN capture device
+      echo 0 > /proc/sys/net/ipv4/conf/$IFNAME/rp_filter 2>/dev/null
+      echo 0 > /proc/sys/net/ipv4/conf/all/rp_filter 2>/dev/null
+      # Add policy route: traffic from this client -> TUN for forwarding
+      ip rule add from "$PLUTO_PEER_SOURCEIP" lookup %s 2>/dev/null
+    fi
+    # Notify hy2scale of session
+    wget -qO- "http://%s:%d/ikev2/up?ip=${PLUTO_PEER_SOURCEIP}&user=${PLUTO_PEER_ID}" 2>/dev/null
+    ;;
+  down-client|down-client-v6)
+    IFID="${PLUTO_IF_ID_OUT%%%%/*}"
+    IFNAME="ikec${IFID}"
+    ip link del "$IFNAME" 2>/dev/null
+    wget -qO- "http://%s:%d/ikev2/down?ip=${PLUTO_PEER_SOURCEIP}" 2>/dev/null
+    ;;
+esac
+`, cfg.mtuVal(), tunRouteTable, gateway, hooksPort, gateway, hooksPort)
+
+		os.MkdirAll("/etc/ipsec.d", 0755)
+		os.WriteFile("/etc/ipsec.d/ikev2-updown.sh", []byte(xfrmUpdown), 0755)
+
+		// Generate swanctl config with if_id for xfrm interface mode
+		a.writeSwanctlIKEv2(cfg, localID, remoteID, ipRange, dns)
+
+		// Hooks server for session tracking
 		go a.serveIKEv2Hooks(gateway, hooksPort, cfg)
 	}
 
@@ -269,6 +410,8 @@ conn ikev2-mschapv2
 	time.Sleep(time.Second)
 	run("ipsec", "update")
 	run("ipsec", "rereadsecrets")
+	// Also load swanctl config (for compat mode xfrm interface)
+	run("swanctl", "--load-all", "--noprompt")
 
 	log.Printf("[ikev2] server mode=%s pool=%s", cfg.Mode, cfg.Pool)
 	return nil
