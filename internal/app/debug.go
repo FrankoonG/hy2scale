@@ -7,6 +7,9 @@ import (
 	"sync"
 )
 
+// AppVersion is set by the api package at init time.
+var AppVersion = "dev"
+
 // debugMode is true when DEBUG=true or DEBUG=1 is set in the environment.
 var debugMode = sync.OnceValue(func() bool {
 	v := strings.ToLower(os.Getenv("DEBUG"))

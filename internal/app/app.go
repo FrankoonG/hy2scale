@@ -155,6 +155,14 @@ func (a *App) PersistNodeID(id string) {
 func (a *App) Run(ctx context.Context) error {
 	a.appCtx = ctx
 	cfg := a.store.Get()
+	fmt.Println(`
+ _   ___   ______   _____ _____ ___  _     _____
+| | | \ \ / /___ \ / ____/ ____/ _ \| |   |  ___|
+| |_| |\ V /  __) | (___| |  | |_| | |   | |_
+|  _  | | |  |__ < \___ \| |  |  _  | |   |  _|
+| | | | | |  ___) |____) | |__| | | | |___| |___
+|_| |_| |_| |____/|_____/\____/_| |_|_____|_____|`)
+	fmt.Printf("  v%s\n\n", AppVersion)
 	log.Printf("[%s] starting node id=%s (exit=%v)", cfg.Name, cfg.NodeID, cfg.ExitNode)
 	if debugMode() {
 		log.Printf("[debug] DEBUG mode enabled (set DEBUG=true in environment)")
