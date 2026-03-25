@@ -65,15 +65,22 @@ func (s *pppSession) Unregister(ip string) {
 // This handles iKuai routers where container iptables is incompatible with the kernel.
 var iptUseChroot = sync.OnceValue(func() bool {
 	// Test if native iptables-legacy works
-	if exec.Command("iptables-legacy", "-L", "-n").Run() == nil {
+	if out, err := exec.Command("iptables-legacy", "-L", "-n").CombinedOutput(); err == nil {
+		debugLog("[iptables] native iptables-legacy works")
 		return false
+	} else {
+		debugLog("[iptables] native iptables-legacy failed: %v: %s", err, string(out))
 	}
 	// Check if host root is mounted and its iptables works
 	if _, err := os.Stat("/host/usr/sbin/iptables"); err == nil {
-		if exec.Command("chroot", "/host", "/usr/sbin/iptables", "-L", "-n").Run() == nil {
+		if out, err := exec.Command("chroot", "/host", "/usr/sbin/iptables", "-L", "-n").CombinedOutput(); err == nil {
 			log.Printf("[iptables] using chroot /host for iptables (host kernel compat)")
 			return true
+		} else {
+			debugLog("[iptables] chroot /host iptables failed: %v: %s", err, string(out))
 		}
+	} else {
+		debugLog("[iptables] /host/usr/sbin/iptables not found (host root not mounted)")
 	}
 	return false
 })
@@ -120,7 +127,12 @@ func iptRun(prog string, args ...string) {
 // testIptablesAvailable checks if iptables-legacy DNAT works (native or chroot).
 func testIptablesAvailable() bool {
 	cmd := iptExec("iptables-legacy", "-t", "nat", "-L", "-n")
-	return cmd.Run() == nil
+	if out, err := cmd.CombinedOutput(); err != nil {
+		debugLog("[iptables] NAT table test failed: %v: %s", err, string(out))
+		return false
+	}
+	debugLog("[iptables] NAT table test passed")
+	return true
 }
 
 func (s *pppSession) Lookup(ip string) (string, bool) {
@@ -136,16 +148,20 @@ func CheckCapability() (bool, string) {
 	// NET_ADMIN check — try bridge (kernel built-in), fall back to iptables
 	if exec.Command("ip", "link", "add", "hy2cap_test", "type", "bridge").Run() == nil {
 		exec.Command("ip", "link", "del", "hy2cap_test").Run()
+		debugLog("[cap] NET_ADMIN confirmed via bridge creation")
 		return true, ""
 	}
+	debugLog("[cap] bridge creation failed, trying iptables")
 	if exec.Command("iptables-legacy", "-L", "-n").Run() == nil {
+		debugLog("[cap] NET_ADMIN confirmed via iptables-legacy")
 		return true, ""
 	}
 	if exec.Command("iptables", "-L", "-n").Run() == nil {
+		debugLog("[cap] NET_ADMIN confirmed via iptables-nft")
 		return true, ""
 	}
-	// Try host iptables via chroot (for iKuai/incompatible kernel)
 	if exec.Command("chroot", "/host", "/usr/sbin/iptables", "-L", "-n").Run() == nil {
+		debugLog("[cap] NET_ADMIN confirmed via chroot /host iptables")
 		return true, ""
 	}
 	return false, "no NET_ADMIN capability (bridge creation, iptables-legacy, iptables, and chroot /host all failed)"
@@ -301,7 +317,11 @@ conn l2tp-psk
 	os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
 
 	if testIptablesAvailable() {
-		// Standard mode: iptables DNAT + transparent proxy
+		if iptUseChroot() {
+			log.Printf("[l2tp] mode: iptables via chroot /host (host kernel compat)")
+		} else {
+			log.Printf("[l2tp] mode: native iptables DNAT + transparent proxy")
+		}
 		portStr := fmt.Sprintf("%d", proxyPort)
 		iptRun("iptables-legacy", "-t", "nat", "-I", "PREROUTING",
 			"-i", "ppp+", "-p", "tcp",
