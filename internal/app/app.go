@@ -156,6 +156,9 @@ func (a *App) Run(ctx context.Context) error {
 	a.appCtx = ctx
 	cfg := a.store.Get()
 	log.Printf("[%s] starting node id=%s (exit=%v)", cfg.Name, cfg.NodeID, cfg.ExitNode)
+	if debugMode() {
+		log.Printf("[debug] DEBUG mode enabled (set DEBUG=true in environment)")
+	}
 
 	// Start rate ticker, latency prober, and traffic flusher
 	go a.node.StartRateTicker(ctx)
