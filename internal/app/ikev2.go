@@ -128,8 +128,27 @@ pools {
 	os.WriteFile("/etc/swanctl/conf.d/ikev2.conf", []byte(conf), 0644)
 
 	// Write secrets
-	if cfg.Mode == "psk" && cfg.PSK != "" {
-		secrets := fmt.Sprintf("secrets {\n    ike-psk {\n        secret = \"%s\"\n    }\n}\n", cfg.PSK)
+	var secrets string
+	switch cfg.Mode {
+	case "psk":
+		if cfg.PSK != "" {
+			secrets = fmt.Sprintf("secrets {\n    ike-psk {\n        secret = \"%s\"\n    }\n}\n", cfg.PSK)
+		}
+	case "mschapv2":
+		// swanctl needs: private key reference + EAP secrets for each user
+		var sb strings.Builder
+		sb.WriteString("secrets {\n")
+		sb.WriteString("    rsa-key {\n        file = ikev2-server.key.pem\n    }\n")
+		cfgStore := a.store.Get()
+		for i, u := range cfgStore.Users {
+			if u.Enabled {
+				sb.WriteString(fmt.Sprintf("    eap-user%d {\n        id = %s\n        secret = \"%s\"\n    }\n", i, u.Username, u.Password))
+			}
+		}
+		sb.WriteString("}\n")
+		secrets = sb.String()
+	}
+	if secrets != "" {
 		os.WriteFile("/etc/swanctl/secrets.d/ikev2.conf", []byte(secrets), 0644)
 	}
 	// Ensure base swanctl.conf exists
@@ -279,6 +298,10 @@ conn ikev2-psk
 		keyData, _ := os.ReadFile(keyPath)
 		os.WriteFile("/etc/ipsec.d/certs/ikev2-server.cert.pem", certData, 0644)
 		os.WriteFile("/etc/ipsec.d/private/ikev2-server.key.pem", keyData, 0600)
+		// Symlink swanctl dirs → ipsec.d dirs (both stroke and vici use the same files)
+		os.MkdirAll("/etc/swanctl", 0755)
+		os.Symlink("/etc/ipsec.d/certs", "/etc/swanctl/x509")
+		os.Symlink("/etc/ipsec.d/private", "/etc/swanctl/private")
 
 		connConf = fmt.Sprintf(`
 conn ikev2-mschapv2

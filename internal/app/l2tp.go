@@ -289,7 +289,7 @@ conn l2tp-psk
     leftprotoport=17/1701
     right=%any
     rightprotoport=17/%any
-    ike=aes256-sha256-modp2048,aes128-sha1-modp1024,3des-sha1-modp1024!
+    ike=aes256-sha256-modp3072,aes256-sha256-modp2048,aes128-sha256-modp3072,aes128-sha256-modp2048,aes128-sha1-modp1024,3des-sha1-modp1024!
     esp=aes256-sha256,aes128-sha1,3des-sha1!
     dpdaction=clear
     dpddelay=300s
