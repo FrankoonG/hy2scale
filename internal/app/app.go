@@ -79,6 +79,7 @@ type Config struct {
 	L2TP       *L2TPConfig           `yaml:"l2tp,omitempty" json:"l2tp,omitempty"`
 	IKEv2      *IKEv2Config          `yaml:"ikev2,omitempty" json:"ikev2,omitempty"`
 	WireGuard  *WireGuardConfig      `yaml:"wireguard,omitempty" json:"wireguard,omitempty"`
+	Rules      []RoutingRule         `yaml:"rules,omitempty" json:"rules,omitempty"`
 	UIListen    string                `yaml:"ui_listen,omitempty" json:"ui_listen,omitempty"`
 	UIBasePath  string                `yaml:"ui_base_path,omitempty" json:"ui_base_path,omitempty"`
 	WebUsername string                `yaml:"web_username,omitempty" json:"web_username,omitempty"`
@@ -282,12 +283,16 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}
 
+	// Start rule engine (host mode only)
+	a.StartRuleEngine()
+
 	// Start clients
 	for _, cl := range cfg.Clients {
 		a.StartClient(cl)
 	}
 
 	<-ctx.Done()
+	a.StopRuleEngine()
 	return ctx.Err()
 }
 
