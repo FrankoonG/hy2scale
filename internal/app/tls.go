@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -166,8 +167,8 @@ func (s *TLSStore) SignWithCA(caID, newID, name, cn string, days int) error {
 		}
 	}
 
-	// Generate new key for the server cert
-	newKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// Generate RSA 2048 key (RSA for maximum IKEv2 client compatibility)
+	newKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return fmt.Errorf("generate key: %w", err)
 	}
@@ -175,10 +176,16 @@ func (s *TLSStore) SignWithCA(caID, newID, name, cn string, days int) error {
 	if days <= 0 {
 		days = 7300 // 20 years
 	}
+	// Use CA's subject fields but override CN if specified
+	subject := caCert.Subject
+	if cn != "" {
+		subject.CommonName = cn
+	}
 	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: cn},
+		Subject:      subject,
+		DNSNames:     []string{subject.CommonName}, // SAN: DNS name matching CN (required by iKuai IKEv2)
 		NotBefore:    time.Now(),
 		NotAfter:     time.Now().Add(time.Duration(days) * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -191,8 +198,8 @@ func (s *TLSStore) SignWithCA(caID, newID, name, cn string, days int) error {
 	}
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyBytes, _ := x509.MarshalECPrivateKey(newKey)
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes})
+	keyBytes := x509.MarshalPKCS1PrivateKey(newKey)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: keyBytes})
 
 	// Store with a reference to the CA that signed it
 	if err := s.Import(newID, name, string(certPEM), string(keyPEM)); err != nil {
