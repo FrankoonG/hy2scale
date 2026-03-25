@@ -425,6 +425,7 @@ func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 		"server":        cfg.Server,
 		"version":       Version,
 		"limited":       limited,
+		"compat":        app.TunCaptureActive(),
 		"hy2_user_auth": cfg.Hy2UserAuth,
 	})
 }
