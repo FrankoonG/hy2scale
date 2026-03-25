@@ -135,6 +135,13 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("GET /api/wireguard/peers/{name}/config", s.downloadWGPeerConfig)
 	authed.HandleFunc("GET /api/wireguard/qr", s.wireGuardQR)
 
+	// Rules
+	authed.HandleFunc("GET /api/rules", s.getRules)
+	authed.HandleFunc("POST /api/rules", s.addRule)
+	authed.HandleFunc("PUT /api/rules/{id}", s.updateRule)
+	authed.HandleFunc("DELETE /api/rules/{id}", s.deleteRule)
+	authed.HandleFunc("PUT /api/rules/{id}/toggle", s.toggleRule)
+
 	// Port check
 	authed.HandleFunc("POST /api/check-ports", s.checkPorts)
 
@@ -182,6 +189,7 @@ func (s *Server) Start(ctx context.Context) error {
 		"proxies":  true,
 		"users":    true,
 		"tls":      true,
+		"rules":    true,
 		"settings": true,
 	}
 
@@ -1521,6 +1529,66 @@ func (s *Server) resetUserTrafficAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// --- Rules ---
+
+func (s *Server) getRules(w http.ResponseWriter, r *http.Request) {
+	cfg := s.app.Store().Get()
+	result := map[string]any{
+		"available": app.RuleEngineAvailable(),
+		"rules":     cfg.Rules,
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) addRule(w http.ResponseWriter, r *http.Request) {
+	var rule app.RoutingRule
+	if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if rule.ID == "" || rule.ExitVia == "" || len(rule.Targets) == 0 {
+		http.Error(w, "id, exit_via, and targets required", 400)
+		return
+	}
+	if rule.Type != "ip" && rule.Type != "domain" {
+		http.Error(w, "type must be 'ip' or 'domain'", 400)
+		return
+	}
+	s.app.AddRule(rule)
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) updateRule(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var rule app.RoutingRule
+	if err := json.NewDecoder(r.Body).Decode(&rule); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	rule.ID = id
+	s.app.UpdateRule(id, rule)
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) deleteRule(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s.app.DeleteRule(id)
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) toggleRule(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	s.app.ToggleRule(id, body.Enabled)
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 

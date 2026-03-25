@@ -127,6 +127,7 @@ function switchPage(name, push) {
   if (name === 'users') { refreshUsers(); refreshSessions(); }
   if (name === 'proxies') refreshProxies();
   if (name === 'settings') loadSettings();
+  if (name === 'rules') refreshRules();
   if (name === 'tls') refreshCerts();
 }
 
@@ -1689,6 +1690,128 @@ function certExpired(notAfter) {
   try { return new Date(notAfter) < new Date(); } catch(e) { return true; }
 }
 
+// ── Rules ──
+let _editRuleId = null;
+
+function switchRuleTab(tab) {
+  $$('[data-ruletab]').forEach(t => t.classList.toggle('active', t === tab));
+  $$('.rule-panel').forEach(p => { p.style.display = p.id === 'ruletab-' + tab.dataset.ruletab ? '' : 'none'; });
+}
+
+async function refreshRules() {
+  try {
+    const data = await api('/rules');
+    if (!data.available) {
+      $('#rules-unavailable').style.display = '';
+      $('#rules-content').style.display = 'none';
+      // Hide nav item if not available
+      return;
+    }
+    $('#rules-unavailable').style.display = 'none';
+    $('#rules-content').style.display = '';
+    const rules = data.rules || [];
+    renderRuleList('ip', rules.filter(r => r.type === 'ip'));
+    renderRuleList('domain', rules.filter(r => r.type === 'domain'));
+  } catch(e) { console.error(e); }
+}
+
+function renderRuleList(type, rules) {
+  const el = $('#' + type + '-rules-list');
+  if (!rules.length) {
+    el.innerHTML = `<div style="color:var(--muted);padding:20px;text-align:center">${t('rules.noRules')}</div>`;
+    return;
+  }
+  el.innerHTML = `<table class="table"><thead><tr>
+    <th>${t('rules.name')}</th>
+    <th>${type === 'ip' ? t('rules.ipTargets') : t('rules.domainTargets')}</th>
+    <th>${t('rules.exitVia')}</th>
+    <th style="text-align:right">${t('app.actions')}</th>
+  </tr></thead><tbody>` + rules.map(r => {
+    const targets = r.targets || [];
+    const first = esc(targets[0] || '');
+    const more = targets.length > 1 ? ` <span class="badge badge-muted" title="${esc(targets.slice(1).join('\n'))}" style="cursor:help">+${targets.length-1}</span>` : '';
+    const enabledCls = r.enabled ? '' : ' style="opacity:0.5"';
+    return `<tr${enabledCls}>
+      <td><b>${esc(r.name || r.id)}</b></td>
+      <td><code style="font-size:12px">${first}</code>${more}</td>
+      <td>${exitViaHTML(r.exit_via)}</td>
+      <td style="text-align:right;white-space:nowrap">
+        <button class="act-btn edit" onclick="editRule('${esc(r.id)}')">${t('app.edit')}</button>
+        <button class="act-btn ${r.enabled ? 'danger' : ''}" onclick="toggleRuleEnabled('${esc(r.id)}',${!r.enabled})">${r.enabled ? t('app.disable') : t('app.enable')}</button>
+        <button class="act-btn danger" onclick="deleteRuleConfirm('${esc(r.id)}')">${t('app.delete')}</button>
+      </td>
+    </tr>`;
+  }).join('') + '</tbody></table>';
+}
+
+function openRuleDialog(type) {
+  _editRuleId = null;
+  $('#rule-type').value = type;
+  $('#rule-name').value = '';
+  $('#rule-targets').value = '';
+  $('#rule-exit').value = '';
+  $('#rule-enabled').checked = true;
+  $('#rule-targets-label').textContent = type === 'ip' ? t('rules.ipTargets') : t('rules.domainTargets');
+  $('#rule-targets').placeholder = type === 'ip' ? '1.1.1.1\n10.0.0.0/8\n192.168.1.1-192.168.1.254' : 'google.com\n*.github.com';
+  $('#rule-modal-title').textContent = t('rules.newRule');
+  $('#rule-submit-btn').textContent = t('app.add');
+  $('#rule-modal').style.display = '';
+}
+
+function closeRuleDialog() { $('#rule-modal').style.display = 'none'; }
+
+async function editRule(id) {
+  const data = await api('/rules');
+  const rule = (data.rules || []).find(r => r.id === id);
+  if (!rule) return;
+  _editRuleId = id;
+  $('#rule-type').value = rule.type;
+  $('#rule-name').value = rule.name || '';
+  $('#rule-targets').value = (rule.targets || []).join('\n');
+  $('#rule-exit').value = rule.exit_via || '';
+  $('#rule-enabled').checked = rule.enabled;
+  $('#rule-targets-label').textContent = rule.type === 'ip' ? t('rules.ipTargets') : t('rules.domainTargets');
+  $('#rule-modal-title').textContent = t('app.edit');
+  $('#rule-submit-btn').textContent = t('app.save');
+  $('#rule-modal').style.display = '';
+}
+
+async function submitRule() {
+  const type = $('#rule-type').value;
+  const name = $('#rule-name').value.trim();
+  const targets = $('#rule-targets').value.trim().split('\n').map(s => s.trim()).filter(Boolean);
+  const exit_via = $('#rule-exit').value.trim();
+  const enabled = $('#rule-enabled').checked;
+  if (!targets.length) { toast(t('rules.targetsRequired'), 'error'); return; }
+  if (!exit_via) { toast(t('rules.exitRequired'), 'error'); return; }
+  const id = _editRuleId || (type + '-' + Date.now().toString(36));
+  const body = { id, name: name || id, type, targets, exit_via, enabled };
+  try {
+    if (_editRuleId) {
+      await api('/rules/' + _editRuleId, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    } else {
+      await api('/rules', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    }
+    closeRuleDialog(); refreshRules(); toast(t('rules.saved'), 'success');
+  } catch(e) { toast(String(e), 'error'); }
+}
+
+async function toggleRuleEnabled(id, enabled) {
+  try {
+    await api('/rules/' + id + '/toggle', { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ enabled }) });
+    refreshRules();
+  } catch(e) { toast(String(e), 'error'); }
+}
+
+async function deleteRuleConfirm(id) {
+  if (!confirm(t('rules.deleteConfirm'))) return;
+  try {
+    await api('/rules/' + id, { method: 'DELETE' });
+    refreshRules(); toast(t('rules.deleted'), 'success');
+  } catch(e) { toast(String(e), 'error'); }
+}
+
+// ── TLS ──
 async function refreshCerts() {
   const certs = await api('/tls');
   const el = $('#cert-list');

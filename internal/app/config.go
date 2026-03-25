@@ -32,6 +32,16 @@ type ProxyConfig struct {
 	ExitVia  string `yaml:"exit_via,omitempty" json:"exit_via,omitempty"` // legacy, migrated to users
 }
 
+// RoutingRule defines a traffic routing rule (IP or domain based).
+type RoutingRule struct {
+	ID      string   `yaml:"id" json:"id"`
+	Name    string   `yaml:"name" json:"name"`
+	Type    string   `yaml:"type" json:"type"`       // "ip" or "domain"
+	Targets []string `yaml:"targets" json:"targets"` // IPs/CIDRs/ranges or domains
+	ExitVia string   `yaml:"exit_via" json:"exit_via"`
+	Enabled bool     `yaml:"enabled" json:"enabled"`
+}
+
 // ConfigStore manages dynamic configuration with persistence.
 type ConfigStore struct {
 	mu   sync.RWMutex
