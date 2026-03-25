@@ -111,6 +111,7 @@ pools {
         send_cert = always
         unique = never
         local-1 {
+            auth = pubkey
             certs = ikev2-server.cert.pem
             id = %s
         }
