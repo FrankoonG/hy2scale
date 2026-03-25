@@ -116,7 +116,7 @@ pools {
         }
         remote-1 {
             auth = eap-mschapv2
-            eap_id = %%any
+            eap_id = %%identity
         }
         pools = ikev2pool
         children {
