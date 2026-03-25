@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"log"
 	"net"
@@ -87,19 +89,34 @@ pools {
 `, localID, remoteID, ipRange, strings.ReplaceAll(dns, " ", ", "))
 
 	case "mschapv2":
+		// Read cert to extract CN for server identity (iKuai clients use this for EAP secret lookup)
+		serverCN := localID
+		if certData, err := os.ReadFile(a.tls.CertPath(cfg.CertID)); err == nil {
+			if block, _ := pem.Decode(certData); block != nil {
+				if cert, err := x509.ParseCertificate(block.Bytes); err == nil {
+					// Prefer SAN DNS name, fall back to CN
+					if len(cert.DNSNames) > 0 {
+						serverCN = cert.DNSNames[0]
+					} else if cert.Subject.CommonName != "" {
+						serverCN = cert.Subject.CommonName
+					}
+				}
+			}
+		}
 		conf = fmt.Sprintf(`connections {
     ikev2-mschapv2 {
         version = 2
         local_addrs = %%any
         send_certreq = no
         send_cert = always
+        unique = never
         local-1 {
-            auth = pubkey
             certs = ikev2-server.cert.pem
+            id = %s
         }
         remote-1 {
             auth = eap-mschapv2
-            eap_id = %%identity
+            eap_id = %%any
         }
         pools = ikev2pool
         children {
@@ -122,7 +139,7 @@ pools {
         dns = %s
     }
 }
-`, ipRange, strings.ReplaceAll(dns, " ", ", "))
+`, serverCN, ipRange, strings.ReplaceAll(dns, " ", ", "))
 	}
 
 	os.WriteFile("/etc/swanctl/conf.d/ikev2.conf", []byte(conf), 0644)
