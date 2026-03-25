@@ -66,6 +66,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
         <span data-i18n="nav.proxies">Proxies</span>
       </a>
+      <a class="nav-item" data-page="rules" onclick="switchPage('rules')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5"/><path d="M21 3l-7 7"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>
+        <span data-i18n="nav.rules">Rules</span>
+      </a>
       <a class="nav-item" data-page="tls" onclick="switchPage('tls')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
         <span data-i18n="nav.tls">TLS</span>
@@ -385,6 +389,64 @@
           <div class="modal-footer">
             <button onclick="closeWGPeerDetail()" data-i18n="app.close">Close</button>
             <button class="btn-primary" onclick="downloadFromDetail()" data-i18n="wg.downloadConf">Download .conf</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Rules Page -->
+      <div class="page" id="page-rules" style="display:none">
+        <div class="card">
+          <div class="card-header">
+            <h2 data-i18n="rules.title">Routing Rules</h2>
+          </div>
+          <div id="rules-unavailable" style="display:none;padding:24px;color:var(--muted)">
+            <p data-i18n="rules.unavailable">Routing rules require host network mode with NET_ADMIN capability.</p>
+          </div>
+          <div id="rules-content" style="display:none">
+            <div class="proxy-tabs" style="margin:16px 16px 0">
+              <div class="proxy-tab active" data-ruletab="ip" onclick="switchRuleTab(this)" data-i18n="rules.ipRules">IP Rules</div>
+              <div class="proxy-tab" data-ruletab="domain" onclick="switchRuleTab(this)" data-i18n="rules.domainRules">Domain Rules</div>
+            </div>
+            <div class="rule-panel" id="ruletab-ip" style="padding:16px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <span></span>
+                <button class="btn-primary" onclick="openRuleDialog('ip')" data-i18n="rules.newRule">+ New Rule</button>
+              </div>
+              <div id="ip-rules-list"></div>
+            </div>
+            <div class="rule-panel" id="ruletab-domain" style="padding:16px;display:none">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <span></span>
+                <button class="btn-primary" onclick="openRuleDialog('domain')" data-i18n="rules.newRule">+ New Rule</button>
+              </div>
+              <div id="domain-rules-list"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Rule Dialog -->
+      <div class="modal-overlay" id="rule-modal" style="display:none" onmousedown="if(event.target===this)closeRuleDialog()">
+        <div class="modal" style="max-width:480px">
+          <div class="modal-header">
+            <h2 id="rule-modal-title" data-i18n="rules.newRule">New Rule</h2>
+            <button class="btn-icon" onclick="closeRuleDialog()">&#10005;</button>
+          </div>
+          <div class="modal-body" style="padding-top:16px">
+            <div class="form-col">
+              <input type="hidden" id="rule-type">
+              <div class="form-group"><label data-i18n="rules.name">Name</label><input id="rule-name" placeholder="optional"></div>
+              <div class="form-group"><label id="rule-targets-label" data-i18n="rules.targets">Targets</label><textarea id="rule-targets" placeholder="One per line" style="min-height:100px;font-family:var(--mono);font-size:13px"></textarea></div>
+              <div class="form-group"><label data-i18n="rules.exitVia">Exit Via *</label><input id="rule-exit" placeholder="e.g. AUB"></div>
+              <div class="form-group">
+                <label data-i18n="app.enabled">Enabled</label>
+                <label class="toggle" style="margin-top:4px"><input type="checkbox" id="rule-enabled" checked><span class="slider"></span></label>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button onclick="closeRuleDialog()" data-i18n="app.cancel">Cancel</button>
+            <button class="btn-primary" id="rule-submit-btn" onclick="submitRule()" data-i18n="app.add">Add</button>
           </div>
         </div>
       </div>
