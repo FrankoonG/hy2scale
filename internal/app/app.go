@@ -106,6 +106,8 @@ type App struct {
 	srvCancel    context.CancelFunc
 	ssListener   net.Listener
 	ssCancel     context.CancelFunc
+	l2tpCancel   context.CancelFunc
+	ikev2Cancel  context.CancelFunc
 	usersMu      sync.RWMutex
 	userIndex    map[string]*UserConfig // username → user (for fast auth lookup)
 	trafficDirty sync.Map              // username → true (needs flush)
