@@ -471,6 +471,34 @@ esac
 	return nil
 }
 
+// StopIKEv2 stops the IKEv2 service (kills strongswan connections, removes configs).
+func (a *App) StopIKEv2() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.ikev2Cancel != nil {
+		a.ikev2Cancel()
+		a.ikev2Cancel = nil
+	}
+	// Remove IKEv2 swanctl config and reload
+	os.Remove("/etc/swanctl/conf.d/ikev2.conf")
+	os.Remove("/etc/swanctl/secrets.d/ikev2.conf")
+	exec.Command("swanctl", "--load-all", "--noprompt").Run()
+	// Disconnect all IKEv2 connections
+	exec.Command("ipsec", "down", "ikev2-mschapv2").Run()
+	exec.Command("ipsec", "down", "ikev2-psk").Run()
+	log.Printf("[ikev2] stopped")
+}
+
+// RestartIKEv2 stops and restarts the IKEv2 service with current config.
+func (a *App) RestartIKEv2() error {
+	a.StopIKEv2()
+	time.Sleep(500 * time.Millisecond)
+	cfg := a.store.Get()
+	if cfg.IKEv2 == nil || !cfg.IKEv2.Enabled {
+		return nil
+	}
+	return a.StartIKEv2(*cfg.IKEv2)
+}
 
 // updateEAPSecrets writes EAP-MSCHAPv2 user entries to ipsec.secrets.
 func (a *App) updateEAPSecrets() {

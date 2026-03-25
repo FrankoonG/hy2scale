@@ -391,6 +391,32 @@ conn l2tp-psk
 	return nil
 }
 
+// StopL2TP stops the L2TP service.
+func (a *App) StopL2TP() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.l2tpCancel != nil {
+		a.l2tpCancel()
+		a.l2tpCancel = nil
+	}
+	// Kill xl2tpd
+	exec.Command("killall", "xl2tpd").Run()
+	// Remove L2TP ipsec connection
+	exec.Command("ipsec", "down", "l2tp-psk").Run()
+	log.Printf("[l2tp] stopped")
+}
+
+// RestartL2TP stops and restarts L2TP with current config.
+func (a *App) RestartL2TP() error {
+	a.StopL2TP()
+	time.Sleep(500 * time.Millisecond)
+	cfg := a.store.Get()
+	if cfg.L2TP == nil || !cfg.L2TP.Enabled {
+		return nil
+	}
+	return a.StartL2TP(*cfg.L2TP)
+}
+
 // updateChapSecrets generates /etc/ppp/chap-secrets from user config.
 func (a *App) updateChapSecrets() {
 	cfg := a.store.Get()
