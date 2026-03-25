@@ -23,6 +23,7 @@ RUN cd /tmp/iptables-1.8.3 && ./configure --prefix=/usr --sbindir=/sbin \
     --disable-nftables --enable-static --disable-shared \
     && make -j$(nproc) && make DESTDIR=/out install
 
+
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates xl2tpd ppp iproute2 openssl libmnl libnftnl
 # Install Alpine's iptables for nft mode (Docker compat)

@@ -33,7 +33,7 @@ import (
 const (
 	tunCaptureName = "hy2cap0"
 	tunCaptureIP   = "169.254.99.1"
-	tunCaptureMTU  = 1500
+	tunCaptureMTU  = 1300 // Conservative: must fit within ESP encapsulation (IKEv2) and PPP (L2TP)
 	tunRouteTable  = "100"
 )
 
@@ -45,9 +45,10 @@ const (
 )
 
 var (
-	tunCaptureActive atomic.Bool
-	tunCaptureMu     sync.Mutex
-	tunCaptureInst   *tunCaptureState
+	tunCaptureActive    atomic.Bool
+	tunCaptureMu        sync.Mutex
+	tunCaptureInst      *tunCaptureState
+	ikev2DefaultExitVia atomic.Value // stores string for PSK mode default exit
 )
 
 type tunCaptureState struct {
@@ -179,7 +180,11 @@ func startTunBridge(ctx context.Context, tunFile *os.File, ep *channel.Endpoint,
 			pkt.DecRef()
 			data := view.AsSlice()
 			if len(data) > 0 {
-				tunFile.Write(data)
+				// Check if this packet should go to an xfrm interface
+				// (IKEv2 client response) instead of the TUN
+				if !xfrmBridgeGvisorWrite(data) {
+					tunFile.Write(data)
+				}
 			}
 		}
 	}()
@@ -224,7 +229,15 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 						break
 					}
 				}
+			} else if protocol == "ikev2" {
+				// PSK mode: use default exit from IKEv2 config
+				if v := ikev2DefaultExitVia.Load(); v != nil {
+					exitVia = v.(string)
+				}
 			}
+
+			debugLog("[tun-fwd] TCP %s(%s/%s) → %s exit=%q",
+				srcIP, username, protocol, dstAddr, exitVia)
 
 			var remote net.Conn
 			var err error
@@ -234,6 +247,7 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 				remote, err = a.dialExit(context.Background(), exitVia, dstAddr)
 			}
 			if err != nil {
+				debugLog("[tun-fwd] dial error: %s → %s: %v", srcIP, dstAddr, err)
 				return
 			}
 			defer remote.Close()
@@ -341,7 +355,7 @@ func ensureTunCapture(a *App, subnet string) error {
 	}
 
 	// First initialization
-	log.Printf("[tun-capture] creating kernel TUN %s with gvisor netstack", tunCaptureName)
+	log.Printf("[tun-capture] creating kernel TUN %s with gvisor netstack (MTU=%d)", tunCaptureName, tunCaptureMTU)
 
 	tunFile, err := openKernelTun(tunCaptureName)
 	if err != nil {
