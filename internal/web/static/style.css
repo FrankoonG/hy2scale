@@ -27,6 +27,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 .sidebar-header .logo img{width:28px;height:28px}
 .version-badge{display:inline-block;padding:1px 8px;font-size:10px;font-weight:600;color:#2ecc71;background:rgba(46,204,113,0.08);border:1px solid rgba(46,204,113,0.35);border-radius:10px;line-height:16px}
 .version-badge.limited{color:#e74c3c;background:rgba(231,76,60,0.08);border-color:rgba(231,76,60,0.35)}
+.version-badge.compat{color:#f39c12;background:rgba(243,156,18,0.08);border-color:rgba(243,156,18,0.35)}
 .sidebar-nav{flex:1;padding:8px;display:flex;flex-direction:column;gap:2px}
 .nav-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:var(--radius-sm);cursor:pointer;color:var(--text-secondary);font-size:13px;font-weight:500;transition:all .15s;white-space:nowrap;text-decoration:none}
 .nav-item:hover{background:var(--primary-light);color:var(--primary)}

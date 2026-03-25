@@ -117,6 +117,12 @@ func iptRun(prog string, args ...string) {
 	}
 }
 
+// testIptablesAvailable checks if iptables-legacy DNAT works (native or chroot).
+func testIptablesAvailable() bool {
+	cmd := iptExec("iptables-legacy", "-t", "nat", "-L", "-n")
+	return cmd.Run() == nil
+}
+
 func (s *pppSession) Lookup(ip string) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -291,42 +297,40 @@ conn l2tp-psk
 	os.WriteFile("/etc/ipsec.conf", []byte(ipsecConf), 0644)
 	os.WriteFile("/etc/ipsec.secrets", []byte(ipsecSecrets), 0600)
 
-	// 7. Setup iptables for L2TP traffic forwarding
-	// Kernel L2TP/IPsec uses iptables-legacy path, but Docker uses nf_tables (iptables).
-	// Both must allow PPP traffic for forwarding to work.
-	// Uses iptRun to avoid duplicate rules on container restart.
+	// 7. Setup traffic forwarding
 	os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
-	portStr := fmt.Sprintf("%d", proxyPort)
 
-	// iptables-legacy: DNAT TCP to transparent proxy, FORWARD, MASQUERADE
-	iptRun("iptables-legacy", "-t", "nat", "-I", "PREROUTING",
-		"-i", "ppp+", "-p", "tcp",
-		"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%s", gateway, portStr))
-	iptRun("iptables-legacy", "-t", "nat", "-A", "POSTROUTING",
-		"-s", subnet, "-o", "eth0", "-j", "MASQUERADE")
-	iptRun("iptables-legacy", "-I", "FORWARD", "-i", "ppp+", "-o", "eth0", "-j", "ACCEPT")
-	iptRun("iptables-legacy", "-I", "FORWARD", "-i", "eth0", "-o", "ppp+",
-		"-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
-
-	// Restrict transparent proxy: only accept from PPP subnet, drop external access
-	iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", portStr,
-		"-s", subnet, "-j", "ACCEPT")
-	iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", portStr, "-j", "DROP")
-	// Same for hooks port
-	hooksPortStr := fmt.Sprintf("%d", hooksPort)
-	iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr,
-		"-i", "lo", "-j", "ACCEPT")
-	iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr, "-j", "DROP")
-
-	// iptables (nf_tables): allow PPP subnet in DOCKER-USER chain + MASQUERADE
-	// Docker's nft FORWARD policy is DROP; DOCKER-USER runs first
-	iptRun("iptables", "-I", "DOCKER-USER", "-s", subnet, "-j", "ACCEPT")
-	iptRun("iptables", "-I", "DOCKER-USER", "-d", subnet, "-j", "ACCEPT")
-	iptRun("iptables", "-t", "nat", "-A", "POSTROUTING",
-		"-s", subnet, "-j", "MASQUERADE")
-
-	// 8. Start transparent proxy
-	go a.runTransparentProxy(gateway, proxyPort)
+	if testIptablesAvailable() {
+		// Standard mode: iptables DNAT + transparent proxy
+		portStr := fmt.Sprintf("%d", proxyPort)
+		iptRun("iptables-legacy", "-t", "nat", "-I", "PREROUTING",
+			"-i", "ppp+", "-p", "tcp",
+			"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%s", gateway, portStr))
+		iptRun("iptables-legacy", "-t", "nat", "-A", "POSTROUTING",
+			"-s", subnet, "-o", "eth0", "-j", "MASQUERADE")
+		iptRun("iptables-legacy", "-I", "FORWARD", "-i", "ppp+", "-o", "eth0", "-j", "ACCEPT")
+		iptRun("iptables-legacy", "-I", "FORWARD", "-i", "eth0", "-o", "ppp+",
+			"-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
+		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", portStr,
+			"-s", subnet, "-j", "ACCEPT")
+		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", portStr, "-j", "DROP")
+		hooksPortStr := fmt.Sprintf("%d", hooksPort)
+		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr,
+			"-i", "lo", "-j", "ACCEPT")
+		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr, "-j", "DROP")
+		iptRun("iptables", "-I", "DOCKER-USER", "-s", subnet, "-j", "ACCEPT")
+		iptRun("iptables", "-I", "DOCKER-USER", "-d", subnet, "-j", "ACCEPT")
+		iptRun("iptables", "-t", "nat", "-A", "POSTROUTING",
+			"-s", subnet, "-j", "MASQUERADE")
+		go a.runTransparentProxy(gateway, proxyPort)
+	} else {
+		// Compat mode: TUN capture with gvisor netstack (no iptables needed)
+		log.Printf("[l2tp] iptables unavailable, using TUN capture mode (compat)")
+		if err := ensureTunCapture(a, subnet); err != nil {
+			log.Printf("[l2tp] TUN capture failed: %v", err)
+			return err
+		}
+	}
 
 	// 9. Start strongswan (shared with IKEv2; auto=add connections load automatically)
 	ensureStrongswanRunning()
