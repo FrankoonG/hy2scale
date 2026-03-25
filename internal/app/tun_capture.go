@@ -252,21 +252,24 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 			}
 			defer remote.Close()
 
-			// Session tracking
+			// Session tracking with traffic counting
 			ctx, cancel := context.WithCancel(context.Background())
 			sid := a.Sessions.Connect(username, srcIP, protocol, cancel)
-			defer func() {
-				cancel()
-				a.Sessions.Disconnect(sid, 0, 0)
-			}()
-
+			var up, down int64
 			done := make(chan struct{})
-			go func() { copyCtx(ctx, remote, tunConn); done <- struct{}{} }()
-			copyCtx(ctx, tunConn, remote)
+			go func() {
+				n, _ := copyCtx(ctx, remote, tunConn)
+				atomic.AddInt64(&up, n)
+				done <- struct{}{}
+			}()
+			n, _ := copyCtx(ctx, tunConn, remote)
+			atomic.AddInt64(&down, n)
 			<-done
+			cancel()
+			a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))
 
 			if username != "" && username != "__psk__" {
-				a.RecordTraffic(username, 0) // traffic already counted in copyCtx
+				a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))
 			}
 		}()
 	})

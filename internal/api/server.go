@@ -1155,7 +1155,13 @@ func (s *Server) updateL2TPConfig(w http.ResponseWriter, r *http.Request) {
 	s.app.Store().Update(func(c *app.Config) {
 		c.L2TP = &l2tp
 	})
-	writeJSON(w, map[string]string{"status": "ok", "note": "restart required for L2TP changes"})
+	// Hot reload L2TP
+	go func() {
+		if err := s.app.RestartL2TP(); err != nil {
+			log.Printf("[l2tp] hot reload failed: %v", err)
+		}
+	}()
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 // --- IKEv2 ---
@@ -1213,7 +1219,13 @@ func (s *Server) updateIKEv2Config(w http.ResponseWriter, r *http.Request) {
 	s.app.Store().Update(func(c *app.Config) {
 		c.IKEv2 = &ikev2
 	})
-	writeJSON(w, map[string]string{"status": "ok", "note": "restart required for IKEv2 changes"})
+	// Hot reload IKEv2
+	go func() {
+		if err := s.app.RestartIKEv2(); err != nil {
+			log.Printf("[ikev2] hot reload failed: %v", err)
+		}
+	}()
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 // --- WireGuard ---
