@@ -298,6 +298,17 @@ conn ikev2-psk
 		keyData, _ := os.ReadFile(keyPath)
 		os.WriteFile("/etc/ipsec.d/certs/ikev2-server.cert.pem", certData, 0644)
 		os.WriteFile("/etc/ipsec.d/private/ikev2-server.key.pem", keyData, 0600)
+		// If this cert was signed by a CA, also install the CA cert
+		if caID := a.tls.CAParent(cfg.CertID); caID != "" {
+			caData, _ := os.ReadFile(a.tls.CertPath(caID))
+			if len(caData) > 0 {
+				os.MkdirAll("/etc/ipsec.d/cacerts", 0755)
+				os.WriteFile("/etc/ipsec.d/cacerts/ca.pem", caData, 0644)
+				os.MkdirAll("/etc/swanctl/x509ca", 0755)
+				os.WriteFile("/etc/swanctl/x509ca/ca.pem", caData, 0644)
+				log.Printf("[ikev2] installed CA cert from %s for cert chain", caID)
+			}
+		}
 		// Symlink swanctl dirs → ipsec.d dirs (both stroke and vici use the same files)
 		os.MkdirAll("/etc/swanctl", 0755)
 		os.Symlink("/etc/ipsec.d/certs", "/etc/swanctl/x509")
