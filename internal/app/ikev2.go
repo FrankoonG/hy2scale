@@ -334,7 +334,11 @@ conn ikev2-mschapv2
 	os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
 
 	if testIptablesAvailable() {
-		// Standard mode: iptables DNAT + transparent proxy
+		if iptUseChroot() {
+			log.Printf("[ikev2] mode: iptables via chroot /host (host kernel compat)")
+		} else {
+			log.Printf("[ikev2] mode: native iptables DNAT + transparent proxy")
+		}
 		portStr := fmt.Sprintf("%d", proxyPort)
 		iptRun("iptables-legacy", "-t", "nat", "-I", "PREROUTING",
 			"-s", subnet, "-p", "tcp",
@@ -358,11 +362,17 @@ conn ikev2-mschapv2
 		go a.runIKEv2Proxy(gateway, proxyPort, hooksPort, cfg)
 	} else {
 		// Compat mode: xfrm interface + TUN capture (swanctl with if_id)
-		log.Printf("[ikev2] iptables unavailable, using xfrm interface + TUN capture (compat)")
+		log.Printf("[ikev2] mode: compat (iptables unavailable → xfrm interface + AF_PACKET bridge + gvisor netstack)")
+		// Store PSK default exit for TUN capture forwarder
+		if cfg.Mode == "psk" && cfg.DefaultExit != "" {
+			ikev2DefaultExitVia.Store(cfg.DefaultExit)
+			log.Printf("[ikev2] PSK default exit: %s", cfg.DefaultExit)
+		}
 		if err := ensureTunCapture(a, subnet); err != nil {
 			log.Printf("[ikev2] TUN capture failed: %v", err)
 			return err
 		}
+
 
 		// Generate swanctl-style updown script that creates xfrm interface
 		// and routes traffic to the TUN capture device
@@ -382,8 +392,8 @@ case "$PLUTO_VERB" in
       # Add policy route: traffic from this client -> TUN for forwarding
       ip rule add from "$PLUTO_PEER_SOURCEIP" lookup %s 2>/dev/null
     fi
-    # Notify hy2scale of session
-    wget -qO- "http://%s:%d/ikev2/up?ip=${PLUTO_PEER_SOURCEIP}&user=${PLUTO_PEER_ID}" 2>/dev/null
+    # Notify hy2scale of session (include iface name for xfrm bridge)
+    wget -qO- "http://%s:%d/ikev2/up?ip=${PLUTO_PEER_SOURCEIP}&user=${PLUTO_PEER_ID}&iface=${IFNAME}" 2>/dev/null
     ;;
   down-client|down-client-v6)
     IFID="${PLUTO_IF_ID_OUT%%%%/*}"
@@ -482,8 +492,10 @@ func appendPSKSecret(psk string) {
 func ensureStrongswanRunning() {
 	// Check if charon is already running
 	if exec.Command("ipsec", "status").Run() == nil {
+		debugLog("[ipsec] strongswan already running, skipping start")
 		return
 	}
+	log.Printf("[ipsec] starting strongswan...")
 	// Clean stale xfrm state/policy from previous runs (kernel persists them across restarts)
 	exec.Command("ip", "xfrm", "state", "flush").Run()
 	exec.Command("ip", "xfrm", "policy", "flush").Run()
@@ -499,10 +511,11 @@ func ensureStrongswanRunning() {
 	for i := 0; i < 20; i++ {
 		time.Sleep(500 * time.Millisecond)
 		if exec.Command("ipsec", "status").Run() == nil {
+			log.Printf("[ipsec] strongswan ready")
 			return
 		}
 	}
-	log.Printf("[ipsec] warning: strongswan may not be ready")
+	log.Printf("[ipsec] warning: strongswan may not be ready after 10s")
 }
 
 // runIKEv2Proxy runs the transparent proxy and hooks server for IKEv2.
@@ -565,6 +578,19 @@ func (a *App) serveIKEv2Hooks(gatewayIP string, port int, cfg IKEv2Config) {
 						if user != "" {
 							ikev2Sessions.Register(ip, user)
 						}
+						// In compat mode, start xfrm bridge for this client's interface
+						if ifn := params["iface"]; ifn != "" && TunCaptureActive() && tunCaptureInst != nil {
+							registerXfrmClient(ip, ifn)
+							go func() {
+								if err := waitForInterface(ifn, 5*time.Second); err != nil {
+									log.Printf("[ikev2] xfrm iface wait: %v", err)
+									return
+								}
+								if err := startXfrmBridge(a.appCtx, ifn, tunCaptureInst.ep); err != nil {
+									log.Printf("[ikev2] xfrm bridge: %v", err)
+								}
+							}()
+						}
 					}
 				}
 			} else if strings.Contains(req, "/ikev2/down?") {
@@ -576,6 +602,11 @@ func (a *App) serveIKEv2Hooks(gatewayIP string, port int, cfg IKEv2Config) {
 					params := parseQuery(q)
 					if ip, ok := params["ip"]; ok {
 						ikev2Sessions.Unregister(ip)
+						// Stop xfrm bridge for this client
+						if ifn := xfrmIfForClient(ip); ifn != "" {
+							stopXfrmBridge(ifn)
+							unregisterXfrmClient(ip)
+						}
 					}
 				}
 			}
