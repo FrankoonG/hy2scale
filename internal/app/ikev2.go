@@ -228,35 +228,40 @@ conn ikev2-mschapv2
 
 	// Setup iptables (same dual-stack approach as L2TP)
 	os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
-	portStr := fmt.Sprintf("%d", proxyPort)
 
-	// iptables-legacy: DNAT + FORWARD + MASQUERADE
-	iptRun("iptables-legacy", "-t", "nat", "-I", "PREROUTING",
-		"-s", subnet, "-p", "tcp",
-		"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%s", gateway, portStr))
-	iptRun("iptables-legacy", "-t", "nat", "-A", "POSTROUTING",
-		"-s", subnet, "-o", "eth0", "-j", "MASQUERADE")
-	iptRun("iptables-legacy", "-I", "FORWARD", "-s", subnet, "-o", "eth0", "-j", "ACCEPT")
-	iptRun("iptables-legacy", "-I", "FORWARD", "-d", subnet,
-		"-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
-
-	// Restrict proxy port access
-	iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", portStr,
-		"-s", subnet, "-j", "ACCEPT")
-	iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", portStr, "-j", "DROP")
-	hooksPortStr := fmt.Sprintf("%d", hooksPort)
-	iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr,
-		"-i", "lo", "-j", "ACCEPT")
-	iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr, "-j", "DROP")
-
-	// nf_tables (Docker compat)
-	iptRun("iptables", "-I", "DOCKER-USER", "-s", subnet, "-j", "ACCEPT")
-	iptRun("iptables", "-I", "DOCKER-USER", "-d", subnet, "-j", "ACCEPT")
-	iptRun("iptables", "-t", "nat", "-A", "POSTROUTING",
-		"-s", subnet, "-j", "MASQUERADE")
-
-	// Start transparent proxy
-	go a.runIKEv2Proxy(gateway, proxyPort, hooksPort, cfg)
+	if testIptablesAvailable() {
+		// Standard mode: iptables DNAT + transparent proxy
+		portStr := fmt.Sprintf("%d", proxyPort)
+		iptRun("iptables-legacy", "-t", "nat", "-I", "PREROUTING",
+			"-s", subnet, "-p", "tcp",
+			"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%s", gateway, portStr))
+		iptRun("iptables-legacy", "-t", "nat", "-A", "POSTROUTING",
+			"-s", subnet, "-o", "eth0", "-j", "MASQUERADE")
+		iptRun("iptables-legacy", "-I", "FORWARD", "-s", subnet, "-o", "eth0", "-j", "ACCEPT")
+		iptRun("iptables-legacy", "-I", "FORWARD", "-d", subnet,
+			"-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
+		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", portStr,
+			"-s", subnet, "-j", "ACCEPT")
+		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", portStr, "-j", "DROP")
+		hooksPortStr := fmt.Sprintf("%d", hooksPort)
+		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr,
+			"-i", "lo", "-j", "ACCEPT")
+		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr, "-j", "DROP")
+		iptRun("iptables", "-I", "DOCKER-USER", "-s", subnet, "-j", "ACCEPT")
+		iptRun("iptables", "-I", "DOCKER-USER", "-d", subnet, "-j", "ACCEPT")
+		iptRun("iptables", "-t", "nat", "-A", "POSTROUTING",
+			"-s", subnet, "-j", "MASQUERADE")
+		go a.runIKEv2Proxy(gateway, proxyPort, hooksPort, cfg)
+	} else {
+		// Compat mode: TUN capture with gvisor netstack
+		log.Printf("[ikev2] iptables unavailable, using TUN capture mode (compat)")
+		if err := ensureTunCapture(a, subnet); err != nil {
+			log.Printf("[ikev2] TUN capture failed: %v", err)
+			return err
+		}
+		// Hooks server still needed for IKEv2 session tracking
+		go a.serveIKEv2Hooks(gateway, hooksPort, cfg)
+	}
 
 	// Start strongswan or reload if already running
 	ensureStrongswanRunning()

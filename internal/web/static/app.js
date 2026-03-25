@@ -218,12 +218,15 @@ async function refresh() {
     $('#node-name-display').textContent = node.name !== node.node_id ? node.name : '';
     if (node.version) {
       const vb = $('#version-badge');
+      vb.classList.remove('limited', 'compat');
       if (node.limited) {
         vb.textContent = 'v' + node.version + ' Limited';
         vb.classList.add('limited');
+      } else if (node.compat) {
+        vb.textContent = 'v' + node.version + ' Compat';
+        vb.classList.add('compat');
       } else {
         vb.textContent = 'v' + node.version;
-        vb.classList.remove('limited');
       }
     }
     const tasks = [refreshTopology(), refreshStats()];
