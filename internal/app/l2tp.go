@@ -303,14 +303,30 @@ conn l2tp-psk
 `, cfg.PSK)
 
 	// strongswan.conf: fix IKEv1 iOS compatibility
-	strongswanConf := `charon {
+	// strongswan.conf: increase log level when DEBUG is set
+	charonLog := ""
+	if debugMode() {
+		charonLog = `
+    filelog {
+        /dev/stderr {
+            ike = 2
+            cfg = 2
+            net = 1
+            enc = 1
+            knl = 1
+            default = 1
+            flush_line = yes
+        }
+    }`
+	}
+	strongswanConf := fmt.Sprintf(`charon {
     load_modular = yes
-    max_ikev1_exchanges = 100
+    max_ikev1_exchanges = 100%s
     plugins {
         include strongswan.d/charon/*.conf
     }
 }
-`
+`, charonLog)
 
 	os.MkdirAll("/etc/ipsec.d", 0755)
 	os.WriteFile("/etc/strongswan.conf", []byte(strongswanConf), 0644)
