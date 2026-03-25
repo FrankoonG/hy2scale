@@ -144,7 +144,7 @@ func (s *pppSession) Lookup(ip string) (string, bool) {
 
 // CheckCapability tests if the runtime has NET_ADMIN.
 // Returns (ok, reason) where reason explains what failed.
-func CheckCapability() (bool, string) {
+var cachedCapability = sync.OnceValues(func() (bool, string) {
 	// NET_ADMIN check — try bridge (kernel built-in), fall back to iptables
 	if exec.Command("ip", "link", "add", "hy2cap_test", "type", "bridge").Run() == nil {
 		exec.Command("ip", "link", "del", "hy2cap_test").Run()
@@ -165,6 +165,10 @@ func CheckCapability() (bool, string) {
 		return true, ""
 	}
 	return false, "no NET_ADMIN capability (bridge creation, iptables-legacy, iptables, and chroot /host all failed)"
+})
+
+func CheckCapability() (bool, string) {
+	return cachedCapability()
 }
 
 // CheckL2TPCapability tests if the runtime has NET_ADMIN and /dev/ppp.
@@ -290,7 +294,7 @@ conn l2tp-psk
     right=%any
     rightprotoport=17/%any
     ike=aes256-sha256-modp3072,aes256-sha256-modp2048,aes128-sha256-modp3072,aes128-sha256-modp2048,aes128-sha1-modp1024,3des-sha1-modp1024!
-    esp=aes256-sha256,aes128-sha1,3des-sha1!
+    esp=aes256-sha256,aes128-sha256,aes128-sha1,3des-sha1!
     dpdaction=clear
     dpddelay=300s
 
