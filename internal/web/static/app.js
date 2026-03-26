@@ -1132,7 +1132,7 @@ function editWGPeer(name) {
   $('#wgp-modal-title').textContent = t('wg.editPeerPrefix', {name});
   $('#wgp-submit').textContent = t('app.save');
   $('#wgp-name').value = p.name;
-  $('#wgp-name').readOnly = true;
+  $('#wgp-name').readOnly = false;
   $('#wgp-pubkey').value = p.public_key || '';
   $('#wgp-privkey').value = p.private_key || '';
   $('#wgp-allowedips').value = p.allowed_ips || '';
@@ -1165,7 +1165,13 @@ async function submitWGPeer() {
     exit_via: exitVia, keepalive: parseInt($('#wgp-keepalive').value) || 0 };
   try {
     if (editingWGPeer) {
-      await api('/wireguard/peers/' + encodeURIComponent(editingWGPeer), { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      if (name !== editingWGPeer) {
+        // Name changed: delete old, create new
+        await api('/wireguard/peers/' + encodeURIComponent(editingWGPeer), { method: 'DELETE' });
+        await api('/wireguard/peers', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      } else {
+        await api('/wireguard/peers/' + encodeURIComponent(editingWGPeer), { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+      }
       toast(t('wg.peerUpdated'), 'success');
     } else {
       await api('/wireguard/peers', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
@@ -1733,10 +1739,12 @@ function renderRuleList(type, rules) {
   </tr></thead><tbody>${rules.map(r => {
     const targets = r.targets || [];
     const first = esc(targets[0] || '');
-    const more = targets.length > 1 ? ` <span class="badge badge-muted" title="${esc(targets.slice(1).join('\n'))}" style="cursor:help">+${targets.length - 1}</span>` : '';
+    const restList = targets.slice(1).map(t => esc(t)).join('<br>');
+    const more = targets.length > 1 ? ` <span class="badge badge-muted rule-more" style="cursor:pointer;position:relative" onclick="this.querySelector('.rule-tip').style.display=this.querySelector('.rule-tip').style.display?'':'block'">+${targets.length - 1}<span class="rule-tip" style="display:none;position:absolute;left:0;top:110%;z-index:99;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:6px 10px;white-space:nowrap;font-family:var(--mono);font-size:12px;box-shadow:0 4px 12px rgba(0,0,0,.15)">${restList}</span></span>` : '';
+    const nameDisplay = r.name ? esc(r.name) : `<span style="color:var(--text-muted)">${esc(r.id)}</span>`;
     return `<tr class="${!r.enabled ? 'disabled' : ''}">
       <td><label class="toggle"><input type="checkbox" ${r.enabled ? 'checked' : ''} onchange="toggleRuleEnabled('${esc(r.id)}',this.checked)"><span class="slider"></span></label></td>
-      <td><b>${esc(r.name || r.id)}</b></td>
+      <td><b>${nameDisplay}</b></td>
       <td><span style="font-family:var(--mono);font-size:12px">${first}</span>${more}</td>
       <td><span style="font-family:var(--mono);font-size:12px">${exitViaHTML(r.exit_via)}</span></td>
       <td style="text-align:right"><div class="act-group">
@@ -1788,7 +1796,7 @@ async function submitRule() {
   if (!targets.length) { toast(t('rules.targetsRequired'), 'error'); return; }
   if (!exit_via) { toast(t('rules.exitRequired'), 'error'); return; }
   const id = _editRuleId || (type + '-' + Date.now().toString(36));
-  const body = { id, name: name || id, type, targets, exit_via, enabled: _editRuleEnabled !== undefined ? _editRuleEnabled : true };
+  const body = { id, name, type, targets, exit_via, enabled: _editRuleEnabled !== undefined ? _editRuleEnabled : true };
   try {
     if (_editRuleId) {
       await api('/rules/' + _editRuleId, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
@@ -2038,6 +2046,10 @@ async function switchLang(code) {
 document.addEventListener('click', e => {
   if (!e.target.closest('.lang-switcher')) {
     document.querySelectorAll('.lang-menu').forEach(m => m.style.display = 'none');
+  }
+  // Close rule target popovers when clicking outside
+  if (!e.target.closest('.rule-more')) {
+    document.querySelectorAll('.rule-tip').forEach(t => t.style.display = 'none');
   }
 });
 
