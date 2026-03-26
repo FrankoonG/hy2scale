@@ -285,6 +285,48 @@ func sortPathsByScore(target string, paths []string) {
 	}
 }
 
+// dialLoadBalance distributes connections across all healthy paths (round-robin).
+// Each new TCP connection goes to the next healthy path, maximizing aggregate throughput.
+func (a *App) dialLoadBalance(ctx context.Context, target, addr string) (net.Conn, error) {
+	paths := a.findPathsTo(target)
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("loadbalance: no paths to %s", target)
+	}
+
+	// Filter to healthy paths only
+	var healthy []string
+	for _, p := range paths {
+		ps := getPathScore(target, p)
+		if ps.isHealthy() || ps.samples == 0 {
+			healthy = append(healthy, p)
+		}
+	}
+	if len(healthy) == 0 {
+		healthy = paths // fallback: try all if none healthy
+	}
+
+	// Round-robin selection
+	idx := lbCounter.Add(1)
+	selected := healthy[int(idx)%len(healthy)]
+
+	debugLog("[loadbalance] %s: %d healthy paths, selected %s (rr #%d)", target, len(healthy), selected, idx)
+
+	conn, err := a.dialPath(ctx, selected, addr)
+	if err != nil {
+		ps := getPathScore(target, selected)
+		ps.recordFailure()
+		// Fallback: try adaptive (race all paths)
+		debugLog("[loadbalance] %s path %s failed, falling back to adaptive", target, selected)
+		return a.dialAdaptive(ctx, target, addr)
+	}
+
+	ps := getPathScore(target, selected)
+	ps.recordSuccess(0) // RTT not measured in round-robin mode
+	return conn, nil
+}
+
+var lbCounter atomic.Int64
+
 func min(a, b float64) float64 {
 	if a < b {
 		return a

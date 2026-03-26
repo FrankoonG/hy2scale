@@ -300,5 +300,8 @@
   "rules.deleted": "규칙 삭제됨",
   "rules.deleteConfirm": "이 규칙을 삭제하시겠습니까?",
   "rules.targetsRequired": "최소 하나의 대상이 필요합니다",
-  "rules.exitRequired": "출구 경로는 필수입니다"
+  "rules.exitRequired": "출구 경로는 필수입니다",
+  "exit.modeNone": "직접 연결",
+  "exit.modeStability": "안정성 우선",
+  "exit.modeSpeed": "속도 우선"
 }
