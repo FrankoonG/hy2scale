@@ -1330,7 +1330,11 @@ function renderQRToCanvas(ctx, text, size) {
 function switchSettingsTab(tab) {
   const t = tab.dataset.settab;
   $$('[data-settab]').forEach(el => el.classList.toggle('active', el === tab));
-  $$('.settings-panel').forEach(p => p.style.display = p.id === 'stab-' + t ? '' : 'none');
+  $$('.settings-panel').forEach(p => {
+    const show = p.id === 'stab-' + t;
+    p.style.display = show ? '' : 'none';
+    if (show) { p.style.animation = 'none'; p.offsetHeight; p.style.animation = ''; }
+  });
   loadSettings();
 }
 
