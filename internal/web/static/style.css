@@ -270,3 +270,35 @@ textarea.drag-over{border-color:var(--primary);background:rgba(67,97,238,.05);bo
 .lang-menu-item{padding:8px 14px;font-size:13px;cursor:pointer;display:flex;align-items:center;gap:6px}
 .lang-menu-item:hover{background:var(--primary-light)}
 .lang-menu-item.active{color:var(--primary);font-weight:600}
+
+/* ── Animations ── */
+
+/* Buttons: hover lift + active press */
+.btn-primary,.act-btn,.btn-icon{transition:all .15s ease}
+.btn-primary:hover{transform:translateY(-1px);box-shadow:0 2px 8px rgba(67,97,238,.25)}
+.btn-primary:active{transform:translateY(0);box-shadow:none}
+.act-btn:hover{opacity:.85;transform:translateY(-1px)}
+.act-btn:active{transform:translateY(0)}
+
+/* Modal: scale + fade in */
+.modal-overlay{opacity:0;animation:modalOverlayIn .2s ease forwards}
+.modal{transform:scale(.92) translateY(12px);opacity:0;animation:modalIn .25s cubic-bezier(.175,.885,.32,1.1) forwards;animation-delay:.05s}
+@keyframes modalOverlayIn{from{opacity:0}to{opacity:1}}
+@keyframes modalIn{from{transform:scale(.92) translateY(12px);opacity:0}to{transform:scale(1) translateY(0);opacity:1}}
+
+/* Page: fade + slide up */
+.page{animation:pageIn .3s ease both}
+@keyframes pageIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+
+/* Proxy/Rule tab panels: slide from direction */
+.proxy-panel,.rule-panel{animation:tabSlideIn .25s ease both}
+@keyframes tabSlideIn{from{opacity:0;transform:translateX(12px)}to{opacity:1;transform:translateX(0)}}
+
+/* Nav items: subtle hover indicator */
+.nav-item{position:relative}
+.nav-item::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);width:3px;height:0;background:var(--primary);border-radius:2px;transition:height .2s ease}
+.nav-item.active::before{height:60%}
+
+/* Toggle switch: smooth */
+.toggle .slider{transition:background .2s ease}
+.toggle .slider::before{transition:transform .2s cubic-bezier(.4,0,.2,1)}
