@@ -248,7 +248,7 @@ textarea.drag-over{border-color:var(--primary);background:rgba(67,97,238,.05);bo
 .autocomplete-wrap{position:relative;width:100%}
 .form-group .autocomplete-wrap{width:100%}
 .form-group .autocomplete-wrap input{width:100%;box-sizing:border-box}
-.autocomplete-list{position:fixed;z-index:200;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);max-height:180px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,.15);transform-origin:top center;transform:scaleY(0);opacity:0;pointer-events:none;transition:transform .18s cubic-bezier(.4,0,.2,1),opacity .15s ease}
+.autocomplete-list{position:fixed;z-index:200;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);max-height:180px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,.15);transform-origin:top center;transform:scaleY(0);opacity:0;pointer-events:none;transition:transform .25s cubic-bezier(.4,0,.2,1),opacity .2s ease}
 .autocomplete-list.open{transform:scaleY(1);opacity:1;pointer-events:auto}
 .autocomplete-item{padding:7px 10px;font-size:13px;cursor:pointer;font-family:var(--mono)}
 .autocomplete-item:hover,.autocomplete-item.active{background:var(--primary-light);color:var(--primary)}
@@ -257,7 +257,7 @@ textarea.drag-over{border-color:var(--primary);background:rgba(67,97,238,.05);bo
 .custom-select-btn{width:100%;padding:8px 30px 8px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:#fafbfc;font-size:13px;font-family:var(--font);cursor:pointer;text-align:left;appearance:none;color:var(--text)}
 .custom-select-btn::after{content:'';position:absolute;right:10px;top:50%;transform:translateY(-50%);border:5px solid transparent;border-top-color:var(--text-muted)}
 .custom-select-btn:focus{border-color:var(--primary);outline:none}
-.custom-select-list{position:fixed;z-index:200;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);max-height:200px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,.15);transform-origin:top center;transform:scaleY(0);opacity:0;pointer-events:none;transition:transform .18s cubic-bezier(.4,0,.2,1),opacity .15s ease}
+.custom-select-list{position:fixed;z-index:200;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);max-height:200px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,.15);transform-origin:top center;transform:scaleY(0);opacity:0;pointer-events:none;transition:transform .25s cubic-bezier(.4,0,.2,1),opacity .2s ease}
 .custom-select-list.open{transform:scaleY(1);opacity:1;pointer-events:auto}
 .custom-select-item{padding:7px 10px;font-size:13px;cursor:pointer}
 .custom-select-item:hover,.custom-select-item.selected{background:var(--primary-light);color:var(--primary)}
@@ -281,24 +281,24 @@ textarea.drag-over{border-color:var(--primary);background:rgba(67,97,238,.05);bo
 .act-btn:active{transform:translateY(0)}
 
 /* Modal: born from button, return to button */
-.modal-overlay{opacity:0;transition:opacity .2s ease}
+.modal-overlay{opacity:0;transition:opacity .25s ease}
 .modal-overlay.modal-open{opacity:1}
 .modal-overlay.modal-closing{opacity:0}
-.modal{transform-origin:top center;transform:scale(.3);opacity:0;transition:transform .28s cubic-bezier(.34,1.4,.64,1),opacity .2s ease}
+.modal{transform-origin:top center;transform:scale(.3);opacity:0;transition:transform .4s cubic-bezier(.34,1.4,.64,1),opacity .25s ease}
 .modal-overlay.modal-open .modal{transform:scale(1);opacity:1}
-.modal-overlay.modal-closing .modal{transform:scale(.3);opacity:0;transition:transform .2s cubic-bezier(.4,0,1,1),opacity .15s ease}
+.modal-overlay.modal-closing .modal{transform:scale(.3);opacity:0;transition:transform .3s cubic-bezier(.4,0,1,1),opacity .2s ease}
 
 /* Page: fade + slide up */
-.page{animation:pageIn .3s ease both}
-@keyframes pageIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+.page{animation:pageIn .4s ease both}
+@keyframes pageIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
 
 /* Proxy/Rule tab panels: slide from direction */
-.proxy-panel,.rule-panel{animation:tabSlideIn .25s ease both}
-@keyframes tabSlideIn{from{opacity:0;transform:translateX(12px)}to{opacity:1;transform:translateX(0)}}
+.proxy-panel,.rule-panel{animation:tabSlideIn .35s ease both}
+@keyframes tabSlideIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:translateX(0)}}
 
 /* Nav items: subtle hover indicator */
 .nav-item{position:relative}
-.nav-item::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);width:3px;height:0;background:var(--primary);border-radius:2px;transition:height .2s ease}
+.nav-item::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);width:3px;height:0;background:var(--primary);border-radius:2px;transition:height .3s ease}
 .nav-item.active::before{height:60%}
 
 /* Toggle switch: smooth */
