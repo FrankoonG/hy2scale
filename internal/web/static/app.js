@@ -112,7 +112,7 @@ function closeSidebar() {
 }
 
 // ── Navigation / Router ──
-const pageTitles = { nodes: 'nav.nodes', users: 'nav.users', proxies: 'nav.proxies', tls: 'nav.tls', settings: 'nav.settings' };
+const pageTitles = { nodes: 'nav.nodes', users: 'nav.users', proxies: 'nav.proxies', rules: 'nav.rules', tls: 'nav.tls', settings: 'nav.settings' };
 
 let _currentPage = 'nodes';
 function switchPage(name, push) {
