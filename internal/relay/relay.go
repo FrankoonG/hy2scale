@@ -63,6 +63,44 @@ type PeerInfo struct {
 // Set by the app package at init time.
 var NodeVersion = "1.0.0"
 
+// peerMeta is extensible metadata exchanged after basic handshake.
+// New fields can be added freely — old peers ignore unknown fields.
+type peerMeta struct {
+	Version string `json:"v,omitempty"`
+	// Future fields go here (e.g., Capabilities, Region, etc.)
+}
+
+// writeMeta sends a length-prefixed JSON metadata blob.
+func writeMeta(w io.Writer, m peerMeta) {
+	data, _ := json.Marshal(m)
+	var lenBuf [2]byte
+	binary.BigEndian.PutUint16(lenBuf[:], uint16(len(data)))
+	w.Write(lenBuf[:])
+	w.Write(data)
+}
+
+// readMeta reads a length-prefixed JSON metadata blob with timeout.
+// Returns zero-value peerMeta if the remote is old (doesn't send metadata).
+func readMeta(r net.Conn, timeout time.Duration) peerMeta {
+	r.SetReadDeadline(time.Now().Add(timeout))
+	defer r.SetReadDeadline(time.Time{})
+	var lenBuf [2]byte
+	if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
+		return peerMeta{}
+	}
+	n := binary.BigEndian.Uint16(lenBuf[:])
+	if n == 0 || n > 4096 {
+		return peerMeta{}
+	}
+	data := make([]byte, n)
+	if _, err := io.ReadFull(r, data); err != nil {
+		return peerMeta{}
+	}
+	var m peerMeta
+	json.Unmarshal(data, &m)
+	return m
+}
+
 // --- Node ---
 
 type peer struct {
@@ -334,11 +372,11 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	if n.exit {
 		flags |= 0x01
 	}
-	flags |= 0x02 // bit 1: supports version exchange
+	flags |= 0x02 // bit 1: supports metadata exchange
 	regStream.Write([]byte{flags})
 	writeString(regStream, n.name)
 
-	// Read back: remote name, then optionally remote version + flags
+	// Read back the remote's actual node ID
 	remoteID, err := readString(regStream)
 	if err != nil {
 		return ErrNotHy2scale
@@ -347,20 +385,10 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	if remoteID != "" {
 		actualName = remoteID
 	}
-	// Read 1 byte: remote's flags (new protocol) or nothing (old protocol)
-	// Old servers don't send anything after the name, so use a short timeout
-	remoteVersion := "1.0.0"
-	regStream.SetReadDeadline(time.Now().Add(2 * time.Second))
-	var remoteFlags [1]byte
-	if _, err := io.ReadFull(regStream, remoteFlags[:]); err == nil {
-		if remoteFlags[0]&0x02 != 0 {
-			// Remote supports version exchange
-			if v, err := readString(regStream); err == nil && v != "" {
-				remoteVersion = v
-			}
-		}
-	}
-	regStream.SetReadDeadline(time.Time{}) // clear deadline
+	// Read remote metadata (2s timeout — old servers don't send it)
+	remoteMeta := readMeta(regStream, 2*time.Second)
+	// Send our metadata (remote reads it only if it sent the flag)
+	writeMeta(regStream, peerMeta{Version: NodeVersion})
 
 	if onID != nil {
 		onID(actualName)
@@ -376,7 +404,7 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 
 	// Register peer with remote's actual name
 	p := &peer{
-		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteVersion},
+		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version},
 		client:  client,
 		waiting: make(map[string]chan net.Conn),
 	}
@@ -492,13 +520,12 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 	// Send back our name
 	writeString(stream, n.name)
 
-	// Version exchange: only if client set the version flag (bit 1)
-	remoteVersion := "1.0.0"
+	// Metadata exchange: only if client set the metadata flag (bit 1)
+	var remoteMeta peerMeta
 	if flags[0]&0x02 != 0 {
-		// Client supports version: send our flags + version
-		var ourFlags byte = 0x02
-		stream.Write([]byte{ourFlags})
-		writeString(stream, NodeVersion)
+		// Send our metadata, then read client's
+		writeMeta(stream, peerMeta{Version: NodeVersion})
+		remoteMeta = readMeta(stream, 2*time.Second)
 	}
 
 	p := &peer{
@@ -506,7 +533,7 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 			Name:      name,
 			ExitNode:  flags[0]&0x01 != 0,
 			Direction: "inbound",
-			Version:   remoteVersion,
+			Version:   remoteMeta.Version,
 		},
 		waiting: make(map[string]chan net.Conn),
 	}
