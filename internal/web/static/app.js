@@ -1724,28 +1724,27 @@ function renderRuleList(type, rules) {
     return;
   }
   const targetLabel = type === 'ip' ? t('rules.ipTargets') : t('rules.domainTargets');
-  el.innerHTML = `<table class="table"><thead><tr>
-    <th>${t('rules.name')}</th>
-    <th>${targetLabel}</th>
-    <th>${t('rules.exitVia')}</th>
-    <th style="text-align:right">${t('app.actions')}</th>
-  </tr></thead><tbody>` + rules.map(r => {
+  el.innerHTML = `<div class="table-scroll"><table class="peer-table user-table"><thead><tr>
+    <th style="width:50px">${t('users.on')}</th>
+    <th style="width:140px">${t('rules.name')}</th>
+    <th style="min-width:180px">${targetLabel}</th>
+    <th style="min-width:120px">${t('rules.exitVia')}</th>
+    <th style="width:150px"></th>
+  </tr></thead><tbody>${rules.map(r => {
     const targets = r.targets || [];
     const first = esc(targets[0] || '');
-    const more = targets.length > 1 ? ` <span class="badge badge-muted" title="${esc(targets.slice(1).join('\n'))}" style="cursor:help">+${targets.length-1}</span>` : '';
-    const rowStyle = r.enabled ? '' : ' style="opacity:0.45"';
-    const disabledBadge = r.enabled ? '' : ` <span class="badge badge-muted">${t('app.disabled')}</span>`;
-    return `<tr${rowStyle}>
-      <td><b>${esc(r.name || r.id)}</b>${disabledBadge}</td>
-      <td><code style="font-size:12px">${first}</code>${more}</td>
-      <td>${exitViaHTML(r.exit_via)}</td>
-      <td style="text-align:right;white-space:nowrap">
+    const more = targets.length > 1 ? ` <span class="badge badge-muted" title="${esc(targets.slice(1).join('\n'))}" style="cursor:help">+${targets.length - 1}</span>` : '';
+    return `<tr class="${!r.enabled ? 'disabled' : ''}">
+      <td><label class="toggle"><input type="checkbox" ${r.enabled ? 'checked' : ''} onchange="toggleRuleEnabled('${esc(r.id)}',this.checked)"><span class="slider"></span></label></td>
+      <td><b>${esc(r.name || r.id)}</b></td>
+      <td><span style="font-family:var(--mono);font-size:12px">${first}</span>${more}</td>
+      <td><span style="font-family:var(--mono);font-size:12px">${exitViaHTML(r.exit_via)}</span></td>
+      <td style="text-align:right"><div class="act-group">
         <button class="act-btn edit" onclick="editRule('${esc(r.id)}')">${t('app.edit')}</button>
-        <button class="act-btn${r.enabled ? ' danger' : ''}" onclick="toggleRuleEnabled('${esc(r.id)}',${!r.enabled})">${r.enabled ? t('app.disable') : t('app.enable')}</button>
         <button class="act-btn danger" onclick="deleteRuleConfirm('${esc(r.id)}')">${t('app.delete')}</button>
-      </td>
+      </div></td>
     </tr>`;
-  }).join('') + '</tbody></table>';
+  }).join('')}</tbody></table></div>`;
 }
 
 function openRuleDialog(type) {
