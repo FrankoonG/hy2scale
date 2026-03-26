@@ -1,6 +1,43 @@
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 const basePath = window.__BASE__ || '';
+
+// Track last clicked button for modal transform-origin
+let _lastClickTarget = null;
+document.addEventListener('click', e => {
+  const btn = e.target.closest('button,.act-btn,.btn-primary,.btn-icon,.btn-sm,[onclick]');
+  if (btn) _lastClickTarget = btn;
+}, true);
+
+// Modal open/close with animation (born from button, return to button)
+function openModal(sel) {
+  const overlay = typeof sel === 'string' ? $(sel) : sel;
+  overlay.style.display = '';
+  const modal = overlay.querySelector('.modal');
+  if (modal) {
+    if (_lastClickTarget) {
+      const rect = _lastClickTarget.getBoundingClientRect();
+      const overlayRect = overlay.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2 - overlayRect.left;
+      const cy = rect.top + rect.height / 2 - overlayRect.top;
+      modal.style.transformOrigin = `${cx}px ${cy}px`;
+    } else {
+      modal.style.transformOrigin = 'center center';
+    }
+  }
+  overlay.classList.remove('modal-closing');
+  overlay.offsetHeight;
+  overlay.classList.add('modal-open');
+}
+function closeModal(sel) {
+  const overlay = typeof sel === 'string' ? $(sel) : sel;
+  overlay.classList.remove('modal-open');
+  overlay.classList.add('modal-closing');
+  setTimeout(() => {
+    overlay.style.display = 'none';
+    overlay.classList.remove('modal-closing');
+  }, 220);
+}
 const tokenKey = 'token:' + basePath;
 function sha256(msg) {
   // Pure JS SHA-256 (works over HTTP, no crypto.subtle needed)
@@ -68,11 +105,11 @@ function showConfirm(title, msg) {
   return new Promise(resolve => {
     $('#confirm-title').textContent = title;
     $('#confirm-msg').textContent = msg;
-    $('#confirm-modal').style.display = '';
+    openModal('#confirm-modal');
     const ok = () => { cleanup(); resolve(true); };
     const cancel = () => { cleanup(); resolve(false); };
     const cleanup = () => {
-      $('#confirm-modal').style.display = 'none';
+      closeModal('#confirm-modal');
       $('#confirm-ok').onclick = null;
       $('#confirm-cancel').onclick = null;
     };
@@ -525,11 +562,11 @@ async function renameNative(currentName) {
   $('#confirm-ok').style.background = 'var(--primary)';
   $('#confirm-ok').style.borderColor = 'var(--primary)';
   $('#confirm-ok').textContent = t('app.save');
-  $('#confirm-modal').style.display = '';
+  openModal('#confirm-modal');
   input.focus();
   input.select();
   const ok = await new Promise(resolve => {
-    const done = (v) => { $('#confirm-modal').style.display = 'none'; $('#confirm-ok').style.background = ''; $('#confirm-ok').style.borderColor = ''; $('#confirm-ok').textContent = t('app.confirm'); resolve(v); };
+    const done = (v) => { closeModal('#confirm-modal'); $('#confirm-ok').style.background = ''; $('#confirm-ok').style.borderColor = ''; $('#confirm-ok').textContent = t('app.confirm'); resolve(v); };
     $('#confirm-ok').onclick = () => done(true);
     $('#confirm-cancel').onclick = () => done(false);
     input.addEventListener('keydown', e => { if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); });
@@ -573,7 +610,7 @@ function openAddDialog() {
   ['add-addr','add-pass','add-sni','add-ca','add-tx','add-rx','add-isw','add-msw','add-icw','add-mcw'].forEach(id => $(`#${id}`).value = '');
   $('#add-addr').disabled = false;
   $('#add-insecure').checked = true; $('#add-fastopen').checked = false;
-  $('#add-node-modal').style.display = '';
+  openModal('#add-node-modal');
   $('#quic-advanced').style.display = 'none';
 }
 
@@ -595,13 +632,13 @@ async function openEditDialog(name) {
     $('#add-icw').value = cl.init_conn_window || '';
     $('#add-mcw').value = cl.max_conn_window || '';
     $('#add-fastopen').checked = !!cl.fast_open;
-    $('#add-node-modal').style.display = '';
+    openModal('#add-node-modal');
     const hasQuic = cl.init_stream_window || cl.max_stream_window || cl.init_conn_window || cl.max_conn_window;
     $('#quic-advanced').style.display = hasQuic ? '' : 'none';
   } catch (e) { toast(String(e), 'error'); }
 }
 
-function closeAddDialog() { $('#add-node-modal').style.display = 'none'; editingNode = null; }
+function closeAddDialog() { closeModal('#add-node-modal'); editingNode = null; }
 
 async function submitAddNode() {
   const addr = $('#add-addr').value.trim(), password = $('#add-pass').value.trim();
@@ -649,10 +686,10 @@ async function openEditSelf() {
     }
     $('#self-error').textContent = '';
     $('#self-ok').textContent = '';
-    $('#edit-self-modal').style.display = '';
+    openModal('#edit-self-modal');
   } catch (e) { toast(String(e), 'error'); }
 }
-function closeEditSelf() { $('#edit-self-modal').style.display = 'none'; }
+function closeEditSelf() { closeModal('#edit-self-modal'); }
 
 async function submitEditSelf() {
   $('#self-error').textContent = ''; $('#self-ok').textContent = '';
@@ -1108,7 +1145,7 @@ async function saveWireGuard() {
     loadWireGuard();
   } catch(e) { toast(String(e), 'error'); }
 }
-function closeWGPeerDialog() { $('#wg-peer-dialog').style.display = 'none'; editingWGPeer = null; }
+function closeWGPeerDialog() { closeModal('#wg-peer-dialog'); editingWGPeer = null; }
 async function openWGPeerDialog() {
   editingWGPeer = null;
   $('#wgp-modal-title').textContent = t('wg.addPeerTitle');
@@ -1135,7 +1172,7 @@ async function openWGPeerDialog() {
   } catch(e) {}
   $('#wgp-pubkey').style.borderColor = '';
   $('#wgp-privkey').style.borderColor = '';
-  $('#wg-peer-dialog').style.display = '';
+  openModal('#wg-peer-dialog');
 }
 function editWGPeer(name) {
   const p = _wgPeers.find(x => x.name === name);
@@ -1152,7 +1189,7 @@ function editWGPeer(name) {
   $('#wgp-keepalive').value = p.keepalive || 0;
   $('#wgp-pubkey').style.borderColor = '';
   $('#wgp-privkey').style.borderColor = '';
-  $('#wg-peer-dialog').style.display = '';
+  openModal('#wg-peer-dialog');
 }
 async function generateWGPeerKeys() {
   try {
@@ -1189,7 +1226,7 @@ async function submitWGPeer() {
       await api('/wireguard/peers', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
       toast(t('wg.peerAdded'), 'success');
     }
-    $('#wg-peer-dialog').style.display = 'none';
+    closeModal('#wg-peer-dialog');
     editingWGPeer = null;
     loadWireGuard();
   } catch(e) { toast(String(e), 'error'); }
@@ -1638,7 +1675,7 @@ function openUserDialog() {
   ['u-username','u-password','u-exitvia','u-expiry'].forEach(id => $(`#${id}`).value = '');
   $('#u-limit').value = '0';
   $('#u-enabled').checked = true;
-  $('#user-modal').style.display = '';
+  openModal('#user-modal');
 }
 
 async function editUser(id) {
@@ -1654,10 +1691,10 @@ async function editUser(id) {
   $('#u-limit').value = u.traffic_limit ? (u.traffic_limit / 1073741824).toFixed(1) : '0';
   $('#u-expiry').value = u.expiry_date || '';
   $('#u-enabled').checked = u.enabled;
-  $('#user-modal').style.display = '';
+  openModal('#user-modal');
 }
 
-function closeUserDialog() { $('#user-modal').style.display = 'none'; editingUserId = null; }
+function closeUserDialog() { closeModal('#user-modal'); editingUserId = null; }
 
 async function submitUser() {
   const username = $('#u-username').value.trim();
@@ -1783,10 +1820,10 @@ function openRuleDialog(type) {
   $('#rule-targets').placeholder = type === 'ip' ? '1.1.1.1\n10.0.0.0/8\n192.168.1.1-192.168.1.254' : 'google.com\n*.github.com';
   $('#rule-modal-title').textContent = t('rules.newRule');
   $('#rule-submit-btn').textContent = t('app.add');
-  $('#rule-modal').style.display = '';
+  openModal('#rule-modal');
 }
 
-function closeRuleDialog() { $('#rule-modal').style.display = 'none'; }
+function closeRuleDialog() { closeModal('#rule-modal'); }
 
 async function editRule(id) {
   const data = await api('/rules');
@@ -1801,7 +1838,7 @@ async function editRule(id) {
   $('#rule-targets-label').textContent = rule.type === 'ip' ? t('rules.ipTargets') : t('rules.domainTargets');
   $('#rule-modal-title').textContent = t('app.edit');
   $('#rule-submit-btn').textContent = t('app.save');
-  $('#rule-modal').style.display = '';
+  openModal('#rule-modal');
 }
 
 async function submitRule() {
@@ -1906,7 +1943,7 @@ function setupPEMDragDrop(textarea, type) {
 async function openNewCertDialog() {
   ['cert-id','cert-name','cert-pem','cert-key-pem','cert-path','cert-key-path','cert-ca-cn'].forEach(x => { const e = $(`#${x}`); if (e) e.value = ''; });
   $('#cert-id').disabled = false;
-  $('#new-cert-modal').style.display = '';
+  openModal('#new-cert-modal');
   $('#cert-submit-btn').textContent = t('tls.new');
   // Populate CA select with CA certs that have private keys
   const sel = $('#cert-ca-select');
@@ -1923,7 +1960,7 @@ async function openNewCertDialog() {
   $('#cert-ca-group').style.display = '';
   switchCertTab(document.querySelector('[data-certtab="paste"]'));
 }
-function closeNewCertDialog() { $('#new-cert-modal').style.display = 'none'; }
+function closeNewCertDialog() { closeModal('#new-cert-modal'); }
 
 function onCaSelectChange() {
   const hasCa = $('#cert-ca-select').value !== '';
@@ -2013,7 +2050,7 @@ async function editCert(id) {
     if (pem.cert) $('#cert-pem').value = pem.cert;
     if (pem.key) $('#cert-key-pem').value = pem.key;
   } catch(e) {}
-  $('#new-cert-modal').style.display = '';
+  openModal('#new-cert-modal');
   $('#cert-submit-btn').textContent = t('app.save');
   $('#cert-ca-group').style.display = 'none'; // Hide CA options in edit mode
   $('#cert-ca-cn-group').style.display = 'none';

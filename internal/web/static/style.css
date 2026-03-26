@@ -280,11 +280,13 @@ textarea.drag-over{border-color:var(--primary);background:rgba(67,97,238,.05);bo
 .act-btn:hover{opacity:.85;transform:translateY(-1px)}
 .act-btn:active{transform:translateY(0)}
 
-/* Modal: scale + fade in */
-.modal-overlay{opacity:0;animation:modalOverlayIn .2s ease forwards}
-.modal{transform:scale(.92) translateY(12px);opacity:0;animation:modalIn .25s cubic-bezier(.175,.885,.32,1.1) forwards;animation-delay:.05s}
-@keyframes modalOverlayIn{from{opacity:0}to{opacity:1}}
-@keyframes modalIn{from{transform:scale(.92) translateY(12px);opacity:0}to{transform:scale(1) translateY(0);opacity:1}}
+/* Modal: born from button, return to button */
+.modal-overlay{opacity:0;transition:opacity .2s ease}
+.modal-overlay.modal-open{opacity:1}
+.modal-overlay.modal-closing{opacity:0}
+.modal{transform-origin:top center;transform:scale(.3);opacity:0;transition:transform .28s cubic-bezier(.34,1.4,.64,1),opacity .2s ease}
+.modal-overlay.modal-open .modal{transform:scale(1);opacity:1}
+.modal-overlay.modal-closing .modal{transform:scale(.3);opacity:0;transition:transform .2s cubic-bezier(.4,0,1,1),opacity .15s ease}
 
 /* Page: fade + slide up */
 .page{animation:pageIn .3s ease both}
