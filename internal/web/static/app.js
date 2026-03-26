@@ -620,7 +620,7 @@ async function openEditDialog(name) {
     editingNode = name;
     $('#add-node-modal-title').textContent = t('nodes.editPrefix', {name});
     $('#add-node-submit').textContent = t('app.save');
-    $('#add-addr').value = cl.addr || ''; $('#add-addr').disabled = true;
+    $('#add-addr').value = cl.addr || ''; $('#add-addr').disabled = false;
     $('#add-pass').value = cl.password || '';
     $('#add-sni').value = cl.sni || '';
     $('#add-insecure').checked = cl.insecure !== false;
