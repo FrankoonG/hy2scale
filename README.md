@@ -18,6 +18,10 @@
 
 ---
 
+## Documentation
+
+**[Wiki](https://github.com/FrankoonG/hy2scale/wiki)** — Full documentation including installation, configuration, API reference, and more.
+
 ## Quick Start
 
 ```bash
@@ -44,19 +48,6 @@ Open `http://<host>:5565/scale/` — default login: `admin` / `admin`
 
 ![Nodes](.github/assets/nodes.png)
 ![Users](.github/assets/users.png)
-
-## Documentation
-
-Full documentation is available on the **[Wiki](https://github.com/FrankoonG/hy2scale/wiki)**.
-
-- [Installation](https://github.com/FrankoonG/hy2scale/wiki/Installation)
-- [Nodes & Mesh](https://github.com/FrankoonG/hy2scale/wiki/Nodes)
-- [Proxies & VPN](https://github.com/FrankoonG/hy2scale/wiki/Proxies)
-- [Users & Routing](https://github.com/FrankoonG/hy2scale/wiki/Users)
-- [Routing Rules](https://github.com/FrankoonG/hy2scale/wiki/Rules)
-- [TLS Certificates](https://github.com/FrankoonG/hy2scale/wiki/TLS)
-- [iKuai Compatibility](https://github.com/FrankoonG/hy2scale/wiki/iKuai-Compatibility)
-- [API Reference](https://github.com/FrankoonG/hy2scale/wiki/API-Reference)
 
 ## Architecture
 

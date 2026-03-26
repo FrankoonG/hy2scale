@@ -17,6 +17,10 @@
 
 ---
 
+## 문서
+
+**[Wiki](https://github.com/FrankoonG/hy2scale/wiki)** — 설치, 설정, API 레퍼런스 등 전체 문서.
+
 ## 빠른 시작
 
 ```bash
@@ -43,19 +47,6 @@ docker run -d --name hy2scale \
 
 ![노드](.github/assets/nodes.png)
 ![사용자](.github/assets/users.png)
-
-## 문서
-
-전체 문서는 **[Wiki](https://github.com/FrankoonG/hy2scale/wiki)**에서 확인할 수 있습니다.
-
-- [설치](https://github.com/FrankoonG/hy2scale/wiki/Installation)
-- [노드 및 메시](https://github.com/FrankoonG/hy2scale/wiki/Nodes)
-- [프록시 및 VPN](https://github.com/FrankoonG/hy2scale/wiki/Proxies)
-- [사용자 및 라우팅](https://github.com/FrankoonG/hy2scale/wiki/Users)
-- [라우팅 규칙](https://github.com/FrankoonG/hy2scale/wiki/Rules)
-- [TLS 인증서](https://github.com/FrankoonG/hy2scale/wiki/TLS)
-- [iKuai 호환성](https://github.com/FrankoonG/hy2scale/wiki/iKuai-Compatibility)
-- [API 레퍼런스](https://github.com/FrankoonG/hy2scale/wiki/API-Reference)
 
 ## 아키텍처
 
