@@ -1740,7 +1740,7 @@ function renderRuleList(type, rules) {
     const targets = r.targets || [];
     const first = esc(targets[0] || '');
     const restList = targets.slice(1).map(t => esc(t)).join('<br>');
-    const more = targets.length > 1 ? ` <span class="badge badge-muted rule-more" style="cursor:pointer;position:relative" onclick="this.querySelector('.rule-tip').style.display=this.querySelector('.rule-tip').style.display?'':'block'">+${targets.length - 1}<span class="rule-tip" style="display:none;position:absolute;left:0;top:110%;z-index:99;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:6px 10px;white-space:nowrap;font-family:var(--mono);font-size:12px;box-shadow:0 4px 12px rgba(0,0,0,.15)">${restList}</span></span>` : '';
+    const more = targets.length > 1 ? ` <span class="badge badge-muted rule-more-badge" style="cursor:default" data-tip="${esc(targets.slice(1).join('\n'))}">+${targets.length - 1}</span>` : '';
     const nameDisplay = r.name ? esc(r.name) : `<span style="color:var(--text-muted)">${esc(r.id)}</span>`;
     return `<tr class="${!r.enabled ? 'disabled' : ''}">
       <td><label class="toggle"><input type="checkbox" ${r.enabled ? 'checked' : ''} onchange="toggleRuleEnabled('${esc(r.id)}',this.checked)"><span class="slider"></span></label></td>
@@ -2047,11 +2047,33 @@ document.addEventListener('click', e => {
   if (!e.target.closest('.lang-switcher')) {
     document.querySelectorAll('.lang-menu').forEach(m => m.style.display = 'none');
   }
-  // Close rule target popovers when clicking outside
-  if (!e.target.closest('.rule-more')) {
-    document.querySelectorAll('.rule-tip').forEach(t => t.style.display = 'none');
-  }
 });
+
+// Global floating tooltip for rule target badges
+(function() {
+  let tip = null;
+  document.addEventListener('mouseenter', e => {
+    const badge = e.target.closest('.rule-more-badge');
+    if (!badge) return;
+    const text = badge.dataset.tip;
+    if (!text) return;
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.style.cssText = 'position:fixed;z-index:99999;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:var(--mono);font-size:12px;box-shadow:0 4px 16px rgba(0,0,0,.2);pointer-events:none;white-space:pre;line-height:1.6';
+      document.body.appendChild(tip);
+    }
+    tip.textContent = text;
+    tip.style.display = 'block';
+    const rect = badge.getBoundingClientRect();
+    tip.style.left = rect.left + 'px';
+    tip.style.top = (rect.bottom + 4) + 'px';
+  }, true);
+  document.addEventListener('mouseleave', e => {
+    if (e.target.closest('.rule-more-badge') && tip) {
+      tip.style.display = 'none';
+    }
+  }, true);
+})();
 
 // ── Init ──
 (async function init() {
