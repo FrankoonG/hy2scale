@@ -387,6 +387,9 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	}
 	// Read remote metadata (2s timeout — old servers don't send it)
 	remoteMeta := readMeta(regStream, 2*time.Second)
+	if remoteMeta.Version == "" {
+		remoteMeta.Version = "1.0.0" // old peers don't send version
+	}
 	// Send our metadata (remote reads it only if it sent the flag)
 	writeMeta(regStream, peerMeta{Version: NodeVersion})
 
@@ -526,6 +529,9 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 		// Send our metadata, then read client's
 		writeMeta(stream, peerMeta{Version: NodeVersion})
 		remoteMeta = readMeta(stream, 2*time.Second)
+	}
+	if remoteMeta.Version == "" {
+		remoteMeta.Version = "1.0.0" // old peers don't send version
 	}
 
 	p := &peer{
