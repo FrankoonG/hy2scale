@@ -300,5 +300,8 @@
   "rules.deleted": "Rule deleted",
   "rules.deleteConfirm": "Delete this rule?",
   "rules.targetsRequired": "At least one target required",
-  "rules.exitRequired": "Exit Via is required"
+  "rules.exitRequired": "Exit Via is required",
+  "exit.modeNone": "Direct",
+  "exit.modeStability": "Stability",
+  "exit.modeSpeed": "Speed"
 }
