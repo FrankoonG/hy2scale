@@ -1747,13 +1747,14 @@ function renderRuleList(type, rules) {
   }).join('')}</tbody></table></div>`;
 }
 
+let _editRuleEnabled;
 function openRuleDialog(type) {
   _editRuleId = null;
+  _editRuleEnabled = true;
   $('#rule-type').value = type;
   $('#rule-name').value = '';
   $('#rule-targets').value = '';
   $('#rule-exit').value = '';
-  $('#rule-enabled').checked = true;
   $('#rule-targets-label').textContent = type === 'ip' ? t('rules.ipTargets') : t('rules.domainTargets');
   $('#rule-targets').placeholder = type === 'ip' ? '1.1.1.1\n10.0.0.0/8\n192.168.1.1-192.168.1.254' : 'google.com\n*.github.com';
   $('#rule-modal-title').textContent = t('rules.newRule');
@@ -1768,11 +1769,11 @@ async function editRule(id) {
   const rule = (data.rules || []).find(r => r.id === id);
   if (!rule) return;
   _editRuleId = id;
+  _editRuleEnabled = rule.enabled;
   $('#rule-type').value = rule.type;
   $('#rule-name').value = rule.name || '';
   $('#rule-targets').value = (rule.targets || []).join('\n');
   $('#rule-exit').value = rule.exit_via || '';
-  $('#rule-enabled').checked = rule.enabled;
   $('#rule-targets-label').textContent = rule.type === 'ip' ? t('rules.ipTargets') : t('rules.domainTargets');
   $('#rule-modal-title').textContent = t('app.edit');
   $('#rule-submit-btn').textContent = t('app.save');
@@ -1784,11 +1785,10 @@ async function submitRule() {
   const name = $('#rule-name').value.trim();
   const targets = $('#rule-targets').value.trim().split('\n').map(s => s.trim()).filter(Boolean);
   const exit_via = $('#rule-exit').value.trim();
-  const enabled = $('#rule-enabled').checked;
   if (!targets.length) { toast(t('rules.targetsRequired'), 'error'); return; }
   if (!exit_via) { toast(t('rules.exitRequired'), 'error'); return; }
   const id = _editRuleId || (type + '-' + Date.now().toString(36));
-  const body = { id, name: name || id, type, targets, exit_via, enabled };
+  const body = { id, name: name || id, type, targets, exit_via, enabled: _editRuleEnabled !== undefined ? _editRuleEnabled : true };
   try {
     if (_editRuleId) {
       await api('/rules/' + _editRuleId, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
@@ -2025,15 +2025,15 @@ async function switchLang(code) {
   await I18N.load(code);
   document.querySelectorAll('.lang-menu').forEach(m => m.style.display = 'none');
   updateLangButtons();
-  const titles = { nodes: t('nav.nodes'), users: t('nav.users'), proxies: t('nav.proxies'), tls: t('nav.tls'), settings: t('nav.settings') };
-  if (titles[_currentPage]) $('#page-title').textContent = titles[_currentPage];
-  // Re-render dynamic lists to update button text and table headers
-  try {
-    if (_currentPage === 'nodes') { lastTopoJSON = ''; refreshTopology(); }
-    if (_currentPage === 'users') { refreshUsers(); refreshSessions(); }
-    if (_currentPage === 'proxies') { proxiesLoaded = false; refreshProxies(); }
-    if (_currentPage === 'tls') refreshCerts();
-  } catch(e) {}
+  // Update page title from pageTitles (generic, no hardcoding)
+  if (pageTitles[_currentPage]) {
+    $('#page-title').textContent = t(pageTitles[_currentPage]);
+  }
+  // Re-render current page to refresh all dynamic i18n content
+  try { switchPage(_currentPage, false); } catch(e) {}
+  // Force re-render for pages that cache state
+  if (_currentPage === 'nodes') lastTopoJSON = '';
+  if (_currentPage === 'proxies') proxiesLoaded = false;
 }
 document.addEventListener('click', e => {
   if (!e.target.closest('.lang-switcher')) {
@@ -2063,6 +2063,8 @@ document.addEventListener('click', e => {
   if (ikExit) setupExitAutocomplete(ikExit);
   const wgpExit = $('#wgp-exitvia');
   if (wgpExit) setupExitAutocomplete(wgpExit);
+  const ruleExit = $('#rule-exit');
+  if (ruleExit) setupExitAutocomplete(ruleExit);
   // Setup custom selects for all <select> elements
   $$('select').forEach(sel => setupCustomSelect(sel));
 })();
