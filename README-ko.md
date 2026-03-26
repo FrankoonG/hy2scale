@@ -36,7 +36,7 @@ docker run -d --name hy2scale \
 - **라우팅 규칙** — IP 및 도메인 기반 트래픽을 특정 출구 노드로 라우팅
 - **TLS 및 CA** — IKEv2를 위한 CA 서명 기능 포함 인증서 관리
 - **웹 UI** — 실시간 토폴로지, 트래픽 모니터링, 다국어 지원 (EN/KO)
-- **iKuai 호환** — 비호스트 Docker에서 `--privileged` 없이 iKuai 라우터에서 실행
+- **경량 Linux 호환** — 라우터 펌웨어 등 고도로 경량화된 Linux 시스템에서 `--privileged` 없이 비호스트 Docker로 실행
 - **핫 리로드** — L2TP, IKEv2, WireGuard, 프록시 모두 컨테이너 재시작 없이 리로드
 
 ## 스크린샷
