@@ -1072,12 +1072,20 @@ func splitPath(s string) []string {
 }
 
 // dialExit routes traffic through an exit path, stripping the local node name prefix.
-// If exitVia ends with "*" (e.g., "C*"), adaptive multi-path mode is used.
+// Exit via modes:
+//   "C"   → direct (single path, no optimization)
+//   "C*"  → stability (adaptive failover, race paths, pick first success)
+//   "C**" → speed (load balance across all healthy paths for max throughput)
 func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, error) {
-	// Adaptive mode: "NodeName*" → race all available paths to NodeName
-	if strings.HasSuffix(exitVia, "*") && !strings.Contains(exitVia, "/") {
-		target := strings.TrimSuffix(exitVia, "*")
-		return a.dialAdaptive(ctx, target, addr)
+	if !strings.Contains(exitVia, "/") {
+		if strings.HasSuffix(exitVia, "**") {
+			target := strings.TrimSuffix(exitVia, "**")
+			return a.dialLoadBalance(ctx, target, addr)
+		}
+		if strings.HasSuffix(exitVia, "*") {
+			target := strings.TrimSuffix(exitVia, "*")
+			return a.dialAdaptive(ctx, target, addr)
+		}
 	}
 
 	parts := splitPath(exitVia)

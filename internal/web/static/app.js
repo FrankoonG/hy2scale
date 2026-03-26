@@ -1451,6 +1451,44 @@ function setupExitAutocomplete(inputEl) {
   wrap.className = 'autocomplete-wrap';
   inputEl.parentNode.insertBefore(wrap, inputEl);
   wrap.appendChild(inputEl);
+
+  // Exit mode selector (appears when value is a simple node name)
+  const modePanel = document.createElement('div');
+  modePanel.className = 'exit-mode-panel';
+  modePanel.style.display = 'none';
+  modePanel.innerHTML = `<div class="exit-mode-options">
+    <label class="exit-mode-opt"><input type="radio" name="exitmode-${inputEl.id}" value="" checked><span>${t('exit.modeNone')}</span></label>
+    <label class="exit-mode-opt"><input type="radio" name="exitmode-${inputEl.id}" value="*"><span>${t('exit.modeStability')}</span></label>
+    <label class="exit-mode-opt"><input type="radio" name="exitmode-${inputEl.id}" value="**"><span>${t('exit.modeSpeed')}</span></label>
+  </div>`;
+  wrap.appendChild(modePanel);
+
+  function syncModeFromValue() {
+    const val = inputEl.value.trim();
+    const hasSlash = val.includes('/');
+    const isSimple = val.length > 0 && !hasSlash;
+    modePanel.style.display = isSimple ? '' : 'none';
+    if (!isSimple) return;
+    let mode = '';
+    if (val.endsWith('**')) mode = '**';
+    else if (val.endsWith('*')) mode = '*';
+    modePanel.querySelectorAll('input[type=radio]').forEach(r => { r.checked = r.value === mode; });
+  }
+
+  function syncValueFromMode() {
+    const selected = modePanel.querySelector('input[type=radio]:checked');
+    if (!selected) return;
+    let base = inputEl.value.trim().replace(/\*+$/, '');
+    if (!base || base.includes('/')) return;
+    inputEl.value = base + selected.value;
+  }
+
+  modePanel.addEventListener('change', syncValueFromMode);
+  inputEl.addEventListener('input', syncModeFromValue);
+  inputEl.addEventListener('focus', syncModeFromValue);
+  // Initial sync
+  setTimeout(syncModeFromValue, 0);
+
   const list = document.createElement('div');
   list.className = 'autocomplete-list';
   document.body.appendChild(list);
