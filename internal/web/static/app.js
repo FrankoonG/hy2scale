@@ -409,7 +409,7 @@ function childRowHTML(c, isLast, depth, parentChain, guides) {
   const nameCell = c.native
     ? `<span class="peer-name-cell">${esc(c.name)}</span>`
     : nameLink(c.name, chain);
-  const actions = `<button class="act-btn ${dis ? 'enable' : 'warn'}" onclick="toggleNestedDisable('${esc(c.via)}','${esc(c.name)}',${!dis})">${dis ? t('app.enable') : t('app.disable')}</button>`;
+  const childToggle = `<label class="toggle"><input type="checkbox" ${dis ? '' : 'checked'} onchange="toggleNestedDisable('${esc(c.via)}','${esc(c.name)}',!this.checked)"><span class="slider"></span></label>`;
 
   // Build guide lines for ancestor depths + current branch
   let treeHTML = '';
@@ -419,7 +419,7 @@ function childRowHTML(c, isLast, depth, parentChain, guides) {
   treeHTML += `<span class="tree-branch${isLast ? ' tree-last' : ''}" aria-hidden="true"></span>`;
 
   let html = `<tr class="sub-row${dis ? ' disabled' : ''}${cSyncing ? ' syncing' : ''}">
-    <td></td>
+    <td>${childToggle}</td>
     <td class="col-status">${dis ? latencyHTML(-1, c.name) : latencyHTML(c.latency_ms, c.name)}</td>
     <td class="col-dir">${dir}</td>
     <td class="col-name">
@@ -430,7 +430,7 @@ function childRowHTML(c, isLast, depth, parentChain, guides) {
     </td>
     <td class="col-traffic">${trafficHTML(c.tx_rate, c.rx_rate)}</td>
     <td class="col-nested">${nestedToggle}</td>
-    <td class="col-actions"><div class="act-group">${actions}</div></td>
+    <td class="col-actions"></td>
   </tr>`;
 
   if (c.children?.length) {
