@@ -36,7 +36,7 @@ function closeModal(sel) {
   setTimeout(() => {
     overlay.style.display = 'none';
     overlay.classList.remove('modal-closing');
-  }, 220);
+  }, 320);
 }
 const tokenKey = 'token:' + basePath;
 function sha256(msg) {
