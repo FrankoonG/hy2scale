@@ -395,31 +395,36 @@
 
       <!-- Rules Page -->
       <div class="page" id="page-rules" style="display:none">
-        <div class="card">
-          <div class="card-header">
-            <h2 data-i18n="rules.title">Routing Rules</h2>
+        <div id="rules-unavailable" style="display:none;padding:24px;color:var(--text-muted);text-align:center">
+          <p data-i18n="rules.unavailable">Routing rules require host network mode with NET_ADMIN capability.</p>
+        </div>
+        <div id="rules-content" style="display:none">
+          <div class="proxy-tabs">
+            <div class="proxy-tab active" data-ruletab="ip" onclick="switchRuleTab(this)" data-i18n="rules.ipRules">IP Rules</div>
+            <div class="proxy-tab" data-ruletab="domain" onclick="switchRuleTab(this)" data-i18n="rules.domainRules">Domain Rules</div>
           </div>
-          <div id="rules-unavailable" style="display:none;padding:24px;color:var(--muted)">
-            <p data-i18n="rules.unavailable">Routing rules require host network mode with NET_ADMIN capability.</p>
+
+          <div class="rule-panel" id="ruletab-ip">
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title" data-i18n="rules.ipRules">IP Rules</span>
+                <span class="card-count" id="ip-rule-count">0</span>
+                <span class="spacer"></span>
+                <button class="btn-primary btn-sm" onclick="openRuleDialog('ip')" data-i18n="rules.newRule">+ New Rule</button>
+              </div>
+              <div id="ip-rules-list"><div class="empty" data-i18n="rules.noRules">No rules configured.</div></div>
+            </div>
           </div>
-          <div id="rules-content" style="display:none">
-            <div class="proxy-tabs" style="margin:16px 16px 0">
-              <div class="proxy-tab active" data-ruletab="ip" onclick="switchRuleTab(this)" data-i18n="rules.ipRules">IP Rules</div>
-              <div class="proxy-tab" data-ruletab="domain" onclick="switchRuleTab(this)" data-i18n="rules.domainRules">Domain Rules</div>
-            </div>
-            <div class="rule-panel" id="ruletab-ip" style="padding:16px">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                <span></span>
-                <button class="btn-primary" onclick="openRuleDialog('ip')" data-i18n="rules.newRule">+ New Rule</button>
+
+          <div class="rule-panel" id="ruletab-domain" style="display:none">
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title" data-i18n="rules.domainRules">Domain Rules</span>
+                <span class="card-count" id="domain-rule-count">0</span>
+                <span class="spacer"></span>
+                <button class="btn-primary btn-sm" onclick="openRuleDialog('domain')" data-i18n="rules.newRule">+ New Rule</button>
               </div>
-              <div id="ip-rules-list"></div>
-            </div>
-            <div class="rule-panel" id="ruletab-domain" style="padding:16px;display:none">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-                <span></span>
-                <button class="btn-primary" onclick="openRuleDialog('domain')" data-i18n="rules.newRule">+ New Rule</button>
-              </div>
-              <div id="domain-rules-list"></div>
+              <div id="domain-rules-list"><div class="empty" data-i18n="rules.noRules">No rules configured.</div></div>
             </div>
           </div>
         </div>
