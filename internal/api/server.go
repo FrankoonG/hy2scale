@@ -34,6 +34,7 @@ type topoSubPeer struct {
 	LatencyMs int            `json:"latency_ms"`
 	Nested    bool           `json:"nested"`
 	Native    bool           `json:"native,omitempty"`
+	Version   string         `json:"version,omitempty"`
 	TxRate    uint64         `json:"tx_rate"`
 	RxRate    uint64         `json:"rx_rate"`
 	Children  []topoSubPeer  `json:"children,omitempty"`
@@ -425,6 +426,7 @@ const Version = "1.1.2"
 
 func init() {
 	app.AppVersion = Version
+	relay.NodeVersion = Version
 }
 
 func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
@@ -570,10 +572,14 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	}
 	connected := make(map[string]bool)
 	nativeMap := make(map[string]bool)
+	versionMap := make(map[string]string)
 	for _, p := range peers {
 		connected[p.Name] = true
 		if p.Native {
 			nativeMap[p.Name] = true
+		}
+		if p.Version != "" {
+			versionMap[p.Name] = p.Version
 		}
 	}
 
@@ -586,6 +592,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		Disabled  bool            `json:"disabled"`
 		Nested    bool            `json:"nested"`
 		Native    bool            `json:"native,omitempty"`
+		Version   string          `json:"version,omitempty"`
 		LatencyMs int             `json:"latency_ms"`
 		TxRate    uint64          `json:"tx_rate"`
 		RxRate    uint64          `json:"rx_rate"`
@@ -636,6 +643,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				Direction: "inbound",
 				Via:       cfg.NodeID,
 				LatencyMs: latencyCache[p.Name],
+				Version:   p.Version,
 			}
 			if pc, ok := cfg.Peers[p.Name]; ok && !pc.Nested {
 				child.Nested = false // explicitly disabled
@@ -689,6 +697,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		tn.Native = nativeMap[name]
+		tn.Version = versionMap[name]
 		if tn.Native {
 			tn.Nested = false
 		} else if pc, ok := cfg.Peers[name]; ok && !pc.Nested {

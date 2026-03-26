@@ -56,7 +56,12 @@ type PeerInfo struct {
 	Direction string `json:"direction"`
 	Native    bool   `json:"native"`
 	LatencyMs int    `json:"latency_ms"` // self-reported latency to this peer
+	Version   string `json:"version,omitempty"`
 }
+
+// NodeVersion is the version string sent during peer registration.
+// Set by the app package at init time.
+var NodeVersion = "1.0.0"
 
 // --- Node ---
 
@@ -331,6 +336,7 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	}
 	regStream.Write([]byte{flags})
 	writeString(regStream, n.name)
+	writeString(regStream, NodeVersion) // send our version
 
 	// Read back the remote's actual node ID
 	// If the remote is a plain hy2 server, this will fail (EOF/timeout)
@@ -341,6 +347,11 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	actualName := peerName
 	if remoteID != "" {
 		actualName = remoteID
+	}
+	// Read remote version (optional — old peers won't send it)
+	remoteVersion, _ := readString(regStream)
+	if remoteVersion == "" {
+		remoteVersion = "1.0.0"
 	}
 	if onID != nil {
 		onID(actualName)
@@ -356,7 +367,7 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 
 	// Register peer with remote's actual name
 	p := &peer{
-		info:    PeerInfo{Name: actualName, Direction: "outbound"},
+		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteVersion},
 		client:  client,
 		waiting: make(map[string]chan net.Conn),
 	}
@@ -469,14 +480,21 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 		stream.Close()
 		return
 	}
-	// Send back our name so the client knows our actual node ID
+	// Read remote version (optional — old peers won't send it)
+	remoteVersion, _ := readString(stream)
+	if remoteVersion == "" {
+		remoteVersion = "1.0.0"
+	}
+	// Send back our name and version
 	writeString(stream, n.name)
+	writeString(stream, NodeVersion)
 
 	p := &peer{
 		info: PeerInfo{
 			Name:      name,
 			ExitNode:  flags[0]&0x01 != 0,
 			Direction: "inbound",
+			Version:   remoteVersion,
 		},
 		waiting: make(map[string]chan net.Conn),
 	}
