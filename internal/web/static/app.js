@@ -342,6 +342,7 @@ function nameLink(name, chain) {
 function parentRowHTML(n) {
   if (n.is_self) {
     return `<tr class="self-row${n.disabled ? ' disabled' : ''}">
+      <td><label class="toggle"><input type="checkbox" ${n.disabled ? '' : 'checked'} onchange="toggleSelfDisable(!this.checked)"><span class="slider"></span></label></td>
       <td class="col-status"><span class="latency latency-good">∞ms</span></td>
       <td class="col-dir">${dirHTML('local')}</td>
       <td class="col-name">
@@ -352,7 +353,6 @@ function parentRowHTML(n) {
       <td class="col-nested"><label class="toggle toggle-disabled"><input type="checkbox" checked disabled><span class="slider"></span></label></td>
       <td class="col-actions"><div class="act-group">
         <button class="act-btn edit" onclick="openEditSelf()">${t('app.edit')}</button>
-        <button class="act-btn ${n.disabled ? 'enable' : 'warn'}" onclick="toggleSelfDisable(${!n.disabled})">${n.disabled ? t('app.enable') : t('app.disable')}</button>
       </div></td>
     </tr>`;
   }
@@ -368,13 +368,16 @@ function parentRowHTML(n) {
     : (n.direction === 'outbound'
       ? `<label class="toggle"><input type="checkbox" ${nestedChecked ? 'checked' : ''} onchange="toggleNested('${esc(n.name)}',this.checked)"><span class="slider"></span></label>`
       : '');
+  const toggleCol = n.direction === 'outbound'
+    ? `<label class="toggle"><input type="checkbox" ${n.disabled ? '' : 'checked'} onchange="toggleDisable('${esc(n.name)}',!this.checked)"><span class="slider"></span></label>`
+    : '';
   const actions = n.direction === 'outbound' ? `<div class="act-group">
     <button class="act-btn edit" onclick="openEditDialog('${esc(n.name)}')">${t('app.edit')}</button>
-    <button class="act-btn ${n.disabled ? 'enable' : 'warn'}" onclick="toggleDisable('${esc(n.name)}',${!n.disabled})">${n.disabled ? t('app.enable') : t('app.disable')}</button>
     <button class="act-btn danger" onclick="removeClient('${esc(n.name)}')">${t('app.delete')}</button>
   </div>` : '';
 
   return `<tr class="${n.disabled ? 'disabled' : ''} ${syncing ? 'syncing' : ''}">
+    <td>${toggleCol}</td>
     <td class="col-status">${latencyHTML(n.latency_ms, n.name)}</td>
     <td class="col-dir">${dirHTML(n.direction)}</td>
     <td class="col-name">
@@ -416,6 +419,7 @@ function childRowHTML(c, isLast, depth, parentChain, guides) {
   treeHTML += `<span class="tree-branch${isLast ? ' tree-last' : ''}" aria-hidden="true"></span>`;
 
   let html = `<tr class="sub-row${dis ? ' disabled' : ''}${cSyncing ? ' syncing' : ''}">
+    <td></td>
     <td class="col-status">${dis ? latencyHTML(-1, c.name) : latencyHTML(c.latency_ms, c.name)}</td>
     <td class="col-dir">${dir}</td>
     <td class="col-name">
@@ -505,6 +509,7 @@ async function refreshTopology() {
   const scrollLeft = scrollEl ? scrollEl.scrollLeft : 0;
   el.innerHTML = `<div class="table-scroll"><table class="peer-table">
     <thead><tr>
+      <th style="width:50px">${t('users.on')}</th>
       <th class="col-status">${t('nodes.status')}</th>
       <th class="col-dir">${t('nodes.dir')}</th>
       <th class="col-name">${t('nodes.node')}</th>
