@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -104,13 +105,15 @@ func readMeta(r net.Conn, timeout time.Duration) peerMeta {
 // --- Node ---
 
 type peer struct {
-	info    PeerInfo
-	client  hyclient.Client // non-nil for outbound (we connected to them)
-	ctrlW   net.Conn        // write dial requests to this peer
-	writeMu sync.Mutex
-	waiting map[string]chan net.Conn
-	txBytes atomic.Uint64
-	rxBytes atomic.Uint64
+	info      PeerInfo
+	client    hyclient.Client // non-nil for outbound (we connected to them)
+	ctrlW     net.Conn        // write dial requests to this peer
+	writeMu   sync.Mutex
+	waiting   map[string]chan net.Conn
+	txBytes   atomic.Uint64
+	rxBytes   atomic.Uint64
+	failCount atomic.Int32 // consecutive ping failures
+	cancel    context.CancelFunc
 }
 
 // PeerTraffic holds per-peer traffic info.
@@ -225,12 +228,18 @@ func (n *Node) StartLatencyProber(ctx context.Context) {
 					continue
 				}
 				go func(name string, p *peer) {
-					// Ping only — lightweight, no stream overhead
 					rtt := n.PingPeer(name)
 					if rtt >= 0 {
 						n.SetLatency(name, int(rtt.Milliseconds()))
+						p.failCount.Store(0) // reset on success
 					} else {
 						n.SetLatency(name, -1)
+						fails := p.failCount.Add(1)
+						// After 3 consecutive failures, disconnect to trigger reconnection
+						if fails >= 3 && p.cancel != nil {
+							log.Printf("[relay] %s: %d consecutive ping failures, disconnecting for reconnect", name, fails)
+							p.cancel()
+						}
 					}
 				}(names[i], p)
 			}
@@ -333,21 +342,24 @@ func NewNode(name string, exitNode bool) *Node {
 // AttachNative registers a plain hy2 server (no relay protocol) as a peer.
 // Only DialTCP works (direct proxy). No nested discovery, no control stream.
 func (n *Node) AttachNative(ctx context.Context, peerName string, client hyclient.Client) error {
+	childCtx, cancel := context.WithCancel(ctx)
 	p := &peer{
 		info:    PeerInfo{Name: peerName, Direction: "outbound", Native: true},
 		client:  client,
 		waiting: make(map[string]chan net.Conn),
+		cancel:  cancel,
 	}
 	n.mu.Lock()
 	n.peers[peerName] = p
 	n.mu.Unlock()
 	defer func() {
+		cancel()
 		n.mu.Lock()
 		delete(n.peers, peerName)
 		n.mu.Unlock()
 	}()
-	<-ctx.Done()
-	return ctx.Err()
+	<-childCtx.Done()
+	return childCtx.Err()
 }
 
 func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Client, onID func(string)) error {
@@ -406,15 +418,18 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	writeString(s2cCtrl, n.name)
 
 	// Register peer with remote's actual name
+	childCtx, childCancel := context.WithCancel(ctx)
 	p := &peer{
 		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version},
 		client:  client,
 		waiting: make(map[string]chan net.Conn),
+		cancel:  childCancel,
 	}
 	n.mu.Lock()
 	n.peers[actualName] = p
 	n.mu.Unlock()
 	defer func() {
+		childCancel()
 		n.mu.Lock()
 		delete(n.peers, actualName)
 		n.mu.Unlock()
@@ -465,6 +480,8 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	select {
 	case err := <-errCh:
 		return fmt.Errorf("relay: peer %s disconnected: %w", peerName, err)
+	case <-childCtx.Done():
+		return fmt.Errorf("relay: peer %s: health check triggered disconnect", peerName)
 	case <-ctx.Done():
 		return ctx.Err()
 	}
