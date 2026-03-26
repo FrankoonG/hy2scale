@@ -122,7 +122,12 @@ function switchPage(name, push) {
   closeSidebar();
   $$('.nav-item[data-page]').forEach(n => n.classList.toggle('active', n.dataset.page === name));
   $$('.page').forEach(p => p.style.display = 'none');
-  $(`#page-${name}`).style.display = '';
+  const pageEl = $(`#page-${name}`);
+  pageEl.style.display = '';
+  // Re-trigger page enter animation
+  pageEl.style.animation = 'none';
+  pageEl.offsetHeight; // force reflow
+  pageEl.style.animation = '';
   $('#page-title').textContent = t(pageTitles[name]);
   if (push !== false) history.pushState(null, '', basePath + '/' + name);
   if (name === 'users') { refreshUsers(); refreshSessions(); }
@@ -695,9 +700,12 @@ async function toggleSelfDisable(disabled) {
 // ── Proxies ──
 function switchProxyTab(tab) {
   $$('.proxy-tab').forEach(t => t.classList.toggle('active', t === tab));
-  $$('.proxy-panel').forEach(p => p.classList.toggle('active', p.id === 'ptab-' + tab.dataset.ptab));
-  $$('.proxy-panel').forEach(p => p.style.display = p.classList.contains('active') ? '' : 'none');
-  // Reload data for the active tab to clear unsaved changes
+  $$('.proxy-panel').forEach(p => {
+    const show = p.id === 'ptab-' + tab.dataset.ptab;
+    p.classList.toggle('active', show);
+    p.style.display = show ? '' : 'none';
+    if (show) { p.style.animation = 'none'; p.offsetHeight; p.style.animation = ''; }
+  });
   refreshProxies();
 }
 
@@ -1705,7 +1713,11 @@ let _editRuleId = null;
 
 function switchRuleTab(tab) {
   $$('[data-ruletab]').forEach(t => t.classList.toggle('active', t === tab));
-  $$('.rule-panel').forEach(p => p.style.display = p.id === 'ruletab-' + tab.dataset.ruletab ? '' : 'none');
+  $$('.rule-panel').forEach(p => {
+    const show = p.id === 'ruletab-' + tab.dataset.ruletab;
+    p.style.display = show ? '' : 'none';
+    if (show) { p.style.animation = 'none'; p.offsetHeight; p.style.animation = ''; }
+  });
 }
 
 async function refreshRules() {
