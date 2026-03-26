@@ -293,7 +293,7 @@ textarea.drag-over{border-color:var(--primary);background:rgba(67,97,238,.05);bo
 @keyframes pageIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
 
 /* Proxy/Rule tab panels: slide from direction */
-.proxy-panel,.rule-panel{animation:tabSlideIn .35s ease both}
+.proxy-panel,.rule-panel,.settings-panel{animation:tabSlideIn .35s ease both}
 @keyframes tabSlideIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:translateX(0)}}
 
 /* Nav items: subtle hover indicator */
