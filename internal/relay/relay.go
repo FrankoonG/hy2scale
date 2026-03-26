@@ -334,12 +334,11 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	if n.exit {
 		flags |= 0x01
 	}
+	flags |= 0x02 // bit 1: supports version exchange
 	regStream.Write([]byte{flags})
 	writeString(regStream, n.name)
-	writeString(regStream, NodeVersion) // send our version
 
-	// Read back the remote's actual node ID
-	// If the remote is a plain hy2 server, this will fail (EOF/timeout)
+	// Read back: remote name, then optionally remote version + flags
 	remoteID, err := readString(regStream)
 	if err != nil {
 		return ErrNotHy2scale
@@ -348,11 +347,21 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	if remoteID != "" {
 		actualName = remoteID
 	}
-	// Read remote version (optional — old peers won't send it)
-	remoteVersion, _ := readString(regStream)
-	if remoteVersion == "" {
-		remoteVersion = "1.0.0"
+	// Read 1 byte: remote's flags (new protocol) or nothing (old protocol)
+	// Old servers don't send anything after the name, so use a short timeout
+	remoteVersion := "1.0.0"
+	regStream.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var remoteFlags [1]byte
+	if _, err := io.ReadFull(regStream, remoteFlags[:]); err == nil {
+		if remoteFlags[0]&0x02 != 0 {
+			// Remote supports version exchange
+			if v, err := readString(regStream); err == nil && v != "" {
+				remoteVersion = v
+			}
+		}
 	}
+	regStream.SetReadDeadline(time.Time{}) // clear deadline
+
 	if onID != nil {
 		onID(actualName)
 	}
@@ -480,14 +489,17 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 		stream.Close()
 		return
 	}
-	// Read remote version (optional — old peers won't send it)
-	remoteVersion, _ := readString(stream)
-	if remoteVersion == "" {
-		remoteVersion = "1.0.0"
-	}
-	// Send back our name and version
+	// Send back our name
 	writeString(stream, n.name)
-	writeString(stream, NodeVersion)
+
+	// Version exchange: only if client set the version flag (bit 1)
+	remoteVersion := "1.0.0"
+	if flags[0]&0x02 != 0 {
+		// Client supports version: send our flags + version
+		var ourFlags byte = 0x02
+		stream.Write([]byte{ourFlags})
+		writeString(stream, NodeVersion)
+	}
 
 	p := &peer{
 		info: PeerInfo{
