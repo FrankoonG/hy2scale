@@ -37,7 +37,7 @@ Open `http://<host>:5565/scale/` — default login: `admin` / `admin`
 - **Routing Rules** — IP and domain-based traffic routing through specific exit nodes
 - **TLS & CA** — Certificate management with CA signing for IKEv2
 - **Web UI** — Single-page dashboard with real-time topology, traffic monitoring, and i18n (EN/KO)
-- **iKuai Compatible** — Runs on iKuai routers in non-host Docker without `--privileged`
+- **Minimal Linux Compatible** — Runs on stripped-down Linux systems (e.g., router firmware) in non-host Docker without `--privileged`
 - **Hot Reload** — L2TP, IKEv2, WireGuard, proxies all reload without container restart
 
 ## Screenshots
