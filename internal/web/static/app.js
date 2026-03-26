@@ -1695,7 +1695,7 @@ let _editRuleId = null;
 
 function switchRuleTab(tab) {
   $$('[data-ruletab]').forEach(t => t.classList.toggle('active', t === tab));
-  $$('.rule-panel').forEach(p => { p.style.display = p.id === 'ruletab-' + tab.dataset.ruletab ? '' : 'none'; });
+  $$('.rule-panel').forEach(p => p.style.display = p.id === 'ruletab-' + tab.dataset.ruletab ? '' : 'none');
 }
 
 async function refreshRules() {
@@ -1717,27 +1717,31 @@ async function refreshRules() {
 
 function renderRuleList(type, rules) {
   const el = $('#' + type + '-rules-list');
+  const countEl = $('#' + type + '-rule-count');
+  if (countEl) countEl.textContent = rules.length;
   if (!rules.length) {
-    el.innerHTML = `<div style="color:var(--muted);padding:20px;text-align:center">${t('rules.noRules')}</div>`;
+    el.innerHTML = `<div class="empty">${t('rules.noRules')}</div>`;
     return;
   }
+  const targetLabel = type === 'ip' ? t('rules.ipTargets') : t('rules.domainTargets');
   el.innerHTML = `<table class="table"><thead><tr>
     <th>${t('rules.name')}</th>
-    <th>${type === 'ip' ? t('rules.ipTargets') : t('rules.domainTargets')}</th>
+    <th>${targetLabel}</th>
     <th>${t('rules.exitVia')}</th>
     <th style="text-align:right">${t('app.actions')}</th>
   </tr></thead><tbody>` + rules.map(r => {
     const targets = r.targets || [];
     const first = esc(targets[0] || '');
     const more = targets.length > 1 ? ` <span class="badge badge-muted" title="${esc(targets.slice(1).join('\n'))}" style="cursor:help">+${targets.length-1}</span>` : '';
-    const enabledCls = r.enabled ? '' : ' style="opacity:0.5"';
-    return `<tr${enabledCls}>
-      <td><b>${esc(r.name || r.id)}</b></td>
+    const rowStyle = r.enabled ? '' : ' style="opacity:0.45"';
+    const disabledBadge = r.enabled ? '' : ` <span class="badge badge-muted">${t('app.disabled')}</span>`;
+    return `<tr${rowStyle}>
+      <td><b>${esc(r.name || r.id)}</b>${disabledBadge}</td>
       <td><code style="font-size:12px">${first}</code>${more}</td>
       <td>${exitViaHTML(r.exit_via)}</td>
       <td style="text-align:right;white-space:nowrap">
         <button class="act-btn edit" onclick="editRule('${esc(r.id)}')">${t('app.edit')}</button>
-        <button class="act-btn ${r.enabled ? 'danger' : ''}" onclick="toggleRuleEnabled('${esc(r.id)}',${!r.enabled})">${r.enabled ? t('app.disable') : t('app.enable')}</button>
+        <button class="act-btn${r.enabled ? ' danger' : ''}" onclick="toggleRuleEnabled('${esc(r.id)}',${!r.enabled})">${r.enabled ? t('app.disable') : t('app.enable')}</button>
         <button class="act-btn danger" onclick="deleteRuleConfirm('${esc(r.id)}')">${t('app.delete')}</button>
       </td>
     </tr>`;
