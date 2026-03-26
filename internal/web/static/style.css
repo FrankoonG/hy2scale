@@ -55,6 +55,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14
 .badge-orange{background:var(--orange-bg);color:#d97706}
 .badge-blue{background:var(--blue-bg);color:var(--blue)}
 .badge-muted{background:var(--bg);color:var(--text-muted)}
+.badge-warn{background:rgba(234,179,8,0.12);color:#ca8a04}
 
 /* ── Peer Table ── */
 .table-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}

@@ -115,6 +115,7 @@ function closeSidebar() {
 const pageTitles = { nodes: 'nav.nodes', users: 'nav.users', proxies: 'nav.proxies', rules: 'nav.rules', tls: 'nav.tls', settings: 'nav.settings' };
 
 let _currentPage = 'nodes';
+let _localVersion = '1.0.0';
 function switchPage(name, push) {
   if (!pageTitles[name]) name = 'nodes';
   _currentPage = name;
@@ -217,6 +218,7 @@ async function refresh() {
     const node = await api('/node');
     $('#node-badge').textContent = node.node_id;
     $('#node-name-display').textContent = node.name !== node.node_id ? node.name : '';
+    _localVersion = node.version || '1.0.0';
     if (node.version) {
       const vb = $('#version-badge');
       vb.classList.remove('limited', 'compat');
@@ -315,6 +317,7 @@ function parentRowHTML(n) {
 
   const chain = n.native ? [] : [n.name];
   const nativeBadge = n.native ? ' <span class="badge badge-muted">NATIVE</span>' : '';
+  const versionBadge = (n.version && n.version !== _localVersion) ? ` <span class="badge badge-warn">v${esc(n.version)}</span>` : '';
   const syncing = syncingNodes.has(n.name);
   const syncData = syncingNodes.get(n.name);
   const nestedChecked = syncing ? syncData.enabled : n.nested;
@@ -333,7 +336,7 @@ function parentRowHTML(n) {
     <td class="col-status">${latencyHTML(n.latency_ms, n.name)}</td>
     <td class="col-dir">${dirHTML(n.direction)}</td>
     <td class="col-name">
-      ${n.native ? `<span class="peer-name-cell peer-rename" onclick="renameNative('${esc(n.name)}')">${esc(n.name)}</span>` : nameLink(n.name, chain)}${nativeBadge}
+      ${n.native ? `<span class="peer-name-cell peer-rename" onclick="renameNative('${esc(n.name)}')">${esc(n.name)}</span>` : nameLink(n.name, chain)}${nativeBadge}${versionBadge}
       ${n.addr ? `<span class="peer-addr-sub">${esc(n.addr)}</span>` : ''}
     </td>
     <td class="col-traffic">${trafficHTML(n.tx_rate, n.rx_rate)}</td>
@@ -351,6 +354,7 @@ function childRowHTML(c, isLast, depth, parentChain, guides) {
   const dis = isNestedDisabled(c.via, c.name);
   const dir = c.direction ? dirHTML(c.direction) : '';
   const nativeBadge = c.native ? ' <span class="badge badge-muted">NATIVE</span>' : '';
+  const cVersionBadge = (c.version && c.version !== _localVersion) ? ` <span class="badge badge-warn">v${esc(c.version)}</span>` : '';
   const cSyncing = syncingNodes.has(c.name);
   const cSyncData = syncingNodes.get(c.name);
   const cNestedChecked = cSyncing ? cSyncData.enabled : c.nested;
@@ -374,7 +378,7 @@ function childRowHTML(c, isLast, depth, parentChain, guides) {
     <td class="col-dir">${dir}</td>
     <td class="col-name">
       ${treeHTML}<span class="sub-name-wrap">
-        ${nameCell}${nativeBadge}
+        ${nameCell}${nativeBadge}${cVersionBadge}
         <span class="peer-addr-sub">via ${esc(c.via)}</span>
       </span>
     </td>
@@ -395,7 +399,7 @@ function childRowHTML(c, isLast, depth, parentChain, guides) {
 function topoStructureKey(topo) {
   // Generate a key that only changes on structural changes, not latency
   function nodeKey(n) {
-    let k = n.name + '|' + n.connected + '|' + n.nested + '|' + n.disabled + '|' + (n.native||'');
+    let k = n.name + '|' + n.connected + '|' + n.nested + '|' + n.disabled + '|' + (n.native||'') + '|' + (n.version||'');
     if (n.children) k += '[' + n.children.map(nodeKey).join(',') + ']';
     return k;
   }
