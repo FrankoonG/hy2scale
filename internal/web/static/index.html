@@ -36,7 +36,7 @@
     <h1 data-i18n="app.title">HY2 SCALE</h1>
     <p data-i18n="app.subtitle">Sign in to manage your mesh network</p>
     <input id="login-user" data-i18n="app.username" placeholder="Username" autocomplete="username">
-    <div class="pw-wrap"><input id="login-pass" data-i18n="app.password" placeholder="Password" type="password" autocomplete="current-password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
+    <div class="pw-wrap"><input id="login-pass" data-i18n="app.password" placeholder="Password" type="password" autocomplete="current-password"><button type="button" class="pw-eye" tabindex="-1" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
     <label class="remember-me"><input type="checkbox" id="login-remember"> <span data-i18n="app.remember">Remember me</span></label>
     <div id="login-error" class="msg-error" style="margin-bottom:8px"></div>
     <button class="btn-primary btn-full" onclick="doLogin()" data-i18n="app.signin">Sign in</button>
@@ -254,7 +254,7 @@
               </div>
               <div class="form-group"><label data-i18n="l2tp.pool">Address Pool (CIDR)</label><input id="l2tp-pool" placeholder="192.168.25.1/24"></div>
               <div class="form-group"><label data-i18n="l2tp.mtu">MTU</label><input id="l2tp-mtu" type="number" placeholder="1280"></div>
-              <div class="form-group"><label data-i18n="l2tp.ipsecPsk">IPsec Pre-Shared Key</label><div class="pw-wrap"><input id="l2tp-psk" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+              <div class="form-group"><label data-i18n="l2tp.ipsecPsk">IPsec Pre-Shared Key</label><div class="pw-wrap"><input id="l2tp-psk" type="password"><button type="button" class="pw-eye" tabindex="-1" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
               <div style="font-size:12px;color:var(--text-muted)" data-i18n="l2tp.desc">Users authenticate via PPP CHAP with their HY2 SCALE credentials. TCP traffic routed per user's exit_via. UDP exits locally. Requires NET_ADMIN capability.</div>
               <div><button class="btn-primary btn-sm" onclick="saveL2TP()" data-i18n="app.save">Save</button></div>
             </div>
@@ -295,7 +295,7 @@
               </div>
 
               <div id="ikev2-psk-fields" style="display:none">
-                <div class="form-group"><label data-i18n="ikev2.psk">Pre-Shared Key</label><div class="pw-wrap"><input id="ikev2-psk" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+                <div class="form-group"><label data-i18n="ikev2.psk">Pre-Shared Key</label><div class="pw-wrap"><input id="ikev2-psk" type="password"><button type="button" class="pw-eye" tabindex="-1" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
                 <div class="form-group"><label data-i18n="ikev2.defaultExit">Exit Via</label><input id="ikev2-default-exit" placeholder="node ID or empty for direct" oninput="checkIKEv2ExitReachability()"><div id="ikev2-exit-status" style="font-size:12px;margin-top:2px"></div></div>
                 <div style="font-size:12px;color:var(--text-muted)" data-i18n="ikev2.pskDesc">All clients sharing the same PSK use this exit path. No per-user routing.</div>
               </div>
@@ -483,10 +483,10 @@
           <div class="card">
             <div class="card-header"><span class="card-title" data-i18n="settings.credentials">Credentials</span></div>
             <div class="form-col" style="max-width:400px">
-              <div class="form-group"><label data-i18n="settings.currentPassword">Current Password</label><div class="pw-wrap"><input id="set-cur-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+              <div class="form-group"><label data-i18n="settings.currentPassword">Current Password</label><div class="pw-wrap"><input id="set-cur-pass" type="password"><button type="button" class="pw-eye" tabindex="-1" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
               <div class="form-group"><label data-i18n="settings.newUsernameOpt">New Username (optional)</label><input id="set-new-user"></div>
-              <div class="form-group"><label data-i18n="settings.newPassword">New Password</label><div class="pw-wrap"><input id="set-new-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
-              <div class="form-group"><label data-i18n="settings.confirmPassword">Confirm Password</label><div class="pw-wrap"><input id="set-confirm-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+              <div class="form-group"><label data-i18n="settings.newPassword">New Password</label><div class="pw-wrap"><input id="set-new-pass" type="password"><button type="button" class="pw-eye" tabindex="-1" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+              <div class="form-group"><label data-i18n="settings.confirmPassword">Confirm Password</label><div class="pw-wrap"><input id="set-confirm-pass" type="password"><button type="button" class="pw-eye" tabindex="-1" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
               <div id="set-error" class="msg-error"></div>
               <button class="btn-primary btn-sm" onclick="changePassword()" data-i18n="settings.update">Update</button>
             </div>
@@ -532,7 +532,7 @@
         <div class="section-divider"><span data-i18n="nodes.hy2Server">hy2 Server</span> <span class="badge badge-muted" style="margin-left:4px" data-i18n="settings.restartRequired">restart required</span></div>
         <div class="form-grid">
           <div class="form-group"><label data-i18n="nodes.listenUdp">Listen (UDP)</label><input id="self-srv-listen" placeholder="0.0.0.0:5565"></div>
-          <div class="form-group"><label data-i18n="nodes.password">Password</label><div class="pw-wrap"><input id="self-srv-pass" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+          <div class="form-group"><label data-i18n="nodes.password">Password</label><div class="pw-wrap"><input id="self-srv-pass" type="password"><button type="button" class="pw-eye" tabindex="-1" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
         </div>
         <div class="form-group">
           <label data-i18n="settings.tlsCert">TLS Certificate</label>
@@ -561,7 +561,7 @@
         <!-- Connection -->
         <div class="form-grid">
           <div class="form-group"><label data-i18n="nodes.address">Address *</label><input id="add-addr" placeholder="host:port"></div>
-          <div class="form-group"><label data-i18n="nodes.password">Password *</label><div class="pw-wrap"><input id="add-pass" type="password" placeholder="Auth password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+          <div class="form-group"><label data-i18n="nodes.password">Password *</label><div class="pw-wrap"><input id="add-pass" type="password" placeholder="Auth password"><button type="button" class="pw-eye" tabindex="-1" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
           <div class="form-group"><label data-i18n="nodes.upload">Upload (Mbps)</label><input id="add-tx" type="number" placeholder="0 = 1000 Mbps"></div>
           <div class="form-group"><label data-i18n="nodes.download">Download (Mbps)</label><input id="add-rx" type="number" placeholder="0 = 1000 Mbps"></div>
           <div class="form-group">
@@ -640,7 +640,7 @@
       <div class="form-col">
         <div class="form-grid">
           <div class="form-group"><label data-i18n="users.username">Username *</label><input id="u-username"></div>
-          <div class="form-group"><label data-i18n="users.password">Password *</label><div class="pw-wrap"><input id="u-password" type="password"><button type="button" class="pw-eye" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+          <div class="form-group"><label data-i18n="users.password">Password *</label><div class="pw-wrap"><input id="u-password" type="password"><button type="button" class="pw-eye" tabindex="-1" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
         </div>
         <div class="form-group"><label data-i18n="users.exitVia">Exit Via</label><input id="u-exitvia" data-i18n="users.exitViaHint" placeholder="e.g. au/fast-test (empty = direct)"></div>
         <div class="form-grid">

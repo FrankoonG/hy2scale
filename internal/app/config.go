@@ -30,7 +30,8 @@ type ProxyConfig struct {
 	Protocol string `yaml:"protocol" json:"protocol"` // "socks5"
 	Listen   string `yaml:"listen" json:"listen"`
 	Enabled  bool   `yaml:"enabled" json:"enabled"`
-	ExitVia  string `yaml:"exit_via,omitempty" json:"exit_via,omitempty"` // legacy, migrated to users
+	ExitVia  string `yaml:"exit_via,omitempty" json:"exit_via,omitempty"`
+	ExitMode string `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"`
 }
 
 // RoutingRule defines a traffic routing rule (IP or domain based).

@@ -471,13 +471,14 @@ async function refreshTopology() {
 
   // Build connected peers set from all visible nodes
   const newConnected = new Set();
-  function collectPeers(nodes) {
+  function collectPeers(nodes, parentReachable) {
     for (const n of nodes) {
-      if (n.connected || n.is_self || n.native || n.latency_ms > 0) newConnected.add(n.name);
-      if (n.children) collectPeers(n.children);
+      const reachable = n.connected || n.is_self || n.native || n.latency_ms > 0 || parentReachable;
+      if (reachable) newConnected.add(n.name);
+      if (n.children) collectPeers(n.children, reachable);
     }
   }
-  collectPeers(topo);
+  collectPeers(topo, false);
   connectedPeers = newConnected;
   buildExitPaths(topo);
 
@@ -1430,19 +1431,24 @@ let _exitPaths = []; // cached list of all reachable exit paths
 
 function buildExitPaths(topo) {
   const paths = [];
+  const names = new Set(); // all unique node names
   function walk(nodes, prefix) {
     for (const n of nodes) {
       if (!n.is_self) {
         const p = prefix ? prefix + '/' + n.name : n.name;
         paths.push(p);
+        names.add(n.name);
         if (n.children) walk(n.children, p);
       } else if (n.children) {
-        // Self node's inbound children are also valid exit targets
         walk(n.children, '');
       }
     }
   }
   walk(topo, '');
+  // Add standalone node names that only appear in paths
+  for (const name of names) {
+    if (!paths.includes(name)) paths.push(name);
+  }
   _exitPaths = paths;
 }
 
@@ -1454,10 +1460,26 @@ function setupExitAutocomplete(inputEl) {
   inputEl.parentNode.insertBefore(wrap, inputEl);
   wrap.appendChild(inputEl);
 
-  // Exit mode selector (appears when value is a simple node name)
+  // Clear button (same style as pw-eye)
+  const inputWrap = document.createElement('div');
+  inputWrap.className = 'pw-wrap';
+  wrap.insertBefore(inputWrap, inputEl);
+  inputWrap.appendChild(inputEl);
+  const clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.className = 'pw-eye exit-clear-btn';
+  clearBtn.tabIndex = -1;
+  clearBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>';
+  inputWrap.appendChild(clearBtn);
+  clearBtn.addEventListener('click', () => {
+    inputEl.value = '';
+    inputEl.dispatchEvent(new Event('input'));
+    inputEl.focus();
+  });
+
+  // Exit mode selector (always visible)
   const modePanel = document.createElement('div');
   modePanel.className = 'exit-mode-panel';
-  modePanel.style.display = 'none';
   modePanel.innerHTML = `<div class="exit-mode-options">
     <label class="exit-mode-opt"><input type="radio" name="exitmode-${inputEl.id}" value="" checked><span>${t('exit.modeNone')}</span></label>
     <label class="exit-mode-opt"><input type="radio" name="exitmode-${inputEl.id}" value="stability"><span>${t('exit.modeStability')}</span></label>
@@ -1465,23 +1487,32 @@ function setupExitAutocomplete(inputEl) {
   </div>`;
   wrap.appendChild(modePanel);
 
-  function syncModeVisibility() {
+  function syncModeState() {
     const val = inputEl.value.trim();
-    modePanel.style.display = (val.length > 0 && !val.includes('/')) ? '' : 'none';
+    const hasPath = val.includes('/');
+    const radios = modePanel.querySelectorAll('input[type=radio]');
+    if (hasPath) {
+      // Force Direct, disable all options
+      radios.forEach(r => { r.checked = r.value === ''; r.disabled = true; });
+      modePanel.classList.add('exit-mode-disabled');
+    } else {
+      radios.forEach(r => { r.disabled = false; });
+      modePanel.classList.remove('exit-mode-disabled');
+    }
   }
-  // Public API for get/set mode from outside
+  // Public API
   inputEl._setExitMode = function(mode) {
     modePanel.querySelectorAll('input[type=radio]').forEach(r => { r.checked = r.value === (mode || ''); });
-    syncModeVisibility();
+    syncModeState();
   };
   inputEl._getExitMode = function() {
     const sel = modePanel.querySelector('input[type=radio]:checked');
     return sel ? sel.value : '';
   };
 
-  inputEl.addEventListener('input', syncModeVisibility);
-  inputEl.addEventListener('focus', syncModeVisibility);
-  setTimeout(syncModeVisibility, 0);
+  inputEl.addEventListener('input', syncModeState);
+  inputEl.addEventListener('focus', syncModeState);
+  setTimeout(syncModeState, 0);
 
   const list = document.createElement('div');
   list.className = 'autocomplete-list';
