@@ -991,8 +991,10 @@ func (a *App) handleSOCKS5(conn net.Conn) {
 	// Route based on user's exit_via (or direct if no user)
 	exitVia := ""
 	username := ""
+	exitMode := ""
 	if user != nil {
 		exitVia = user.ExitVia
+		exitMode = user.ExitMode
 		username = user.Username
 	}
 
@@ -1001,7 +1003,7 @@ func (a *App) handleSOCKS5(conn net.Conn) {
 	if exitVia == "" {
 		remote, err = net.DialTimeout("tcp", addr, 10*time.Second)
 	} else {
-		remote, err = a.dialExit(context.Background(), exitVia, addr)
+		remote, err = a.dialExitWithMode(context.Background(), exitVia, exitMode, addr)
 	}
 	if err != nil {
 		conn.Write([]byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
@@ -1072,22 +1074,22 @@ func splitPath(s string) []string {
 }
 
 // dialExit routes traffic through an exit path, stripping the local node name prefix.
-// Exit via modes:
-//   "C"   → direct (single path, no optimization)
-//   "C*"  → stability (adaptive failover, race paths, pick first success)
-//   "C**" → speed (load balance across all healthy paths for max throughput)
-func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, error) {
-	if !strings.Contains(exitVia, "/") {
-		if strings.HasSuffix(exitVia, "**") {
-			target := strings.TrimSuffix(exitVia, "**")
-			return a.dialLoadBalance(ctx, target, addr)
-		}
-		if strings.HasSuffix(exitVia, "*") {
-			target := strings.TrimSuffix(exitVia, "*")
-			return a.dialAdaptive(ctx, target, addr)
+// dialExitWithMode routes traffic with the specified exit mode.
+// mode: "" = direct, "stability" = adaptive failover, "speed" = load balance
+func (a *App) dialExitWithMode(ctx context.Context, exitVia, exitMode, addr string) (net.Conn, error) {
+	if exitMode != "" && exitVia != "" && !strings.Contains(exitVia, "/") {
+		switch exitMode {
+		case "stability":
+			return a.dialAdaptive(ctx, exitVia, addr)
+		case "speed":
+			return a.dialLoadBalance(ctx, exitVia, addr)
 		}
 	}
+	return a.dialExit(ctx, exitVia, addr)
+}
 
+// dialExit routes traffic through an exit path (direct mode, no adaptive/LB).
+func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, error) {
 	parts := splitPath(exitVia)
 	// Strip leading self name (e.g. "AUB/64e7c9f5" on node AUB → ["64e7c9f5"])
 	if len(parts) > 0 && parts[0] == a.node.Name() {

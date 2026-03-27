@@ -45,6 +45,7 @@ type WireGuardPeer struct {
 	AllowedIPs string `yaml:"allowed_ips" json:"allowed_ips"`
 	Keepalive  int    `yaml:"keepalive" json:"keepalive"`
 	ExitVia    string `yaml:"exit_via,omitempty" json:"exit_via"`
+	ExitMode   string `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"`
 }
 
 type wgInstance struct {
@@ -170,22 +171,21 @@ func (a *App) StartWireGuard(cfg WireGuardConfig) error {
 	return nil
 }
 
-// findPeerExitVia finds the exit_via for a WG peer by their tunnel IP.
-func findPeerExitVia(cfg WireGuardConfig, srcIP string) string {
+// findPeerExitViaMode finds the exit_via and exit_mode for a WG peer by their tunnel IP.
+func findPeerExitViaMode(cfg WireGuardConfig, srcIP string) (string, string) {
 	for _, p := range cfg.Peers {
 		for _, aip := range strings.Split(p.AllowedIPs, ",") {
 			aip = strings.TrimSpace(aip)
 			if aip == "" {
 				continue
 			}
-			// Check if srcIP matches the allowed IP (strip prefix length)
 			ip := strings.SplitN(aip, "/", 2)[0]
 			if ip == srcIP {
-				return p.ExitVia
+				return p.ExitVia, p.ExitMode
 			}
 		}
 	}
-	return ""
+	return "", ""
 }
 
 // StopWireGuard stops the running WireGuard instance.
@@ -310,14 +310,14 @@ func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 			srcIP := id.RemoteAddress.String()
 			wgConnAdd(srcIP)
 			defer wgConnDel(srcIP)
-			exitVia := findPeerExitVia(cfg, srcIP)
+			exitVia, exitMode := findPeerExitViaMode(cfg, srcIP)
 
 			var remote net.Conn
 			var err error
 			if exitVia == "" {
 				remote, err = net.DialTimeout("tcp", dstAddr, 10*time.Second)
 			} else {
-				remote, err = a.dialExit(context.Background(), exitVia, dstAddr)
+				remote, err = a.dialExitWithMode(context.Background(), exitVia, exitMode, dstAddr)
 			}
 			if err != nil {
 				return
