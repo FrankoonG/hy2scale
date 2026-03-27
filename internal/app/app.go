@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"math/big"
+	mrand "math/rand/v2"
 	"net"
 	"os"
 	"strconv"
@@ -914,11 +915,11 @@ func (a *App) serveProxy(ctx context.Context, ln net.Listener, pc ProxyConfig) {
 		if err != nil {
 			return
 		}
-		go a.handleSOCKS5(c)
+		go a.handleSOCKS5(c, &pc)
 	}
 }
 
-func (a *App) handleSOCKS5(conn net.Conn) {
+func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 	defer conn.Close()
 	buf := make([]byte, 512)
 
@@ -988,7 +989,7 @@ func (a *App) handleSOCKS5(conn net.Conn) {
 		return
 	}
 
-	// Route based on user's exit_via (or direct if no user)
+	// Route: proxy config overrides user config
 	exitVia := ""
 	username := ""
 	exitMode := ""
@@ -996,6 +997,10 @@ func (a *App) handleSOCKS5(conn net.Conn) {
 		exitVia = user.ExitVia
 		exitMode = user.ExitMode
 		username = user.Username
+	}
+	if pc != nil && pc.ExitVia != "" {
+		exitVia = pc.ExitVia
+		exitMode = pc.ExitMode
 	}
 
 	var remote net.Conn
@@ -1076,13 +1081,21 @@ func splitPath(s string) []string {
 // dialExit routes traffic through an exit path, stripping the local node name prefix.
 // dialExitWithMode routes traffic with the specified exit mode.
 // mode: "" = direct, "stability" = adaptive failover, "speed" = load balance
+// ValidateExitMode checks exit_mode is only set for simple (non-path) exit_via.
+func ValidateExitMode(exitVia, exitMode string) error {
+	if exitMode != "" && strings.Contains(exitVia, "/") {
+		return fmt.Errorf("exit mode (%s) cannot be used with path-based exit (%s)", exitMode, exitVia)
+	}
+	return nil
+}
+
 func (a *App) dialExitWithMode(ctx context.Context, exitVia, exitMode, addr string) (net.Conn, error) {
 	if exitMode != "" && exitVia != "" && !strings.Contains(exitVia, "/") {
 		switch exitMode {
 		case "stability":
 			return a.dialAdaptive(ctx, exitVia, addr)
 		case "speed":
-			return a.dialLoadBalance(ctx, exitVia, addr)
+			return a.dialBond(ctx, exitVia, addr)
 		}
 	}
 	return a.dialExit(ctx, exitVia, addr)
@@ -1099,6 +1112,15 @@ func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, err
 		return net.DialTimeout("tcp", addr, 10*time.Second)
 	}
 	if len(parts) == 1 {
+		// If target is not a direct peer, find a path through intermediates
+		if !a.node.HasPeer(parts[0]) {
+			paths := a.findPathsTo(parts[0])
+			if len(paths) > 0 {
+				pick := paths[mrand.IntN(len(paths))]
+				log.Printf("[exit] %s not direct peer, using path: %s", parts[0], pick)
+				return a.dialExit(ctx, pick, addr)
+			}
+		}
 		return a.node.DialTCP(ctx, parts[0], addr)
 	}
 	return a.node.DialVia(ctx, parts, addr)
@@ -1129,6 +1151,17 @@ func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
 	if relay.IsRelayStream(reqAddr) {
 		c1, c2 := net.Pipe()
 		go o.node.HandleStream(o.ctx, reqAddr, c1)
+		return c2, nil
+	}
+	// Bond stream: exit node receives multi-path bond connections
+	if IsBondStream(reqAddr) {
+		c1, c2 := net.Pipe()
+		go func() {
+			if err := o.app.handleBondStream(reqAddr, c1); err != nil {
+				log.Printf("[bond-rx] handle error: %v", err)
+				c1.Close()
+			}
+		}()
 		return c2, nil
 	}
 	// For native hy2 client users: their traffic is handled by hy2 server directly
