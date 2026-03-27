@@ -548,8 +548,10 @@ func (a *App) handleTransparent(conn net.Conn) {
 	}
 
 	exitVia := ""
+	exitMode := ""
 	if user != nil {
 		exitVia = user.ExitVia
+		exitMode = user.ExitMode
 	}
 
 	var remote net.Conn
@@ -558,7 +560,7 @@ func (a *App) handleTransparent(conn net.Conn) {
 		remote, err = net.DialTimeout("tcp", origDst, 10*time.Second)
 	} else {
 		log.Printf("[l2tp] dial via %s to %s", exitVia, origDst)
-		remote, err = a.dialExit(context.Background(), exitVia, origDst)
+		remote, err = a.dialExitWithMode(context.Background(), exitVia, exitMode, origDst)
 	}
 	if err != nil {
 		log.Printf("[l2tp] dial error: %v", err)

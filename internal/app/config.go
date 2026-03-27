@@ -17,7 +17,8 @@ type UserConfig struct {
 	Username     string `yaml:"username" json:"username"`
 	Password     string `yaml:"password" json:"password"`
 	ExitVia      string `yaml:"exit_via" json:"exit_via"`
-	TrafficLimit int64  `yaml:"traffic_limit" json:"traffic_limit"` // bytes, 0=unlimited
+	ExitMode     string `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"` // ""|"stability"|"speed"
+	TrafficLimit int64  `yaml:"traffic_limit" json:"traffic_limit"`             // bytes, 0=unlimited
 	TrafficUsed  int64  `yaml:"traffic_used" json:"traffic_used"`
 	ExpiryDate   string `yaml:"expiry_date,omitempty" json:"expiry_date"`
 	Enabled      bool   `yaml:"enabled" json:"enabled"`
@@ -34,12 +35,13 @@ type ProxyConfig struct {
 
 // RoutingRule defines a traffic routing rule (IP or domain based).
 type RoutingRule struct {
-	ID      string   `yaml:"id" json:"id"`
-	Name    string   `yaml:"name" json:"name"`
-	Type    string   `yaml:"type" json:"type"`       // "ip" or "domain"
-	Targets []string `yaml:"targets" json:"targets"` // IPs/CIDRs/ranges or domains
-	ExitVia string   `yaml:"exit_via" json:"exit_via"`
-	Enabled bool     `yaml:"enabled" json:"enabled"`
+	ID       string   `yaml:"id" json:"id"`
+	Name     string   `yaml:"name" json:"name"`
+	Type     string   `yaml:"type" json:"type"`                           // "ip" or "domain"
+	Targets  []string `yaml:"targets" json:"targets"`                     // IPs/CIDRs/ranges or domains
+	ExitVia  string   `yaml:"exit_via" json:"exit_via"`
+	ExitMode string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"` // ""|"stability"|"speed"
+	Enabled  bool     `yaml:"enabled" json:"enabled"`
 }
 
 // ConfigStore manages dynamic configuration with persistence.

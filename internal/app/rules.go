@@ -141,8 +141,9 @@ func (a *App) RemoveRule(id string) {
 }
 
 type ruleExitInfo struct {
-	ruleID  string
-	exitVia string
+	ruleID   string
+	exitVia  string
+	exitMode string
 }
 
 func (e *ruleEngine) applyRule(r RoutingRule) {
@@ -183,7 +184,7 @@ func (e *ruleEngine) applyIPRule(r RoutingRule) {
 			iptArgs = append(iptArgs, strings.Join(args, " "))
 		}
 		// Register all IPs for this target in destToExit
-		e.registerTargetExit(r.ID, target, r.ExitVia)
+		e.registerTargetExit(r.ID, target, r.ExitVia, r.ExitMode)
 	}
 	e.appliedIPT[r.ID] = iptArgs
 	log.Printf("[rules] applied IP rule %q: %d targets → exit %s", r.Name, len(r.Targets), r.ExitVia)
@@ -212,7 +213,7 @@ func (e *ruleEngine) applyDomainRule(r RoutingRule) {
 			iptRun("iptables-legacy", args...)
 			iptArgs = append(iptArgs, strings.Join(args, " "))
 			resolvedIPs = append(resolvedIPs, ip)
-			e.destToExit.Store(ip, ruleExitInfo{ruleID: r.ID, exitVia: r.ExitVia})
+			e.destToExit.Store(ip, ruleExitInfo{ruleID: r.ID, exitVia: r.ExitVia, exitMode: r.ExitMode})
 		}
 	}
 	e.appliedIPT[r.ID] = iptArgs
@@ -221,9 +222,8 @@ func (e *ruleEngine) applyDomainRule(r RoutingRule) {
 		r.Name, len(r.Targets), len(resolvedIPs), r.ExitVia)
 }
 
-func (e *ruleEngine) registerTargetExit(ruleID, target, exitVia string) {
-	// For CIDR/range, we store the CIDR itself as key; proxy will match
-	e.destToExit.Store(target, ruleExitInfo{ruleID: ruleID, exitVia: exitVia})
+func (e *ruleEngine) registerTargetExit(ruleID, target, exitVia, exitMode string) {
+	e.destToExit.Store(target, ruleExitInfo{ruleID: ruleID, exitVia: exitVia, exitMode: exitMode})
 }
 
 func (e *ruleEngine) removeIPTRulesLocked(id string) {
@@ -247,26 +247,23 @@ func (e *ruleEngine) removeIPTRulesLocked(id string) {
 	delete(e.domainIPs, id)
 }
 
-// lookupExit finds the exit route for a destination IP.
-func (e *ruleEngine) lookupExit(dstIP string) string {
-	// Direct IP match
-	var result string
+// lookupExit finds the exit route and mode for a destination IP.
+func (e *ruleEngine) lookupExit(dstIP string) (string, string) {
+	var resultVia, resultMode string
 	e.destToExit.Range(func(k, v any) bool {
 		target := k.(string)
 		info := v.(ruleExitInfo)
 		if target == dstIP {
-			result = info.exitVia
+			resultVia, resultMode = info.exitVia, info.exitMode
 			return false
 		}
-		// CIDR match
 		if strings.Contains(target, "/") {
 			_, cidr, err := net.ParseCIDR(target)
 			if err == nil && cidr.Contains(net.ParseIP(dstIP)) {
-				result = info.exitVia
+				resultVia, resultMode = info.exitVia, info.exitMode
 				return false
 			}
 		}
-		// Range match (x.x.x.x-y.y.y.y)
 		if strings.Contains(target, "-") && !strings.Contains(target, "/") {
 			parts := strings.SplitN(target, "-", 2)
 			if len(parts) == 2 {
@@ -276,7 +273,7 @@ func (e *ruleEngine) lookupExit(dstIP string) string {
 				if startIP != nil && endIP != nil && ip != nil {
 					if bytesCompare(ip.To4(), startIP.To4()) >= 0 &&
 						bytesCompare(ip.To4(), endIP.To4()) <= 0 {
-						result = info.exitVia
+						resultVia, resultMode = info.exitVia, info.exitMode
 						return false
 					}
 				}
@@ -284,7 +281,7 @@ func (e *ruleEngine) lookupExit(dstIP string) string {
 		}
 		return true
 	})
-	return result
+	return resultVia, resultMode
 }
 
 func bytesCompare(a, b []byte) int {
@@ -323,7 +320,7 @@ func (e *ruleEngine) handleConn(ctx context.Context, conn net.Conn) {
 	}
 
 	host, _, _ := net.SplitHostPort(origDst)
-	exitVia := e.lookupExit(host)
+	exitVia, exitMode := e.lookupExit(host)
 	if exitVia == "" {
 		debugLog("[rules] no exit for %s, direct", origDst)
 		remote, err := net.DialTimeout("tcp", origDst, 10*time.Second)
@@ -338,8 +335,8 @@ func (e *ruleEngine) handleConn(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	debugLog("[rules] %s → exit %s", origDst, exitVia)
-	remote, err := e.app.dialExit(ctx, exitVia, origDst)
+	debugLog("[rules] %s → exit %s mode=%s", origDst, exitVia, exitMode)
+	remote, err := e.app.dialExitWithMode(ctx, exitVia, exitMode, origDst)
 	if err != nil {
 		debugLog("[rules] dial exit %s error: %v", exitVia, err)
 		return

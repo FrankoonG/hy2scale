@@ -219,32 +219,33 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 				protocol = "ikev2"
 			}
 
-			// Determine exit_via
+			// Determine exit_via and exit_mode
 			exitVia := ""
+			exitMode := ""
 			if ok && username != "" && username != "__psk__" {
 				cfg := a.store.Get()
 				for _, u := range cfg.Users {
 					if u.Username == username && u.Enabled {
 						exitVia = u.ExitVia
+						exitMode = u.ExitMode
 						break
 					}
 				}
 			} else if protocol == "ikev2" {
-				// PSK mode: use default exit from IKEv2 config
 				if v := ikev2DefaultExitVia.Load(); v != nil {
 					exitVia = v.(string)
 				}
 			}
 
-			debugLog("[tun-fwd] TCP %s(%s/%s) → %s exit=%q",
-				srcIP, username, protocol, dstAddr, exitVia)
+			debugLog("[tun-fwd] TCP %s(%s/%s) → %s exit=%q mode=%s",
+				srcIP, username, protocol, dstAddr, exitVia, exitMode)
 
 			var remote net.Conn
 			var err error
 			if exitVia == "" {
 				remote, err = net.DialTimeout("tcp", dstAddr, 10*time.Second)
 			} else {
-				remote, err = a.dialExit(context.Background(), exitVia, dstAddr)
+				remote, err = a.dialExitWithMode(context.Background(), exitVia, exitMode, dstAddr)
 			}
 			if err != nil {
 				debugLog("[tun-fwd] dial error: %s → %s: %v", srcIP, dstAddr, err)

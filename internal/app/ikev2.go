@@ -23,7 +23,8 @@ type IKEv2Config struct {
 	LocalID     string `yaml:"local_id" json:"local_id"`           // server identity (leftid), default = node ID
 	RemoteID    string `yaml:"remote_id" json:"remote_id"`         // client identity (rightid), default = %any
 	PSKUserMode bool   `yaml:"psk_user_mode" json:"psk_user_mode"` // PSK: require user auth
-	DefaultExit string `yaml:"default_exit" json:"default_exit"`   // exit_via when user mode off
+	DefaultExit     string `yaml:"default_exit" json:"default_exit"`           // exit_via when user mode off
+	DefaultExitMode string `yaml:"default_exit_mode,omitempty" json:"default_exit_mode,omitempty"` // ""|"stability"|"speed"
 	DNS         string `yaml:"dns" json:"dns"`                     // DNS servers, default "8.8.8.8 8.8.4.4"
 	ProxyPort   int    `yaml:"proxy_port" json:"proxy_port"`       // transparent proxy port, default 12350
 	MTU         int    `yaml:"mtu" json:"mtu"`                     // tunnel MTU, default 1400
@@ -703,6 +704,7 @@ func (a *App) handleIKEv2Transparent(conn net.Conn, cfg IKEv2Config) {
 
 	// Determine exit_via
 	exitVia := ""
+	exitMode := ""
 	if ok && username != "__psk__" {
 		// User mode: look up user's exit_via
 		user, err := a.LookupUser(username, "")
@@ -717,12 +719,12 @@ func (a *App) handleIKEv2Transparent(conn net.Conn, cfg IKEv2Config) {
 		}
 		if user != nil {
 			exitVia = user.ExitVia
+			exitMode = user.ExitMode
 		}
 	} else if cfg.Mode == "psk" && !cfg.PSKUserMode {
-		// PSK no-user mode: use default exit
 		exitVia = cfg.DefaultExit
+		exitMode = cfg.DefaultExitMode
 	} else if !ok {
-		// Unknown session: direct exit
 		exitVia = ""
 	}
 
@@ -732,7 +734,7 @@ func (a *App) handleIKEv2Transparent(conn net.Conn, cfg IKEv2Config) {
 		remote, err = net.DialTimeout("tcp", origDst, 10*time.Second)
 	} else {
 		log.Printf("[ikev2] dial via %s to %s", exitVia, origDst)
-		remote, err = a.dialExit(context.Background(), exitVia, origDst)
+		remote, err = a.dialExitWithMode(context.Background(), exitVia, exitMode, origDst)
 	}
 	if err != nil {
 		log.Printf("[ikev2] dial error: %v", err)
