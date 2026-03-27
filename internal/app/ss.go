@@ -142,13 +142,14 @@ func (a *App) handleSS(conn net.Conn, method string) {
 
 		// User identified! Route via their exit_via
 		exitVia := u.ExitVia
+		exitMode := u.ExitMode
 		username := u.Username
 
 		var remote net.Conn
 		if exitVia == "" {
 			remote, err = net.DialTimeout("tcp", addr, 10*time.Second)
 		} else {
-			remote, err = a.dialExit(a.appCtx, exitVia, addr)
+			remote, err = a.dialExitWithMode(a.appCtx, exitVia, exitMode, addr)
 		}
 		if err != nil {
 			return
@@ -251,9 +252,11 @@ func (a *App) handleSSNone(conn net.Conn) {
 	// No user identification possible with "none" — use first enabled user or direct
 	cfg := a.store.Get()
 	var exitVia, username string
+	exitMode := ""
 	for _, u := range cfg.Users {
 		if u.Enabled {
 			exitVia = u.ExitVia
+			exitMode = u.ExitMode
 			username = u.Username
 			break
 		}
@@ -263,7 +266,7 @@ func (a *App) handleSSNone(conn net.Conn) {
 	if exitVia == "" {
 		remote, err = net.DialTimeout("tcp", addr, 10*time.Second)
 	} else {
-		remote, err = a.dialExit(a.appCtx, exitVia, addr)
+		remote, err = a.dialExitWithMode(a.appCtx, exitVia, exitMode, addr)
 	}
 	if err != nil {
 		return

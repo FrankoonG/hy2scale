@@ -1049,7 +1049,7 @@ function renderWGPeers() {
   </tr></thead><tbody>${_wgPeers.map(p => {
     return `<tr>
       <td><a href="#" onclick="openWGPeerDetail('${esc(p.name)}');return false" style="font-weight:600;color:var(--primary);text-decoration:none">${esc(p.name)}</a></td>
-      <td><span style="font-family:var(--mono);font-size:12px">${exitViaHTML(p.exit_via)}</span></td>
+      <td><span style="font-family:var(--mono);font-size:12px">${exitViaHTML(p.exit_via)}</span>${exitModeBadge(p.exit_mode)}</td>
       <td style="font-family:var(--mono);font-size:12px">${esc(p.allowed_ips)}</td>
       <td>${p.keepalive || '-'}</td>
       <td style="text-align:right"><div class="act-group">
@@ -1191,6 +1191,7 @@ function editWGPeer(name) {
   $('#wgp-privkey').value = p.private_key || '';
   $('#wgp-allowedips').value = p.allowed_ips || '';
   $('#wgp-exitvia').value = p.exit_via || '';
+  if ($('#wgp-exitvia')._setExitMode) $('#wgp-exitvia')._setExitMode(p.exit_mode || '');
   $('#wgp-keepalive').value = p.keepalive || 0;
   $('#wgp-pubkey').style.borderColor = '';
   $('#wgp-privkey').style.borderColor = '';
@@ -1216,7 +1217,8 @@ async function submitWGPeer() {
   if (privKey && !isValidWGKey(privKey)) { toast(t('wg.invalidPrivKeyFormat'), 'error'); return; }
   if (!allowedIPs) { toast(t('wg.allowedIpsRequired'), 'error'); return; }
   const body = { name, public_key: pubKey, private_key: privKey, allowed_ips: allowedIPs,
-    exit_via: exitVia, keepalive: parseInt($('#wgp-keepalive').value) || 0 };
+    exit_via: exitVia, exit_mode: $('#wgp-exitvia')._getExitMode ? $('#wgp-exitvia')._getExitMode() : '',
+    keepalive: parseInt($('#wgp-keepalive').value) || 0 };
   try {
     if (editingWGPeer) {
       if (name !== editingWGPeer) {
@@ -1458,36 +1460,28 @@ function setupExitAutocomplete(inputEl) {
   modePanel.style.display = 'none';
   modePanel.innerHTML = `<div class="exit-mode-options">
     <label class="exit-mode-opt"><input type="radio" name="exitmode-${inputEl.id}" value="" checked><span>${t('exit.modeNone')}</span></label>
-    <label class="exit-mode-opt"><input type="radio" name="exitmode-${inputEl.id}" value="*"><span>${t('exit.modeStability')}</span></label>
-    <label class="exit-mode-opt"><input type="radio" name="exitmode-${inputEl.id}" value="**"><span>${t('exit.modeSpeed')}</span></label>
+    <label class="exit-mode-opt"><input type="radio" name="exitmode-${inputEl.id}" value="stability"><span>${t('exit.modeStability')}</span></label>
+    <label class="exit-mode-opt"><input type="radio" name="exitmode-${inputEl.id}" value="speed"><span>${t('exit.modeSpeed')}</span></label>
   </div>`;
   wrap.appendChild(modePanel);
 
-  function syncModeFromValue() {
+  function syncModeVisibility() {
     const val = inputEl.value.trim();
-    const hasSlash = val.includes('/');
-    const isSimple = val.length > 0 && !hasSlash;
-    modePanel.style.display = isSimple ? '' : 'none';
-    if (!isSimple) return;
-    let mode = '';
-    if (val.endsWith('**')) mode = '**';
-    else if (val.endsWith('*')) mode = '*';
-    modePanel.querySelectorAll('input[type=radio]').forEach(r => { r.checked = r.value === mode; });
+    modePanel.style.display = (val.length > 0 && !val.includes('/')) ? '' : 'none';
   }
+  // Public API for get/set mode from outside
+  inputEl._setExitMode = function(mode) {
+    modePanel.querySelectorAll('input[type=radio]').forEach(r => { r.checked = r.value === (mode || ''); });
+    syncModeVisibility();
+  };
+  inputEl._getExitMode = function() {
+    const sel = modePanel.querySelector('input[type=radio]:checked');
+    return sel ? sel.value : '';
+  };
 
-  function syncValueFromMode() {
-    const selected = modePanel.querySelector('input[type=radio]:checked');
-    if (!selected) return;
-    let base = inputEl.value.trim().replace(/\*+$/, '');
-    if (!base || base.includes('/')) return;
-    inputEl.value = base + selected.value;
-  }
-
-  modePanel.addEventListener('change', syncValueFromMode);
-  inputEl.addEventListener('input', syncModeFromValue);
-  inputEl.addEventListener('focus', syncModeFromValue);
-  // Initial sync
-  setTimeout(syncModeFromValue, 0);
+  inputEl.addEventListener('input', syncModeVisibility);
+  inputEl.addEventListener('focus', syncModeVisibility);
+  setTimeout(syncModeVisibility, 0);
 
   const list = document.createElement('div');
   list.className = 'autocomplete-list';
@@ -1607,6 +1601,13 @@ function setupCustomSelect(selectEl) {
   });
 }
 
+function exitModeBadge(mode) {
+  if (!mode) return '';
+  if (mode === 'stability') return ' <span class="badge badge-green" style="font-size:10px">' + t('exit.modeStability') + '</span>';
+  if (mode === 'speed') return ' <span class="badge badge-blue" style="font-size:10px">' + t('exit.modeSpeed') + '</span>';
+  return '';
+}
+
 function exitViaHTML(path) {
   if (!path) return '<span style="color:var(--text-muted)">(direct)</span>';
   const hops = path.split('/').filter(Boolean);
@@ -1700,7 +1701,7 @@ async function refreshUsers() {
     return `<tr class="${!u.enabled ? 'disabled' : ''}">
       <td><label class="toggle"><input type="checkbox" ${u.enabled ? 'checked' : ''} onchange="toggleUser('${esc(u.id)}',this.checked)"><span class="slider"></span></label></td>
       <td><b>${esc(u.username)}</b></td>
-      <td><span style="font-family:var(--mono);font-size:12px">${exitViaHTML(u.exit_via)}</span></td>
+      <td><span style="font-family:var(--mono);font-size:12px">${exitViaHTML(u.exit_via)}</span>${exitModeBadge(u.exit_mode)}</td>
       <td class="col-right">
         <span style="font-size:12px">${usedGB} / ${limitGB}</span>
         ${u.traffic_limit ? `<div style="background:var(--border-light);height:3px;border-radius:2px;margin-top:3px"><div style="background:${pct > 90 ? 'var(--red)' : 'var(--primary)'};height:100%;width:${pct}%;border-radius:2px"></div></div>` : ''}
@@ -1720,6 +1721,7 @@ function openUserDialog() {
   $('#user-modal-title').textContent = t('users.addTitle');
   $('#user-submit').textContent = t('app.add');
   ['u-username','u-password','u-exitvia','u-expiry'].forEach(id => $(`#${id}`).value = '');
+  if ($('#u-exitvia')._setExitMode) $('#u-exitvia')._setExitMode('');
   $('#u-limit').value = '0';
   $('#u-enabled').checked = true;
   openModal('#user-modal');
@@ -1735,6 +1737,7 @@ async function editUser(id) {
   $('#u-username').value = u.username;
   $('#u-password').value = u.password;
   $('#u-exitvia').value = u.exit_via || '';
+  if ($('#u-exitvia')._setExitMode) $('#u-exitvia')._setExitMode(u.exit_mode || '');
   $('#u-limit').value = u.traffic_limit ? (u.traffic_limit / 1073741824).toFixed(1) : '0';
   $('#u-expiry').value = u.expiry_date || '';
   $('#u-enabled').checked = u.enabled;
@@ -1751,6 +1754,7 @@ async function submitUser() {
   const body = {
     username, password,
     exit_via: $('#u-exitvia').value.trim(),
+    exit_mode: $('#u-exitvia')._getExitMode ? $('#u-exitvia')._getExitMode() : '',
     traffic_limit: Math.round(limitGB * 1073741824),
     expiry_date: $('#u-expiry').value || '',
     enabled: $('#u-enabled').checked,
@@ -1846,7 +1850,7 @@ function renderRuleList(type, rules) {
       <td><label class="toggle"><input type="checkbox" ${r.enabled ? 'checked' : ''} onchange="toggleRuleEnabled('${esc(r.id)}',this.checked)"><span class="slider"></span></label></td>
       <td><b>${nameDisplay}</b></td>
       <td><span style="font-family:var(--mono);font-size:12px">${first}</span>${more}</td>
-      <td><span style="font-family:var(--mono);font-size:12px">${exitViaHTML(r.exit_via)}</span></td>
+      <td><span style="font-family:var(--mono);font-size:12px">${exitViaHTML(r.exit_via)}</span>${exitModeBadge(r.exit_mode)}</td>
       <td style="text-align:right"><div class="act-group">
         <button class="act-btn edit" onclick="editRule('${esc(r.id)}')">${t('app.edit')}</button>
         <button class="act-btn danger" onclick="deleteRuleConfirm('${esc(r.id)}')">${t('app.delete')}</button>
@@ -1882,6 +1886,7 @@ async function editRule(id) {
   $('#rule-name').value = rule.name || '';
   $('#rule-targets').value = (rule.targets || []).join('\n');
   $('#rule-exit').value = rule.exit_via || '';
+  if ($('#rule-exit')._setExitMode) $('#rule-exit')._setExitMode(rule.exit_mode || '');
   $('#rule-targets-label').textContent = rule.type === 'ip' ? t('rules.ipTargets') : t('rules.domainTargets');
   $('#rule-modal-title').textContent = t('app.edit');
   $('#rule-submit-btn').textContent = t('app.save');
@@ -1896,7 +1901,8 @@ async function submitRule() {
   if (!targets.length) { toast(t('rules.targetsRequired'), 'error'); return; }
   if (!exit_via) { toast(t('rules.exitRequired'), 'error'); return; }
   const id = _editRuleId || (type + '-' + Date.now().toString(36));
-  const body = { id, name, type, targets, exit_via, enabled: _editRuleEnabled !== undefined ? _editRuleEnabled : true };
+  const exit_mode = $('#rule-exit')._getExitMode ? $('#rule-exit')._getExitMode() : '';
+  const body = { id, name, type, targets, exit_via, exit_mode, enabled: _editRuleEnabled !== undefined ? _editRuleEnabled : true };
   try {
     if (_editRuleId) {
       await api('/rules/' + _editRuleId, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
