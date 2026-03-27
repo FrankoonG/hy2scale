@@ -1480,6 +1480,10 @@ func (s *Server) addUserAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "username and password required", 400)
 		return
 	}
+	if err := app.ValidateExitMode(u.ExitVia, u.ExitMode); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
 	if u.ID == "" {
 		b := make([]byte, 4)
 		rand.Read(b)
@@ -1500,6 +1504,10 @@ func (s *Server) updateUserAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.ID = id
+	if err := app.ValidateExitMode(u.ExitVia, u.ExitMode); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
 	if err := s.app.UpdateUser(id, u); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -1566,6 +1574,10 @@ func (s *Server) addRule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "type must be 'ip' or 'domain'", 400)
 		return
 	}
+	if err := app.ValidateExitMode(rule.ExitVia, rule.ExitMode); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
 	s.app.AddRule(rule)
 	writeJSON(w, map[string]string{"status": "ok"})
 }
@@ -1578,6 +1590,10 @@ func (s *Server) updateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rule.ID = id
+	if err := app.ValidateExitMode(rule.ExitVia, rule.ExitMode); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
 	s.app.UpdateRule(id, rule)
 	writeJSON(w, map[string]string{"status": "ok"})
 }

@@ -190,7 +190,9 @@ button.btn-icon:hover{color:var(--red);background:var(--red-bg)}
 .login-box .logo img{width:48px;height:48px}
 .login-box h1{font-size:20px;font-weight:700;margin-bottom:4px}
 .login-box p{font-size:13px;color:var(--text-muted);margin-bottom:24px}
-.login-box input{width:100%;margin-bottom:12px}
+.login-box input{width:100%;margin-bottom:12px;box-sizing:border-box}
+.login-box .pw-wrap{width:100%;margin-bottom:12px}
+.login-box .pw-wrap input{margin-bottom:0}
 .login-box button{margin-top:4px}
 .remember-me{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary);cursor:pointer;margin-bottom:8px}
 .remember-me input{width:auto;margin:0}
@@ -255,6 +257,8 @@ textarea.drag-over{border-color:var(--primary);background:rgba(67,97,238,.05);bo
 .exit-mode-opt{display:flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;font-size:12px;color:var(--text-secondary);transition:all .15s}
 .exit-mode-opt:has(input:checked){border-color:var(--primary);background:var(--primary-light);color:var(--primary);font-weight:500}
 .exit-mode-opt input{display:none}
+.exit-mode-disabled .exit-mode-opt{opacity:0.5;cursor:not-allowed;pointer-events:none}
+.exit-mode-disabled .exit-mode-opt:has(input:checked){opacity:0.8;border-color:var(--border);background:var(--bg-secondary);color:var(--text-secondary)}
 .autocomplete-item{padding:7px 10px;font-size:13px;cursor:pointer;font-family:var(--mono)}
 .autocomplete-item:hover,.autocomplete-item.active{background:var(--primary-light);color:var(--primary)}
 .autocomplete-item .ac-path{color:var(--text-muted);font-size:11px;margin-left:6px}
