@@ -1,6 +1,7 @@
 package api
 
 import (
+	"archive/tar"
 	"bufio"
 	"context"
 	"crypto/rand"
@@ -15,7 +16,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -54,6 +57,32 @@ type Server struct {
 	// Cached nested sub-peers (updated asynchronously)
 	subPeersMu    sync.RWMutex
 	subPeersCache map[string][]topoSubPeer
+}
+
+// validAddrSpec checks "host:portspec" where portspec can be "5565", "1000,2000", "20000-30000"
+func validAddrSpec(addr string) bool {
+	idx := strings.LastIndex(addr, ":")
+	if idx <= 0 || idx == len(addr)-1 {
+		return false
+	}
+	portSpec := addr[idx+1:]
+	for _, part := range strings.Split(portSpec, ",") {
+		part = strings.TrimSpace(part)
+		if strings.Contains(part, "-") {
+			rng := strings.SplitN(part, "-", 2)
+			a, err1 := strconv.Atoi(strings.TrimSpace(rng[0]))
+			b, err2 := strconv.Atoi(strings.TrimSpace(rng[1]))
+			if err1 != nil || err2 != nil || a < 1 || b > 65535 || a > b {
+				return false
+			}
+		} else {
+			n, err := strconv.Atoi(part)
+			if err != nil || n < 1 || n > 65535 {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func sha256Hex(s string) string {
@@ -159,6 +188,10 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("PUT /api/users/{id}/reset-traffic", s.resetUserTrafficAPI)
 
 	authed.HandleFunc("PUT /api/settings/password", s.changePassword)
+
+	// Backup / Restore
+	authed.HandleFunc("GET /api/backup", s.downloadBackup)
+	authed.HandleFunc("POST /api/restore", s.uploadRestore)
 	authed.HandleFunc("GET /api/settings/ui", s.getUISettings)
 	authed.HandleFunc("PUT /api/settings/ui", s.updateUISettings)
 
@@ -176,9 +209,10 @@ func (s *Server) Start(ctx context.Context) error {
 	// Static files with SPA fallback — inject basePath into index.html
 	staticFS, _ := fs.Sub(web.Static, "static")
 	rawIndex, _ := fs.ReadFile(staticFS, "index.html")
-	cacheBust := fmt.Sprintf("?v=%s", Version)
-	baseScript := "<script>window.__BASE__=\"" + s.basePath + "\";</script><script src=\"i18n.js" + cacheBust + "\"></script><script src=\"app.js" + cacheBust + "\"></script>"
+	cacheBust := fmt.Sprintf("?v=%s&t=%d", Version, time.Now().Unix())
+	baseScript := "<script>window.__BASE__=\"" + s.basePath + "\";</script><script src=\"i18n.js" + cacheBust + "\"></script><script src=\"xlsx.min.js" + cacheBust + "\"></script><script src=\"app.js" + cacheBust + "\"></script>"
 	indexHTML := strings.Replace(string(rawIndex), "<script src=\"i18n.js\"></script>", "", 1)
+	indexHTML = strings.Replace(indexHTML, "<script src=\"xlsx.min.js\"></script>", "", 1)
 	indexHTML = strings.Replace(indexHTML, "<script src=\"app.js\"></script>", baseScript, 1)
 	indexBytes := []byte(indexHTML)
 
@@ -220,6 +254,8 @@ func (s *Server) Start(ctx context.Context) error {
 					w.Header().Set("Content-Type", "image/svg+xml")
 				case strings.HasSuffix(path, ".png"):
 					w.Header().Set("Content-Type", "image/png")
+				case strings.HasSuffix(path, ".json"):
+					w.Header().Set("Content-Type", "application/json")
 				}
 				w.Header().Set("Cache-Control", "no-cache, must-revalidate")
 				w.Write(data)
@@ -422,7 +458,7 @@ func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // Version is the application version. Update this on each release.
-const Version = "1.1.3"
+const Version = "1.2.0"
 
 func init() {
 	app.AppVersion = Version
@@ -584,9 +620,11 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type treeNode struct {
-		Name      string          `json:"name"`
-		Addr      string          `json:"addr,omitempty"`
-		ExitNode  bool            `json:"exit_node"`
+		Name       string            `json:"name"`
+		Addr       string            `json:"addr,omitempty"`
+		Addrs      []string          `json:"addrs,omitempty"`
+		IPStatuses []relay.IPStatus  `json:"ip_statuses,omitempty"`
+		ExitNode   bool              `json:"exit_node"`
 		Direction string          `json:"direction"`
 		Connected bool            `json:"connected"`
 		Disabled  bool            `json:"disabled"`
@@ -686,7 +724,12 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		}
 		tn := treeNode{Name: name, Connected: connected[name], Disabled: disabledMap[name]}
 		if cl, ok := clientMap[name]; ok {
-			tn.Addr = cl.Addr
+			tn.Addr = cl.PrimaryAddr()
+			addrs := cl.AllAddrs()
+			if len(addrs) > 1 {
+				tn.IPStatuses = s.app.Node().PeerIPStatuses(name)
+				tn.Addrs = addrs
+			}
 			tn.Direction = "outbound"
 		}
 		for _, p := range peers {
@@ -771,6 +814,45 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 			s.subPeersMu.Lock()
 			s.subPeersCache = newCache
 			s.subPeersMu.Unlock()
+
+			// Feed sub-peer data into relay's peersOfCache for path discovery
+			// Recursively cache all levels of nested children
+			// Feed ALL nested topology into relay cache.
+			// Walk the subPeersCache tree and for each node, record its children.
+			// Also walk children recursively to get deeper levels.
+			visited := make(map[string]bool)
+			var walkAndCache func(parentName string, children []topoSubPeer)
+			walkAndCache = func(parentName string, children []topoSubPeer) {
+				if visited[parentName] {
+					return
+				}
+				visited[parentName] = true
+				var infos []relay.PeerInfo
+				for _, c := range children {
+					infos = append(infos, relay.PeerInfo{
+						Name:     c.Name,
+						ExitNode: c.ExitNode,
+						Native:   c.Native,
+					})
+				}
+				if len(infos) > 0 {
+					s.app.Node().SetPeersOfCache(parentName, infos)
+				}
+				// Recurse into children that have their own children
+				for _, c := range children {
+					if len(c.Children) > 0 {
+						walkAndCache(c.Name, c.Children)
+					} else {
+						// For leaf children, try to get their sub-peers from the cache too
+						if cached, ok := newCache[c.Name]; ok && len(cached) > 0 {
+							walkAndCache(c.Name, cached)
+						}
+					}
+				}
+			}
+			for peerName, children := range newCache {
+				walkAndCache(peerName, children)
+			}
 		}
 	}
 }
@@ -986,13 +1068,21 @@ func (s *Server) updateClient(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	// Sync Addrs ↔ Addr
+	if len(cl.Addrs) > 0 {
+		cl.Addr = cl.Addrs[0]
+	} else if cl.Addr != "" {
+		cl.Addrs = []string{cl.Addr}
+	}
 	if cl.Addr == "" || cl.Password == "" {
 		http.Error(w, "addr and password required", 400)
 		return
 	}
-	if _, err := net.ResolveUDPAddr("udp", cl.Addr); err != nil {
-		http.Error(w, fmt.Sprintf("invalid address %q: %v", cl.Addr, err), 400)
-		return
+	for _, a := range cl.AllAddrs() {
+		if !validAddrSpec(a) {
+			http.Error(w, fmt.Sprintf("invalid address format %q", a), 400)
+			return
+		}
 	}
 	// Look up by URL path name, update with body (may include rename)
 	oldName := name
@@ -1012,13 +1102,21 @@ func (s *Server) addClient(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	// Sync Addrs ↔ Addr for backward compat
+	if len(cl.Addrs) > 0 {
+		cl.Addr = cl.Addrs[0]
+	} else if cl.Addr != "" {
+		cl.Addrs = []string{cl.Addr}
+	}
 	if cl.Name == "" || cl.Addr == "" || cl.Password == "" {
 		http.Error(w, "name, addr, password required", 400)
 		return
 	}
-	if _, err := net.ResolveUDPAddr("udp", cl.Addr); err != nil {
-		http.Error(w, fmt.Sprintf("invalid address %q: %v", cl.Addr, err), 400)
-		return
+	for _, a := range cl.AllAddrs() {
+		if !validAddrSpec(a) {
+			http.Error(w, fmt.Sprintf("invalid address format %q", a), 400)
+			return
+		}
 	}
 	if err := s.app.AddClient(cl); err != nil {
 		http.Error(w, err.Error(), 500)
@@ -1892,4 +1990,82 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(v)
+}
+
+// --- Backup / Restore ---
+
+func (s *Server) downloadBackup(w http.ResponseWriter, r *http.Request) {
+	dataDir := s.app.DataDir()
+	w.Header().Set("Content-Type", "application/x-tar")
+	w.Header().Set("Content-Disposition", "attachment; filename=hy2scale-backup.tar")
+	tw := tar.NewWriter(w)
+	defer tw.Close()
+	filepath.Walk(dataDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, _ := filepath.Rel(dataDir, path)
+		if rel == "." {
+			return nil
+		}
+		hdr, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return nil
+		}
+		hdr.Name = rel
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			f, err := os.Open(path)
+			if err != nil {
+				return nil
+			}
+			defer f.Close()
+			io.Copy(tw, f)
+		}
+		return nil
+	})
+}
+
+func (s *Server) uploadRestore(w http.ResponseWriter, r *http.Request) {
+	dataDir := s.app.DataDir()
+
+	// Read tar from request body (limit 50MB)
+	r.Body = http.MaxBytesReader(w, r.Body, 50<<20)
+	tr := tar.NewReader(r.Body)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			http.Error(w, "invalid tar: "+err.Error(), 400)
+			return
+		}
+		target := filepath.Join(dataDir, filepath.Clean(hdr.Name))
+		// Security: ensure target is within dataDir
+		if !strings.HasPrefix(target, filepath.Clean(dataDir)+string(os.PathSeparator)) && target != filepath.Clean(dataDir) {
+			continue
+		}
+		if hdr.Typeflag == tar.TypeDir {
+			os.MkdirAll(target, 0755)
+		} else {
+			os.MkdirAll(filepath.Dir(target), 0755)
+			f, err := os.Create(target)
+			if err != nil {
+				continue
+			}
+			io.Copy(f, tr)
+			f.Close()
+		}
+	}
+	log.Printf("[backup] config restored from upload, restarting...")
+	writeJSON(w, map[string]string{"status": "ok"})
+
+	// Restart the process after a short delay
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0) // container/systemd will restart the process
+	}()
 }

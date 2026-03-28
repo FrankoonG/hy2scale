@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -239,16 +240,24 @@ func (a *App) findPathsTo(target string) []string {
 
 	var paths []string
 	peers := a.node.Peers()
+	seen := make(map[string]bool) // avoid duplicate paths
 
-	// Direct path
+	// Direct path — multiply by number of QUIC connections to target
 	for _, p := range peers {
 		if p.Name == target {
-			paths = append(paths, target)
+			k := a.node.PeerConnCount(target)
+			if k < 1 {
+				k = 1
+			}
+			for i := 0; i < k; i++ {
+				paths = append(paths, target)
+			}
+			seen[target] = true
 			break
 		}
 	}
 
-	// Via intermediate peers
+	// Via intermediate peers (depth 1): check direct peers' sub-peers
 	for _, p := range peers {
 		if p.Name == target || p.Native {
 			continue
@@ -259,12 +268,86 @@ func (a *App) findPathsTo(target string) []string {
 		}
 		for _, sp := range subPeers {
 			if sp.Name == target {
-				paths = append(paths, p.Name+"/"+target)
-				break
+				pathStr := p.Name + "/" + target
+				if !seen[pathStr] {
+					seen[pathStr] = true
+					k := a.node.PeerConnCount(p.Name)
+					if k < 1 {
+						k = 1
+					}
+					for i := 0; i < k; i++ {
+						paths = append(paths, pathStr)
+					}
+				}
 			}
 		}
 	}
 
+	// Via intermediate peers (depth 2+): use cached topology
+	// BFS over cached peer lists — no real-time relay queries
+	type bfsItem struct {
+		chain []string // peer names from hub
+	}
+	bfsQueue := []bfsItem{}
+	for _, p := range peers {
+		if p.Name != target && !p.Native {
+			bfsQueue = append(bfsQueue, bfsItem{chain: []string{p.Name}})
+		}
+	}
+	for len(bfsQueue) > 0 {
+		item := bfsQueue[0]
+		bfsQueue = bfsQueue[1:]
+		if len(item.chain) > 4 {
+			continue
+		}
+		lastPeer := item.chain[len(item.chain)-1]
+		subPeers, ok := a.node.PeersOfCached(lastPeer)
+		if !ok {
+			log.Printf("[findPathsTo] BFS: no cache for %s", lastPeer)
+			continue
+		}
+		log.Printf("[findPathsTo] BFS: cache[%s] = %d peers", lastPeer, len(subPeers))
+		for _, sp := range subPeers {
+			if sp.Name == target {
+				pathStr := strings.Join(append(item.chain, target), "/")
+				if !seen[pathStr] {
+					seen[pathStr] = true
+					k := a.node.PeerConnCount(item.chain[0])
+					if k < 1 {
+						k = 1
+					}
+					for i := 0; i < k; i++ {
+						paths = append(paths, pathStr)
+					}
+				}
+			} else if !sp.Native && len(item.chain) < 4 {
+				// Avoid cycles (including back to self)
+				cycle := sp.Name == a.node.Name()
+				for _, c := range item.chain {
+					if c == sp.Name {
+						cycle = true
+						break
+					}
+				}
+				if !cycle {
+					newChain := make([]string, len(item.chain)+1)
+					copy(newChain, item.chain)
+					newChain[len(item.chain)] = sp.Name
+					bfsQueue = append(bfsQueue, bfsItem{chain: newChain})
+				}
+			}
+		}
+	}
+
+	log.Printf("[findPathsTo] %s: found %d paths: %v (cache keys: %v)", target, len(paths), paths, func() []string {
+		var keys []string
+		for _, p := range peers {
+			if _, ok := a.node.PeersOfCached(p.Name); ok {
+				keys = append(keys, p.Name)
+			}
+		}
+		return keys
+	}())
 	adaptivePathsAge.Store(target, time.Now().UnixMilli())
 	for _, p := range paths {
 		getPathScore(target, p)
