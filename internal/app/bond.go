@@ -144,6 +144,14 @@ func (a *App) dialBond(ctx context.Context, target, addr string) (net.Conn, erro
 		conn, err := a.dialPath(ctx, p, bondAddr)
 		if err != nil {
 			log.Printf("[bond] %s: path %s failed to open: %v", target, p, err)
+			// Add as unhealthy — health monitor will retry later
+			bp := &bondPath{
+				name:    p,
+				index:   i,
+				weight:  0,
+				healthy: false,
+			}
+			opened = append(opened, bp)
 			continue
 		}
 
@@ -151,7 +159,7 @@ func (a *App) dialBond(ctx context.Context, target, addr string) (net.Conn, erro
 			name:    p,
 			conn:    conn,
 			index:   i,
-			weight:  1.0 / float64(len(paths)), // initial equal weight
+			weight:  1.0 / float64(len(paths)),
 			healthy: true,
 		}
 		opened = append(opened, bp)
@@ -164,16 +172,20 @@ func (a *App) dialBond(ctx context.Context, target, addr string) (net.Conn, erro
 		}
 	}
 
-	if len(opened) == 0 {
+	healthyCount := 0
+	for _, bp := range opened {
+		if bp.healthy {
+			healthyCount++
+		}
+	}
+	if healthyCount == 0 {
 		return nil, fmt.Errorf("bond: all paths to %s failed", target)
 	}
 
 	sess.paths = opened
-
-	// Measure initial RTTs and set weights
 	sess.updateWeights()
 
-	log.Printf("[bond] %s: session %d active with %d/%d paths", target, bondID, len(opened), len(paths))
+	log.Printf("[bond] %s: session %d active with %d/%d paths (%d healthy)", target, bondID, len(opened), len(paths), healthyCount)
 
 	// Create a net.Conn-compatible pipe:
 	// - app side reads/writes to userConn
@@ -225,11 +237,24 @@ func (sess *bondSession) runWriter(src net.Conn) {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
 
-			// Select path by weighted round-robin
+			// Select path by weighted round-robin. Wait if none available.
 			bp := sess.selectPath(int(seq))
 			if bp == nil {
-				debugLog("[bond] %d: no healthy path for seq %d", sess.id, seq)
-				return
+				// Wait up to 10s for a path to become healthy
+				for i := 0; i < 50; i++ {
+					time.Sleep(200 * time.Millisecond)
+					if sess.closed.Load() {
+						return
+					}
+					bp = sess.selectPath(int(seq))
+					if bp != nil {
+						break
+					}
+				}
+				if bp == nil {
+					log.Printf("[bond] %d: no healthy path after 10s for seq %d", sess.id, seq)
+					return
+				}
 			}
 
 			if err2 := sess.writeChunk(bp, seq, chunk); err2 != nil {
@@ -404,18 +429,15 @@ func (sess *bondSession) runDeliverer(dst net.Conn) {
 		sess.reorderMu.Unlock()
 
 		if !delivered {
-			// Wait for new data — use short timeout for reorder gaps
-			timeout := 200 * time.Millisecond // fast retry for reorder
+			timeout := 200 * time.Millisecond
 			if bufSize == 0 {
-				timeout = 5 * time.Second // no data at all: wait longer
+				timeout = 5 * time.Second
 			}
 			select {
 			case <-sess.reorderCh:
 			case <-time.After(timeout):
-				if bufSize > 0 && sess.shouldSkipSeq() {
-					sess.reorderMu.Lock()
-					sess.reorderNext++
-					sess.reorderMu.Unlock()
+				if bufSize > 0 {
+					sess.skipReorderGaps()
 				}
 			case <-sess.closeCh:
 				return
@@ -442,27 +464,28 @@ func (sess *bondSession) shouldSkipSeq() bool {
 }
 
 // skipReorderGaps advances reorderNext past any missing sequences
-// when a path dies. This unblocks the deliverer immediately.
+// when a path dies. Finds the lowest buffered seq and jumps to it.
 func (sess *bondSession) skipReorderGaps() {
 	sess.reorderMu.Lock()
 	skipped := 0
 	for {
 		if _, ok := sess.reorderBuf[sess.reorderNext]; ok {
-			break // next seq is present, deliverer can continue
+			break
 		}
-		// Check if any buffered seq exists ahead
-		hasAhead := false
-		for s := sess.reorderNext + 1; s < sess.reorderNext+100; s++ {
-			if _, ok := sess.reorderBuf[s]; ok {
-				hasAhead = true
-				break
+		// Find the lowest buffered seq ahead of reorderNext
+		var minSeq uint32
+		found := false
+		for s := range sess.reorderBuf {
+			if s > sess.reorderNext && (!found || s < minSeq) {
+				minSeq = s
+				found = true
 			}
 		}
-		if !hasAhead {
-			break // nothing buffered ahead, no need to skip
+		if !found {
+			break
 		}
-		sess.reorderNext++
-		skipped++
+		skipped += int(minSeq - sess.reorderNext)
+		sess.reorderNext = minSeq
 	}
 	sess.reorderMu.Unlock()
 	if skipped > 0 {

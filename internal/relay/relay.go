@@ -106,7 +106,7 @@ func readMeta(r net.Conn, timeout time.Duration) peerMeta {
 
 type peer struct {
 	info      PeerInfo
-	client    hyclient.Client // non-nil for outbound (we connected to them)
+	client    hyclient.Client // primary outbound client (first IP)
 	ctrlW     net.Conn        // write dial requests to this peer
 	writeMu   sync.Mutex
 	waiting   map[string]chan net.Conn
@@ -114,6 +114,50 @@ type peer struct {
 	rxBytes   atomic.Uint64
 	failCount atomic.Int32 // consecutive ping failures
 	cancel    context.CancelFunc
+
+	// Multi-IP: additional outbound QUIC connections
+	extraConns   []hyclient.Client // extra clients (index 0 = second IP, etc.)
+	connAddrs    []string          // address per connection (index 0 = primary, 1+ = extras)
+	connStatuses []string          // per-IP status: "online", "offline", "mismatch", "native"
+	connSeq      atomic.Uint64    // round-robin counter for stream distribution
+}
+
+// pickClient returns the next QUIC client using round-robin across healthy connections.
+func (p *peer) pickClient() hyclient.Client {
+	if len(p.extraConns) == 0 {
+		return p.client
+	}
+	// Build list of healthy clients (primary + online extras)
+	healthy := []hyclient.Client{p.client}
+	for i, c := range p.extraConns {
+		status := "online"
+		if i < len(p.connStatuses) {
+			status = p.connStatuses[i]
+		}
+		if status == "online" {
+			healthy = append(healthy, c)
+		}
+	}
+	if len(healthy) == 1 {
+		return p.client
+	}
+	idx := int(p.connSeq.Add(1)) % len(healthy)
+	return healthy[idx]
+}
+
+// ConnCount returns the total number of active QUIC connections for this peer.
+func (p *peer) ConnCount() int {
+	if p.client == nil {
+		return 0
+	}
+	return 1 + len(p.extraConns)
+}
+
+// AddConn adds an extra QUIC connection for a secondary IP address.
+func (p *peer) AddConn(client hyclient.Client, addr, status string) {
+	p.extraConns = append(p.extraConns, client)
+	p.connAddrs = append(p.connAddrs, addr)
+	p.connStatuses = append(p.connStatuses, status)
 }
 
 // PeerTraffic holds per-peer traffic info.
@@ -195,6 +239,17 @@ func (n *Node) GetLatency(peerName string) int {
 	return -1
 }
 
+// SetPeersOfCache sets the cached peer list for a given peer name.
+// Called by the API sub-peers updater to share nested topology data.
+func (n *Node) SetPeersOfCache(peerName string, peers []PeerInfo) {
+	n.peerRateMu.Lock()
+	defer n.peerRateMu.Unlock()
+	if n.peersOfCache == nil {
+		n.peersOfCache = make(map[string][]PeerInfo)
+	}
+	n.peersOfCache[peerName] = peers
+}
+
 // PeersOfCached returns cached peer list from the last prober cycle.
 func (n *Node) PeersOfCached(peerName string) ([]PeerInfo, bool) {
 	n.peerRateMu.RLock()
@@ -231,11 +286,16 @@ func (n *Node) StartLatencyProber(ctx context.Context) {
 					rtt := n.PingPeer(name)
 					if rtt >= 0 {
 						n.SetLatency(name, int(rtt.Milliseconds()))
-						p.failCount.Store(0) // reset on success
+						p.failCount.Store(0)
+						// Cache peer's sub-peers for path discovery
+						if subPeers, err := n.PeersOf(name); err == nil {
+							n.peerRateMu.Lock()
+							n.peersOfCache[name] = subPeers
+							n.peerRateMu.Unlock()
+						}
 					} else {
 						n.SetLatency(name, -1)
 						fails := p.failCount.Add(1)
-						// After 3 consecutive failures, disconnect to trigger reconnection
 						if fails >= 3 && p.cancel != nil {
 							log.Printf("[relay] %s: %d consecutive ping failures, disconnecting for reconnect", name, fails)
 							p.cancel()
@@ -820,6 +880,62 @@ func (n *Node) HasPeer(name string) bool {
 	return ok
 }
 
+// AddPeerConn adds an extra QUIC connection to an existing peer.
+func (n *Node) AddPeerConn(name string, client hyclient.Client, addr, status string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	p, ok := n.peers[name]
+	if !ok {
+		return
+	}
+	p.AddConn(client, addr, status)
+}
+
+// IPStatus represents per-IP connection info.
+type IPStatus struct {
+	Addr   string `json:"addr"`
+	Status string `json:"status"` // "online", "offline", "mismatch", "native"
+}
+
+// PeerIPStatuses returns per-IP status for a peer.
+func (n *Node) PeerIPStatuses(name string) []IPStatus {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	p, ok := n.peers[name]
+	if !ok {
+		return nil
+	}
+	var result []IPStatus
+	// Primary
+	primaryAddr := ""
+	if len(p.connAddrs) > 0 {
+		primaryAddr = p.connAddrs[0]
+	}
+	if primaryAddr != "" {
+		result = append(result, IPStatus{Addr: primaryAddr, Status: "online"})
+	}
+	// Extras
+	for i, addr := range p.connAddrs[1:] {
+		status := "online"
+		if i < len(p.connStatuses) {
+			status = p.connStatuses[i]
+		}
+		result = append(result, IPStatus{Addr: addr, Status: status})
+	}
+	return result
+}
+
+// PeerConnCount returns the number of QUIC connections to a peer.
+func (n *Node) PeerConnCount(name string) int {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	p, ok := n.peers[name]
+	if !ok {
+		return 0
+	}
+	return p.ConnCount()
+}
+
 // ConnectedPeerNames returns names of all connected peers (outbound with active client).
 func (n *Node) ConnectedPeerNames() []string {
 	n.mu.RLock()
@@ -959,9 +1075,10 @@ func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.C
 		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
 	}
 
-	// Outbound peer: we have a client, use it directly
+	// Outbound peer: use round-robin across available QUIC connections
 	if p.client != nil {
-		conn, err := p.client.TCP(addr)
+		cl := p.pickClient()
+		conn, err := cl.TCP(addr)
 		if err != nil {
 			return nil, err
 		}
@@ -1021,7 +1138,8 @@ func (n *Node) DialVia(ctx context.Context, path []string, addr string) (net.Con
 	viaAddr := streamViaPrefix + remaining + "_" + addr + ":0"
 
 	if p.client != nil {
-		conn, err := p.client.TCP(viaAddr)
+		cl := p.pickClient()
+		conn, err := cl.TCP(viaAddr)
 		if err != nil {
 			return nil, err
 		}

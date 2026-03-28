@@ -2,8 +2,9 @@ FROM golang:1.24-alpine AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
+ARG CACHEBUST=0
 COPY . .
-RUN CGO_ENABLED=0 go build -o /hy2scale ./cmd/node
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /hy2scale ./cmd/node
 
 # Build strongswan 5.8.4 (5.9.x has L2TP transport mode xfrm outbound bug)
 FROM alpine:3.19 AS swan-builder

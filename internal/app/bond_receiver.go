@@ -113,8 +113,26 @@ func (a *App) handleBondStream(bondAddr string, pathConn net.Conn) error {
 	})
 	recv = v.(*bondReceiver)
 
-	// First path: create target connection
-	if !loaded {
+	// First path or reviving a closed session
+	needsInit := !loaded
+	if loaded {
+		recv.mu.Lock()
+		if recv.closed {
+			// Revive: reopen target and reset state
+			recv.closed = false
+			recv.closeCh = make(chan struct{})
+			recv.reorderBuf = make(map[uint32][]byte)
+			recv.reorderNext = 1
+			recv.paths = make(map[int]net.Conn)
+			recv.pathTxBytes = make(map[int]int64)
+			recv.writeSeq = 0
+			needsInit = true
+			log.Printf("[bond-rx] %d: reviving session", bondID)
+		}
+		recv.mu.Unlock()
+	}
+
+	if needsInit {
 		targetConn, err := net.DialTimeout("tcp", realAddr, 10*time.Second)
 		if err != nil {
 			bondReceivers.Delete(bondID)
@@ -148,10 +166,17 @@ func (a *App) handleBondStream(bondAddr string, pathConn net.Conn) error {
 		// Start deliverer (reorder buffer → target)
 		go recv.runDeliverer()
 
-		// Cleanup on close
+		// Cleanup: delete from map after 60s grace period (allows reconnection)
 		go func() {
 			<-recv.closeCh
-			bondReceivers.Delete(bondID)
+			time.Sleep(60 * time.Second)
+			// Only delete if still closed (not revived)
+			recv.mu.Lock()
+			stillClosed := recv.closed
+			recv.mu.Unlock()
+			if stillClosed {
+				bondReceivers.Delete(bondID)
+			}
 		}()
 	}
 
@@ -291,9 +316,45 @@ func (recv *bondReceiver) runDeliverer() {
 }
 
 // runReturnWriter reads from the target and sends back through bond paths.
-// Return traffic is sent through all healthy paths with the same framing.
-// Does NOT close the receiver — the sender's teardown or path disconnection handles that.
+// Restarts automatically if the target connection changes (session revival).
 func (recv *bondReceiver) runReturnWriter() {
+	for {
+		recv.mu.Lock()
+		target := recv.target
+		closed := recv.closed
+		recv.mu.Unlock()
+		if closed || target == nil {
+			return
+		}
+
+		recv.doReturnWrite(target)
+
+		// After target EOF, wait for session revival or close
+		for {
+			select {
+			case <-recv.closeCh:
+				return
+			case <-time.After(2 * time.Second):
+				recv.mu.Lock()
+				newTarget := recv.target
+				closed = recv.closed
+				recv.mu.Unlock()
+				if closed {
+					return
+				}
+				if newTarget != nil && newTarget != target {
+					// Session revived with new target — restart
+					log.Printf("[bond-rx] %d: return writer restarting (new target)", recv.id)
+					break
+				}
+				continue
+			}
+			break
+		}
+	}
+}
+
+func (recv *bondReceiver) doReturnWrite(target net.Conn) {
 	buf := make([]byte, bondChunkSize)
 	pathBytes := make(map[int]int64)
 
@@ -302,46 +363,61 @@ func (recv *bondReceiver) runReturnWriter() {
 			return
 		}
 
-		n, err := recv.target.Read(buf)
+		n, err := target.Read(buf)
 		if n > 0 {
 			recv.writeSeq++
 			seq := recv.writeSeq
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
 
-			// Send on weighted path
 			pathIdx, bp := recv.selectReturnPathIdx(int(seq))
 			if bp == nil {
-				debugLog("[bond-rx] %d: no path for return seq %d", recv.id, seq)
-				return
+				// No paths available — wait for reconnection
+				recv.mu.Lock()
+				pathCount := len(recv.paths)
+				recv.mu.Unlock()
+				if pathCount == 0 {
+					log.Printf("[bond-rx] %d: no paths, buffering seq %d", recv.id, seq)
+					// Put back into reorder for retry? No — return data goes outbound.
+					// Just wait for paths to come back.
+					for i := 0; i < 30; i++ {
+						time.Sleep(200 * time.Millisecond)
+						if recv.isClosed() {
+							return
+						}
+						_, bp = recv.selectReturnPathIdx(int(seq))
+						if bp != nil {
+							break
+						}
+					}
+					if bp == nil {
+						debugLog("[bond-rx] %d: no path after 6s, dropping seq %d", recv.id, seq)
+						continue
+					}
+				}
 			}
-			pathBytes[pathIdx] += int64(n)
-			recv.mu.Lock()
-			recv.pathTxBytes[pathIdx] += int64(n)
-			recv.mu.Unlock()
+			if bp != nil {
+				pathBytes[pathIdx] += int64(n)
+				recv.mu.Lock()
+				recv.pathTxBytes[pathIdx] += int64(n)
+				recv.mu.Unlock()
 
-			var hdr [bondFrameHeaderSize]byte
-			binary.BigEndian.PutUint32(hdr[0:4], recv.id)
-			binary.BigEndian.PutUint32(hdr[4:8], seq)
-			binary.BigEndian.PutUint16(hdr[8:10], uint16(len(chunk)))
+				var hdr [bondFrameHeaderSize]byte
+				binary.BigEndian.PutUint32(hdr[0:4], recv.id)
+				binary.BigEndian.PutUint32(hdr[4:8], seq)
+				binary.BigEndian.PutUint16(hdr[8:10], uint16(len(chunk)))
 
-			writeStart := time.Now()
-			if _, werr := bp.Write(hdr[:]); werr != nil {
-				debugLog("[bond-rx] %d: return write header error: %v", recv.id, werr)
-				continue
+				if _, werr := bp.Write(hdr[:]); werr != nil {
+					debugLog("[bond-rx] %d: return write header error: %v", recv.id, werr)
+					continue
+				}
+				if _, werr := bp.Write(chunk); werr != nil {
+					debugLog("[bond-rx] %d: return write data error: %v", recv.id, werr)
+					continue
+				}
 			}
-			if _, werr := bp.Write(chunk); werr != nil {
-				debugLog("[bond-rx] %d: return write data error: %v", recv.id, werr)
-				continue
-			}
-			writeNs := time.Since(writeStart).Nanoseconds()
-			recv.mu.Lock()
-			recv.pathWriteNs[pathIdx] += writeNs
-			recv.pathWriteCount[pathIdx]++
-			recv.mu.Unlock()
 		}
 		if err != nil {
-			// Log distribution summary
 			log.Printf("[bond-rx] %d: return writer done, distribution: %v", recv.id, pathBytes)
 			return
 		}
@@ -414,18 +490,19 @@ func (recv *bondReceiver) skipReorderGaps() {
 		if _, ok := recv.reorderBuf[recv.reorderNext]; ok {
 			break
 		}
-		hasAhead := false
-		for s := recv.reorderNext + 1; s < recv.reorderNext+100; s++ {
-			if _, ok := recv.reorderBuf[s]; ok {
-				hasAhead = true
-				break
+		var minSeq uint32
+		found := false
+		for s := range recv.reorderBuf {
+			if s > recv.reorderNext && (!found || s < minSeq) {
+				minSeq = s
+				found = true
 			}
 		}
-		if !hasAhead {
+		if !found {
 			break
 		}
-		recv.reorderNext++
-		skipped++
+		skipped += int(minSeq - recv.reorderNext)
+		recv.reorderNext = minSeq
 	}
 	recv.reorderMu.Unlock()
 	if skipped > 0 {

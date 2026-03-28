@@ -26,9 +26,10 @@ import (
 )
 
 type ClientEntry struct {
-	Name     string `yaml:"name" json:"name"`
-	Addr     string `yaml:"addr" json:"addr"`
-	Password string `yaml:"password" json:"password"`
+	Name     string   `yaml:"name" json:"name"`
+	Addr     string   `yaml:"addr" json:"addr"`           // primary address (backward compat)
+	Addrs    []string `yaml:"addrs,omitempty" json:"addrs,omitempty"` // all addresses (including primary)
+	Password string   `yaml:"password" json:"password"`
 
 	// TLS
 	SNI      string `yaml:"sni,omitempty" json:"sni"`
@@ -45,9 +46,32 @@ type ClientEntry struct {
 	InitConnWindow   int `yaml:"init_conn_window,omitempty" json:"init_conn_window"`
 	MaxConnWindow    int `yaml:"max_conn_window,omitempty" json:"max_conn_window"`
 
+	// Connection mode for multi-IP: "" = direct (single IP), "stability", "speed"
+	ConnMode string `yaml:"conn_mode,omitempty" json:"conn_mode,omitempty"`
+
 	// Misc
 	FastOpen bool `yaml:"fast_open,omitempty" json:"fast_open"`
 	Disabled bool `yaml:"disabled,omitempty" json:"disabled"`
+}
+
+// AllAddrs returns the effective address list. If Addrs is populated, returns it.
+// Otherwise falls back to the single Addr field for backward compatibility.
+func (c ClientEntry) AllAddrs() []string {
+	if len(c.Addrs) > 0 {
+		return c.Addrs
+	}
+	if c.Addr != "" {
+		return []string{c.Addr}
+	}
+	return nil
+}
+
+// PrimaryAddr returns the first address (used as stable key and default connection).
+func (c ClientEntry) PrimaryAddr() string {
+	if len(c.Addrs) > 0 {
+		return c.Addrs[0]
+	}
+	return c.Addr
 }
 
 type PeerConfig struct {
@@ -139,6 +163,7 @@ func New(dataDir string) (*App, error) {
 func (a *App) Store() *ConfigStore { return a.store }
 func (a *App) Node() *relay.Node   { return a.node }
 func (a *App) TLS() *TLSStore     { return a.tls }
+func (a *App) DataDir() string     { return a.dataDir }
 
 func (a *App) GetConfig() Config { return a.store.Get() }
 
@@ -306,12 +331,24 @@ func (a *App) StartClient(cl ClientEntry) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if _, ok := a.clientCancel[cl.Addr]; ok {
+	primaryAddr := cl.PrimaryAddr()
+	if _, ok := a.clientCancel[primaryAddr]; ok {
 		return // already running for this address
 	}
 	ctx, cancel := context.WithCancel(a.appCtx)
-	a.clientCancel[cl.Addr] = cancel
+	a.clientCancel[primaryAddr] = cancel
+
+	// Primary connection (first addr) — registers with relay, handles peer identity
 	go a.connectLoop(ctx, cl)
+
+	// Secondary connections (additional addrs) — attach as extra QUIC connections
+	addrs := cl.AllAddrs()
+	if len(addrs) > 1 {
+		for i := 1; i < len(addrs); i++ {
+			extraAddr := addrs[i]
+			go a.connectExtraLoop(ctx, cl, extraAddr, i)
+		}
+	}
 }
 
 // ReconnectAll stops and restarts all connections (outbound + hy2 server) after ID change.
@@ -785,6 +822,160 @@ func (a *App) connectLoop(ctx context.Context, cl ClientEntry) {
 		case <-time.After(5 * time.Second):
 		}
 	}
+}
+
+// connectExtraLoop manages a secondary QUIC connection to an additional IP of the same peer.
+// It doesn't register with relay — just attaches the QUIC client to the existing peer's extra conns.
+func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr string, index int) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		// Wait for primary to connect first (peer must exist)
+		peerName := ""
+		for i := 0; i < 30; i++ {
+			cfg := a.store.Get()
+			for _, entry := range cfg.Clients {
+				if entry.PrimaryAddr() == cl.PrimaryAddr() {
+					peerName = entry.Name
+					break
+				}
+			}
+			if peerName != "" && a.node.HasPeer(peerName) {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(1 * time.Second):
+			}
+		}
+		if peerName == "" || !a.node.HasPeer(peerName) {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
+			continue
+		}
+
+		log.Printf("[%s] connecting extra IP %s for %s (#%d)", a.node.Name(), extraAddr, peerName, index)
+
+		addr, err := net.ResolveUDPAddr("udp", extraAddr)
+		if err != nil {
+			log.Printf("[%s] extra IP %s: %v", a.node.Name(), extraAddr, err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
+			continue
+		}
+
+		tlsCfg := hyclient.TLSConfig{
+			InsecureSkipVerify: cl.Insecure,
+			ServerName:         cl.SNI,
+		}
+		if tlsCfg.ServerName == "" {
+			tlsCfg.ServerName = "hy2scale"
+		}
+		if cl.CA != "" {
+			pool := x509.NewCertPool()
+			pool.AppendCertsFromPEM([]byte(cl.CA))
+			tlsCfg.RootCAs = pool
+		}
+
+		c, _, err := hyclient.NewClient(&hyclient.Config{
+			ServerAddr: addr,
+			Auth:       cl.Password,
+			TLSConfig:  tlsCfg,
+			QUICConfig: hyclient.QUICConfig{
+				InitialStreamReceiveWindow:     67108864,
+				MaxStreamReceiveWindow:         67108864,
+				InitialConnectionReceiveWindow: 134217728,
+				MaxConnectionReceiveWindow:     134217728,
+			},
+			BandwidthConfig: hyclient.BandwidthConfig{
+				MaxTx: 125000000,
+				MaxRx: 125000000,
+			},
+		})
+		if err != nil {
+			log.Printf("[%s] extra IP %s: connect failed: %v", a.node.Name(), extraAddr, err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
+			continue
+		}
+
+		// Verify this IP reaches the same node by attempting a lightweight handshake
+		status := a.verifyExtraConn(c, peerName)
+		a.node.AddPeerConn(peerName, c, extraAddr, status)
+		log.Printf("[%s] extra IP %s for %s: %s", a.node.Name(), extraAddr, peerName, status)
+
+		// Block until context cancelled or connection dies
+		<-ctx.Done()
+		c.Close()
+		return
+	}
+}
+
+// verifyExtraConn checks if an extra QUIC connection reaches the expected peer.
+// Returns: "online" (same node), "mismatch" (different node), "native" (not hy2scale)
+func (a *App) verifyExtraConn(c hyclient.Client, expectedPeerName string) string {
+	// Try to open the register stream — if it fails with proxy-like error, it's native
+	stream, err := c.TCP("_relay_register_:0")
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "NXDOMAIN") || strings.Contains(errStr, "connection refused") || strings.Contains(errStr, "no such host") {
+			return "native"
+		}
+		return "offline"
+	}
+	defer stream.Close()
+
+	// Send our info (minimal — just to get the remote ID back)
+	stream.Write([]byte{0}) // flags = 0 (no exit, no metadata)
+	writeString := func(w io.Writer, s string) {
+		b := []byte(s)
+		buf := []byte{byte(len(b) >> 8), byte(len(b))}
+		w.Write(buf)
+		w.Write(b)
+	}
+	writeString(stream, a.node.Name())
+
+	// Read remote ID
+	readString := func(r io.Reader) (string, error) {
+		var hdr [2]byte
+		if _, err := io.ReadFull(r, hdr[:]); err != nil {
+			return "", err
+		}
+		n := int(hdr[0])<<8 | int(hdr[1])
+		if n == 0 || n > 1024 {
+			return "", fmt.Errorf("invalid string length: %d", n)
+		}
+		data := make([]byte, n)
+		if _, err := io.ReadFull(r, data); err != nil {
+			return "", err
+		}
+		return string(data), nil
+	}
+
+	remoteID, err := readString(stream)
+	if err != nil {
+		return "native" // couldn't read ID — likely native hy2
+	}
+
+	if remoteID == expectedPeerName {
+		return "online"
+	}
+	log.Printf("[%s] extra IP verification: expected %s, got %s", a.node.Name(), expectedPeerName, remoteID)
+	return "mismatch"
 }
 
 func (a *App) connect(ctx context.Context, cl ClientEntry) error {
