@@ -281,6 +281,18 @@ $('#login-user').addEventListener('keydown', e => { if (e.key === 'Enter') $('#l
 // ── Polling ──
 let pollTimer = null, lastTopoJSON = '', lastTopoStructKey = '';
 let connectedPeers = new Set(); // updated from topology
+let disabledPeers = new Set(); // updated from topology
+let _topoLoaded = false;
+async function ensureTopoLoaded() {
+  if (_topoLoaded) return;
+  try {
+    const topo = await api('/topology');
+    const s = new Set(); const d = new Set();
+    (function collect(nodes) { for (const n of nodes) { if (n.disabled) d.add(n.name); if (!n.disabled && (n.connected || n.is_self || n.native || n.latency_ms > 0)) s.add(n.name); if (n.children) collect(n.children); } })(topo);
+    connectedPeers = s; disabledPeers = d;
+    _topoLoaded = true;
+  } catch(e) {}
+}
 
 let proxiesLoaded = false;
 async function refresh() {
@@ -501,15 +513,19 @@ async function refreshTopology() {
 
   // Build connected peers set from all visible nodes
   const newConnected = new Set();
+  const newDisabled = new Set();
   function collectPeers(nodes, parentReachable) {
     for (const n of nodes) {
-      const reachable = n.connected || n.is_self || n.native || n.latency_ms > 0 || parentReachable;
+      if (n.disabled) newDisabled.add(n.name);
+      const reachable = !n.disabled && (n.connected || n.is_self || n.native || n.latency_ms > 0 || parentReachable);
       if (reachable) newConnected.add(n.name);
       if (n.children) collectPeers(n.children, reachable);
     }
   }
   collectPeers(topo, false);
   connectedPeers = newConnected;
+  disabledPeers = newDisabled;
+  _topoLoaded = true;
   buildExitPaths(topo);
 
   // Cache latencies and clear syncing for nodes with children
@@ -1282,6 +1298,7 @@ let _wgPeers = [];
 let editingWGPeer = null; // null = add mode, string = editing peer name
 
 async function loadWireGuard() {
+  await ensureTopoLoaded();
   try {
     const wg = await api('/wireguard');
     $('#wg-enabled').checked = wg.enabled;
@@ -1319,7 +1336,7 @@ function renderWGPeers() {
   </tr></thead><tbody>${_wgPeers.map(p => {
     return `<tr>
       <td><a href="#" onclick="openWGPeerDetail('${esc(p.name)}');return false" style="font-weight:600;color:var(--primary);text-decoration:none">${esc(p.name)}</a></td>
-      <td><span style="font-family:var(--mono);font-size:12px">${exitViaHTML(p.exit_via)}</span>${exitModeBadge(p.exit_mode)}</td>
+      <td>${exitCellHTML(p.exit_via, p.exit_paths, p.exit_mode)}</td>
       <td style="font-family:var(--mono);font-size:12px">${esc(p.allowed_ips)}</td>
       <td>${p.keepalive || '-'}</td>
       <td style="text-align:right"><div class="act-group">
@@ -2225,8 +2242,12 @@ function exitViaHTML(path) {
   if (!path) return '<span style="color:var(--text-muted)">(direct)</span>';
   const hops = path.split('/').filter(Boolean);
   let reachable = true;
-  return hops.map(hop => {
+  return hops.map((hop, i) => {
     if (!reachable) {
+      return `<span style="color:var(--red);font-weight:600">${esc(hop)}</span>`;
+    }
+    if (disabledPeers.has(hop)) {
+      reachable = false;
       return `<span style="color:var(--red);font-weight:600">${esc(hop)}</span>`;
     }
     if (connectedPeers.has(hop)) {
@@ -2236,6 +2257,16 @@ function exitViaHTML(path) {
       return `<span style="color:var(--red);font-weight:600">${esc(hop)}</span>`;
     }
   }).join('<span style="color:var(--text-muted);margin:0 2px">/</span>');
+}
+
+function exitCellHTML(exitVia, exitPaths, exitMode) {
+  const primary = `<span style="font-family:var(--mono);font-size:12px">${exitViaHTML(exitVia)}</span>`;
+  const badge = exitModeBadge(exitMode);
+  const others = (exitPaths || []).filter(p => p !== exitVia);
+  if (others.length > 0) {
+    return `${primary}${badge} <span class="badge badge-muted" style="cursor:default;font-size:10px" data-exitpaths='${JSON.stringify(others)}'>+${others.length}</span>`;
+  }
+  return `${primary}${badge}`;
 }
 
 // ── Users ──
@@ -2282,15 +2313,7 @@ async function kickDevice(key) {
 }
 
 async function refreshUsers() {
-  // Ensure connectedPeers is populated for exit_via reachability
-  if (connectedPeers.size === 0) {
-    try {
-      const topo = await api('/topology');
-      const s = new Set();
-      (function collect(nodes) { for (const n of nodes) { if (n.connected || n.is_self || n.native || n.latency_ms > 0) s.add(n.name); if (n.children) collect(n.children); } })(topo);
-      connectedPeers = s;
-    } catch(e) {}
-  }
+  await ensureTopoLoaded();
   const users = await api('/users');
   const el = $('#user-list');
   $('#user-count').textContent = users?.length || 0;
@@ -2314,7 +2337,7 @@ async function refreshUsers() {
     return `<tr class="${!u.enabled ? 'disabled' : ''}">
       <td><label class="toggle"><input type="checkbox" ${u.enabled ? 'checked' : ''} onchange="toggleUser('${esc(u.id)}',this.checked)"><span class="slider"></span></label></td>
       <td><b>${esc(u.username)}</b></td>
-      <td><span style="font-family:var(--mono);font-size:12px">${exitViaHTML(u.exit_via)}</span>${exitModeBadge(u.exit_mode)}</td>
+      <td>${exitCellHTML(u.exit_via, u.exit_paths, u.exit_mode)}</td>
       <td class="col-right">
         <span style="font-size:12px">${usedGB} / ${limitGB}</span>
         ${u.traffic_limit ? `<div style="background:var(--border-light);height:3px;border-radius:2px;margin-top:3px"><div style="background:${pct > 90 ? 'var(--red)' : 'var(--primary)'};height:100%;width:${pct}%;border-radius:2px"></div></div>` : ''}
@@ -2427,6 +2450,7 @@ function switchRuleTab(tab) {
 }
 
 async function refreshRules() {
+  await ensureTopoLoaded();
   try {
     const data = await api('/rules');
     if (!data.available) {
@@ -2468,7 +2492,7 @@ function renderRuleList(type, rules) {
       <td><label class="toggle"><input type="checkbox" ${r.enabled ? 'checked' : ''} onchange="toggleRuleEnabled('${esc(r.id)}',this.checked)"><span class="slider"></span></label></td>
       <td><b>${nameDisplay}</b></td>
       <td><span style="font-family:var(--mono);font-size:12px">${first}</span>${more}</td>
-      <td><span style="font-family:var(--mono);font-size:12px">${exitViaHTML(r.exit_via)}</span>${exitModeBadge(r.exit_mode)}</td>
+      <td>${exitCellHTML(r.exit_via, r.exit_paths, r.exit_mode)}</td>
       <td style="text-align:right"><div class="act-group">
         <button class="act-btn edit" onclick="editRule('${esc(r.id)}')">${t('app.edit')}</button>
         <button class="act-btn danger" onclick="deleteRuleConfirm('${esc(r.id)}')">${t('app.delete')}</button>
@@ -2781,7 +2805,12 @@ document.addEventListener('click', e => {
 
   function show(badge) {
     clearTimeout(hideTimer);
-    if (badge.dataset.tip) {
+    if (badge.dataset.exitpaths) {
+      try {
+        const paths = JSON.parse(badge.dataset.exitpaths);
+        tip.innerHTML = paths.map(p => `<div style="font-family:var(--mono);font-size:12px;padding:1px 0">${exitViaHTML(p)}</div>`).join('');
+      } catch(e) { return; }
+    } else if (badge.dataset.tip) {
       tip.textContent = badge.dataset.tip;
     } else if (badge.dataset.ipstatus) {
       try {
@@ -2821,7 +2850,7 @@ document.addEventListener('click', e => {
   }
 
   document.addEventListener('mouseover', e => {
-    const badge = e.target.closest('[data-tip],[data-ipstatus]');
+    const badge = e.target.closest('[data-tip],[data-ipstatus],[data-exitpaths]');
     if (badge) show(badge);
     else hide();
   });
