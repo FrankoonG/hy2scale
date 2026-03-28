@@ -12,16 +12,21 @@ function openModal(sel) {
   overlay.style.display = '';
   const modal = overlay.querySelector('.modal');
   if (modal) {
-    // Force layout so modal gets its centered position
+    // Measure modal's centered position without triggering transition
+    modal.style.transition = 'none';
     modal.style.transform = 'scale(1)';
     modal.style.opacity = '0';
+    modal.offsetHeight; // force layout
     const rect = modal.getBoundingClientRect();
-    modal.style.transform = '';
-    modal.style.opacity = '';
     // Calculate click position relative to modal's box
     const ox = _clickX - rect.left;
     const oy = _clickY - rect.top;
+    // Reset to initial state
+    modal.style.transform = '';
+    modal.style.opacity = '';
     modal.style.transformOrigin = `${ox}px ${oy}px`;
+    modal.style.transition = '';
+    modal.offsetHeight; // force layout before transition starts
   }
   overlay.classList.remove('modal-closing');
   overlay.offsetHeight;
