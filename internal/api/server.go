@@ -902,7 +902,9 @@ func (s *Server) fetchSubPeersViaHTTP(peerName string) []topoSubPeer {
 			childLatency += parentLatency
 		}
 		// Only include deeper children if LOCAL config has nested enabled for this sub-peer
-		pc, hasPC := cfg.Peers[rp.Name]
+		// Use path-qualified key (parent/child) so same-name peers in different contexts are independent
+		qualifiedKey := peerName + "/" + rp.Name
+		pc, hasPC := cfg.Peers[qualifiedKey]
 		localNested := hasPC && pc.Nested
 		var subChildren []topoSubPeer
 		if localNested {
@@ -1007,9 +1009,10 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 			Via:       peerName,
 			LatencyMs: childLatency,
 		}
+		qualifiedKey := peerName + "/" + sp.Name
 		if sp.Native {
 			child.Native = true
-		} else if pc, ok := cfg.Peers[sp.Name]; ok && pc.Nested {
+		} else if pc, ok := cfg.Peers[qualifiedKey]; ok && pc.Nested {
 			child.Nested = true // explicitly enabled
 		}
 		if child.Nested && !child.Native {
