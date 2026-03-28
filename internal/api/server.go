@@ -793,8 +793,11 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 				if nativeMap[name] {
 					continue
 				}
-				// Always fetch sub-peers for path discovery cache,
-				// regardless of nested display config
+				// Only fetch sub-peers for peers with nested enabled
+				cfg := s.app.Store().Get()
+				if pc, ok := cfg.Peers[name]; !ok || !pc.Nested {
+					continue
+				}
 				ch := make(chan []topoSubPeer, 1)
 				go func(n string) {
 					ch <- s.fetchSubPeersViaHTTP(n)
@@ -906,11 +909,40 @@ func (s *Server) fetchSubPeersViaHTTP(peerName string) []topoSubPeer {
 			LatencyMs: childLatency,
 			Nested:    rp.Nested,
 			Native:    rp.Native,
-			Children:  filterSelfFromChildren(addLatencyOffset(rp.Children, parentLatency), myID),
+			Children:  truncateAndFilter(rp.Children, parentLatency, myID, 4),
 		}
 		children = append(children, child)
 	}
 	return children
+}
+
+// truncateAndFilter limits tree depth, removes self-ID, and detects cycles.
+func truncateAndFilter(children []topoSubPeer, parentLatency int, selfID string, maxDepth int) []topoSubPeer {
+	if maxDepth <= 0 || len(children) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool)
+	return doTruncate(children, parentLatency, selfID, maxDepth, seen)
+}
+
+func doTruncate(children []topoSubPeer, parentLatency int, selfID string, depth int, seen map[string]bool) []topoSubPeer {
+	if depth <= 0 || len(children) == 0 {
+		return nil
+	}
+	var result []topoSubPeer
+	for _, c := range children {
+		if c.Name == selfID || seen[c.Name] {
+			continue
+		}
+		seen[c.Name] = true
+		if c.LatencyMs > 0 && parentLatency > 0 {
+			c.LatencyMs += parentLatency
+		}
+		c.Children = doTruncate(c.Children, parentLatency, selfID, depth-1, seen)
+		result = append(result, c)
+		delete(seen, c.Name) // allow same name in different branches
+	}
+	return result
 }
 
 // filterChildrenByNestedConfig strips deeper children unless local nested config allows them.
