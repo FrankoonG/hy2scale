@@ -44,8 +44,9 @@ type WireGuardPeer struct {
 	PrivateKey string `yaml:"private_key" json:"private_key"`
 	AllowedIPs string `yaml:"allowed_ips" json:"allowed_ips"`
 	Keepalive  int    `yaml:"keepalive" json:"keepalive"`
-	ExitVia    string `yaml:"exit_via,omitempty" json:"exit_via"`
-	ExitMode   string `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"`
+	ExitVia    string   `yaml:"exit_via,omitempty" json:"exit_via"`
+	ExitPaths  []string `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
+	ExitMode   string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"`
 }
 
 type wgInstance struct {
