@@ -1228,6 +1228,11 @@ func (s *Server) addProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	if len(pc.ExitPaths) > 0 {
+		pc.ExitVia = pc.ExitPaths[0]
+	} else if pc.ExitVia != "" {
+		pc.ExitPaths = []string{pc.ExitVia}
+	}
 	if pc.ID == "" || pc.Listen == "" {
 		http.Error(w, "id, listen required", 400)
 		return
@@ -1250,6 +1255,11 @@ func (s *Server) updateProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pc.ID = id
+	if len(pc.ExitPaths) > 0 {
+		pc.ExitVia = pc.ExitPaths[0]
+	} else if pc.ExitVia != "" {
+		pc.ExitPaths = []string{pc.ExitVia}
+	}
 	if pc.Protocol == "" {
 		pc.Protocol = "socks5"
 	}
@@ -1477,6 +1487,11 @@ func (s *Server) addWGPeer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	if len(peer.ExitPaths) > 0 {
+		peer.ExitVia = peer.ExitPaths[0]
+	} else if peer.ExitVia != "" {
+		peer.ExitPaths = []string{peer.ExitVia}
+	}
 	if peer.Name == "" || peer.PublicKey == "" || peer.AllowedIPs == "" {
 		http.Error(w, "name, public_key, allowed_ips required", 400)
 		return
@@ -1500,6 +1515,11 @@ func (s *Server) updateWGPeer(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
+	}
+	if len(updated.ExitPaths) > 0 {
+		updated.ExitVia = updated.ExitPaths[0]
+	} else if updated.ExitVia != "" {
+		updated.ExitPaths = []string{updated.ExitVia}
 	}
 	var oldPub string
 	var wgFieldsChanged bool
@@ -1639,6 +1659,11 @@ func (s *Server) addUserAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	if len(u.ExitPaths) > 0 {
+		u.ExitVia = u.ExitPaths[0]
+	} else if u.ExitVia != "" {
+		u.ExitPaths = []string{u.ExitVia}
+	}
 	if u.Username == "" || u.Password == "" {
 		http.Error(w, "username and password required", 400)
 		return
@@ -1667,6 +1692,11 @@ func (s *Server) updateUserAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.ID = id
+	if len(u.ExitPaths) > 0 {
+		u.ExitVia = u.ExitPaths[0]
+	} else if u.ExitVia != "" {
+		u.ExitPaths = []string{u.ExitVia}
+	}
 	if err := app.ValidateExitMode(u.ExitVia, u.ExitMode); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
@@ -1729,6 +1759,11 @@ func (s *Server) addRule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	if len(rule.ExitPaths) > 0 {
+		rule.ExitVia = rule.ExitPaths[0]
+	} else if rule.ExitVia != "" {
+		rule.ExitPaths = []string{rule.ExitVia}
+	}
 	if rule.ID == "" || rule.ExitVia == "" || len(rule.Targets) == 0 {
 		http.Error(w, "id, exit_via, and targets required", 400)
 		return
@@ -1753,6 +1788,11 @@ func (s *Server) updateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rule.ID = id
+	if len(rule.ExitPaths) > 0 {
+		rule.ExitVia = rule.ExitPaths[0]
+	} else if rule.ExitVia != "" {
+		rule.ExitPaths = []string{rule.ExitVia}
+	}
 	if err := app.ValidateExitMode(rule.ExitVia, rule.ExitMode); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
