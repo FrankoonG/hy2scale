@@ -722,7 +722,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		if inboundNames[name] {
 			continue
 		}
-		tn := treeNode{Name: name, Connected: connected[name], Disabled: disabledMap[name]}
+		tn := treeNode{Name: name, Connected: connected[name] && !disabledMap[name], Disabled: disabledMap[name]}
 		if cl, ok := clientMap[name]; ok {
 			tn.Addr = cl.PrimaryAddr()
 			addrs := cl.AllAddrs()
@@ -1108,7 +1108,7 @@ func (s *Server) getClients(w http.ResponseWriter, r *http.Request) {
 	for _, cl := range cfg.Clients {
 		result = append(result, clientResp{
 			ClientEntry: cl,
-			Connected:   connected[cl.Name],
+			Connected:   connected[cl.Name] && !cl.Disabled,
 		})
 	}
 	writeJSON(w, result)
