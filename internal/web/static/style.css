@@ -318,8 +318,8 @@ textarea.drag-over{border-color:var(--primary);background:rgba(67,97,238,.05);bo
 .modal-overlay{opacity:0;transition:opacity .25s ease}
 .modal-overlay.modal-open{opacity:1}
 .modal-overlay.modal-closing{opacity:0}
-.modal{transform:scale(.05);opacity:0}
-.modal-overlay.modal-open .modal{animation:modalOpen .5s linear(0,0.006,0.025,0.06,0.11,0.17,0.24,0.33,0.42,0.52,0.61,0.71,0.79,0.86,0.92,0.96,0.99,1.01,1.025,1.03,1.03,1.025,1.018,1.01,1.005,1.002,1) forwards}
+.modal{transform:scale(.05);opacity:0;will-change:transform,opacity}
+.modal-overlay.modal-open .modal{animation:modalOpen .5s linear(0,0.004,0.016,0.035,0.063,0.098,0.141,0.19,0.245,0.305,0.37,0.437,0.504,0.572,0.637,0.699,0.756,0.807,0.853,0.892,0.924,0.95,0.969,0.983,0.992,0.998,1.002,1.005,1.008,1.01,1.012,1.013,1.013,1.012,1.011,1.01,1.008,1.007,1.005,1.004,1.003,1.002,1.001,1.001,1,1,1) forwards}
 .modal-overlay.modal-closing .modal{animation:modalClose .25s cubic-bezier(.4,0,1,1) forwards}
 @keyframes modalOpen{
   0%{transform:scale(.05);opacity:0}

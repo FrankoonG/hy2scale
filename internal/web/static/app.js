@@ -772,9 +772,15 @@ function getConnMode() {
   return sel ? sel.value : '';
 }
 
+function normalizeMode(mode) {
+  if (mode === 'stability') return 'quality';
+  if (mode === 'speed') return 'aggregate';
+  return mode || '';
+}
 function setConnMode(mode) {
   const panel = $('#conn-mode-panel');
-  panel.querySelectorAll('input[type=radio]').forEach(r => { r.checked = r.value === (mode || ''); });
+  const m = normalizeMode(mode);
+  panel.querySelectorAll('input[type=radio]').forEach(r => { r.checked = r.value === m; });
   syncConnMode();
 }
 
@@ -2023,8 +2029,9 @@ class ExitPathList {
     this.listEl.innerHTML = '';
     const list = paths && paths.length ? paths : [''];
     for (const p of list) this.addRow(p);
-    if (mode) {
-      const r = this.modeEl.querySelector(`input[value="${mode}"]`);
+    const m = normalizeMode(mode);
+    if (m) {
+      const r = this.modeEl.querySelector(`input[value="${m}"]`);
       if (r) r.checked = true;
     }
     this.syncMode();
@@ -2209,8 +2216,8 @@ function setupCustomSelect(selectEl) {
 
 function exitModeBadge(mode) {
   if (!mode) return '';
-  if (mode === 'quality') return ' <span class="badge badge-green" style="font-size:10px">' + t('exit.modeStability') + '</span>';
-  if (mode === 'aggregate') return ' <span class="badge badge-blue" style="font-size:10px">' + t('exit.modeSpeed') + '</span>';
+  if (mode === 'quality' || mode === 'stability') return ' <span class="badge badge-green" style="font-size:10px">' + t('exit.modeStability') + '</span>';
+  if (mode === 'aggregate' || mode === 'speed') return ' <span class="badge badge-blue" style="font-size:10px">' + t('exit.modeSpeed') + '</span>';
   return '';
 }
 
