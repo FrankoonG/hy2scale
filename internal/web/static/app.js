@@ -10,28 +10,26 @@ document.addEventListener('mousedown', e => { _clickX = e.clientX; _clickY = e.c
 function openModal(sel) {
   const overlay = typeof sel === 'string' ? $(sel) : sel;
   overlay.style.display = '';
+  overlay.classList.remove('modal-closing');
   const modal = overlay.querySelector('.modal');
   if (modal) {
-    // Calculate modal's centered position mathematically (no DOM measurement needed)
-    // Overlay is position:fixed inset:0 with flex centering
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    // Modal width: min(max-width, 100%) — typically max-width from CSS
-    const cs = getComputedStyle(modal);
-    const maxW = parseInt(cs.maxWidth) || 520;
-    const mw = Math.min(maxW, vw - 32); // account for margin
-    // Estimate height from scrollHeight or use viewport fraction
-    const mh = Math.min(modal.scrollHeight || vh * 0.6, vh * 0.85);
-    // Modal is centered: left = (vw - mw) / 2, top = (vh - mh) / 2
-    const ml = (vw - mw) / 2;
-    const mt = (vh - mh) / 2;
-    const ox = _clickX - ml;
-    const oy = _clickY - mt;
+    // Measure real modal position: briefly show at scale(1) with no transition
+    modal.style.cssText = 'transition:none !important; transform:scale(1); opacity:0; pointer-events:none';
+    const rect = modal.getBoundingClientRect();
+    const ox = _clickX - rect.left;
+    const oy = _clickY - rect.top;
+    // Reset and set origin
+    modal.style.cssText = '';
     modal.style.transformOrigin = `${ox}px ${oy}px`;
+    // Next frame: start animation
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        overlay.classList.add('modal-open');
+      });
+    });
+  } else {
+    overlay.classList.add('modal-open');
   }
-  overlay.classList.remove('modal-closing');
-  overlay.offsetHeight;
-  overlay.classList.add('modal-open');
 }
 function closeModal(sel) {
   const overlay = typeof sel === 'string' ? $(sel) : sel;

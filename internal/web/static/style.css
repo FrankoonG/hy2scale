@@ -314,18 +314,18 @@ textarea.drag-over{border-color:var(--primary);background:rgba(67,97,238,.05);bo
 .modal-overlay{opacity:0;transition:opacity .25s ease}
 .modal-overlay.modal-open{opacity:1}
 .modal-overlay.modal-closing{opacity:0}
-.modal{transform:scale(.3);opacity:0}
-.modal-overlay.modal-open .modal{animation:modalOpen .4s cubic-bezier(.34,1.4,.64,1) forwards}
-.modal-overlay.modal-closing .modal{animation:modalClose .3s cubic-bezier(.4,0,1,1) forwards}
+.modal{transform:scale(.05);opacity:0}
+.modal-overlay.modal-open .modal{animation:modalOpen .35s cubic-bezier(.2,.9,.3,1.2) forwards}
+.modal-overlay.modal-closing .modal{animation:modalClose .25s cubic-bezier(.4,0,1,1) forwards}
 @keyframes modalOpen{
-  0%{transform:scale(.3);opacity:0}
-  10%{opacity:.75}
+  0%{transform:scale(.05);opacity:0}
+  8%{opacity:.8}
   100%{transform:scale(1);opacity:1}
 }
 @keyframes modalClose{
   0%{transform:scale(1);opacity:1}
-  90%{opacity:.75}
-  100%{transform:scale(.3);opacity:0}
+  92%{opacity:.8}
+  100%{transform:scale(.05);opacity:0}
 }
 
 /* Page: fade + slide up */
