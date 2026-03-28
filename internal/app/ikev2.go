@@ -520,7 +520,9 @@ func (a *App) updateEAPSecrets() {
 		}
 	}
 	os.WriteFile("/etc/ipsec.secrets", []byte(strings.Join(lines, "\n")+"\n"), 0600)
-	exec.Command("ipsec", "auto", "--rereadsecrets").Run()
+	// Reload secrets via both stroke and vici (swanctl) to ensure both paths work
+	exec.Command("ipsec", "rereadsecrets").Run()
+	exec.Command("swanctl", "--load-creds").Run()
 }
 
 // appendToIPSecConf appends a conn block to /etc/ipsec.conf.

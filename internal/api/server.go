@@ -542,14 +542,16 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 	if cfg.Name != oldName {
 		needReconnect = true
 	}
-	if needReconnect {
-		// Restart hy2 server to drop inbound connections (they'll reconnect and see new name)
+	// Hot-restart server if server config or identity changed
+	if needReconnect || body.Server != nil {
 		go func() {
-			s.app.ReconnectAll()
+			if needReconnect {
+				s.app.ReconnectAll()
+			}
 			s.app.RestartServer()
 		}()
 	}
-	writeJSON(w, map[string]string{"status": "ok", "note": "server config changes require restart"})
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 // --- Peers ---
