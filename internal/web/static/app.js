@@ -400,12 +400,13 @@ function childRowHTML(c, isLast, depth, parentChain, guides) {
   const dir = c.direction ? dirHTML(c.direction) : '';
   const nativeBadge = c.native ? ' <span class="badge badge-muted">NATIVE</span>' : '';
   const cVersionBadge = (c.version && c.version !== _localVersion) ? ` <span class="badge badge-warn">v${esc(c.version)}</span>` : '';
-  const cSyncing = syncingNodes.has(c.name);
-  const cSyncData = syncingNodes.get(c.name);
+  const cQualKey = c.via + '/' + c.name;
+  const cSyncing = syncingNodes.has(cQualKey) || syncingNodes.has(c.name);
+  const cSyncData = syncingNodes.get(cQualKey) || syncingNodes.get(c.name);
   const cNestedChecked = cSyncing ? cSyncData.enabled : c.nested;
   const nestedToggle = c.native
     ? '<label class="toggle toggle-disabled"><input type="checkbox" disabled><span class="slider"></span></label>'
-    : `<label class="toggle"><input type="checkbox" ${cNestedChecked ? 'checked' : ''} onchange="toggleNested('${esc(c.name)}',this.checked)"><span class="slider"></span></label>`;
+    : `<label class="toggle"><input type="checkbox" ${cNestedChecked ? 'checked' : ''} onchange="toggleNested('${esc(c.via + '/' + c.name)}',this.checked)"><span class="slider"></span></label>`;
   const nameCell = c.native
     ? `<span class="peer-name-cell">${esc(c.name)}</span>`
     : nameLink(c.name, chain);
@@ -529,14 +530,22 @@ async function toggleNested(name, enabled) {
   lastTopoJSON = ''; refreshTopology(); // immediate: gray + syncing + toggled checkbox
 
   try {
-    await api(`/peers/${name}/nested`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+    await api(`/peers/${encodeURIComponent(name)}/nested`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
     // Poll until topology reflects the actual change
+    const simpleName = name.includes('/') ? name.split('/').pop() : name;
     const poll = setInterval(async () => {
       try {
         const topo = await api('/topology');
-        const node = topo.find(n => n.name === name);
+        // Search recursively for the node
+        function findNode(nodes) {
+          for (const n of nodes) {
+            if (n.name === simpleName) return n;
+            if (n.children) { const f = findNode(n.children); if (f) return f; }
+          }
+          return null;
+        }
+        const node = findNode(topo);
         if (!node) return;
-        // Check if the nested flag in topology matches what we requested
         if (node.nested === enabled) {
           clearInterval(poll);
           syncingNodes.delete(name);
