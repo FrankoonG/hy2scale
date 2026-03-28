@@ -7,7 +7,11 @@ let _clickX = window.innerWidth / 2, _clickY = window.innerHeight / 2;
 document.addEventListener('mousedown', e => { _clickX = e.clientX; _clickY = e.clientY; }, true);
 
 // Modal open/close with animation (born from click position)
+let _modalAnimating = false;
+
 function openModal(sel) {
+  if (_modalAnimating) return;
+  _modalAnimating = true;
   const overlay = typeof sel === 'string' ? $(sel) : sel;
   overlay.style.display = '';
   overlay.classList.remove('modal-closing');
@@ -22,7 +26,6 @@ function openModal(sel) {
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
     const dist = Math.hypot(_clickX - cx, _clickY - cy);
-    // Fixed speed: ~2500px/s → consistent perceived velocity everywhere
     const dur = Math.max(0.2, Math.min(0.5, dist / 2500 + 0.15));
     // Reset and set origin + duration
     modal.style.cssText = '';
@@ -32,16 +35,19 @@ function openModal(sel) {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         overlay.classList.add('modal-open');
+        setTimeout(() => { _modalAnimating = false; }, dur * 1000);
       });
     });
   } else {
     overlay.classList.add('modal-open');
+    _modalAnimating = false;
   }
 }
 function closeModal(sel) {
+  if (_modalAnimating) return;
+  _modalAnimating = true;
   const overlay = typeof sel === 'string' ? $(sel) : sel;
   const modal = overlay.querySelector('.modal');
-  // Close duration = 80% of open duration for snappy feel
   const closeDur = modal ? parseFloat(modal.style.animationDuration || '0.3') * 0.8 : 0.25;
   if (modal) modal.style.animationDuration = `${closeDur}s`;
   overlay.classList.remove('modal-open');
@@ -50,6 +56,7 @@ function closeModal(sel) {
     overlay.style.display = 'none';
     overlay.classList.remove('modal-closing');
     if (modal) modal.style.animationDuration = '';
+    _modalAnimating = false;
   }, closeDur * 1000 + 50);
 }
 const tokenKey = 'token:' + basePath;
