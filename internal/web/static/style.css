@@ -324,7 +324,7 @@ textarea.drag-over{border-color:var(--primary);background:rgba(67,97,238,.05);bo
 }
 @keyframes modalClose{
   0%{transform:scale(1);opacity:1}
-  92%{opacity:.8}
+  90%{transform:scale(.15);opacity:.8}
   100%{transform:scale(.05);opacity:0}
 }
 
