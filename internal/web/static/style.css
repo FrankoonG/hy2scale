@@ -310,13 +310,23 @@ textarea.drag-over{border-color:var(--primary);background:rgba(67,97,238,.05);bo
 .act-btn:hover{opacity:.85;transform:translateY(-1px)}
 .act-btn:active{transform:translateY(0)}
 
-/* Modal: born from button, return to button */
+/* Modal: born from cursor, return to cursor */
 .modal-overlay{opacity:0;transition:opacity .25s ease}
 .modal-overlay.modal-open{opacity:1}
 .modal-overlay.modal-closing{opacity:0}
-.modal{transform:scale(.3);opacity:0;transition:transform .4s cubic-bezier(.34,1.4,.64,1),opacity .12s ease}
-.modal-overlay.modal-open .modal{transform:scale(1);opacity:1}
-.modal-overlay.modal-closing .modal{transform:scale(.3);opacity:0;transition:transform .3s cubic-bezier(.4,0,1,1),opacity .2s ease}
+.modal{transform:scale(.3);opacity:0}
+.modal-overlay.modal-open .modal{animation:modalOpen .4s cubic-bezier(.34,1.4,.64,1) forwards}
+.modal-overlay.modal-closing .modal{animation:modalClose .3s cubic-bezier(.4,0,1,1) forwards}
+@keyframes modalOpen{
+  0%{transform:scale(.3);opacity:0}
+  10%{opacity:.75}
+  100%{transform:scale(1);opacity:1}
+}
+@keyframes modalClose{
+  0%{transform:scale(1);opacity:1}
+  90%{opacity:.75}
+  100%{transform:scale(.3);opacity:0}
+}
 
 /* Page: fade + slide up */
 .page{animation:pageIn .4s ease both}
