@@ -757,8 +757,9 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Load sub-peers from background cache only (never blocks)
+		// Nested config controls DISPLAY only, not path discovery cache
 		if tn.Nested && tn.Connected && !tn.Native {
-			tn.Children = s.getCachedSubPeers(name)
+			tn.Children = filterChildrenByNestedConfig(s.getCachedSubPeers(name), name, cfg)
 		}
 		// Also load children for inbound peers nested under self
 		// (they can have outbound connections visible if nested is enabled)
@@ -784,7 +785,6 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			cfg := s.app.Store().Get()
 			newCache := make(map[string][]topoSubPeer)
 			// Collect all connected non-native outbound peers
 			connectedPeers := s.app.Node().ConnectedPeerNames()
@@ -793,11 +793,8 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 				if nativeMap[name] {
 					continue
 				}
-				// Skip unless explicitly enabled in Peers config
-				pc, ok := cfg.Peers[name]
-				if !ok || !pc.Nested {
-					continue
-				}
+				// Always fetch sub-peers for path discovery cache,
+				// regardless of nested display config
 				ch := make(chan []topoSubPeer, 1)
 				go func(n string) {
 					ch <- s.fetchSubPeersViaHTTP(n)
@@ -901,28 +898,40 @@ func (s *Server) fetchSubPeersViaHTTP(peerName string) []topoSubPeer {
 		if childLatency > 0 && parentLatency > 0 {
 			childLatency += parentLatency
 		}
-		// Only include deeper children if LOCAL config has nested enabled for this sub-peer
-		// Use path-qualified key (parent/child) so same-name peers in different contexts are independent
-		qualifiedKey := peerName + "/" + rp.Name
-		pc, hasPC := cfg.Peers[qualifiedKey]
-		localNested := hasPC && pc.Nested
-		var subChildren []topoSubPeer
-		if localNested {
-			subChildren = filterSelfFromChildren(addLatencyOffset(rp.Children, parentLatency), myID)
-		}
 		child := topoSubPeer{
 			Name:      rp.Name,
 			ExitNode:  rp.ExitNode,
 			Direction: rp.Direction,
 			Via:       peerName,
 			LatencyMs: childLatency,
-			Nested:    localNested,
+			Nested:    rp.Nested,
 			Native:    rp.Native,
-			Children:  subChildren,
+			Children:  filterSelfFromChildren(addLatencyOffset(rp.Children, parentLatency), myID),
 		}
 		children = append(children, child)
 	}
 	return children
+}
+
+// filterChildrenByNestedConfig strips deeper children unless local nested config allows them.
+// Uses path-qualified keys (parent/child) so same-name peers have independent nested state.
+func filterChildrenByNestedConfig(children []topoSubPeer, parentName string, cfg app.Config) []topoSubPeer {
+	if len(children) == 0 {
+		return children
+	}
+	result := make([]topoSubPeer, 0, len(children))
+	for _, c := range children {
+		qualifiedKey := parentName + "/" + c.Name
+		pc, hasPC := cfg.Peers[qualifiedKey]
+		c.Nested = hasPC && pc.Nested
+		if c.Nested && len(c.Children) > 0 {
+			c.Children = filterChildrenByNestedConfig(c.Children, qualifiedKey, cfg)
+		} else {
+			c.Children = nil
+		}
+		result = append(result, c)
+	}
+	return result
 }
 
 // filterSelfFromChildren recursively removes self node ID from all levels of children.
