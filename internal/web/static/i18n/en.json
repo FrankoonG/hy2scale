@@ -332,5 +332,6 @@
   "import.empty": "File is empty or has no data rows.",
   "import.result": "Added: {added}, Skipped: {skipped}, Errors: {errors}",
   "import.failed": "Import failed",
-  "import.exported": "Exported successfully"
+  "import.exported": "Exported successfully",
+  "import.exportConfirm": "Export {count} {type} items to XLSX?"
 }
