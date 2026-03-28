@@ -1509,10 +1509,10 @@ async function openWGPeerDetail(name) {
     generateQR(canvas, conf);
     // Store name for download button
     canvas.dataset.name = name;
-    $('#wg-peer-detail').style.display = '';
+    openModal('#wg-peer-detail');
   } catch(e) { toast(String(e), 'error'); }
 }
-function closeWGPeerDetail() { $('#wg-peer-detail').style.display = 'none'; }
+function closeWGPeerDetail() { closeModal('#wg-peer-detail'); }
 function downloadFromDetail() {
   const name = $('#wgp-qr-canvas').dataset.name;
   if (name) downloadWGPeerConfig(name);
