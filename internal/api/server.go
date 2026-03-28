@@ -685,10 +685,8 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				LatencyMs: latencyCache[p.Name],
 				Version:   p.Version,
 			}
-			if pc, ok := cfg.Peers[p.Name]; ok && !pc.Nested {
-				child.Nested = false // explicitly disabled
-			} else {
-				child.Nested = true // default: discover sub-peers
+			if pc, ok := cfg.Peers[p.Name]; ok && pc.Nested {
+				child.Nested = true // explicitly enabled
 			}
 			selfChildren = append(selfChildren, child)
 		}
@@ -745,10 +743,8 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		tn.Version = versionMap[name]
 		if tn.Native {
 			tn.Nested = false
-		} else if pc, ok := cfg.Peers[name]; ok && !pc.Nested {
-			tn.Nested = false // explicitly disabled
-		} else {
-			tn.Nested = true // default: try to discover sub-peers
+		} else if pc, ok := cfg.Peers[name]; ok && pc.Nested {
+			tn.Nested = true // explicitly enabled
 		}
 		if tn.Connected && tn.Direction == "outbound" {
 			tn.LatencyMs = latencyCache[name]
@@ -797,8 +793,9 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 				if nativeMap[name] {
 					continue
 				}
-				// Skip if explicitly disabled in Peers config
-				if pc, ok := cfg.Peers[name]; ok && !pc.Nested {
+				// Skip unless explicitly enabled in Peers config
+				pc, ok := cfg.Peers[name]
+				if !ok || !pc.Nested {
 					continue
 				}
 				ch := make(chan []topoSubPeer, 1)
@@ -884,6 +881,7 @@ func (s *Server) fetchSubPeersViaHTTP(peerName string) []topoSubPeer {
 		ExitNode  bool          `json:"exit_node"`
 		Direction string        `json:"direction"`
 		Native    bool          `json:"native"`
+		Nested    bool          `json:"nested"`
 		LatencyMs int           `json:"latency_ms"`
 		Children  []topoSubPeer `json:"children,omitempty"`
 	}
@@ -909,7 +907,7 @@ func (s *Server) fetchSubPeersViaHTTP(peerName string) []topoSubPeer {
 			Direction: rp.Direction,
 			Via:       peerName,
 			LatencyMs: childLatency,
-			Nested:    true,
+			Nested:    rp.Nested,
 			Native:    rp.Native,
 			Children:  addLatencyOffset(rp.Children, parentLatency),
 		}
@@ -988,10 +986,8 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 		}
 		if sp.Native {
 			child.Native = true
-		} else if pc, ok := cfg.Peers[sp.Name]; ok && !pc.Nested {
-			child.Nested = false // explicitly disabled
-		} else {
-			child.Nested = true // default: discover sub-peers
+		} else if pc, ok := cfg.Peers[sp.Name]; ok && pc.Nested {
+			child.Nested = true // explicitly enabled
 		}
 		if child.Nested && !child.Native {
 			childPath := append(append([]string{}, path...), sp.Name)
