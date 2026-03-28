@@ -2,21 +2,17 @@ const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 const basePath = window.__BASE__ || '';
 
-// Track mouse position for modal transform-origin (Hero Transition from cursor)
-let _mouseX = window.innerWidth / 2, _mouseY = window.innerHeight / 2;
-document.addEventListener('mousemove', e => { _mouseX = e.clientX; _mouseY = e.clientY; }, true);
-document.addEventListener('click', e => { _mouseX = e.clientX; _mouseY = e.clientY; }, true);
+// Track click position for modal transform-origin (Hero Transition from cursor)
+let _clickX = window.innerWidth / 2, _clickY = window.innerHeight / 2;
+document.addEventListener('mousedown', e => { _clickX = e.clientX; _clickY = e.clientY; }, true);
 
-// Modal open/close with animation (born from mouse position)
+// Modal open/close with animation (born from click position)
 function openModal(sel) {
   const overlay = typeof sel === 'string' ? $(sel) : sel;
   overlay.style.display = '';
   const modal = overlay.querySelector('.modal');
   if (modal) {
-    const overlayRect = overlay.getBoundingClientRect();
-    const cx = _mouseX - overlayRect.left;
-    const cy = _mouseY - overlayRect.top;
-    modal.style.transformOrigin = `${cx}px ${cy}px`;
+    modal.style.transformOrigin = `${_clickX}px ${_clickY}px`;
   }
   overlay.classList.remove('modal-closing');
   overlay.offsetHeight;
