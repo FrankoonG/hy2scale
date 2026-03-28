@@ -172,8 +172,8 @@ func (a *App) StartWireGuard(cfg WireGuardConfig) error {
 	return nil
 }
 
-// findPeerExitViaMode finds the exit_via and exit_mode for a WG peer by their tunnel IP.
-func findPeerExitViaMode(cfg WireGuardConfig, srcIP string) (string, string) {
+// findPeerExitInfo finds the exit_via, exit_paths, and exit_mode for a WG peer by their tunnel IP.
+func findPeerExitInfo(cfg WireGuardConfig, srcIP string) (string, []string, string) {
 	for _, p := range cfg.Peers {
 		for _, aip := range strings.Split(p.AllowedIPs, ",") {
 			aip = strings.TrimSpace(aip)
@@ -182,11 +182,11 @@ func findPeerExitViaMode(cfg WireGuardConfig, srcIP string) (string, string) {
 			}
 			ip := strings.SplitN(aip, "/", 2)[0]
 			if ip == srcIP {
-				return p.ExitVia, p.ExitMode
+				return p.ExitVia, p.ExitPaths, p.ExitMode
 			}
 		}
 	}
-	return "", ""
+	return "", nil, ""
 }
 
 // StopWireGuard stops the running WireGuard instance.
@@ -311,14 +311,18 @@ func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 			srcIP := id.RemoteAddress.String()
 			wgConnAdd(srcIP)
 			defer wgConnDel(srcIP)
-			exitVia, exitMode := findPeerExitViaMode(cfg, srcIP)
+			wgCfg := a.store.Get().WireGuard
+			if wgCfg == nil {
+				return
+			}
+			exitVia, exitPaths, exitMode := findPeerExitInfo(*wgCfg, srcIP)
 
 			var remote net.Conn
 			var err error
 			if exitVia == "" {
 				remote, err = net.DialTimeout("tcp", dstAddr, 10*time.Second)
 			} else {
-				remote, err = a.dialExitWithMode(context.Background(), exitVia, exitMode, dstAddr)
+				remote, err = a.dialExitWithPaths(context.Background(), exitVia, exitPaths, exitMode, dstAddr)
 			}
 			if err != nil {
 				return
