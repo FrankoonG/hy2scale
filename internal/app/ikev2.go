@@ -24,7 +24,7 @@ type IKEv2Config struct {
 	RemoteID    string `yaml:"remote_id" json:"remote_id"`         // client identity (rightid), default = %any
 	PSKUserMode bool   `yaml:"psk_user_mode" json:"psk_user_mode"` // PSK: require user auth
 	DefaultExit     string `yaml:"default_exit" json:"default_exit"`           // exit_via when user mode off
-	DefaultExitMode string `yaml:"default_exit_mode,omitempty" json:"default_exit_mode,omitempty"` // ""|"stability"|"speed"
+	DefaultExitMode string `yaml:"default_exit_mode,omitempty" json:"default_exit_mode,omitempty"` // ""|"quality"|"aggregate"
 	DNS         string `yaml:"dns" json:"dns"`                     // DNS servers, default "8.8.8.8 8.8.4.4"
 	ProxyPort   int    `yaml:"proxy_port" json:"proxy_port"`       // transparent proxy port, default 12350
 	MTU         int    `yaml:"mtu" json:"mtu"`                     // tunnel MTU, default 1400

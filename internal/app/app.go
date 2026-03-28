@@ -46,7 +46,7 @@ type ClientEntry struct {
 	InitConnWindow   int `yaml:"init_conn_window,omitempty" json:"init_conn_window"`
 	MaxConnWindow    int `yaml:"max_conn_window,omitempty" json:"max_conn_window"`
 
-	// Connection mode for multi-IP: "" = direct (single IP), "stability", "speed"
+	// Connection mode for multi-IP: "" = direct (single IP), "quality", "aggregate"
 	ConnMode string `yaml:"conn_mode,omitempty" json:"conn_mode,omitempty"`
 
 	// Misc
@@ -1289,7 +1289,7 @@ func splitPath(s string) []string {
 
 // dialExit routes traffic through an exit path, stripping the local node name prefix.
 // dialExitWithMode routes traffic with the specified exit mode.
-// mode: "" = direct, "stability" = adaptive failover, "speed" = load balance
+// mode: "" = direct, "quality" = adaptive failover, "aggregate" = load balance
 // ValidateExitMode checks exit_mode is only set for simple (non-path) exit_via.
 func ValidateExitMode(exitVia, exitMode string) error {
 	if exitMode != "" && strings.Contains(exitVia, "/") {
@@ -1301,9 +1301,9 @@ func ValidateExitMode(exitVia, exitMode string) error {
 func (a *App) dialExitWithMode(ctx context.Context, exitVia, exitMode, addr string) (net.Conn, error) {
 	if exitMode != "" && exitVia != "" && !strings.Contains(exitVia, "/") {
 		switch exitMode {
-		case "stability":
+		case "quality", "stability": // "stability" for backward compat
 			return a.dialAdaptive(ctx, exitVia, addr)
-		case "speed":
+		case "aggregate", "speed": // "speed" for backward compat
 			return a.dialBond(ctx, exitVia, addr)
 		}
 	}

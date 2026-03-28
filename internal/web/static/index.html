@@ -589,8 +589,8 @@
         <div class="section-divider" style="margin-top:0;border-top:none" data-i18n="nodes.connMode">Connection Mode</div>
         <div id="conn-mode-panel" class="exit-mode-options" style="margin-bottom:12px">
           <label class="exit-mode-opt"><input type="radio" name="conn-mode" value="" checked><span data-i18n="exit.modeNone">Direct</span></label>
-          <label class="exit-mode-opt"><input type="radio" name="conn-mode" value="stability"><span data-i18n="exit.modeStability">Stability</span></label>
-          <label class="exit-mode-opt"><input type="radio" name="conn-mode" value="speed"><span data-i18n="exit.modeSpeed">Speed</span></label>
+          <label class="exit-mode-opt"><input type="radio" name="conn-mode" value="quality"><span data-i18n="exit.modeStability">Quality</span></label>
+          <label class="exit-mode-opt"><input type="radio" name="conn-mode" value="aggregate"><span data-i18n="exit.modeSpeed">Aggregate</span></label>
         </div>
         <div class="section-divider" data-i18n="nodes.addresses">Addresses</div>
         <div id="addr-list" class="addr-list"></div>
@@ -775,10 +775,10 @@
           <span style="font-size:13px" data-i18n="import.overwrite">Overwrite duplicates</span>
         </div>
         <p style="font-size:12px;color:var(--text-muted);margin:0 0 12px" data-i18n="import.overwriteHint">When checked, existing items with the same key will be replaced. When unchecked, duplicates are skipped.</p>
-        <label class="btn-secondary-label" style="justify-content:center;width:100%">
-          <span data-i18n="import.selectFile">Select .xlsx file</span>
+        <div class="import-dropzone" id="import-dropzone" onclick="$('#import-file-input').click()" data-i18n="import.dropHint">
+          Click or drag .xlsx file here
           <input type="file" accept=".xlsx,.xls" style="display:none" id="import-file-input" onchange="handleImportFile(this)">
-        </label>
+        </div>
         <div id="import-status" style="margin-top:10px;font-size:13px;display:none"></div>
       </div>
     </div>
