@@ -13,14 +13,21 @@ function openModal(sel) {
   overlay.classList.remove('modal-closing');
   const modal = overlay.querySelector('.modal');
   if (modal) {
-    // Measure real modal position: briefly show at scale(1) with no transition
+    // Measure real modal position
     modal.style.cssText = 'transition:none !important; transform:scale(1); opacity:0; pointer-events:none';
     const rect = modal.getBoundingClientRect();
     const ox = _clickX - rect.left;
     const oy = _clickY - rect.top;
-    // Reset and set origin
+    // Distance from click to modal center → duration based on speed
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const dist = Math.hypot(_clickX - cx, _clickY - cy);
+    // Fixed speed: ~2500px/s → consistent perceived velocity everywhere
+    const dur = Math.max(0.2, Math.min(0.5, dist / 2500 + 0.15));
+    // Reset and set origin + duration
     modal.style.cssText = '';
     modal.style.transformOrigin = `${ox}px ${oy}px`;
+    modal.style.animationDuration = `${dur}s`;
     // Next frame: start animation
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -33,12 +40,17 @@ function openModal(sel) {
 }
 function closeModal(sel) {
   const overlay = typeof sel === 'string' ? $(sel) : sel;
+  const modal = overlay.querySelector('.modal');
+  // Close duration = 80% of open duration for snappy feel
+  const closeDur = modal ? parseFloat(modal.style.animationDuration || '0.3') * 0.8 : 0.25;
+  if (modal) modal.style.animationDuration = `${closeDur}s`;
   overlay.classList.remove('modal-open');
   overlay.classList.add('modal-closing');
   setTimeout(() => {
     overlay.style.display = 'none';
     overlay.classList.remove('modal-closing');
-  }, 320);
+    if (modal) modal.style.animationDuration = '';
+  }, closeDur * 1000 + 50);
 }
 const tokenKey = 'token:' + basePath;
 function sha256(msg) {
