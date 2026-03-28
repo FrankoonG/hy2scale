@@ -712,7 +712,7 @@ function addAddrRow(host, port) {
   row.className = 'addr-row';
   row.innerHTML = `<input class="addr-ip" placeholder="IP or hostname" value="${host || ''}">
     <input class="addr-port" placeholder="Port(s)" value="${port || ''}">
-    <button class="addr-del" tabindex="-1" onclick="removeAddrRow(this)" ${idx === 0 ? 'disabled' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>`;
+    <button class="addr-del" tabindex="-1" onclick="removeAddrRow(this)" ${idx === 0 ? 'disabled' : ''}><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>`;
   list.appendChild(row);
   updateAddrDelButtons();
   syncConnMode();
@@ -1650,7 +1650,7 @@ let _importTarget = '';
 
 async function exportXLSX(target) {
   try {
-    let data, filename, headers;
+    let data, filename, headers, label;
     if (target === 'nodes') {
       const clients = await api('/clients');
       headers = ['name','addrs','password','sni','insecure','conn_mode','max_tx','max_rx'];
@@ -1660,6 +1660,7 @@ async function exportXLSX(target) {
         conn_mode: c.conn_mode||'', max_tx: c.max_tx||0, max_rx: c.max_rx||0,
       }));
       filename = 'hy2scale-nodes.xlsx';
+      label = t('nav.nodes');
     } else if (target === 'users') {
       const users = await api('/users');
       headers = ['username','password','exit_via','exit_mode','traffic_limit_gb','expiry_date','enabled'];
@@ -1670,6 +1671,7 @@ async function exportXLSX(target) {
         expiry_date: u.expiry_date||'', enabled: u.enabled?'true':'false',
       }));
       filename = 'hy2scale-users.xlsx';
+      label = t('nav.users');
     } else if (target.startsWith('rules-')) {
       const ruleType = target.replace('rules-','');
       const resp = await api('/rules');
@@ -1681,7 +1683,10 @@ async function exportXLSX(target) {
         enabled: r.enabled?'true':'false',
       }));
       filename = `hy2scale-rules-${ruleType}.xlsx`;
+      label = t('nav.rules') + ' (' + ruleType + ')';
     } else return;
+
+    if (!await showConfirm(t('import.export'), t('import.exportConfirm', {count: data.length, type: label}))) return;
 
     const ws = XLSX.utils.json_to_sheet(data, {header: headers});
     const wb = XLSX.utils.book_new();
@@ -1955,7 +1960,7 @@ class ExitPathList {
     const del = document.createElement('button');
     del.className = 'addr-del';
     del.tabIndex = -1;
-    del.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="16" height="16"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
+    del.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>';
     del.addEventListener('click', () => { row.remove(); this.syncMode(); });
     row.appendChild(input);
     row.appendChild(del);
