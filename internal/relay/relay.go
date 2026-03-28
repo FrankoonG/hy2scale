@@ -287,11 +287,13 @@ func (n *Node) StartLatencyProber(ctx context.Context) {
 					if rtt >= 0 {
 						n.SetLatency(name, int(rtt.Milliseconds()))
 						p.failCount.Store(0)
-						// Cache peer's sub-peers for path discovery
-						if subPeers, err := n.PeersOf(name); err == nil {
-							n.peerRateMu.Lock()
-							n.peersOfCache[name] = subPeers
-							n.peerRateMu.Unlock()
+						// Cache peer's sub-peers only if nested discovery is enabled
+						if n.IsNestedEnabled(name) {
+							if subPeers, err := n.PeersOf(name); err == nil {
+								n.peerRateMu.Lock()
+								n.peersOfCache[name] = subPeers
+								n.peerRateMu.Unlock()
+							}
 						}
 					} else {
 						n.SetLatency(name, -1)
