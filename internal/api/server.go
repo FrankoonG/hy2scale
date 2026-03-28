@@ -909,11 +909,27 @@ func (s *Server) fetchSubPeersViaHTTP(peerName string) []topoSubPeer {
 			LatencyMs: childLatency,
 			Nested:    rp.Nested,
 			Native:    rp.Native,
-			Children:  addLatencyOffset(rp.Children, parentLatency),
+			Children:  filterSelfFromChildren(addLatencyOffset(rp.Children, parentLatency), myID),
 		}
 		children = append(children, child)
 	}
 	return children
+}
+
+// filterSelfFromChildren recursively removes self node ID from all levels of children.
+func filterSelfFromChildren(children []topoSubPeer, selfID string) []topoSubPeer {
+	if len(children) == 0 {
+		return children
+	}
+	filtered := make([]topoSubPeer, 0, len(children))
+	for _, c := range children {
+		if c.Name == selfID {
+			continue
+		}
+		c.Children = filterSelfFromChildren(c.Children, selfID)
+		filtered = append(filtered, c)
+	}
+	return filtered
 }
 
 // addLatencyOffset recursively adds an offset to all latency values in a sub-peer tree.
