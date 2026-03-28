@@ -189,6 +189,9 @@ type Node struct {
 	nestedMu sync.RWMutex
 	nested   map[string]bool
 
+	blockedMu sync.RWMutex
+	blocked   map[string]bool
+
 	// Traffic counters
 	txBytes   atomic.Uint64
 	rxBytes   atomic.Uint64
@@ -388,6 +391,7 @@ func NewNode(name string, exitNode bool) *Node {
 		exit:      exitNode,
 		peers:     make(map[string]*peer),
 		nested:    make(map[string]bool),
+		blocked:   make(map[string]bool),
 		peerRates: make(map[string]PeerTraffic),
 		latencies:    make(map[string]int),
 		peersOfCache: make(map[string][]PeerInfo),
@@ -613,6 +617,13 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 		remoteMeta.Version = "1.0.0" // old peers don't send version
 	}
 
+	// Reject blocked peers (disabled nodes)
+	if n.IsPeerBlocked(name) {
+		stream.Close()
+		return
+	}
+
+	peerCtx, peerCancel := context.WithCancel(ctx)
 	p := &peer{
 		info: PeerInfo{
 			Name:      name,
@@ -621,13 +632,14 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 			Version:   remoteMeta.Version,
 		},
 		waiting: make(map[string]chan net.Conn),
+		cancel:  peerCancel,
 	}
 
 	n.mu.Lock()
 	n.peers[name] = p
 	n.mu.Unlock()
 
-	<-ctx.Done()
+	<-peerCtx.Done()
 
 	n.mu.Lock()
 	delete(n.peers, name)
@@ -872,6 +884,38 @@ func (n *Node) IsNestedEnabled(peerName string) bool {
 	n.nestedMu.RLock()
 	defer n.nestedMu.RUnlock()
 	return n.nested[peerName]
+}
+
+// DisconnectPeer forcibly disconnects a peer (both inbound and outbound).
+func (n *Node) DisconnectPeer(name string) {
+	n.mu.Lock()
+	p, ok := n.peers[name]
+	if ok && p.cancel != nil {
+		p.cancel()
+	}
+	delete(n.peers, name)
+	n.mu.Unlock()
+}
+
+// BlockPeer prevents a peer from registering (inbound connections rejected).
+func (n *Node) BlockPeer(name string) {
+	n.blockedMu.Lock()
+	n.blocked[name] = true
+	n.blockedMu.Unlock()
+}
+
+// UnblockPeer allows a peer to register again.
+func (n *Node) UnblockPeer(name string) {
+	n.blockedMu.Lock()
+	delete(n.blocked, name)
+	n.blockedMu.Unlock()
+}
+
+// IsPeerBlocked checks if a peer is blocked.
+func (n *Node) IsPeerBlocked(name string) bool {
+	n.blockedMu.RLock()
+	defer n.blockedMu.RUnlock()
+	return n.blocked[name]
 }
 
 // HasPeer checks if a peer is connected.

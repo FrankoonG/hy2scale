@@ -314,8 +314,11 @@ func (a *App) Run(ctx context.Context) error {
 	// Start rule engine (host mode only)
 	a.StartRuleEngine()
 
-	// Start clients
+	// Start clients (block disabled ones from inbound too)
 	for _, cl := range cfg.Clients {
+		if cl.Disabled {
+			a.node.BlockPeer(cl.Name)
+		}
 		a.StartClient(cl)
 	}
 
@@ -458,7 +461,11 @@ func (a *App) RemoveClient(name string) error {
 func (a *App) SetClientDisabled(name string, disabled bool) error {
 	if disabled {
 		a.StopClient(name)
+		// Block and disconnect inbound peer with this name
+		a.node.BlockPeer(name)
+		a.node.DisconnectPeer(name)
 	} else {
+		a.node.UnblockPeer(name)
 		cfg := a.store.Get()
 		for _, cl := range cfg.Clients {
 			if cl.Name == name || cl.Addr == name {
@@ -1290,15 +1297,21 @@ func splitPath(s string) []string {
 // dialExit routes traffic through an exit path, stripping the local node name prefix.
 // dialExitWithMode routes traffic with the specified exit mode.
 // mode: "" = direct, "quality" = adaptive failover, "aggregate" = load balance
-// ValidateExitMode checks exit_mode is only set for simple (non-path) exit_via.
+// ValidateExitMode checks exit_mode compatibility. Mode only applies to
+// single-hop exits at dial time; path-based exits silently ignore the mode.
 func ValidateExitMode(exitVia, exitMode string) error {
-	if exitMode != "" && strings.Contains(exitVia, "/") {
-		return fmt.Errorf("exit mode (%s) cannot be used with path-based exit (%s)", exitMode, exitVia)
-	}
 	return nil
 }
 
 func (a *App) dialExitWithMode(ctx context.Context, exitVia, exitMode, addr string) (net.Conn, error) {
+	// Reject traffic if the first hop is a disabled local connection
+	if exitVia != "" {
+		for _, hop := range strings.Split(exitVia, "/") {
+			if a.isNodeDisabled(hop) {
+				return nil, fmt.Errorf("exit node %q is disabled", hop)
+			}
+		}
+	}
 	if exitMode != "" && exitVia != "" && !strings.Contains(exitVia, "/") {
 		switch exitMode {
 		case "quality", "stability": // "stability" for backward compat
@@ -1308,6 +1321,17 @@ func (a *App) dialExitWithMode(ctx context.Context, exitVia, exitMode, addr stri
 		}
 	}
 	return a.dialExit(ctx, exitVia, addr)
+}
+
+// isNodeDisabled checks if a node name is disabled in config.
+func (a *App) isNodeDisabled(name string) bool {
+	cfg := a.store.Get()
+	for _, cl := range cfg.Clients {
+		if cl.Name == name && cl.Disabled {
+			return true
+		}
+	}
+	return false
 }
 
 // dialExit routes traffic through an exit path (direct mode, no adaptive/LB).
