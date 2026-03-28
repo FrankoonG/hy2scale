@@ -380,23 +380,6 @@
       </div>
 
       <!-- WireGuard Peer Detail (QR + Download) -->
-      <div class="modal-overlay" id="wg-peer-detail" style="display:none" onmousedown="if(event.target===this)closeWGPeerDetail()">
-        <div class="modal" style="max-width:360px">
-          <div class="modal-header">
-            <h2 id="wgp-detail-title">Peer</h2>
-            <button class="btn-icon" onclick="closeWGPeerDetail()">&#10005;</button>
-          </div>
-          <div class="modal-body" style="padding:16px;text-align:center">
-            <canvas id="wgp-qr-canvas" style="width:256px;height:256px;border:1px solid var(--border);border-radius:8px"></canvas>
-            <pre id="wgp-detail-conf" style="text-align:left;font-size:11px;background:var(--bg-subtle);border:1px solid var(--border);border-radius:6px;padding:10px;margin:12px 0 0;max-height:160px;overflow:auto;white-space:pre-wrap;word-break:break-all"></pre>
-          </div>
-          <div class="modal-footer">
-            <button onclick="closeWGPeerDetail()" data-i18n="app.close">Close</button>
-            <button class="btn-primary" onclick="downloadFromDetail()" data-i18n="wg.downloadConf">Download .conf</button>
-          </div>
-        </div>
-      </div>
-
       <!-- Rules Page -->
       <div class="page" id="page-rules" style="display:none">
         <div id="rules-unavailable" style="display:none;padding:24px;color:var(--text-muted);text-align:center">
@@ -565,6 +548,24 @@
     <div class="modal-footer">
       <button onclick="closeEditSelf()" data-i18n="app.cancel">Cancel</button>
       <button class="btn-primary" onclick="submitEditSelf()" data-i18n="app.save">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- WG Peer Detail (QR code) -->
+<div class="modal-overlay" id="wg-peer-detail" style="display:none" onmousedown="if(event.target===this)closeWGPeerDetail()">
+  <div class="modal" style="max-width:360px">
+    <div class="modal-header">
+      <h2 id="wgp-detail-title">Peer</h2>
+      <button class="btn-icon" onclick="closeWGPeerDetail()">&#10005;</button>
+    </div>
+    <div class="modal-body" style="padding:16px;text-align:center">
+      <canvas id="wgp-qr-canvas" style="width:256px;height:256px;border:1px solid var(--border);border-radius:8px"></canvas>
+      <pre id="wgp-detail-conf" style="text-align:left;font-size:11px;background:var(--bg-subtle);border:1px solid var(--border);border-radius:6px;padding:10px;margin:12px 0 0;max-height:160px;overflow:auto;white-space:pre-wrap;word-break:break-all"></pre>
+    </div>
+    <div class="modal-footer">
+      <button onclick="closeWGPeerDetail()" data-i18n="app.close">Close</button>
+      <button class="btn-primary" onclick="downloadFromDetail()" data-i18n="wg.downloadConf">Download .conf</button>
     </div>
   </div>
 </div>
