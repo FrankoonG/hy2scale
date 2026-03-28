@@ -315,11 +315,13 @@ textarea.drag-over{border-color:var(--primary);background:rgba(67,97,238,.05);bo
 .modal-overlay.modal-open{opacity:1}
 .modal-overlay.modal-closing{opacity:0}
 .modal{transform:scale(.05);opacity:0}
-.modal-overlay.modal-open .modal{animation:modalOpen .35s cubic-bezier(.2,.9,.3,1.2) forwards}
+.modal-overlay.modal-open .modal{animation:modalOpen .4s ease forwards}
 .modal-overlay.modal-closing .modal{animation:modalClose .25s cubic-bezier(.4,0,1,1) forwards}
 @keyframes modalOpen{
   0%{transform:scale(.05);opacity:0}
   8%{opacity:.8}
+  65%{transform:scale(1.03)}
+  82%{transform:scale(.99)}
   100%{transform:scale(1);opacity:1}
 }
 @keyframes modalClose{

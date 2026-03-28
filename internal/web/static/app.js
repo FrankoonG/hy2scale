@@ -56,9 +56,12 @@ function closeModal(sel) {
     overlay.style.display = 'none';
     overlay.classList.remove('modal-closing');
     if (modal) modal.style.animationDuration = '';
-    // Reset all password fields to hidden when modal closes
-    overlay.querySelectorAll('input[type="text"]').forEach(inp => {
-      if (inp.closest('.pw-wrap')) inp.type = 'password';
+    // Reset all password fields to hidden and eye button color when modal closes
+    overlay.querySelectorAll('.pw-wrap').forEach(wrap => {
+      const inp = wrap.querySelector('input');
+      const btn = wrap.querySelector('.pw-eye');
+      if (inp && inp.type === 'text') inp.type = 'password';
+      if (btn) btn.style.color = '';
     });
     _modalAnimating = false;
   }, closeDur * 1000 + 50);
