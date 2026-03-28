@@ -712,7 +712,7 @@ function addAddrRow(host, port) {
   row.className = 'addr-row';
   row.innerHTML = `<input class="addr-ip" placeholder="IP or hostname" value="${host || ''}">
     <input class="addr-port" placeholder="Port(s)" value="${port || ''}">
-    <button class="addr-del" tabindex="-1" onclick="removeAddrRow(this)" ${idx === 0 ? 'disabled' : ''}>&#10005;</button>`;
+    <button class="addr-del" tabindex="-1" onclick="removeAddrRow(this)" ${idx === 0 ? 'disabled' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg></button>`;
   list.appendChild(row);
   updateAddrDelButtons();
   syncConnMode();
@@ -1955,7 +1955,7 @@ class ExitPathList {
     const del = document.createElement('button');
     del.className = 'addr-del';
     del.tabIndex = -1;
-    del.innerHTML = '&#10005;';
+    del.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>';
     del.addEventListener('click', () => { row.remove(); this.syncMode(); });
     row.appendChild(input);
     row.appendChild(del);
