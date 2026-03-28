@@ -12,21 +12,22 @@ function openModal(sel) {
   overlay.style.display = '';
   const modal = overlay.querySelector('.modal');
   if (modal) {
-    // Measure modal's centered position without triggering transition
-    modal.style.transition = 'none';
-    modal.style.transform = 'scale(1)';
-    modal.style.opacity = '0';
-    modal.offsetHeight; // force layout
-    const rect = modal.getBoundingClientRect();
-    // Calculate click position relative to modal's box
-    const ox = _clickX - rect.left;
-    const oy = _clickY - rect.top;
-    // Reset to initial state
-    modal.style.transform = '';
-    modal.style.opacity = '';
+    // Calculate modal's centered position mathematically (no DOM measurement needed)
+    // Overlay is position:fixed inset:0 with flex centering
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    // Modal width: min(max-width, 100%) — typically max-width from CSS
+    const cs = getComputedStyle(modal);
+    const maxW = parseInt(cs.maxWidth) || 520;
+    const mw = Math.min(maxW, vw - 32); // account for margin
+    // Estimate height from scrollHeight or use viewport fraction
+    const mh = Math.min(modal.scrollHeight || vh * 0.6, vh * 0.85);
+    // Modal is centered: left = (vw - mw) / 2, top = (vh - mh) / 2
+    const ml = (vw - mw) / 2;
+    const mt = (vh - mh) / 2;
+    const ox = _clickX - ml;
+    const oy = _clickY - mt;
     modal.style.transformOrigin = `${ox}px ${oy}px`;
-    modal.style.transition = '';
-    modal.offsetHeight; // force layout before transition starts
   }
   overlay.classList.remove('modal-closing');
   overlay.offsetHeight;
