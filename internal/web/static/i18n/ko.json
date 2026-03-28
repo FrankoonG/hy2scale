@@ -332,5 +332,6 @@
   "import.empty": "파일이 비어 있거나 데이터 행이 없습니다.",
   "import.result": "추가: {added}, 건너뜀: {skipped}, 오류: {errors}",
   "import.failed": "가져오기 실패",
-  "import.exported": "내보내기 완료"
+  "import.exported": "내보내기 완료",
+  "import.exportConfirm": "{count}개의 {type} 항목을 XLSX로 내보내시겠습니까?"
 }
