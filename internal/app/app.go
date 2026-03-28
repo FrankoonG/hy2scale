@@ -216,7 +216,8 @@ func (a *App) Run(ctx context.Context) error {
 	if cfg.Server != nil {
 		port := 5565
 		if cfg.Server.Listen != "" {
-			if _, p, err := net.SplitHostPort(cfg.Server.Listen); err == nil {
+			primary := extractPrimaryAddr(cfg.Server.Listen)
+			if _, p, err := net.SplitHostPort(primary); err == nil {
 				if pn, err := strconv.Atoi(p); err == nil {
 					port = pn
 				}
@@ -762,12 +763,29 @@ func (a *App) restartServer() error {
 	return a.startServer(srvCtx, cfg.Server)
 }
 
+// extractPrimaryAddr takes an address like "0.0.0.0:5565,44000-45000"
+// and returns "0.0.0.0:5565" (first port only) for net.ListenPacket.
+func extractPrimaryAddr(addr string) string {
+	idx := strings.LastIndex(addr, ":")
+	if idx < 0 {
+		return addr
+	}
+	host := addr[:idx]
+	portSpec := addr[idx+1:]
+	// Take first port from comma-separated list
+	first := strings.SplitN(portSpec, ",", 2)[0]
+	// Take start of range if it's a range
+	first = strings.SplitN(first, "-", 2)[0]
+	return host + ":" + strings.TrimSpace(first)
+}
+
 func (a *App) startServer(ctx context.Context, sc *ServerConfig) error {
 	cert, err := loadCert(sc.TLSCert, sc.TLSKey)
 	if err != nil {
 		return err
 	}
-	conn, err := net.ListenPacket("udp", sc.Listen)
+	listenAddr := extractPrimaryAddr(sc.Listen)
+	conn, err := net.ListenPacket("udp", listenAddr)
 	if err != nil {
 		return err
 	}
@@ -864,7 +882,7 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 
 		log.Printf("[%s] connecting extra IP %s for %s (#%d)", a.node.Name(), extraAddr, peerName, index)
 
-		addr, err := net.ResolveUDPAddr("udp", extraAddr)
+		addr, err := net.ResolveUDPAddr("udp", extractPrimaryAddr(extraAddr))
 		if err != nil {
 			log.Printf("[%s] extra IP %s: %v", a.node.Name(), extraAddr, err)
 			select {
@@ -979,7 +997,7 @@ func (a *App) verifyExtraConn(c hyclient.Client, expectedPeerName string) string
 }
 
 func (a *App) connect(ctx context.Context, cl ClientEntry) error {
-	addr, err := net.ResolveUDPAddr("udp", cl.Addr)
+	addr, err := net.ResolveUDPAddr("udp", extractPrimaryAddr(cl.Addr))
 	if err != nil {
 		return fmt.Errorf("invalid address %q: %w", cl.Addr, err)
 	}
