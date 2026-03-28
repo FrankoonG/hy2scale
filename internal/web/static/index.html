@@ -775,8 +775,8 @@
           <span style="font-size:13px" data-i18n="import.overwrite">Overwrite duplicates</span>
         </div>
         <p style="font-size:12px;color:var(--text-muted);margin:0 0 12px" data-i18n="import.overwriteHint">When checked, existing items with the same key will be replaced. When unchecked, duplicates are skipped.</p>
-        <div class="import-dropzone" id="import-dropzone" onclick="$('#import-file-input').click()" data-i18n="import.dropHint">
-          Click or drag .xlsx file here
+        <div class="import-dropzone" id="import-dropzone" onclick="$('#import-file-input').click()">
+          <span data-i18n="import.dropHint">Click or drag .xlsx file here</span>
           <input type="file" accept=".xlsx,.xls" style="display:none" id="import-file-input" onchange="handleImportFile(this)">
         </div>
         <div id="import-status" style="margin-top:10px;font-size:13px;display:none"></div>
