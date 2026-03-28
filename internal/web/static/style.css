@@ -314,7 +314,7 @@ textarea.drag-over{border-color:var(--primary);background:rgba(67,97,238,.05);bo
 .modal-overlay{opacity:0;transition:opacity .25s ease}
 .modal-overlay.modal-open{opacity:1}
 .modal-overlay.modal-closing{opacity:0}
-.modal{transform:scale(.3);opacity:0;transition:transform .4s cubic-bezier(.34,1.4,.64,1),opacity .25s ease}
+.modal{transform:scale(.3);opacity:0;transition:transform .4s cubic-bezier(.34,1.4,.64,1),opacity .12s ease}
 .modal-overlay.modal-open .modal{transform:scale(1);opacity:1}
 .modal-overlay.modal-closing .modal{transform:scale(.3);opacity:0;transition:transform .3s cubic-bezier(.4,0,1,1),opacity .2s ease}
 
