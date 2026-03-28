@@ -382,7 +382,7 @@ function parentRowHTML(n) {
     <td class="col-dir">${dirHTML(n.direction)}</td>
     <td class="col-name">
       ${n.native ? `<span class="peer-name-cell peer-rename" onclick="renameNative('${esc(n.name)}')">${esc(n.name)}</span>` : nameLink(n.name, chain)}${nativeBadge}${versionBadge}
-      ${n.addr ? `<span class="peer-addr-sub">${esc(n.addr)}</span>` : ''}
+      ${n.addr ? `<span class="peer-addr-sub">${esc(n.addr)}${n.addrs && n.addrs.length > 1 ? ` <span class="badge badge-muted addr-more-badge" data-ipstatus='${JSON.stringify(n.ip_statuses || n.addrs.map(a=>({addr:a,status:n.connected?"online":"offline"})))}' data-lat="${n.latency_ms || 0}">+${n.addrs.length - 1}</span>` : ''}</span>` : ''}
     </td>
     <td class="col-traffic">${trafficHTML(n.tx_rate, n.rx_rate)}</td>
     <td class="col-nested">${nested}</td>
@@ -609,13 +609,218 @@ async function removeClient(name) {
 // ── Node Modal (Add / Edit) ──
 let editingNode = null; // null = add mode, string = edit mode (name)
 
+async function loadCaCertOptions(currentCa) {
+  const sel = $('#add-ca-select');
+  const ta = $('#add-ca');
+  sel.innerHTML = '<option value="">None (use system CA)</option>';
+  try {
+    const certs = await api('/tls');
+    for (const c of certs) {
+      if (c.is_ca) {
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.textContent = c.name || c.id;
+        sel.appendChild(opt);
+      }
+    }
+  } catch(e) {}
+  // Add manual paste option
+  const manualOpt = document.createElement('option');
+  manualOpt.value = '__manual__';
+  manualOpt.textContent = '— Paste PEM manually —';
+  sel.appendChild(manualOpt);
+
+  // Set current value
+  if (currentCa && currentCa.startsWith('-----')) {
+    sel.value = '__manual__';
+    ta.value = currentCa;
+    ta.style.display = '';
+  } else if (currentCa) {
+    sel.value = currentCa;
+    ta.style.display = 'none';
+  } else {
+    sel.value = '';
+    ta.value = '';
+    ta.style.display = 'none';
+  }
+
+  sel.onchange = () => {
+    if (sel.value === '__manual__') {
+      ta.style.display = '';
+      ta.focus();
+    } else {
+      ta.style.display = 'none';
+      ta.value = '';
+    }
+  };
+}
+
+function getSelectedCa() {
+  const sel = $('#add-ca-select');
+  if (sel.value === '__manual__') return $('#add-ca').value.trim();
+  return sel.value; // cert ID or empty
+}
+
+function switchNodeTab(btn, panelId) {
+  btn.parentElement.querySelectorAll('.proxy-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  btn.closest('.modal-body').querySelectorAll('.node-tab-panel').forEach(p => {
+    p.style.display = 'none';
+    p.style.animation = '';
+  });
+  const panel = $('#' + panelId);
+  panel.style.display = '';
+  panel.style.animation = 'tabSlideIn .35s ease both';
+}
+
+function addAddrRow(host, port) {
+  const list = $('#addr-list');
+  const idx = list.children.length;
+  const row = document.createElement('div');
+  row.className = 'addr-row';
+  row.innerHTML = `<input class="addr-ip" placeholder="IP or hostname" value="${host || ''}">
+    <input class="addr-port" placeholder="Port(s)" value="${port || ''}">
+    <button class="addr-del" tabindex="-1" onclick="removeAddrRow(this)" ${idx === 0 ? 'disabled' : ''}>&#10005;</button>`;
+  list.appendChild(row);
+  updateAddrDelButtons();
+  syncConnMode();
+}
+
+function removeAddrRow(btn) {
+  const row = btn.closest('.addr-row');
+  row.remove();
+  updateAddrDelButtons();
+  syncConnMode();
+}
+
+function updateAddrDelButtons() {
+  const rows = $$('#addr-list .addr-row');
+  rows.forEach((row, i) => {
+    row.querySelector('.addr-del').disabled = (rows.length <= 1);
+  });
+}
+
+// Sync connection mode radio buttons with address count
+function syncConnMode() {
+  const addrCount = $$('#addr-list .addr-row').length;
+  const panel = $('#conn-mode-panel');
+  const radios = panel.querySelectorAll('input[type=radio]');
+  const directRadio = panel.querySelector('input[value=""]');
+  const stabilityRadio = panel.querySelector('input[value="stability"]');
+
+  if (addrCount <= 1) {
+    // Single IP: force Direct, disable others
+    directRadio.checked = true;
+    radios.forEach(r => {
+      r.disabled = true;
+    });
+    panel.classList.add('exit-mode-disabled');
+  } else {
+    // Multi IP: disable Direct, enable Stability/Speed
+    directRadio.disabled = true;
+    stabilityRadio.disabled = false;
+    panel.querySelector('input[value="speed"]').disabled = false;
+    panel.classList.remove('exit-mode-disabled');
+    // If Direct was selected, switch to Stability
+    if (directRadio.checked) {
+      stabilityRadio.checked = true;
+    }
+  }
+}
+
+function getConnMode() {
+  const sel = $('#conn-mode-panel').querySelector('input[type=radio]:checked');
+  return sel ? sel.value : '';
+}
+
+function setConnMode(mode) {
+  const panel = $('#conn-mode-panel');
+  panel.querySelectorAll('input[type=radio]').forEach(r => { r.checked = r.value === (mode || ''); });
+  syncConnMode();
+}
+
+function getAddrList() {
+  const rows = [...$$('#addr-list .addr-row')];
+  return rows.map(row => {
+    const ip = row.querySelector('.addr-ip').value.trim();
+    const port = row.querySelector('.addr-port').value.trim();
+    return { ip, port };
+  }).filter(a => a.ip || a.port);
+}
+
+// Validate port spec: single port, comma-separated, or ranges (e.g. "5565", "1000,2000", "20000-30000")
+function validatePortSpec(spec) {
+  if (!spec) return false;
+  const parts = spec.split(',').map(s => s.trim()).filter(Boolean);
+  if (!parts.length) return false;
+  for (const p of parts) {
+    if (p.includes('-')) {
+      const [a, b] = p.split('-').map(s => parseInt(s.trim()));
+      if (isNaN(a) || isNaN(b) || a < 1 || b > 65535 || a > b) return false;
+    } else {
+      const n = parseInt(p);
+      if (isNaN(n) || n < 1 || n > 65535) return false;
+    }
+  }
+  return true;
+}
+
+function validateAddrs() {
+  const errEl = $('#addr-error');
+  errEl.style.display = 'none';
+  const rows = $$('#addr-list .addr-row');
+
+  function fail(msg) {
+    errEl.textContent = msg;
+    errEl.style.display = '';
+    // Switch to Addresses tab so user sees the error
+    switchNodeTab($$('#add-node-modal .proxy-tab')[0], 'node-tab-addrs');
+    toast(msg, 'error');
+  }
+
+  for (const row of rows) {
+    const ip = row.querySelector('.addr-ip').value.trim();
+    const port = row.querySelector('.addr-port').value.trim();
+    row.querySelector('.addr-ip').style.borderColor = '';
+    row.querySelector('.addr-port').style.borderColor = '';
+    if (!ip) {
+      row.querySelector('.addr-ip').style.borderColor = 'var(--red)';
+      fail('IP/hostname is required for each address');
+      return null;
+    }
+    if (!port || !validatePortSpec(port)) {
+      row.querySelector('.addr-port').style.borderColor = 'var(--red)';
+      fail('Invalid port format. Use: 5565 or 1000,2000 or 20000-30000');
+      return null;
+    }
+  }
+  // Check duplicates
+  const addrStrs = getAddrList().map(a => `${a.ip}:${a.port}`);
+  const seen = new Set();
+  for (let i = 0; i < addrStrs.length; i++) {
+    if (seen.has(addrStrs[i])) {
+      const dupRow = rows[i];
+      dupRow.querySelector('.addr-ip').style.borderColor = 'var(--red)';
+      fail('Duplicate address: ' + addrStrs[i]);
+      return null;
+    }
+    seen.add(addrStrs[i]);
+  }
+  return addrStrs;
+}
+
 function openAddDialog() {
   editingNode = null;
   $('#add-node-modal-title').textContent = t('nodes.addTitle');
-  $('#add-node-submit').textContent = t('nodes.connect');
-  ['add-addr','add-pass','add-sni','add-ca','add-tx','add-rx','add-isw','add-msw','add-icw','add-mcw'].forEach(id => $(`#${id}`).value = '');
-  $('#add-addr').disabled = false;
+  $('#add-node-submit').textContent = t('app.save');
+  ['add-pass','add-sni','add-ca','add-tx','add-rx','add-isw','add-msw','add-icw','add-mcw'].forEach(id => $(`#${id}`).value = '');
   $('#add-insecure').checked = true; $('#add-fastopen').checked = false;
+  $('#addr-list').innerHTML = '';
+  $('#addr-error').style.display = 'none';
+  setConnMode('');
+  addAddrRow('', '');
+  loadCaCertOptions('');
+  switchNodeTab($('#add-node-modal .proxy-tab'), 'node-tab-addrs');
   openModal('#add-node-modal');
   $('#quic-advanced').style.display = 'none';
 }
@@ -626,11 +831,20 @@ async function openEditDialog(name) {
     editingNode = name;
     $('#add-node-modal-title').textContent = t('nodes.editPrefix', {name});
     $('#add-node-submit').textContent = t('app.save');
-    $('#add-addr').value = cl.addr || ''; $('#add-addr').disabled = false;
+    // Populate address list
+    $('#addr-list').innerHTML = '';
+    $('#addr-error').style.display = 'none';
+    const addrs = cl.addrs && cl.addrs.length ? cl.addrs : (cl.addr ? [cl.addr] : ['']);
+    for (const a of addrs) {
+      const parts = a.match(/^(.+):(.+)$/);
+      if (parts) addAddrRow(parts[1], parts[2]);
+      else addAddrRow(a, '');
+    }
+    setConnMode(cl.conn_mode || '');
     $('#add-pass').value = cl.password || '';
     $('#add-sni').value = cl.sni || '';
     $('#add-insecure').checked = cl.insecure !== false;
-    $('#add-ca').value = cl.ca || '';
+    loadCaCertOptions(cl.ca || '');
     $('#add-tx').value = cl.max_tx ? (cl.max_tx / 125000).toFixed(0) : '';
     $('#add-rx').value = cl.max_rx ? (cl.max_rx / 125000).toFixed(0) : '';
     $('#add-isw').value = cl.init_stream_window || '';
@@ -638,6 +852,7 @@ async function openEditDialog(name) {
     $('#add-icw').value = cl.init_conn_window || '';
     $('#add-mcw').value = cl.max_conn_window || '';
     $('#add-fastopen').checked = !!cl.fast_open;
+    switchNodeTab($('#add-node-modal .proxy-tab'), 'node-tab-addrs');
     openModal('#add-node-modal');
     const hasQuic = cl.init_stream_window || cl.max_stream_window || cl.init_conn_window || cl.max_conn_window;
     $('#quic-advanced').style.display = hasQuic ? '' : 'none';
@@ -647,12 +862,16 @@ async function openEditDialog(name) {
 function closeAddDialog() { closeModal('#add-node-modal'); editingNode = null; }
 
 async function submitAddNode() {
-  const addr = $('#add-addr').value.trim(), password = $('#add-pass').value.trim();
-  if (!addr || !password) { toast(t('nodes.addrPassRequired'), 'error'); return; }
-  const name = editingNode || addr; // use addr as temp name; remote ID replaces it after connect
+  const addrs = validateAddrs();
+  if (!addrs) return;
+  const password = $('#add-pass').value.trim();
+  if (!addrs.length) { toast(t('nodes.addrPassRequired'), 'error'); return; }
+  if (!password) { switchNodeTab($$('#add-node-modal .proxy-tab')[1], 'node-tab-conn'); toast('Password is required', 'error'); return; }
+  const addr = addrs[0];
+  const name = editingNode || addr;
   const body = {
-    name, addr, password,
-    sni: $('#add-sni').value.trim(), insecure: $('#add-insecure').checked, ca: $('#add-ca').value.trim(),
+    name, addr, addrs, password, conn_mode: getConnMode(),
+    sni: $('#add-sni').value.trim(), insecure: $('#add-insecure').checked, ca: getSelectedCa(),
     max_tx: Math.round((parseFloat($('#add-tx').value) || 0) * 125000),
     max_rx: Math.round((parseFloat($('#add-rx').value) || 0) * 125000),
     init_stream_window: parseInt($('#add-isw').value) || 0, max_stream_window: parseInt($('#add-msw').value) || 0,
@@ -667,7 +886,7 @@ async function submitAddNode() {
     }
     const wasEdit = !!editingNode;
     closeAddDialog();
-    toast(wasEdit ? t('nodes.updated', {name}) : t('nodes.connectedTo', {name}), 'success');
+    toast(wasEdit ? t('nodes.updated', {name}) : t('nodes.saved', {name}), 'success');
     lastTopoJSON = ''; setTimeout(refreshTopology, 1000);
   } catch (e) { toast(String(e), 'error'); }
 }
@@ -677,7 +896,10 @@ async function openEditSelf() {
   try {
     const [n, certs] = await Promise.all([api('/node'), api('/tls')]);
     $('#self-nodeid').value = n.node_id || '';
-    $('#self-srv-listen').value = n.server?.listen || '';
+    const listenAddr = n.server?.listen || '0.0.0.0:5565';
+    const listenParts = listenAddr.match(/^(.+):(.+)$/);
+    $('#self-srv-ip').value = listenParts ? listenParts[1] : '0.0.0.0';
+    $('#self-srv-port').value = listenParts ? listenParts[2] : '5565';
     $('#self-srv-pass').value = n.server?.password || '';
     // Populate TLS cert dropdown
     const sel = $('#self-srv-tls');
@@ -700,7 +922,9 @@ function closeEditSelf() { closeModal('#edit-self-modal'); }
 async function submitEditSelf() {
   $('#self-error').textContent = ''; $('#self-ok').textContent = '';
   const nodeId = $('#self-nodeid').value.trim();
-  const srvListen = $('#self-srv-listen').value.trim();
+  const srvIp = $('#self-srv-ip').value.trim() || '0.0.0.0';
+  const srvPort = $('#self-srv-port').value.trim() || '5565';
+  const srvListen = srvIp + ':' + srvPort;
   const srvPass = $('#self-srv-pass').value.trim();
   const tlsId = $('#self-srv-tls').value;
 
@@ -1158,7 +1382,7 @@ async function openWGPeerDialog() {
   $('#wgp-submit').textContent = t('app.add');
   $('#wgp-name').value = '';
   $('#wgp-name').readOnly = false;
-  $('#wgp-exitvia').value = '';
+  if (window._wgpExitList) window._wgpExitList.set({paths: [], mode: ''});
   $('#wgp-keepalive').value = '25';
   // Auto-suggest next IP
   const addr = $('#wg-address').value;
@@ -1191,8 +1415,10 @@ function editWGPeer(name) {
   $('#wgp-pubkey').value = p.public_key || '';
   $('#wgp-privkey').value = p.private_key || '';
   $('#wgp-allowedips').value = p.allowed_ips || '';
-  $('#wgp-exitvia').value = p.exit_via || '';
-  if ($('#wgp-exitvia')._setExitMode) $('#wgp-exitvia')._setExitMode(p.exit_mode || '');
+  if (window._wgpExitList) {
+    const paths = p.exit_paths || (p.exit_via ? [p.exit_via] : []);
+    window._wgpExitList.set({paths, mode: p.exit_mode || ''});
+  }
   $('#wgp-keepalive').value = p.keepalive || 0;
   $('#wgp-pubkey').style.borderColor = '';
   $('#wgp-privkey').style.borderColor = '';
@@ -1212,13 +1438,14 @@ async function submitWGPeer() {
   const pubKey = $('#wgp-pubkey').value.trim();
   const privKey = $('#wgp-privkey').value.trim();
   const allowedIPs = $('#wgp-allowedips').value.trim();
-  const exitVia = $('#wgp-exitvia').value.trim();
   if (!name) { toast(t('wg.nameRequired'), 'error'); return; }
   if (!pubKey || !isValidWGKey(pubKey)) { toast(t('wg.pubKeyRequired'), 'error'); return; }
   if (privKey && !isValidWGKey(privKey)) { toast(t('wg.invalidPrivKeyFormat'), 'error'); return; }
   if (!allowedIPs) { toast(t('wg.allowedIpsRequired'), 'error'); return; }
+  if (window._wgpExitList && !window._wgpExitList.validate()) return;
+  const wgExitData = window._wgpExitList ? window._wgpExitList.get() : {paths:[], mode:''};
   const body = { name, public_key: pubKey, private_key: privKey, allowed_ips: allowedIPs,
-    exit_via: exitVia, exit_mode: $('#wgp-exitvia')._getExitMode ? $('#wgp-exitvia')._getExitMode() : '',
+    exit_via: wgExitData.paths[0] || '', exit_paths: wgExitData.paths, exit_mode: wgExitData.mode,
     keepalive: parseInt($('#wgp-keepalive').value) || 0 };
   try {
     if (editingWGPeer) {
@@ -1386,6 +1613,217 @@ function toggleHttpsCert() {
   $('#ui-https-cert-group').style.display = $('#ui-https').checked ? '' : 'none';
 }
 
+// ── Import / Export XLSX ──
+let _importTarget = '';
+
+async function exportXLSX(target) {
+  try {
+    let data, filename, headers;
+    if (target === 'nodes') {
+      const clients = await api('/clients');
+      headers = ['name','addr','addrs','password','sni','insecure','conn_mode','max_tx','max_rx'];
+      data = clients.map(c => ({
+        name: c.name, addr: c.addr, addrs: (c.addrs||[]).join('; '),
+        password: c.password, sni: c.sni||'', insecure: c.insecure?'true':'false',
+        conn_mode: c.conn_mode||'', max_tx: c.max_tx||0, max_rx: c.max_rx||0,
+      }));
+      filename = 'hy2scale-nodes.xlsx';
+    } else if (target === 'users') {
+      const users = await api('/users');
+      headers = ['username','password','exit_via','exit_mode','traffic_limit_gb','expiry_date','enabled'];
+      data = users.map(u => ({
+        username: u.username, password: u.password,
+        exit_via: u.exit_via||'', exit_mode: u.exit_mode||'',
+        traffic_limit_gb: u.traffic_limit ? (u.traffic_limit/1073741824).toFixed(2) : '0',
+        expiry_date: u.expiry_date||'', enabled: u.enabled?'true':'false',
+      }));
+      filename = 'hy2scale-users.xlsx';
+    } else if (target.startsWith('rules-')) {
+      const ruleType = target.replace('rules-','');
+      const resp = await api('/rules');
+      const rules = (resp.rules||[]).filter(r => r.type === ruleType);
+      headers = ['id','name','targets','exit_via','exit_mode','enabled'];
+      data = rules.map(r => ({
+        id: r.id, name: r.name||'', targets: (r.targets||[]).join('\n'),
+        exit_via: r.exit_via||'', exit_mode: r.exit_mode||'',
+        enabled: r.enabled?'true':'false',
+      }));
+      filename = `hy2scale-rules-${ruleType}.xlsx`;
+    } else return;
+
+    const ws = XLSX.utils.json_to_sheet(data, {header: headers});
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Data');
+    XLSX.writeFile(wb, filename);
+    toast(t('import.exported'), 'success');
+  } catch(e) { toast(String(e), 'error'); }
+}
+
+function openImportDialog(target) {
+  _importTarget = target;
+  let title = t('import.title');
+  if (target === 'nodes') title = t('import.importNodes');
+  else if (target === 'users') title = t('import.importUsers');
+  else if (target.startsWith('rules-')) title = t('import.importRules');
+  $('#import-modal-title').textContent = title;
+  $('#import-overwrite').checked = false;
+  $('#import-file-input').value = '';
+  $('#import-status').style.display = 'none';
+  openModal('#import-modal');
+}
+
+function closeImportDialog() { closeModal('#import-modal'); _importTarget = ''; }
+
+async function handleImportFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const statusEl = $('#import-status');
+  statusEl.style.display = '';
+  statusEl.style.color = 'var(--text-muted)';
+  statusEl.textContent = t('import.processing');
+
+  try {
+    const ab = await file.arrayBuffer();
+    const wb = XLSX.read(ab);
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws);
+    if (!rows.length) { statusEl.style.color = 'var(--red)'; statusEl.textContent = t('import.empty'); return; }
+
+    const overwrite = $('#import-overwrite').checked;
+    let added = 0, skipped = 0, errors = 0;
+
+    if (_importTarget === 'nodes') {
+      for (const r of rows) {
+        const addrs = r.addrs ? String(r.addrs).split(/;\s*/).filter(Boolean) : (r.addr ? [String(r.addr)] : []);
+        const body = {
+          name: String(r.name||addrs[0]||''), addr: addrs[0]||'', addrs,
+          password: String(r.password||''), sni: String(r.sni||''), insecure: String(r.insecure)!=='false',
+          conn_mode: String(r.conn_mode||''), max_tx: parseInt(r.max_tx)||0, max_rx: parseInt(r.max_rx)||0,
+        };
+        if (!body.addr || !body.password) { errors++; continue; }
+        try {
+          if (overwrite) {
+            try { await api(`/clients/${encodeURIComponent(body.name)}`, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}); } catch(e) {
+              await api('/clients', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+            }
+          } else {
+            await api('/clients', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+          }
+          added++;
+        } catch(e) { skipped++; }
+      }
+    } else if (_importTarget === 'users') {
+      for (const r of rows) {
+        const body = {
+          username: String(r.username||''), password: String(r.password||''),
+          exit_via: String(r.exit_via||''), exit_mode: String(r.exit_mode||''),
+          traffic_limit: Math.round((parseFloat(r.traffic_limit_gb)||0)*1073741824),
+          expiry_date: String(r.expiry_date||''), enabled: String(r.enabled)!=='false',
+        };
+        if (!body.username || !body.password) { errors++; continue; }
+        try {
+          if (overwrite) {
+            try { await api(`/users/${encodeURIComponent(body.username)}`, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}); } catch(e) {
+              await api('/users', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+            }
+          } else {
+            await api('/users', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+          }
+          added++;
+        } catch(e) { skipped++; }
+      }
+    } else if (_importTarget.startsWith('rules-')) {
+      const ruleType = _importTarget.replace('rules-','');
+      for (const r of rows) {
+        const targets = String(r.targets||'').split('\n').map(s=>s.trim()).filter(Boolean);
+        const body = {
+          id: String(r.id || ruleType+'-'+Date.now().toString(36)+Math.random().toString(36).slice(2,5)),
+          name: String(r.name||''), type: ruleType, targets,
+          exit_via: String(r.exit_via||''), exit_mode: String(r.exit_mode||''),
+          enabled: String(r.enabled)!=='false',
+        };
+        if (!targets.length || !body.exit_via) { errors++; continue; }
+        try {
+          if (overwrite) {
+            try { await api(`/rules/${encodeURIComponent(body.id)}`, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}); } catch(e) {
+              await api('/rules', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+            }
+          } else {
+            await api('/rules', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+          }
+          added++;
+        } catch(e) { skipped++; }
+      }
+    }
+
+    statusEl.style.color = 'var(--green)';
+    statusEl.textContent = t('import.result', {added, skipped, errors});
+    toast(t('import.result', {added, skipped, errors}), 'success');
+    // Refresh the page
+    if (_importTarget === 'nodes') { lastTopoJSON = ''; refreshTopology(); }
+    else if (_importTarget === 'users') refreshUsers();
+    else refreshRules();
+  } catch(e) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = t('import.failed') + ': ' + e;
+    toast(t('import.failed') + ': ' + e, 'error');
+  }
+  input.value = '';
+}
+
+function downloadBackup() {
+  const token = sessionStorage.getItem(tokenKey);
+  const a = document.createElement('a');
+  a.href = basePath + '/api/backup';
+  // Use fetch to add auth header, then trigger download
+  fetch(basePath + '/api/backup', { headers: { 'Authorization': 'Bearer ' + token } })
+    .then(r => r.blob())
+    .then(blob => {
+      const url = URL.createObjectURL(blob);
+      a.href = url;
+      a.download = 'hy2scale-backup.tar';
+      a.click();
+      URL.revokeObjectURL(url);
+      toast('Backup downloaded', 'success');
+    })
+    .catch(e => toast('Backup failed: ' + e, 'error'));
+}
+
+async function uploadRestore(input) {
+  const file = input.files[0];
+  if (!file) return;
+  if (!confirm(t('settings.restoreConfirm'))) {
+    input.value = '';
+    return;
+  }
+  const statusEl = $('#backup-status');
+  statusEl.style.display = '';
+  statusEl.style.color = 'var(--text-muted)';
+  statusEl.textContent = t('settings.restoreUploading');
+  try {
+    const token = sessionStorage.getItem(tokenKey);
+    const resp = await fetch(basePath + '/api/restore', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token },
+      body: file,
+    });
+    if (!resp.ok) {
+      const msg = await resp.text();
+      throw msg;
+    }
+    statusEl.style.color = 'var(--green)';
+    statusEl.textContent = t('settings.restoreComplete');
+    toast(t('settings.restoreComplete'), 'success');
+    // Wait for restart, then reload
+    setTimeout(() => { location.reload(); }, 3000);
+  } catch (e) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = t('settings.restoreFailed') + ': ' + e;
+    toast(t('settings.restoreFailed') + ': ' + e, 'error');
+  }
+  input.value = '';
+}
+
 async function saveDNS() {
   const dns = $('#ui-dns').value.trim();
   try {
@@ -1452,6 +1890,113 @@ function buildExitPaths(topo) {
   _exitPaths = paths;
 }
 
+// ── Exit Path List Component ──
+// Replaces single exit_via input with a multi-path list + mode selector.
+// Usage: new ExitPathList(containerEl, id)
+// API: .set({paths:[], mode:''}), .get() → {paths:[], mode:''}
+class ExitPathList {
+  constructor(containerEl, id) {
+    this.id = id;
+    this.el = containerEl;
+    this.el.innerHTML = `
+      <div class="exit-mode-options exit-path-mode" style="margin-bottom:8px">
+        <label class="exit-mode-opt"><input type="radio" name="epm-${id}" value="" checked><span>${t('exit.modeNone')}</span></label>
+        <label class="exit-mode-opt"><input type="radio" name="epm-${id}" value="stability"><span>${t('exit.modeStability')}</span></label>
+        <label class="exit-mode-opt"><input type="radio" name="epm-${id}" value="speed"><span>${t('exit.modeSpeed')}</span></label>
+      </div>
+      <div class="exit-path-list addr-list"></div>
+      <div class="addr-add-row exit-path-add" style="margin-top:6px"><span>${t('exit.addPath')}</span></div>`;
+    this.listEl = this.el.querySelector('.exit-path-list');
+    this.modeEl = this.el.querySelector('.exit-path-mode');
+    this.el.querySelector('.exit-path-add').addEventListener('click', () => this.addRow(''));
+    this.addRow('');
+  }
+
+  addRow(value) {
+    const row = document.createElement('div');
+    row.className = 'addr-row';
+    const input = document.createElement('input');
+    input.className = 'addr-ip';
+    input.placeholder = 'e.g. node-name or path/to/node';
+    input.value = value || '';
+    input.style.flex = '1';
+    const del = document.createElement('button');
+    del.className = 'addr-del';
+    del.tabIndex = -1;
+    del.innerHTML = '&#10005;';
+    del.addEventListener('click', () => { row.remove(); this.syncMode(); });
+    row.appendChild(input);
+    row.appendChild(del);
+    this.listEl.appendChild(row);
+    // Setup autocomplete on the input
+    setupExitAutocomplete(input);
+    this.syncMode();
+  }
+
+  syncMode() {
+    const rows = this.listEl.querySelectorAll('.addr-row');
+    const radios = this.modeEl.querySelectorAll('input[type=radio]');
+    const directRadio = this.modeEl.querySelector('input[value=""]');
+    const stabilityRadio = this.modeEl.querySelector('input[value="stability"]');
+    const speedRadio = this.modeEl.querySelector('input[value="speed"]');
+    // Delete button: first row can't be deleted
+    rows.forEach((r, i) => { r.querySelector('.addr-del').disabled = (rows.length <= 1); });
+
+    if (rows.length <= 1) {
+      // Single path: force Direct
+      directRadio.checked = true;
+      radios.forEach(r => r.disabled = true);
+      this.modeEl.classList.add('exit-mode-disabled');
+    } else {
+      // Multi path: disable Direct
+      directRadio.disabled = true;
+      stabilityRadio.disabled = false;
+      speedRadio.disabled = false;
+      this.modeEl.classList.remove('exit-mode-disabled');
+      if (directRadio.checked) stabilityRadio.checked = true;
+    }
+  }
+
+  set({paths, mode}) {
+    this.listEl.innerHTML = '';
+    const list = paths && paths.length ? paths : [''];
+    for (const p of list) this.addRow(p);
+    if (mode) {
+      const r = this.modeEl.querySelector(`input[value="${mode}"]`);
+      if (r) r.checked = true;
+    }
+    this.syncMode();
+  }
+
+  validate() {
+    const rows = this.listEl.querySelectorAll('.addr-row');
+    const seen = new Set();
+    for (const r of rows) {
+      const input = r.querySelector('input');
+      const v = input.value.trim();
+      input.style.borderColor = '';
+      if (v && seen.has(v)) {
+        input.style.borderColor = 'var(--red)';
+        toast('Duplicate exit path: ' + v, 'error');
+        return false;
+      }
+      if (v) seen.add(v);
+    }
+    return true;
+  }
+
+  get() {
+    const rows = this.listEl.querySelectorAll('.addr-row');
+    const paths = [];
+    rows.forEach(r => {
+      const v = r.querySelector('input').value.trim();
+      if (v) paths.push(v);
+    });
+    const modeRadio = this.modeEl.querySelector('input[type=radio]:checked');
+    return { paths, mode: modeRadio ? modeRadio.value : '' };
+  }
+}
+
 function setupExitAutocomplete(inputEl) {
   if (inputEl._acSetup) return;
   inputEl._acSetup = true;
@@ -1477,42 +2022,10 @@ function setupExitAutocomplete(inputEl) {
     inputEl.focus();
   });
 
-  // Exit mode selector (always visible)
-  const modePanel = document.createElement('div');
-  modePanel.className = 'exit-mode-panel';
-  modePanel.innerHTML = `<div class="exit-mode-options">
-    <label class="exit-mode-opt"><input type="radio" name="exitmode-${inputEl.id}" value="" checked><span>${t('exit.modeNone')}</span></label>
-    <label class="exit-mode-opt"><input type="radio" name="exitmode-${inputEl.id}" value="stability"><span>${t('exit.modeStability')}</span></label>
-    <label class="exit-mode-opt"><input type="radio" name="exitmode-${inputEl.id}" value="speed"><span>${t('exit.modeSpeed')}</span></label>
-  </div>`;
-  wrap.appendChild(modePanel);
-
-  function syncModeState() {
-    const val = inputEl.value.trim();
-    const hasPath = val.includes('/');
-    const radios = modePanel.querySelectorAll('input[type=radio]');
-    if (hasPath) {
-      // Force Direct, disable all options
-      radios.forEach(r => { r.checked = r.value === ''; r.disabled = true; });
-      modePanel.classList.add('exit-mode-disabled');
-    } else {
-      radios.forEach(r => { r.disabled = false; });
-      modePanel.classList.remove('exit-mode-disabled');
-    }
-  }
-  // Public API
-  inputEl._setExitMode = function(mode) {
-    modePanel.querySelectorAll('input[type=radio]').forEach(r => { r.checked = r.value === (mode || ''); });
-    syncModeState();
-  };
-  inputEl._getExitMode = function() {
-    const sel = modePanel.querySelector('input[type=radio]:checked');
-    return sel ? sel.value : '';
-  };
-
-  inputEl.addEventListener('input', syncModeState);
-  inputEl.addEventListener('focus', syncModeState);
-  setTimeout(syncModeState, 0);
+  // Exit mode: shown but controlled by ExitPathList if present
+  // Keep simple API for backward compat
+  inputEl._setExitMode = function(mode) {};
+  inputEl._getExitMode = function() { return ''; };
 
   const list = document.createElement('div');
   list.className = 'autocomplete-list';
@@ -1751,8 +2264,8 @@ function openUserDialog() {
   editingUserId = null;
   $('#user-modal-title').textContent = t('users.addTitle');
   $('#user-submit').textContent = t('app.add');
-  ['u-username','u-password','u-exitvia','u-expiry'].forEach(id => $(`#${id}`).value = '');
-  if ($('#u-exitvia')._setExitMode) $('#u-exitvia')._setExitMode('');
+  ['u-username','u-password','u-expiry'].forEach(id => $(`#${id}`).value = '');
+  if (window._uExitList) window._uExitList.set({paths: [], mode: ''});
   $('#u-limit').value = '0';
   $('#u-enabled').checked = true;
   openModal('#user-modal');
@@ -1767,8 +2280,10 @@ async function editUser(id) {
   $('#user-submit').textContent = t('app.save');
   $('#u-username').value = u.username;
   $('#u-password').value = u.password;
-  $('#u-exitvia').value = u.exit_via || '';
-  if ($('#u-exitvia')._setExitMode) $('#u-exitvia')._setExitMode(u.exit_mode || '');
+  if (window._uExitList) {
+    const paths = u.exit_paths || (u.exit_via ? [u.exit_via] : []);
+    window._uExitList.set({paths, mode: u.exit_mode || ''});
+  }
   $('#u-limit').value = u.traffic_limit ? (u.traffic_limit / 1073741824).toFixed(1) : '0';
   $('#u-expiry').value = u.expiry_date || '';
   $('#u-enabled').checked = u.enabled;
@@ -1782,10 +2297,13 @@ async function submitUser() {
   const password = $('#u-password').value;
   if (!username || !password) { toast(t('users.usernamePassRequired'), 'error'); return; }
   const limitGB = parseFloat($('#u-limit').value) || 0;
+  if (window._uExitList && !window._uExitList.validate()) return;
+  const exitData = window._uExitList ? window._uExitList.get() : {paths:[], mode:''};
   const body = {
     username, password,
-    exit_via: $('#u-exitvia').value.trim(),
-    exit_mode: $('#u-exitvia')._getExitMode ? $('#u-exitvia')._getExitMode() : '',
+    exit_via: exitData.paths[0] || '',
+    exit_paths: exitData.paths,
+    exit_mode: exitData.mode,
     traffic_limit: Math.round(limitGB * 1073741824),
     expiry_date: $('#u-expiry').value || '',
     enabled: $('#u-enabled').checked,
@@ -1897,7 +2415,7 @@ function openRuleDialog(type) {
   $('#rule-type').value = type;
   $('#rule-name').value = '';
   $('#rule-targets').value = '';
-  $('#rule-exit').value = '';
+  if (window._ruleExitList) window._ruleExitList.set({paths: [], mode: ''});
   $('#rule-targets-label').textContent = type === 'ip' ? t('rules.ipTargets') : t('rules.domainTargets');
   $('#rule-targets').placeholder = type === 'ip' ? '1.1.1.1\n10.0.0.0/8\n192.168.1.1-192.168.1.254' : 'google.com\n*.github.com';
   $('#rule-modal-title').textContent = t('rules.newRule');
@@ -1916,8 +2434,10 @@ async function editRule(id) {
   $('#rule-type').value = rule.type;
   $('#rule-name').value = rule.name || '';
   $('#rule-targets').value = (rule.targets || []).join('\n');
-  $('#rule-exit').value = rule.exit_via || '';
-  if ($('#rule-exit')._setExitMode) $('#rule-exit')._setExitMode(rule.exit_mode || '');
+  if (window._ruleExitList) {
+    const paths = rule.exit_paths || (rule.exit_via ? [rule.exit_via] : []);
+    window._ruleExitList.set({paths, mode: rule.exit_mode || ''});
+  }
   $('#rule-targets-label').textContent = rule.type === 'ip' ? t('rules.ipTargets') : t('rules.domainTargets');
   $('#rule-modal-title').textContent = t('app.edit');
   $('#rule-submit-btn').textContent = t('app.save');
@@ -1928,12 +2448,14 @@ async function submitRule() {
   const type = $('#rule-type').value;
   const name = $('#rule-name').value.trim();
   const targets = $('#rule-targets').value.trim().split('\n').map(s => s.trim()).filter(Boolean);
-  const exit_via = $('#rule-exit').value.trim();
+  if (window._ruleExitList && !window._ruleExitList.validate()) return;
+  const ruleExitData = window._ruleExitList ? window._ruleExitList.get() : {paths:[], mode:''};
+  const exit_via = ruleExitData.paths[0] || '';
   if (!targets.length) { toast(t('rules.targetsRequired'), 'error'); return; }
   if (!exit_via) { toast(t('rules.exitRequired'), 'error'); return; }
   const id = _editRuleId || (type + '-' + Date.now().toString(36));
-  const exit_mode = $('#rule-exit')._getExitMode ? $('#rule-exit')._getExitMode() : '';
-  const body = { id, name, type, targets, exit_via, exit_mode, enabled: _editRuleEnabled !== undefined ? _editRuleEnabled : true };
+  const exit_mode = ruleExitData.mode;
+  const body = { id, name, type, targets, exit_via, exit_paths: ruleExitData.paths, exit_mode, enabled: _editRuleEnabled !== undefined ? _editRuleEnabled : true };
   try {
     if (_editRuleId) {
       await api('/rules/' + _editRuleId, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
@@ -2148,68 +2670,92 @@ async function deleteCert(id) {
 
 // ── Language Switcher ──
 function updateLangButtons() {
-  const code = I18N.lang.toUpperCase();
-  document.querySelectorAll('.lang-btn').forEach(btn => { btn.textContent = code; });
+  const name = I18N.available.find(l => l.code === I18N.lang)?.name || I18N.lang;
+  document.querySelectorAll('.lang-text').forEach(el => { el.textContent = name; });
 }
 function toggleLangMenu(btn) {
-  // Find the nearest lang-menu sibling
   const switcher = (btn || document.getElementById('lang-btn')).closest('.lang-switcher');
-  const menu = switcher.querySelector('.lang-menu');
-  if (menu.style.display === 'none') {
-    // Close all other lang menus
-    document.querySelectorAll('.lang-menu').forEach(m => m.style.display = 'none');
+  const isOpen = switcher.classList.contains('open');
+  // Close all
+  document.querySelectorAll('.lang-switcher').forEach(s => s.classList.remove('open'));
+  if (!isOpen) {
+    const menu = switcher.querySelector('.lang-menu');
     menu.innerHTML = I18N.available.map(l =>
       `<div class="lang-menu-item ${l.code === I18N.lang ? 'active' : ''}" onclick="switchLang('${l.code}')">${l.name}</div>`
     ).join('');
-    menu.style.display = '';
-  } else {
-    menu.style.display = 'none';
+    switcher.classList.add('open');
   }
 }
 async function switchLang(code) {
   await I18N.load(code);
-  document.querySelectorAll('.lang-menu').forEach(m => m.style.display = 'none');
+  document.querySelectorAll('.lang-switcher').forEach(s => s.classList.remove('open'));
   updateLangButtons();
-  // Update page title from pageTitles (generic, no hardcoding)
   if (pageTitles[_currentPage]) {
     $('#page-title').textContent = t(pageTitles[_currentPage]);
   }
-  // Re-render current page to refresh all dynamic i18n content
   try { switchPage(_currentPage, false); } catch(e) {}
-  // Force re-render for pages that cache state
   if (_currentPage === 'nodes') lastTopoJSON = '';
   if (_currentPage === 'proxies') proxiesLoaded = false;
 }
 document.addEventListener('click', e => {
   if (!e.target.closest('.lang-switcher')) {
-    document.querySelectorAll('.lang-menu').forEach(m => m.style.display = 'none');
+    document.querySelectorAll('.lang-switcher').forEach(s => s.classList.remove('open'));
   }
 });
 
-// Global floating tooltip for rule target badges
+// Universal floating tooltip for badges
 (function() {
-  let tip = null;
-  document.addEventListener('mouseenter', e => {
-    const badge = e.target.closest('.rule-more-badge');
-    if (!badge) return;
-    const text = badge.dataset.tip;
-    if (!text) return;
-    if (!tip) {
-      tip = document.createElement('div');
-      tip.style.cssText = 'position:fixed;z-index:99999;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:var(--mono);font-size:12px;box-shadow:0 4px 16px rgba(0,0,0,.2);pointer-events:none;white-space:pre;line-height:1.6';
-      document.body.appendChild(tip);
-    }
-    tip.textContent = text;
-    tip.style.display = 'block';
+  const tip = document.createElement('div');
+  tip.className = 'float-tip';
+  document.body.appendChild(tip);
+  let hideTimer = null;
+
+  function show(badge) {
+    clearTimeout(hideTimer);
+    if (badge.dataset.tip) {
+      tip.textContent = badge.dataset.tip;
+    } else if (badge.dataset.ipstatus) {
+      try {
+        const statuses = JSON.parse(badge.dataset.ipstatus);
+        const avgLat = parseInt(badge.dataset.lat) || 0;
+        tip.innerHTML = statuses.map(s => {
+          const statusColors = {
+            online: 'var(--green)',
+            offline: 'var(--red)',
+            mismatch: '#f59e0b',
+            native: '#8b5cf6)'
+          };
+          const statusLabels = {
+            online: avgLat > 0 ? avgLat + 'ms' : 'online',
+            offline: 'offline',
+            mismatch: 'mismatch',
+            native: 'native'
+          };
+          const color = statusColors[s.status] || 'var(--text-muted)';
+          const label = statusLabels[s.status] || s.status;
+          const latStyle = s.status === 'online' && avgLat > 0
+            ? (avgLat < 80 ? 'color:var(--green)' : avgLat < 200 ? 'color:#f59e0b' : 'color:var(--red)')
+            : 'color:' + color;
+          return `<div style="display:flex;justify-content:space-between;gap:20px"><span style="color:${s.status === 'online' ? 'var(--text)' : color}">${s.addr}</span><span style="${latStyle};font-weight:600;font-size:11px">${label}</span></div>`;
+        }).join('');
+      } catch(e) { return; }
+    } else return;
     const rect = badge.getBoundingClientRect();
     tip.style.left = rect.left + 'px';
     tip.style.top = (rect.bottom + 4) + 'px';
-  }, true);
-  document.addEventListener('mouseleave', e => {
-    if (e.target.closest('.rule-more-badge') && tip) {
-      tip.style.display = 'none';
-    }
-  }, true);
+    tip.style.transformOrigin = 'top left';
+    tip.classList.add('visible');
+  }
+
+  function hide() {
+    hideTimer = setTimeout(() => tip.classList.remove('visible'), 100);
+  }
+
+  document.addEventListener('mouseover', e => {
+    const badge = e.target.closest('[data-tip],[data-ipstatus]');
+    if (badge) show(badge);
+    else hide();
+  });
 })();
 
 // ── Init ──
@@ -2227,15 +2773,13 @@ document.addEventListener('click', e => {
   // Setup PEM drag-drop on cert textareas
   setupPEMDragDrop($('#cert-pem'), 'cert');
   setupPEMDragDrop($('#cert-key-pem'), 'key');
-  // Setup exit via autocomplete
-  const uExit = $('#u-exitvia');
-  if (uExit) setupExitAutocomplete(uExit);
+  // Setup exit path list components
+  if ($('#u-exitvia-list')) window._uExitList = new ExitPathList($('#u-exitvia-list'), 'u');
+  if ($('#wgp-exitvia-list')) window._wgpExitList = new ExitPathList($('#wgp-exitvia-list'), 'wgp');
+  if ($('#rule-exit-list')) window._ruleExitList = new ExitPathList($('#rule-exit-list'), 'rule');
+  // IKEv2 default exit: keep as simple input with autocomplete
   const ikExit = $('#ikev2-default-exit');
   if (ikExit) setupExitAutocomplete(ikExit);
-  const wgpExit = $('#wgp-exitvia');
-  if (wgpExit) setupExitAutocomplete(wgpExit);
-  const ruleExit = $('#rule-exit');
-  if (ruleExit) setupExitAutocomplete(ruleExit);
   // Setup custom selects for all <select> elements
   $$('select').forEach(sel => setupCustomSelect(sel));
 })();

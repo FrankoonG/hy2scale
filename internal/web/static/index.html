@@ -28,8 +28,8 @@
 <!-- Login -->
 <div id="login-screen" class="login-screen">
   <div class="lang-switcher" style="position:absolute;top:16px;right:16px">
-    <button class="lang-btn" id="login-lang-btn" onclick="toggleLangMenu(this)" title="Language"></button>
-    <div class="lang-menu" id="login-lang-menu" style="display:none"></div>
+    <button class="lang-btn" id="login-lang-btn" onclick="toggleLangMenu(this)"><span class="lang-text"></span><svg class="lang-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="9 18 15 12 9 6"/></svg></button>
+    <div class="lang-menu" id="login-lang-menu"></div>
   </div>
   <div class="login-box">
     <div class="logo"><img class="logo-img" alt="HY2 SCALE"></div>
@@ -55,7 +55,7 @@
     </div>
     <nav class="sidebar-nav">
       <a class="nav-item active" data-page="nodes" onclick="switchPage('nodes')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4m-2.93-7.07-2.83 2.83m-8.48 8.48-2.83 2.83m0-14.14 2.83 2.83m8.48 8.48 2.83 2.83"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="12" r="3"/><path d="M15 6.5a7 7 0 0 0-6 5.5"/><path d="M9 12.5a7 7 0 0 0 6 5.5"/></svg>
         <span data-i18n="nav.nodes">Nodes</span>
       </a>
       <a class="nav-item" data-page="users" onclick="switchPage('users')">
@@ -67,7 +67,7 @@
         <span data-i18n="nav.proxies">Proxies</span>
       </a>
       <a class="nav-item" data-page="rules" onclick="switchPage('rules')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="12" r="3"/><path d="M15 6.5a7 7 0 0 0-6 5.5"/><path d="M9 12.5a7 7 0 0 0 6 5.5"/></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg>
         <span data-i18n="nav.rules">Rules</span>
       </a>
       <a class="nav-item" data-page="tls" onclick="switchPage('tls')">
@@ -95,8 +95,8 @@
       <span class="node-badge" id="node-badge"></span>
       <span id="node-name-display" style="font-size:13px;color:var(--text-secondary)"></span>
       <div class="lang-switcher" id="lang-switcher">
-        <button class="lang-btn" id="lang-btn" onclick="toggleLangMenu()" title="Language"></button>
-        <div class="lang-menu" id="lang-menu" style="display:none"></div>
+        <button class="lang-btn" id="lang-btn" onclick="toggleLangMenu()"><span class="lang-text"></span><svg class="lang-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="9 18 15 12 9 6"/></svg></button>
+        <div class="lang-menu" id="lang-menu"></div>
       </div>
     </div>
 
@@ -130,7 +130,9 @@
             <span class="card-title" data-i18n="nodes.title">Network Topology</span>
             <span class="card-count" id="peer-count">0</span>
             <span class="spacer"></span>
-            <button class="btn-primary btn-sm" onclick="openAddDialog()" data-i18n="nodes.addNode">+ Add Node</button>
+            <button class="act-btn edit" onclick="exportXLSX('nodes')" data-i18n="import.export">Export</button>
+            <button class="act-btn edit" onclick="openImportDialog('nodes')" data-i18n="import.import">Import</button>
+            <button class="act-btn enable" onclick="openAddDialog()" data-i18n="nodes.addNode">+ Add Node</button>
           </div>
           <div id="topology-tree"><div class="empty" data-i18n="app.loading">Loading...</div></div>
         </div>
@@ -144,7 +146,9 @@
             <span class="card-title" data-i18n="users.title">Users</span>
             <span class="card-count" id="user-count">0</span>
             <span class="spacer"></span>
-            <button class="btn-primary btn-sm" onclick="openUserDialog()" data-i18n="users.addUser">+ Add User</button>
+            <button class="act-btn edit" onclick="exportXLSX('users')" data-i18n="import.export">Export</button>
+            <button class="act-btn edit" onclick="openImportDialog('users')" data-i18n="import.import">Import</button>
+            <button class="act-btn enable" onclick="openUserDialog()" data-i18n="users.addUser">+ Add User</button>
           </div>
           <div id="user-list"><div class="empty" data-i18n="app.loading">Loading...</div></div>
         </div>
@@ -364,7 +368,7 @@
               </div>
               <div class="form-group"><label data-i18n="wg.peerPrivKey">Private Key</label><input id="wgp-privkey" onchange="validateWGKey(this)" placeholder="stored for config download"></div>
               <div class="form-group"><label data-i18n="wg.peerAllowedIPs">Allowed IPs *</label><input id="wgp-allowedips" placeholder="10.0.0.2/32"></div>
-              <div class="form-group"><label data-i18n="wg.peerExitVia">Exit Via</label><input id="wgp-exitvia" placeholder="e.g. au/node (empty = direct)"></div>
+              <div class="form-group"><label data-i18n="wg.peerExitVia">Exit Via</label><div id="wgp-exitvia-list"></div></div>
               <div class="form-group"><label data-i18n="wg.peerKeepalive">Keepalive (seconds)</label><input id="wgp-keepalive" type="number" value="25"></div>
             </div>
           </div>
@@ -410,7 +414,9 @@
                 <span class="card-title" data-i18n="rules.ipRules">IP Rules</span>
                 <span class="card-count" id="ip-rule-count">0</span>
                 <span class="spacer"></span>
-                <button class="btn-primary btn-sm" onclick="openRuleDialog('ip')" data-i18n="rules.newRule">+ New Rule</button>
+                <button class="act-btn edit" onclick="exportXLSX('rules-ip')" data-i18n="import.export">Export</button>
+                <button class="act-btn edit" onclick="openImportDialog('rules-ip')" data-i18n="import.import">Import</button>
+                <button class="act-btn enable" onclick="openRuleDialog('ip')" data-i18n="rules.newRule">+ New Rule</button>
               </div>
               <div id="ip-rules-list"><div class="empty" data-i18n="rules.noRules">No rules configured.</div></div>
             </div>
@@ -422,7 +428,9 @@
                 <span class="card-title" data-i18n="rules.domainRules">Domain Rules</span>
                 <span class="card-count" id="domain-rule-count">0</span>
                 <span class="spacer"></span>
-                <button class="btn-primary btn-sm" onclick="openRuleDialog('domain')" data-i18n="rules.newRule">+ New Rule</button>
+                <button class="act-btn edit" onclick="exportXLSX('rules-domain')" data-i18n="import.export">Export</button>
+                <button class="act-btn edit" onclick="openImportDialog('rules-domain')" data-i18n="import.import">Import</button>
+                <button class="act-btn enable" onclick="openRuleDialog('domain')" data-i18n="rules.newRule">+ New Rule</button>
               </div>
               <div id="domain-rules-list"><div class="empty" data-i18n="rules.noRules">No rules configured.</div></div>
             </div>
@@ -442,7 +450,7 @@
               <input type="hidden" id="rule-type">
               <div class="form-group"><label data-i18n="rules.name">Name</label><input id="rule-name" placeholder="optional"></div>
               <div class="form-group"><label id="rule-targets-label" data-i18n="rules.targets">Targets</label><textarea id="rule-targets" placeholder="One per line" style="min-height:100px;font-family:var(--mono);font-size:13px"></textarea></div>
-              <div class="form-group"><label data-i18n="rules.exitVia">Exit Via *</label><input id="rule-exit" data-i18n="rules.exitViaHint" placeholder="e.g. AUB"></div>
+              <div class="form-group"><label data-i18n="rules.exitVia">Exit Via *</label><div id="rule-exit-list"></div></div>
             </div>
           </div>
           <div class="modal-footer">
@@ -491,6 +499,20 @@
               <button class="btn-primary btn-sm" onclick="changePassword()" data-i18n="settings.update">Update</button>
             </div>
           </div>
+          <div class="card">
+            <div class="card-header"><span class="card-title" data-i18n="settings.backup">Backup &amp; Restore</span></div>
+            <div class="form-col" style="max-width:400px">
+              <p style="font-size:13px;color:var(--text-muted);margin:0 0 12px" data-i18n="settings.backupDesc">Download a complete backup of all settings, certificates, and node identity. Restoring will overwrite the current configuration and restart the panel.</p>
+              <div style="display:flex;gap:8px">
+                <button class="btn-primary btn-sm" onclick="downloadBackup()" data-i18n="settings.downloadBackup">Download Backup</button>
+                <label class="btn-sm btn-secondary-label" data-i18n="settings.restoreFromFile">
+                  Restore from File
+                  <input type="file" accept=".tar" style="display:none" onchange="uploadRestore(this)">
+                </label>
+              </div>
+              <div id="backup-status" style="margin-top:8px;font-size:13px;display:none"></div>
+            </div>
+          </div>
         </div>
 
         <div class="settings-panel" id="stab-web" style="display:none">
@@ -530,10 +552,8 @@
       <div class="form-col">
         <div class="form-group"><label data-i18n="settings.nodeId">Node ID</label><input id="self-nodeid"></div>
         <div class="section-divider"><span data-i18n="nodes.hy2Server">hy2 Server</span> <span class="badge badge-muted" style="margin-left:4px" data-i18n="settings.restartRequired">restart required</span></div>
-        <div class="form-grid">
-          <div class="form-group"><label data-i18n="nodes.listenUdp">Listen (UDP)</label><input id="self-srv-listen" placeholder="0.0.0.0:5565"></div>
-          <div class="form-group"><label data-i18n="nodes.password">Password</label><div class="pw-wrap"><input id="self-srv-pass" type="password"><button type="button" class="pw-eye" tabindex="-1" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
-        </div>
+        <div class="form-group"><label data-i18n="nodes.listenUdp">Listen (UDP)</label><div class="addr-row" style="gap:8px"><input id="self-srv-ip" class="addr-ip" placeholder="0.0.0.0" style="flex:3"><input id="self-srv-port" class="addr-port" placeholder="5565 or 5000-6000" style="flex:2"></div></div>
+        <div class="form-group"><label data-i18n="nodes.password">Password</label><div class="pw-wrap"><input id="self-srv-pass" type="password"><button type="button" class="pw-eye" tabindex="-1" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
         <div class="form-group">
           <label data-i18n="settings.tlsCert">TLS Certificate</label>
           <select id="self-srv-tls"><option value="" data-i18n="nodes.selfSignedAuto">Self-signed (auto)</option></select>
@@ -556,44 +576,75 @@
       <h2 id="add-node-modal-title" data-i18n="nodes.addTitle">Add Node Connection</h2>
       <button class="btn-icon" onclick="closeAddDialog()">&#10005;</button>
     </div>
-    <div class="modal-body" style="padding-top:16px">
-      <div class="form-col">
-        <!-- Connection -->
-        <div class="form-grid">
-          <div class="form-group"><label data-i18n="nodes.address">Address *</label><input id="add-addr" placeholder="host:port"></div>
-          <div class="form-group"><label data-i18n="nodes.password">Password *</label><div class="pw-wrap"><input id="add-pass" type="password" placeholder="Auth password"><button type="button" class="pw-eye" tabindex="-1" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
-          <div class="form-group"><label data-i18n="nodes.upload">Upload (Mbps)</label><input id="add-tx" type="number" placeholder="0 = 1000 Mbps"></div>
-          <div class="form-group"><label data-i18n="nodes.download">Download (Mbps)</label><input id="add-rx" type="number" placeholder="0 = 1000 Mbps"></div>
-          <div class="form-group">
-            <label data-i18n="nodes.fastOpen">Fast Open</label>
-            <label class="toggle" style="margin-top:4px"><input type="checkbox" id="add-fastopen"><span class="slider"></span></label>
-          </div>
-        </div>
+    <div class="modal-body" style="padding-top:0">
+      <!-- Tabs -->
+      <div class="proxy-tabs" style="margin-top:16px">
+        <div class="proxy-tab active" onclick="switchNodeTab(this,'node-tab-addrs')" data-i18n="nodes.addresses">Addresses</div>
+        <div class="proxy-tab" onclick="switchNodeTab(this,'node-tab-conn')" data-i18n="nodes.connection">Connection</div>
+      </div>
 
-        <!-- TLS -->
-        <div class="section-divider" data-i18n="nodes.tls">TLS</div>
-        <div class="form-grid">
-          <div class="form-group"><label data-i18n="nodes.sni">SNI (Server Name)</label><input id="add-sni" placeholder="auto: HY2 SCALE"></div>
-          <div class="form-group">
-            <label data-i18n="nodes.skipVerify">Skip Verify</label>
-            <label class="toggle" style="margin-top:4px"><input type="checkbox" id="add-insecure" checked><span class="slider"></span></label>
-          </div>
+      <!-- Tab: Addresses -->
+      <div id="node-tab-addrs" class="node-tab-panel" style="animation:tabSlideIn .35s ease both">
+        <div class="section-divider" style="margin-top:0;border-top:none" data-i18n="nodes.connMode">Connection Mode</div>
+        <div id="conn-mode-panel" class="exit-mode-options" style="margin-bottom:12px">
+          <label class="exit-mode-opt"><input type="radio" name="conn-mode" value="" checked><span data-i18n="exit.modeNone">Direct</span></label>
+          <label class="exit-mode-opt"><input type="radio" name="conn-mode" value="stability"><span data-i18n="exit.modeStability">Stability</span></label>
+          <label class="exit-mode-opt"><input type="radio" name="conn-mode" value="speed"><span data-i18n="exit.modeSpeed">Speed</span></label>
         </div>
-        <div class="form-group">
-          <label data-i18n="nodes.caCert">CA Certificate (PEM)</label>
-          <textarea id="add-ca" placeholder="Paste CA cert PEM here (optional)..."></textarea>
+        <div class="section-divider" data-i18n="nodes.addresses">Addresses</div>
+        <div id="addr-list" class="addr-list"></div>
+        <div class="addr-add-row" onclick="addAddrRow()">
+          <span data-i18n="nodes.addAddress">+ Add address</span>
         </div>
+        <div id="addr-error" class="msg-error" style="margin-top:8px;display:none"></div>
+      </div>
 
-        <!-- QUIC Advanced -->
-        <div class="section-divider" style="cursor:pointer" onclick="$('#quic-advanced').style.display=$('#quic-advanced').style.display==='none'?'':'none'; this.querySelector('.adv-arrow').classList.toggle('open',$('#quic-advanced').style.display!=='none')">
-          <span data-i18n="nodes.quicAdvanced">QUIC Advanced</span> <svg class="adv-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="transition:transform .2s;vertical-align:middle;margin-left:4px"><polyline points="6 9 12 15 18 9"/></svg>
-        </div>
-        <div id="quic-advanced" style="display:none">
+      <!-- Tab: Connection -->
+      <div id="node-tab-conn" class="node-tab-panel" style="display:none">
+        <div class="form-col">
           <div class="form-grid">
-            <div class="form-group"><label data-i18n="nodes.initStreamWindow">Init Stream Window</label><input id="add-isw" type="number" placeholder="67108864 (64MB)"></div>
-            <div class="form-group"><label data-i18n="nodes.maxStreamWindow">Max Stream Window</label><input id="add-msw" type="number" placeholder="67108864 (64MB)"></div>
-            <div class="form-group"><label data-i18n="nodes.initConnWindow">Init Conn Window</label><input id="add-icw" type="number" placeholder="134217728 (128MB)"></div>
-            <div class="form-group"><label data-i18n="nodes.maxConnWindow">Max Conn Window</label><input id="add-mcw" type="number" placeholder="134217728 (128MB)"></div>
+            <div class="form-group"><label data-i18n="nodes.password">Password *</label><div class="pw-wrap"><input id="add-pass" type="password" placeholder="Auth password"><button type="button" class="pw-eye" tabindex="-1" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+            <div class="form-group">
+              <label data-i18n="nodes.fastOpen">Fast Open</label>
+              <label class="toggle" style="margin-top:4px"><input type="checkbox" id="add-fastopen"><span class="slider"></span></label>
+            </div>
+          </div>
+
+          <!-- Bandwidth -->
+          <div class="section-divider" data-i18n="nodes.bandwidth">Bandwidth</div>
+          <div class="form-grid">
+            <div class="form-group"><label data-i18n="nodes.upload">Upload (Mbps)</label><input id="add-tx" type="number" placeholder="0 = 1000 Mbps"></div>
+            <div class="form-group"><label data-i18n="nodes.download">Download (Mbps)</label><input id="add-rx" type="number" placeholder="0 = 1000 Mbps"></div>
+          </div>
+
+          <!-- TLS -->
+          <div class="section-divider" data-i18n="nodes.tls">TLS</div>
+          <div class="form-grid">
+            <div class="form-group"><label data-i18n="nodes.sni">SNI (Server Name)</label><input id="add-sni" placeholder="auto: HY2 SCALE"></div>
+            <div class="form-group">
+              <label data-i18n="nodes.skipVerify">Skip Verify</label>
+              <label class="toggle" style="margin-top:4px"><input type="checkbox" id="add-insecure" checked><span class="slider"></span></label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label data-i18n="nodes.caCert">CA Certificate</label>
+            <select id="add-ca-select">
+              <option value="">None (use system CA)</option>
+            </select>
+            <textarea id="add-ca" placeholder="Or paste PEM manually..." style="margin-top:6px;display:none"></textarea>
+          </div>
+
+          <!-- QUIC Advanced -->
+          <div class="section-divider" style="cursor:pointer" onclick="$('#quic-advanced').style.display=$('#quic-advanced').style.display==='none'?'':'none'; this.querySelector('.adv-arrow').classList.toggle('open',$('#quic-advanced').style.display!=='none')">
+            <span data-i18n="nodes.quicAdvanced">QUIC Advanced</span> <svg class="adv-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="transition:transform .2s;vertical-align:middle;margin-left:4px"><polyline points="6 9 12 15 18 9"/></svg>
+          </div>
+          <div id="quic-advanced" style="display:none">
+            <div class="form-grid">
+              <div class="form-group"><label data-i18n="nodes.initStreamWindow">Init Stream Window</label><input id="add-isw" type="number" placeholder="67108864 (64MB)"></div>
+              <div class="form-group"><label data-i18n="nodes.maxStreamWindow">Max Stream Window</label><input id="add-msw" type="number" placeholder="67108864 (64MB)"></div>
+              <div class="form-group"><label data-i18n="nodes.initConnWindow">Init Conn Window</label><input id="add-icw" type="number" placeholder="134217728 (128MB)"></div>
+              <div class="form-group"><label data-i18n="nodes.maxConnWindow">Max Conn Window</label><input id="add-mcw" type="number" placeholder="134217728 (128MB)"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -642,7 +693,7 @@
           <div class="form-group"><label data-i18n="users.username">Username *</label><input id="u-username"></div>
           <div class="form-group"><label data-i18n="users.password">Password *</label><div class="pw-wrap"><input id="u-password" type="password"><button type="button" class="pw-eye" tabindex="-1" onclick="togglePw(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
         </div>
-        <div class="form-group"><label data-i18n="users.exitVia">Exit Via</label><input id="u-exitvia" data-i18n="users.exitViaHint" placeholder="e.g. au/fast-test (empty = direct)"></div>
+        <div class="form-group"><label data-i18n="users.exitVia">Exit Via</label><div id="u-exitvia-list"></div></div>
         <div class="form-grid">
           <div class="form-group"><label data-i18n="users.trafficLimit">Traffic Limit (GB, 0=unlimited)</label><input id="u-limit" type="number" value="0"></div>
           <div class="form-group"><label data-i18n="users.expiryDate">Expiry Date</label><input id="u-expiry" type="date"></div>
@@ -709,6 +760,34 @@
   </div>
 </div>
 
+<!-- Import XLSX Modal -->
+<div class="modal-overlay" id="import-modal" style="display:none" onmousedown="if(event.target===this)closeImportDialog()">
+  <div class="modal" style="max-width:420px">
+    <div class="modal-header">
+      <h2 id="import-modal-title" data-i18n="import.title">Import</h2>
+      <button class="btn-icon" onclick="closeImportDialog()">&#10005;</button>
+    </div>
+    <div class="modal-body" style="padding-top:16px">
+      <div class="form-col">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+          <label class="toggle"><input type="checkbox" id="import-overwrite"><span class="slider"></span></label>
+          <span style="font-size:13px" data-i18n="import.overwrite">Overwrite duplicates</span>
+        </div>
+        <p style="font-size:12px;color:var(--text-muted);margin:0 0 12px" data-i18n="import.overwriteHint">When checked, existing items with the same key will be replaced. When unchecked, duplicates are skipped.</p>
+        <label class="btn-secondary-label" style="justify-content:center;width:100%">
+          <span data-i18n="import.selectFile">Select .xlsx file</span>
+          <input type="file" accept=".xlsx,.xls" style="display:none" id="import-file-input" onchange="handleImportFile(this)">
+        </label>
+        <div id="import-status" style="margin-top:10px;font-size:13px;display:none"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button onclick="closeImportDialog()" data-i18n="app.cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script src="xlsx.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
