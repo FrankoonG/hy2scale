@@ -223,6 +223,10 @@ button.btn-icon:hover{color:var(--red);background:var(--red-bg)}
 .section-divider{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;padding:12px 0 8px;border-top:1px solid var(--border-light);margin-top:4px;display:flex;align-items:center;gap:6px;user-select:none}
 .section-divider .adv-arrow{color:var(--text-muted)}
 
+/* ── Import drop zone ── */
+.import-dropzone{border:2px dashed var(--border);border-radius:var(--radius-sm);padding:24px;text-align:center;color:var(--text-muted);font-size:13px;cursor:pointer;transition:all .15s}
+.import-dropzone:hover,.import-dropzone.dragover{border-color:var(--primary);color:var(--primary);background:var(--primary-light)}
+
 /* ── Toast ── */
 #toast-container{position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
 .toast{padding:10px 20px;border-radius:var(--radius-sm);font-size:13px;font-weight:500;box-shadow:var(--shadow-md);pointer-events:auto;animation:toast-in .25s ease}

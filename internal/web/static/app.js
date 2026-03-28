@@ -745,7 +745,7 @@ function syncConnMode() {
   const panel = $('#conn-mode-panel');
   const radios = panel.querySelectorAll('input[type=radio]');
   const directRadio = panel.querySelector('input[value=""]');
-  const stabilityRadio = panel.querySelector('input[value="stability"]');
+  const qualityRadio = panel.querySelector('input[value="quality"]');
 
   if (addrCount <= 1) {
     // Single IP: force Direct, disable others
@@ -757,12 +757,12 @@ function syncConnMode() {
   } else {
     // Multi IP: disable Direct, enable Stability/Speed
     directRadio.disabled = true;
-    stabilityRadio.disabled = false;
-    panel.querySelector('input[value="speed"]').disabled = false;
+    qualityRadio.disabled = false;
+    panel.querySelector('input[value="aggregate"]').disabled = false;
     panel.classList.remove('exit-mode-disabled');
     // If Direct was selected, switch to Stability
     if (directRadio.checked) {
-      stabilityRadio.checked = true;
+      qualityRadio.checked = true;
     }
   }
 }
@@ -1718,6 +1718,24 @@ function openImportDialog(target) {
 
 function closeImportDialog() { closeModal('#import-modal'); _importTarget = ''; }
 
+// Drag & drop for import zone
+document.addEventListener('DOMContentLoaded', () => {
+  const zone = document.getElementById('import-dropzone');
+  if (!zone) return;
+  ['dragenter','dragover'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.add('dragover'); }));
+  ['dragleave','drop'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.remove('dragover'); }));
+  zone.addEventListener('drop', e => {
+    const file = e.dataTransfer.files[0];
+    if (file) {
+      const input = document.getElementById('import-file-input');
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      input.files = dt.files;
+      handleImportFile(input);
+    }
+  });
+});
+
 async function handleImportFile(input) {
   const file = input.files[0];
   if (!file) return;
@@ -1945,8 +1963,8 @@ class ExitPathList {
     this.el.innerHTML = `
       <div class="exit-mode-options exit-path-mode" style="margin-bottom:8px">
         <label class="exit-mode-opt"><input type="radio" name="epm-${id}" value="" checked><span>${t('exit.modeNone')}</span></label>
-        <label class="exit-mode-opt"><input type="radio" name="epm-${id}" value="stability"><span>${t('exit.modeStability')}</span></label>
-        <label class="exit-mode-opt"><input type="radio" name="epm-${id}" value="speed"><span>${t('exit.modeSpeed')}</span></label>
+        <label class="exit-mode-opt"><input type="radio" name="epm-${id}" value="quality"><span>${t('exit.modeStability')}</span></label>
+        <label class="exit-mode-opt"><input type="radio" name="epm-${id}" value="aggregate"><span>${t('exit.modeSpeed')}</span></label>
       </div>
       <div class="exit-path-list addr-list"></div>
       <div class="addr-add-row exit-path-add" style="margin-top:6px"><span>${t('exit.addPath')}</span></div>`;
@@ -1981,8 +1999,8 @@ class ExitPathList {
     const rows = this.listEl.querySelectorAll('.addr-row');
     const radios = this.modeEl.querySelectorAll('input[type=radio]');
     const directRadio = this.modeEl.querySelector('input[value=""]');
-    const stabilityRadio = this.modeEl.querySelector('input[value="stability"]');
-    const speedRadio = this.modeEl.querySelector('input[value="speed"]');
+    const qualityRadio = this.modeEl.querySelector('input[value="quality"]');
+    const aggregateRadio = this.modeEl.querySelector('input[value="aggregate"]');
     // Delete button: first row can't be deleted
     rows.forEach((r, i) => { r.querySelector('.addr-del').disabled = (rows.length <= 1); });
 
@@ -1994,10 +2012,10 @@ class ExitPathList {
     } else {
       // Multi path: disable Direct
       directRadio.disabled = true;
-      stabilityRadio.disabled = false;
-      speedRadio.disabled = false;
+      qualityRadio.disabled = false;
+      aggregateRadio.disabled = false;
       this.modeEl.classList.remove('exit-mode-disabled');
-      if (directRadio.checked) stabilityRadio.checked = true;
+      if (directRadio.checked) qualityRadio.checked = true;
     }
   }
 
@@ -2191,8 +2209,8 @@ function setupCustomSelect(selectEl) {
 
 function exitModeBadge(mode) {
   if (!mode) return '';
-  if (mode === 'stability') return ' <span class="badge badge-green" style="font-size:10px">' + t('exit.modeStability') + '</span>';
-  if (mode === 'speed') return ' <span class="badge badge-blue" style="font-size:10px">' + t('exit.modeSpeed') + '</span>';
+  if (mode === 'quality') return ' <span class="badge badge-green" style="font-size:10px">' + t('exit.modeStability') + '</span>';
+  if (mode === 'aggregate') return ' <span class="badge badge-blue" style="font-size:10px">' + t('exit.modeSpeed') + '</span>';
   return '';
 }
 

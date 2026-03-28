@@ -18,7 +18,7 @@ type UserConfig struct {
 	Password     string `yaml:"password" json:"password"`
 	ExitVia      string   `yaml:"exit_via" json:"exit_via"`
 	ExitPaths    []string `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
-	ExitMode     string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"` // ""|"stability"|"speed"
+	ExitMode     string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"` // ""|"quality"|"aggregate"
 	TrafficLimit int64  `yaml:"traffic_limit" json:"traffic_limit"`             // bytes, 0=unlimited
 	TrafficUsed  int64  `yaml:"traffic_used" json:"traffic_used"`
 	ExpiryDate   string `yaml:"expiry_date,omitempty" json:"expiry_date"`
@@ -44,7 +44,7 @@ type RoutingRule struct {
 	Targets  []string `yaml:"targets" json:"targets"`                     // IPs/CIDRs/ranges or domains
 	ExitVia   string   `yaml:"exit_via" json:"exit_via"`
 	ExitPaths []string `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
-	ExitMode  string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"` // ""|"stability"|"speed"
+	ExitMode  string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"` // ""|"quality"|"aggregate"
 	Enabled   bool     `yaml:"enabled" json:"enabled"`
 }
 
