@@ -611,7 +611,7 @@ function toggleNestedDisable(via, name, disabled) {
 
 async function removeClient(name) {
   if (!await showConfirm(t('nodes.deleteTitle'), t('nodes.deleteConfirm', {name}))) return;
-  try { await api(`/clients/${name}`, { method: 'DELETE' }); lastTopoJSON = ''; refreshTopology(); toast(t('nodes.deleted', {name}), 'success'); }
+  try { await api(`/clients/${encodeURIComponent(name)}`, { method: 'DELETE' }); lastTopoJSON = ''; refreshTopology(); toast(t('nodes.deleted', {name}), 'success'); }
   catch (e) { toast(String(e), 'error'); }
 }
 
@@ -1630,9 +1630,9 @@ async function exportXLSX(target) {
     let data, filename, headers;
     if (target === 'nodes') {
       const clients = await api('/clients');
-      headers = ['name','addr','addrs','password','sni','insecure','conn_mode','max_tx','max_rx'];
+      headers = ['name','addrs','password','sni','insecure','conn_mode','max_tx','max_rx'];
       data = clients.map(c => ({
-        name: c.name, addr: c.addr, addrs: (c.addrs||[]).join('; '),
+        name: c.name, addrs: (c.addrs && c.addrs.length ? c.addrs : [c.addr]).join('; '),
         password: c.password, sni: c.sni||'', insecure: c.insecure?'true':'false',
         conn_mode: c.conn_mode||'', max_tx: c.max_tx||0, max_rx: c.max_rx||0,
       }));
