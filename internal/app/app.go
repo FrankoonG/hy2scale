@@ -1209,14 +1209,17 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 	exitVia := ""
 	username := ""
 	exitMode := ""
+	var exitPaths []string
 	if user != nil {
 		exitVia = user.ExitVia
 		exitMode = user.ExitMode
+		exitPaths = user.ExitPaths
 		username = user.Username
 	}
 	if pc != nil && pc.ExitVia != "" {
 		exitVia = pc.ExitVia
 		exitMode = pc.ExitMode
+		exitPaths = pc.ExitPaths
 	}
 
 	var remote net.Conn
@@ -1224,7 +1227,7 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 	if exitVia == "" {
 		remote, err = net.DialTimeout("tcp", addr, 10*time.Second)
 	} else {
-		remote, err = a.dialExitWithMode(context.Background(), exitVia, exitMode, addr)
+		remote, err = a.dialExitWithPaths(context.Background(), exitVia, exitPaths, exitMode, addr)
 	}
 	if err != nil {
 		conn.Write([]byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
@@ -1304,7 +1307,7 @@ func ValidateExitMode(exitVia, exitMode string) error {
 }
 
 func (a *App) dialExitWithMode(ctx context.Context, exitVia, exitMode, addr string) (net.Conn, error) {
-	// Reject traffic if the first hop is a disabled local connection
+	// Reject traffic through disabled nodes
 	if exitVia != "" {
 		for _, hop := range strings.Split(exitVia, "/") {
 			if a.isNodeDisabled(hop) {
@@ -1314,13 +1317,52 @@ func (a *App) dialExitWithMode(ctx context.Context, exitVia, exitMode, addr stri
 	}
 	if exitMode != "" && exitVia != "" && !strings.Contains(exitVia, "/") {
 		switch exitMode {
-		case "quality", "stability": // "stability" for backward compat
+		case "quality", "stability":
 			return a.dialAdaptive(ctx, exitVia, addr)
-		case "aggregate", "speed": // "speed" for backward compat
+		case "aggregate", "speed":
 			return a.dialBond(ctx, exitVia, addr)
 		}
 	}
 	return a.dialExit(ctx, exitVia, addr)
+}
+
+// dialExitWithPaths tries exit_paths in order (quality failover).
+// If exitPaths is empty or mode is aggregate, falls back to dialExitWithMode.
+func (a *App) dialExitWithPaths(ctx context.Context, exitVia string, exitPaths []string, exitMode, addr string) (net.Conn, error) {
+	paths := exitPaths
+	if len(paths) == 0 {
+		paths = []string{exitVia}
+	}
+	// Aggregate mode: no failover, use primary path
+	switch exitMode {
+	case "aggregate", "speed":
+		return a.dialExitWithMode(ctx, exitVia, exitMode, addr)
+	}
+	// Quality mode or no mode: try each path in order
+	var lastErr error
+	for _, p := range paths {
+		// Skip paths with disabled hops
+		skip := false
+		for _, hop := range strings.Split(p, "/") {
+			if a.isNodeDisabled(hop) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		conn, err := a.dialExit(ctx, p, addr)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		log.Printf("[exit] path %s failed: %v, trying next", p, err)
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("all exit paths exhausted")
 }
 
 // isNodeDisabled checks if a node name is disabled in config.
