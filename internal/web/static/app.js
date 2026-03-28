@@ -2,28 +2,21 @@ const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 const basePath = window.__BASE__ || '';
 
-// Track last clicked button for modal transform-origin
-let _lastClickTarget = null;
-document.addEventListener('click', e => {
-  const btn = e.target.closest('button,.act-btn,.btn-primary,.btn-icon,.btn-sm,[onclick]');
-  if (btn) _lastClickTarget = btn;
-}, true);
+// Track mouse position for modal transform-origin (Hero Transition from cursor)
+let _mouseX = window.innerWidth / 2, _mouseY = window.innerHeight / 2;
+document.addEventListener('mousemove', e => { _mouseX = e.clientX; _mouseY = e.clientY; }, true);
+document.addEventListener('click', e => { _mouseX = e.clientX; _mouseY = e.clientY; }, true);
 
-// Modal open/close with animation (born from button, return to button)
+// Modal open/close with animation (born from mouse position)
 function openModal(sel) {
   const overlay = typeof sel === 'string' ? $(sel) : sel;
   overlay.style.display = '';
   const modal = overlay.querySelector('.modal');
   if (modal) {
-    if (_lastClickTarget) {
-      const rect = _lastClickTarget.getBoundingClientRect();
-      const overlayRect = overlay.getBoundingClientRect();
-      const cx = rect.left + rect.width / 2 - overlayRect.left;
-      const cy = rect.top + rect.height / 2 - overlayRect.top;
-      modal.style.transformOrigin = `${cx}px ${cy}px`;
-    } else {
-      modal.style.transformOrigin = 'center center';
-    }
+    const overlayRect = overlay.getBoundingClientRect();
+    const cx = _mouseX - overlayRect.left;
+    const cy = _mouseY - overlayRect.top;
+    modal.style.transformOrigin = `${cx}px ${cy}px`;
   }
   overlay.classList.remove('modal-closing');
   overlay.offsetHeight;
