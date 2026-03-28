@@ -901,15 +901,22 @@ func (s *Server) fetchSubPeersViaHTTP(peerName string) []topoSubPeer {
 		if childLatency > 0 && parentLatency > 0 {
 			childLatency += parentLatency
 		}
+		// Only include deeper children if LOCAL config has nested enabled for this sub-peer
+		pc, hasPC := cfg.Peers[rp.Name]
+		localNested := hasPC && pc.Nested
+		var subChildren []topoSubPeer
+		if localNested {
+			subChildren = filterSelfFromChildren(addLatencyOffset(rp.Children, parentLatency), myID)
+		}
 		child := topoSubPeer{
 			Name:      rp.Name,
 			ExitNode:  rp.ExitNode,
 			Direction: rp.Direction,
 			Via:       peerName,
 			LatencyMs: childLatency,
-			Nested:    rp.Nested,
+			Nested:    localNested,
 			Native:    rp.Native,
-			Children:  filterSelfFromChildren(addLatencyOffset(rp.Children, parentLatency), myID),
+			Children:  subChildren,
 		}
 		children = append(children, child)
 	}
