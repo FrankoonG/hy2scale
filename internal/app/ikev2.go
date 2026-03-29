@@ -355,9 +355,16 @@ conn ikev2-mschapv2
 		return fmt.Errorf("ikev2: unknown mode %q", cfg.Mode)
 	}
 
-	// Append IKEv2 conn to ipsec.conf (only in standard mode; compat uses swanctl)
-	if !TunCaptureActive() {
+	// Append IKEv2 conn to ipsec.conf.
+	// Compat mode: write empty ipsec.conf so ipsec starter doesn't load stroke
+	// connection (which has no if_id, breaking xfrm interface creation).
+	// Only the vici connection from swanctl --load-all (with if_id) should exist.
+	// Stroke EAP secrets from ipsec.secrets are still loaded by ipsec rereadsecrets
+	// and are used by the vici connection for MSCHAPv2 verification.
+	if testIptablesAvailable() {
 		appendToIPSecConf(connConf)
+	} else {
+		os.WriteFile("/etc/ipsec.conf", []byte("# compat mode: connections via swanctl only\n"), 0644)
 	}
 
 	// Update secrets
@@ -463,9 +470,7 @@ esac
 	ensureStrongswanRunning()
 	// Reload config and secrets to pick up new IKEv2 connection
 	time.Sleep(time.Second)
-	if testIptablesAvailable() {
-		run("ipsec", "update")
-	}
+	run("ipsec", "update")
 	run("ipsec", "rereadsecrets")
 	// Also load swanctl config (for compat mode xfrm interface)
 	run("swanctl", "--load-all", "--noprompt")
