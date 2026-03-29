@@ -313,9 +313,11 @@ func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 			defer wgConnDel(srcIP)
 			wgCfg := a.store.Get().WireGuard
 			if wgCfg == nil {
+				log.Printf("[wg-fwd] no WireGuard config, dropping %s -> %s", srcIP, dstAddr)
 				return
 			}
 			exitVia, exitPaths, exitMode := findPeerExitInfo(*wgCfg, srcIP)
+			log.Printf("[wg-fwd] %s -> %s via=%q paths=%v mode=%q", srcIP, dstAddr, exitVia, exitPaths, exitMode)
 
 			var remote net.Conn
 			var err error
@@ -325,6 +327,7 @@ func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 				remote, err = a.dialExitWithPaths(context.Background(), exitVia, exitPaths, exitMode, dstAddr)
 			}
 			if err != nil {
+				log.Printf("[wg-fwd] %s -> %s failed: %v", srcIP, dstAddr, err)
 				return
 			}
 			defer remote.Close()
