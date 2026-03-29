@@ -360,19 +360,20 @@ conn ikev2-mschapv2
 		appendToIPSecConf(connConf)
 	}
 
-	// Update secrets
-	if cfg.Mode == "psk" && cfg.PSK != "" {
-		appendPSKSecret(cfg.PSK)
-	}
-	if cfg.Mode == "mschapv2" {
-		// Detect key type and add to ipsec.secrets
-		kd, _ := os.ReadFile("/etc/ipsec.d/private/ikev2-server.key.pem")
-		keyType := "ECDSA"
-		if strings.Contains(string(kd), "RSA PRIVATE KEY") {
-			keyType = "RSA"
+	// Update secrets (ipsec.secrets only for iptables mode; compat uses swanctl secrets)
+	if iptablesOK {
+		if cfg.Mode == "psk" && cfg.PSK != "" {
+			appendPSKSecret(cfg.PSK)
 		}
-		appendToIPSecSecrets(fmt.Sprintf(": %s ikev2-server.key.pem\n", keyType))
-		a.updateEAPSecrets()
+		if cfg.Mode == "mschapv2" {
+			kd, _ := os.ReadFile("/etc/ipsec.d/private/ikev2-server.key.pem")
+			keyType := "ECDSA"
+			if strings.Contains(string(kd), "RSA PRIVATE KEY") {
+				keyType = "RSA"
+			}
+			appendToIPSecSecrets(fmt.Sprintf(": %s ikev2-server.key.pem\n", keyType))
+			a.updateEAPSecrets()
+		}
 	}
 
 	// Setup iptables (same dual-stack approach as L2TP)
@@ -465,11 +466,13 @@ esac
 	}
 	// Start strongswan or reload if already running
 	ensureStrongswanRunning()
-	// Reload config and secrets to pick up new IKEv2 connection
 	time.Sleep(time.Second)
-	run("ipsec", "update")
-	run("ipsec", "rereadsecrets")
-	// Also load swanctl config (for compat mode xfrm interface)
+	if iptablesOK {
+		// iptables mode: connection + secrets in ipsec.conf/ipsec.secrets
+		run("ipsec", "update")
+		run("ipsec", "rereadsecrets")
+	}
+	// swanctl: load connection + secrets (compat uses this exclusively; iptables mode also loads for hot-reload)
 	run("swanctl", "--load-all", "--noprompt")
 
 	log.Printf("[ikev2] server mode=%s pool=%s", cfg.Mode, cfg.Pool)
