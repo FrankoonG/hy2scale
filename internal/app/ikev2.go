@@ -235,11 +235,11 @@ func (a *App) StartIKEv2(cfg IKEv2Config) error {
 	proxyPort := cfg.proxyPort()
 	hooksPort := proxyPort + 1
 
-	os.MkdirAll("/etc/ipsec.d", 0755)
-
-	// Default updown script (iptables mode): simple session tracking only
-	// Compat mode will overwrite this with xfrm interface version later
-	defaultUpdown := fmt.Sprintf(`#!/bin/sh
+	// Generate updown script for IKEv2 session tracking (strongswan format)
+	updownScript := fmt.Sprintf(`#!/bin/sh
+# strongswan updown script for IKEv2 session tracking
+# PLUTO_PEER_CLIENT = virtual IP assigned to client (e.g. 10.10.10.2/32)
+# PLUTO_PEER_ID = peer identity (username for EAP, or IP/@id for PSK)
 REMOTE_IP="${PLUTO_PEER_CLIENT%%%%/*}"
 case "$PLUTO_VERB" in
   up-client|up-client-v6)
@@ -250,7 +250,9 @@ case "$PLUTO_VERB" in
     ;;
 esac
 `, gateway, hooksPort, gateway, hooksPort)
-	os.WriteFile("/etc/ipsec.d/ikev2-updown.sh", []byte(defaultUpdown), 0755)
+
+	os.MkdirAll("/etc/ipsec.d", 0755)
+	os.WriteFile("/etc/ipsec.d/ikev2-updown.sh", []byte(updownScript), 0755)
 
 	// Resolve Local/Remote IDs
 	localID := cfg.LocalID
@@ -353,33 +355,30 @@ conn ikev2-mschapv2
 		return fmt.Errorf("ikev2: unknown mode %q", cfg.Mode)
 	}
 
-	// Append IKEv2 conn to ipsec.conf (only in standard iptables mode; compat uses swanctl)
-	// Check iptables availability BEFORE writing config to avoid ipsec.conf/swanctl conflict
-	iptablesOK := testIptablesAvailable()
-	if iptablesOK {
+	// Append IKEv2 conn to ipsec.conf (only in standard mode; compat uses swanctl)
+	if !TunCaptureActive() {
 		appendToIPSecConf(connConf)
 	}
 
-	// Update secrets (ipsec.secrets only for iptables mode; compat uses swanctl secrets)
-	if iptablesOK {
-		if cfg.Mode == "psk" && cfg.PSK != "" {
-			appendPSKSecret(cfg.PSK)
+	// Update secrets
+	if cfg.Mode == "psk" && cfg.PSK != "" {
+		appendPSKSecret(cfg.PSK)
+	}
+	if cfg.Mode == "mschapv2" {
+		// Detect key type and add to ipsec.secrets
+		kd, _ := os.ReadFile("/etc/ipsec.d/private/ikev2-server.key.pem")
+		keyType := "ECDSA"
+		if strings.Contains(string(kd), "RSA PRIVATE KEY") {
+			keyType = "RSA"
 		}
-		if cfg.Mode == "mschapv2" {
-			kd, _ := os.ReadFile("/etc/ipsec.d/private/ikev2-server.key.pem")
-			keyType := "ECDSA"
-			if strings.Contains(string(kd), "RSA PRIVATE KEY") {
-				keyType = "RSA"
-			}
-			appendToIPSecSecrets(fmt.Sprintf(": %s ikev2-server.key.pem\n", keyType))
-			a.updateEAPSecrets()
-		}
+		appendToIPSecSecrets(fmt.Sprintf(": %s ikev2-server.key.pem\n", keyType))
+		a.updateEAPSecrets()
 	}
 
 	// Setup iptables (same dual-stack approach as L2TP)
 	os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
 
-	if iptablesOK {
+	if testIptablesAvailable() {
 		if iptUseChroot() {
 			log.Printf("[ikev2] mode: iptables via chroot /host (host kernel compat)")
 		} else {
@@ -460,19 +459,13 @@ esac
 		go a.serveIKEv2Hooks(gateway, hooksPort, cfg)
 	}
 
-	// Ensure ipsec.conf exists (compat mode uses swanctl only, but ipsec starter needs the file)
-	if _, err := os.Stat("/etc/ipsec.conf"); os.IsNotExist(err) {
-		os.WriteFile("/etc/ipsec.conf", []byte("# managed by hy2scale\n"), 0644)
-	}
 	// Start strongswan or reload if already running
 	ensureStrongswanRunning()
+	// Reload config and secrets to pick up new IKEv2 connection
 	time.Sleep(time.Second)
-	if iptablesOK {
-		// iptables mode: connection + secrets in ipsec.conf/ipsec.secrets
-		run("ipsec", "update")
-		run("ipsec", "rereadsecrets")
-	}
-	// swanctl: load connection + secrets (compat uses this exclusively; iptables mode also loads for hot-reload)
+	run("ipsec", "update")
+	run("ipsec", "rereadsecrets")
+	// Also load swanctl config (for compat mode xfrm interface)
 	run("swanctl", "--load-all", "--noprompt")
 
 	log.Printf("[ikev2] server mode=%s pool=%s", cfg.Mode, cfg.Pool)
