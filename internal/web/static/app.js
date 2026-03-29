@@ -2813,10 +2813,14 @@ document.addEventListener('click', e => {
   const tip = document.createElement('div');
   tip.className = 'float-tip';
   document.body.appendChild(tip);
-  let hideTimer = null;
+  let hideRAF = null;
+  let currentBadge = null;
+  const SEL = '[data-tip],[data-ipstatus],[data-exitpaths]';
 
   function show(badge) {
-    clearTimeout(hideTimer);
+    if (hideRAF) { cancelAnimationFrame(hideRAF); hideRAF = null; }
+    if (currentBadge === badge) return; // same badge, skip rebuild
+    currentBadge = badge;
     if (badge.dataset.exitpaths) {
       try {
         const d = JSON.parse(badge.dataset.exitpaths);
@@ -2836,15 +2840,15 @@ document.addEventListener('click', e => {
             activeIdx = paths.findIndex(p => p.split('/').every(hop => !disabledPeers.has(hop) && connectedPeers.has(hop)));
           }
         }
+        const isHealthy = p => p.split('/').every(hop => !disabledPeers.has(hop) && connectedPeers.has(hop));
         tip.innerHTML = paths.map((p, i) => {
           const pathHtml = exitViaHTML(p);
-          const healthy = pathHealthy(p);
           let label = '';
           if (nm === 'quality' || (!nm && paths.length > 1)) {
             if (i === activeIdx) {
               label = '<span style="color:var(--green);font-size:10px;margin-left:8px">● active</span>';
             } else if (i === 0) {
-              label = healthy
+              label = isHealthy(p)
                 ? '<span style="color:var(--green);font-size:10px;margin-left:8px">primary</span>'
                 : '<span style="color:var(--red);font-size:10px;margin-left:8px">primary ✗</span>';
             } else {
@@ -2853,7 +2857,7 @@ document.addEventListener('click', e => {
           } else if (nm === 'aggregate') {
             label = `<span style="color:#6c9bef;font-size:10px;margin-left:8px">path ${i + 1}</span>`;
           }
-          return `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;font-family:var(--mono);font-size:12px;padding:2px 0">${pathHtml}${label}</div>`;
+          return `<div style="display:flex;align-items:center;font-family:var(--mono);font-size:12px;padding:2px 0;white-space:nowrap"><span style="flex:1">${pathHtml}</span>${label}</div>`;
         }).join('');
       } catch(e) { return; }
     } else if (badge.dataset.tip) {
@@ -2880,7 +2884,7 @@ document.addEventListener('click', e => {
           const latStyle = s.status === 'online' && avgLat > 0
             ? (avgLat < 80 ? 'color:var(--green)' : avgLat < 200 ? 'color:#f59e0b' : 'color:var(--red)')
             : 'color:' + color;
-          return `<div style="display:flex;justify-content:space-between;gap:20px"><span style="color:${s.status === 'online' ? 'var(--text)' : color}">${s.addr}</span><span style="${latStyle};font-weight:600;font-size:11px">${label}</span></div>`;
+          return `<div style="display:flex;align-items:center;font-size:12px;padding:2px 0;white-space:nowrap"><span style="flex:1;color:${s.status === 'online' ? 'var(--text)' : color}">${s.addr}</span><span style="${latStyle};font-weight:600;font-size:11px;margin-left:12px">${label}</span></div>`;
         }).join('');
       } catch(e) { return; }
     } else return;
@@ -2892,14 +2896,23 @@ document.addEventListener('click', e => {
   }
 
   function hide() {
-    hideTimer = setTimeout(() => tip.classList.remove('visible'), 100);
+    if (hideRAF) return; // already scheduled
+    hideRAF = requestAnimationFrame(() => {
+      tip.classList.remove('visible');
+      currentBadge = null;
+      hideRAF = null;
+    });
   }
 
-  document.addEventListener('mouseover', e => {
-    const badge = e.target.closest('[data-tip],[data-ipstatus],[data-exitpaths]');
-    if (badge) show(badge);
-    else hide();
+  document.addEventListener('mousemove', e => {
+    const badge = e.target.closest(SEL);
+    if (badge) {
+      show(badge);
+    } else if (currentBadge) {
+      hide();
+    }
   });
+  document.addEventListener('mouseleave', () => { hide(); }, true);
 })();
 
 // ── Init ──
