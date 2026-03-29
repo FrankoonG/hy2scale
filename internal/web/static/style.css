@@ -279,8 +279,8 @@ textarea.drag-over{border-color:var(--primary);background:rgba(67,97,238,.05);bo
 .exit-mode-disabled .exit-mode-opt{opacity:0.4;cursor:not-allowed;pointer-events:none}
 .exit-mode-disabled .exit-mode-opt:has(input:checked){opacity:1;border-color:var(--primary);background:var(--primary-light);color:var(--primary);font-weight:500}
 /* ── Floating tooltip ── */
-.float-tip{position:fixed;z-index:99999;background:var(--card);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:var(--mono);font-size:12px;box-shadow:0 4px 16px rgba(0,0,0,.2);pointer-events:none;white-space:pre;line-height:1.8;opacity:0;transform:scale(.85);transition:opacity .15s ease,transform .15s ease}
-.float-tip.visible{opacity:.8;transform:scale(1)}
+.float-tip{position:fixed;z-index:99999;background:rgba(30,30,36,.92);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:var(--mono);font-size:12px;box-shadow:0 4px 16px rgba(0,0,0,.3);pointer-events:none;white-space:pre;line-height:1.8;opacity:0;transform:scale(.85);transition:opacity .15s ease,transform .15s ease;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.float-tip.visible{opacity:1;transform:scale(1)}
 .autocomplete-item{padding:7px 10px;font-size:13px;cursor:pointer;font-family:var(--mono)}
 .autocomplete-item:hover,.autocomplete-item.active{background:var(--primary-light);color:var(--primary)}
 .autocomplete-item .ac-path{color:var(--text-muted);font-size:11px;margin-left:6px}
