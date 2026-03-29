@@ -355,24 +355,21 @@ conn ikev2-mschapv2
 		return fmt.Errorf("ikev2: unknown mode %q", cfg.Mode)
 	}
 
-	// Append IKEv2 conn to ipsec.conf.
-	// Compat mode: write empty ipsec.conf so ipsec starter doesn't load stroke
-	// connection (which has no if_id, breaking xfrm interface creation).
-	// Only the vici connection from swanctl --load-all (with if_id) should exist.
-	// Stroke EAP secrets from ipsec.secrets are still loaded by ipsec rereadsecrets
-	// and are used by the vici connection for MSCHAPv2 verification.
-	if testIptablesAvailable() {
+	// Compat mode: empty ipsec.conf (no stroke connection), no stroke EAP secrets.
+	// All secrets come exclusively from swanctl to avoid duplicate EAP entries
+	// that cause MSCHAPv2 verification failure on strongSwan 5.8.4.
+	iptablesOK := testIptablesAvailable()
+	if iptablesOK {
 		appendToIPSecConf(connConf)
 	} else {
-		os.WriteFile("/etc/ipsec.conf", []byte("# compat mode: connections via swanctl only\n"), 0644)
+		os.WriteFile("/etc/ipsec.conf", []byte("# compat: connections via swanctl\n"), 0644)
 	}
 
-	// Update secrets
+	// Update secrets — compat mode skips ipsec.secrets EAP entries
 	if cfg.Mode == "psk" && cfg.PSK != "" {
 		appendPSKSecret(cfg.PSK)
 	}
-	if cfg.Mode == "mschapv2" {
-		// Detect key type and add to ipsec.secrets
+	if cfg.Mode == "mschapv2" && iptablesOK {
 		kd, _ := os.ReadFile("/etc/ipsec.d/private/ikev2-server.key.pem")
 		keyType := "ECDSA"
 		if strings.Contains(string(kd), "RSA PRIVATE KEY") {
@@ -466,13 +463,12 @@ esac
 		go a.serveIKEv2Hooks(gateway, hooksPort, cfg)
 	}
 
-	// Start strongswan or reload if already running
 	ensureStrongswanRunning()
-	// Reload config and secrets to pick up new IKEv2 connection
 	time.Sleep(time.Second)
-	run("ipsec", "update")
-	run("ipsec", "rereadsecrets")
-	// Also load swanctl config (for compat mode xfrm interface)
+	if iptablesOK {
+		run("ipsec", "update")
+		run("ipsec", "rereadsecrets")
+	}
 	run("swanctl", "--load-all", "--noprompt")
 
 	log.Printf("[ikev2] server mode=%s pool=%s", cfg.Mode, cfg.Pool)
