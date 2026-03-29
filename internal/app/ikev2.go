@@ -235,38 +235,7 @@ func (a *App) StartIKEv2(cfg IKEv2Config) error {
 	proxyPort := cfg.proxyPort()
 	hooksPort := proxyPort + 1
 
-	// ─── CRITICAL: IKEv2 dual-mode architecture ───────────────────────────
-	// This function writes BOTH ipsec.conf AND swanctl.conf configs.
-	// DO NOT remove either one or change the write order.
-	//
-	// Standard mode (iptables available):
-	//   ipsec.conf → connection config (stroke plugin)
-	//   ipsec.secrets → RSA key + EAP passwords
-	//   iptables DNAT → transparent proxy → dialExitWithMode
-	//   updown script: simple webhook (session tracking only)
-	//
-	// Compat mode (iKuai / no iptables):
-	//   ipsec.conf → NOT written (testIptablesAvailable guards it). Only swanctl.conf
-	//     is loaded. This ensures the vici connection (with if_id) is the ONLY one,
-	//     preventing stroke/vici dual-match that breaks xfrm interface creation.
-	//   swanctl.conf → connection with if_id for xfrm interface
-	//   ipsec.secrets → ALSO written (shared by both stroke and vici)
-	//   updown script: overwritten with xfrm version (creates ikecN interfaces)
-	//   Traffic path: ESP → xfrm decrypt → ikecN → AF_PACKET → gvisor → exit
-	//
-	// Key constraints (DO NOT CHANGE without re-testing on iKuai):
-	//   - leftid MUST be set explicitly (without it, strongSwan uses cert DN
-	//     which doesn't match client's rightid short name)
-	//   - eap_identity MUST be %any (strongSwan 5.8.4 treats %identity as
-	//     literal string constraint, causing "EAP identity '%identity' required")
-	//   - Server cert MUST have SAN=DNS:localID (FQDN lookup requires SAN)
-	//   - Server cert MUST use RSA 2048 (not ECDSA, for iKuai client compat)
-	//   - Server cert MUST be signed by CA (CA:TRUE), not self-signed
-	//   - send_certreq=no / leftsendcert=always (iKuai client expects this)
-	// ──────────────────────────────────────────────────────────────────────
-
-	// Default updown script for session tracking (iptables mode).
-	// In compat mode, this is overwritten later with the xfrm version.
+	// Generate updown script for IKEv2 session tracking (strongswan format)
 	updownScript := fmt.Sprintf(`#!/bin/sh
 # strongswan updown script for IKEv2 session tracking
 # PLUTO_PEER_CLIENT = virtual IP assigned to client (e.g. 10.10.10.2/32)
@@ -356,31 +325,18 @@ conn ikev2-psk
 		// Clean up temp cert from TLS store (keep only in ipsec dirs)
 		a.tls.Delete("__ikev2_auto__")
 
-		// ipsec.conf for mschapv2 mode (stroke connection).
-		// eap_identity varies by mode:
-		//   Standard (iptables): %any — only stroke connection exists, must accept all EAP IDs
-		//   Compat (no iptables): %identity — literal constraint in 5.8.4, ensures this
-		//     stroke connection NEVER matches real clients, so only the vici connection
-		//     (with eap_id=%any and if_id) is used. This prevents stroke/vici dual-match
-		//     conflicts that cause MSCHAPv2 verification failure.
-		// leftid=%s — required so strongSwan presents short ID, not full cert DN.
-		eapIdentity := "%%any"
-		if !testIptablesAvailable() {
-			eapIdentity = "%%identity" // compat: make stroke unmatchable
-		}
 		connConf = fmt.Sprintf(`
 conn ikev2-mschapv2
     keyexchange=ikev2
     auto=add
     type=tunnel
     left=%%any
-    leftid=%s
     leftcert=ikev2-server.cert.pem
     leftsendcert=always
     leftsubnet=0.0.0.0/0
     right=%%any
     rightauth=eap-mschapv2
-    eap_identity=`+eapIdentity+`
+    eap_identity=%%identity
     rightsourceip=%s
     rightdns=%s
     leftupdown=/etc/ipsec.d/ikev2-updown.sh
@@ -390,7 +346,7 @@ conn ikev2-mschapv2
     dpddelay=300s
     ike=aes256-sha256-modp2048,aes128-sha256-modp2048!
     esp=aes256-sha256,aes128-sha256!
-`, localID, ipRange, dns)
+`, ipRange, dns)
 
 		// Generate EAP secrets
 		a.updateEAPSecrets()
@@ -399,19 +355,17 @@ conn ikev2-mschapv2
 		return fmt.Errorf("ikev2: unknown mode %q", cfg.Mode)
 	}
 
-	// Always write ipsec.conf (ipsec starter requires it).
-	// In compat mode, "ipsec update" is skipped below so this stroke connection
-	// is never loaded into charon — only the vici connection (with if_id) is used.
-	appendToIPSecConf(connConf)
+	// Append IKEv2 conn to ipsec.conf (only in standard mode; compat uses swanctl)
+	if !TunCaptureActive() {
+		appendToIPSecConf(connConf)
+	}
 
-	// Write ipsec.secrets (shared by stroke AND vici/swanctl).
-	// Both modes need this — compat mode's swanctl also has its own secrets
-	// section, but ipsec.secrets is loaded by "ipsec rereadsecrets" which
-	// runs unconditionally. DO NOT skip this for compat mode.
+	// Update secrets
 	if cfg.Mode == "psk" && cfg.PSK != "" {
 		appendPSKSecret(cfg.PSK)
 	}
 	if cfg.Mode == "mschapv2" {
+		// Detect key type and add to ipsec.secrets
 		kd, _ := os.ReadFile("/etc/ipsec.d/private/ikev2-server.key.pem")
 		keyType := "ECDSA"
 		if strings.Contains(string(kd), "RSA PRIVATE KEY") {
@@ -452,22 +406,7 @@ conn ikev2-mschapv2
 			"-s", subnet, "-j", "MASQUERADE")
 		go a.runIKEv2Proxy(gateway, proxyPort, hooksPort, cfg)
 	} else {
-		// ─── Compat mode (iKuai / no iptables) ───────────────────────────
-		// Traffic flow: ESP → kernel xfrm decrypt → ikecN interface
-		//   → AF_PACKET socket captures at link layer (bypasses FORWARD chain)
-		//   → inject into shared gvisor netstack → TCP/UDP forwarders
-		//   → dialExit → relay → internet
-		// Response: forwarder → raw IP socket (IPPROTO_RAW + SO_BINDTODEVICE=ikecN)
-		//   → kernel xfrm encapsulate → ESP → client
-		//
-		// The updown script below OVERWRITES the default one (written above).
-		// It creates per-client xfrm interfaces with if_id from PLUTO_IF_ID_OUT.
-		// The swanctl.conf (writeSwanctlIKEv2) sets if_id_in/if_id_out = %unique.
-		//
-		// DO NOT remove the ipsec.conf write above — "ipsec start" needs it.
-		// DO NOT remove ipsec.secrets write — both stroke and vici read it.
-		// DO NOT change the order: default updown → compat updown overwrite.
-		// ──────────────────────────────────────────────────────────────────
+		// Compat mode: xfrm interface + TUN capture (swanctl with if_id)
 		log.Printf("[ikev2] mode: compat (iptables unavailable → xfrm interface + AF_PACKET bridge + gvisor netstack)")
 		// Store PSK default exit for TUN capture forwarder
 		if cfg.Mode == "psk" && cfg.DefaultExit != "" {
@@ -520,27 +459,16 @@ esac
 		go a.serveIKEv2Hooks(gateway, hooksPort, cfg)
 	}
 
-	// Start strongswan and load all configs.
-	// "ipsec start" requires /etc/ipsec.conf to exist (even if empty in compat).
-	// "ipsec update" loads connections from ipsec.conf (stroke).
-	// "ipsec rereadsecrets" loads secrets from ipsec.secrets (stroke).
-	// "swanctl --load-all" loads connections+secrets from swanctl.conf (vici).
+	// Start strongswan or reload if already running
 	ensureStrongswanRunning()
+	// Reload config and secrets to pick up new IKEv2 connection
 	time.Sleep(time.Second)
 	if testIptablesAvailable() {
-		// Standard mode: stroke connection from ipsec.conf
 		run("ipsec", "update")
-		run("ipsec", "rereadsecrets")
-		// Also load swanctl for hot-reload support
-		run("swanctl", "--load-all", "--noprompt")
-	} else {
-		// Compat mode: ONLY vici connection (with if_id for xfrm interfaces).
-		// Do NOT run "ipsec update" — stroke connection has no if_id.
-		// Do NOT run "ipsec rereadsecrets" — stroke EAP secrets interfere with
-		// vici MSCHAPv2 on strongSwan 5.8.4 (dual secrets cause verification failure).
-		// swanctl --load-all loads connection + secrets exclusively via vici.
-		run("swanctl", "--load-all", "--noprompt")
 	}
+	run("ipsec", "rereadsecrets")
+	// Also load swanctl config (for compat mode xfrm interface)
+	run("swanctl", "--load-all", "--noprompt")
 
 	log.Printf("[ikev2] server mode=%s pool=%s", cfg.Mode, cfg.Pool)
 	return nil
@@ -594,34 +522,7 @@ func (a *App) updateEAPSecrets() {
 		}
 	}
 	os.WriteFile("/etc/ipsec.secrets", []byte(strings.Join(lines, "\n")+"\n"), 0600)
-
-	// Also update swanctl secrets file (compat mode uses swanctl connection,
-	// which reads EAP passwords from /etc/swanctl/secrets.d/ikev2.conf).
-	// Without this, hot-added users or password changes only take effect in
-	// ipsec.secrets but the swanctl secrets file remains stale, causing
-	// MSCHAPv2 verification failure in compat mode.
-	if _, err := os.Stat("/etc/swanctl/secrets.d"); err == nil {
-		var sb strings.Builder
-		sb.WriteString("secrets {\n")
-		// Include private key reference
-		kd, _ := os.ReadFile("/etc/ipsec.d/private/ikev2-server.key.pem")
-		if len(kd) > 0 {
-			if strings.Contains(string(kd), "RSA PRIVATE KEY") {
-				sb.WriteString("    rsa-key {\n        file = ikev2-server.key.pem\n    }\n")
-			} else {
-				sb.WriteString("    ecdsa-key {\n        file = ikev2-server.key.pem\n    }\n")
-			}
-		}
-		for i, u := range cfg.Users {
-			if u.Enabled {
-				sb.WriteString(fmt.Sprintf("    eap-user%d {\n        id = %s\n        secret = \"%s\"\n    }\n", i, u.Username, u.Password))
-			}
-		}
-		sb.WriteString("}\n")
-		os.WriteFile("/etc/swanctl/secrets.d/ikev2.conf", []byte(sb.String()), 0644)
-	}
-
-	// Reload secrets via both stroke and vici (swanctl)
+	// Reload secrets via both stroke and vici (swanctl) to ensure both paths work
 	exec.Command("ipsec", "rereadsecrets").Run()
 	exec.Command("swanctl", "--load-creds").Run()
 }
