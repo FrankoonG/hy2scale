@@ -246,11 +246,9 @@ func (a *App) StartIKEv2(cfg IKEv2Config) error {
 	//   updown script: simple webhook (session tracking only)
 	//
 	// Compat mode (iKuai / no iptables):
-	//   ipsec.conf → ALSO written (TunCaptureActive() is false at this point
-	//     because ensureTunCapture hasn't run yet). This is intentional — both
-	//     configs coexist. strongSwan loads ipsec.conf via "ipsec update", then
-	//     swanctl.conf via "swanctl --load-all". The swanctl connection (with
-	//     if_id_in/if_id_out) takes precedence for new IKE_SA negotiations.
+	//   ipsec.conf → NOT written (testIptablesAvailable guards it). Only swanctl.conf
+	//     is loaded. This ensures the vici connection (with if_id) is the ONLY one,
+	//     preventing stroke/vici dual-match that breaks xfrm interface creation.
 	//   swanctl.conf → connection with if_id for xfrm interface
 	//   ipsec.secrets → ALSO written (shared by both stroke and vici)
 	//   updown script: overwritten with xfrm version (creates ikecN interfaces)
@@ -401,11 +399,14 @@ conn ikev2-mschapv2
 		return fmt.Errorf("ikev2: unknown mode %q", cfg.Mode)
 	}
 
-	// Write ipsec.conf connection. TunCaptureActive() is false here (TUN hasn't
-	// started yet), so this always writes. In compat mode the swanctl connection
-	// (written below) takes precedence. DO NOT gate this on iptables availability
-	// — removing the ipsec.conf causes "ipsec start" to fail with missing config.
-	if !TunCaptureActive() {
+	// Write ipsec.conf connection ONLY in standard iptables mode.
+	// In compat mode, only the swanctl/vici connection (with if_id) must be loaded.
+	// If the stroke connection also loads, it gets selected (no if_id) and
+	// PLUTO_IF_ID_OUT is empty → xfrm interface creation fails.
+	// Previously used TunCaptureActive() which was false here (TUN not started yet);
+	// only worked when L2TP started first (its ensureTunCapture set the flag).
+	// Empty ipsec.conf is created below for "ipsec start" to succeed.
+	if testIptablesAvailable() {
 		appendToIPSecConf(connConf)
 	}
 
@@ -530,9 +531,11 @@ esac
 	// "ipsec update" loads connections from ipsec.conf (stroke).
 	// "ipsec rereadsecrets" loads secrets from ipsec.secrets (stroke).
 	// "swanctl --load-all" loads connections+secrets from swanctl.conf (vici).
-	// In compat mode, the swanctl connection (with if_id) takes precedence
-	// over the ipsec.conf one for new IKE negotiations. Both must be loaded.
-	// DO NOT conditionally skip any of these commands.
+	// In compat mode, only swanctl connection is loaded (with if_id).
+	// Ensure ipsec.conf exists (ipsec starter requires it even if empty).
+	if _, err := os.Stat("/etc/ipsec.conf"); os.IsNotExist(err) {
+		os.WriteFile("/etc/ipsec.conf", []byte("# managed by hy2scale\n"), 0644)
+	}
 	ensureStrongswanRunning()
 	time.Sleep(time.Second)
 	run("ipsec", "update")
