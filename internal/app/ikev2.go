@@ -358,11 +358,18 @@ conn ikev2-psk
 		// Clean up temp cert from TLS store (keep only in ipsec dirs)
 		a.tls.Delete("__ikev2_auto__")
 
-		// ipsec.conf for mschapv2 mode.
-		// leftid=%s REQUIRED — without it strongSwan uses cert DN, client can't match.
-		// eap_identity=%%any REQUIRED — %%identity is treated as literal in 5.8.4.
-		// leftsendcert=always — iKuai client needs the cert pushed.
-		// See docs/ikuai-compat-research.md "Dead Ends" for full history.
+		// ipsec.conf for mschapv2 mode (stroke connection).
+		// eap_identity varies by mode:
+		//   Standard (iptables): %any — only stroke connection exists, must accept all EAP IDs
+		//   Compat (no iptables): %identity — literal constraint in 5.8.4, ensures this
+		//     stroke connection NEVER matches real clients, so only the vici connection
+		//     (with eap_id=%any and if_id) is used. This prevents stroke/vici dual-match
+		//     conflicts that cause MSCHAPv2 verification failure.
+		// leftid=%s — required so strongSwan presents short ID, not full cert DN.
+		eapIdentity := "%%any"
+		if !testIptablesAvailable() {
+			eapIdentity = "%%identity" // compat: make stroke unmatchable
+		}
 		connConf = fmt.Sprintf(`
 conn ikev2-mschapv2
     keyexchange=ikev2
@@ -375,7 +382,7 @@ conn ikev2-mschapv2
     leftsubnet=0.0.0.0/0
     right=%%any
     rightauth=eap-mschapv2
-    eap_identity=%%any
+    eap_identity=`+eapIdentity+`
     rightsourceip=%s
     rightdns=%s
     leftupdown=/etc/ipsec.d/ikev2-updown.sh
