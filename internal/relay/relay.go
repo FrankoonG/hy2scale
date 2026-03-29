@@ -961,12 +961,14 @@ func (n *Node) PeerIPStatuses(name string) []IPStatus {
 		result = append(result, IPStatus{Addr: primaryAddr, Status: "online"})
 	}
 	// Extras
-	for i, addr := range p.connAddrs[1:] {
-		status := "online"
-		if i < len(p.connStatuses) {
-			status = p.connStatuses[i]
+	if len(p.connAddrs) > 1 {
+		for i, addr := range p.connAddrs[1:] {
+			status := "online"
+			if i < len(p.connStatuses) {
+				status = p.connStatuses[i]
+			}
+			result = append(result, IPStatus{Addr: addr, Status: status})
 		}
-		result = append(result, IPStatus{Addr: addr, Status: status})
 	}
 	return result
 }
