@@ -584,7 +584,34 @@ func (a *App) updateEAPSecrets() {
 		}
 	}
 	os.WriteFile("/etc/ipsec.secrets", []byte(strings.Join(lines, "\n")+"\n"), 0600)
-	// Reload secrets via both stroke and vici (swanctl) to ensure both paths work
+
+	// Also update swanctl secrets file (compat mode uses swanctl connection,
+	// which reads EAP passwords from /etc/swanctl/secrets.d/ikev2.conf).
+	// Without this, hot-added users or password changes only take effect in
+	// ipsec.secrets but the swanctl secrets file remains stale, causing
+	// MSCHAPv2 verification failure in compat mode.
+	if _, err := os.Stat("/etc/swanctl/secrets.d"); err == nil {
+		var sb strings.Builder
+		sb.WriteString("secrets {\n")
+		// Include private key reference
+		kd, _ := os.ReadFile("/etc/ipsec.d/private/ikev2-server.key.pem")
+		if len(kd) > 0 {
+			if strings.Contains(string(kd), "RSA PRIVATE KEY") {
+				sb.WriteString("    rsa-key {\n        file = ikev2-server.key.pem\n    }\n")
+			} else {
+				sb.WriteString("    ecdsa-key {\n        file = ikev2-server.key.pem\n    }\n")
+			}
+		}
+		for i, u := range cfg.Users {
+			if u.Enabled {
+				sb.WriteString(fmt.Sprintf("    eap-user%d {\n        id = %s\n        secret = \"%s\"\n    }\n", i, u.Username, u.Password))
+			}
+		}
+		sb.WriteString("}\n")
+		os.WriteFile("/etc/swanctl/secrets.d/ikev2.conf", []byte(sb.String()), 0644)
+	}
+
+	// Reload secrets via both stroke and vici (swanctl)
 	exec.Command("ipsec", "rereadsecrets").Run()
 	exec.Command("swanctl", "--load-creds").Run()
 }
