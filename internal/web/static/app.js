@@ -512,11 +512,20 @@ async function refreshTopology() {
   lastTopoStructKey = structKey;
 
   // Build connected peers set from all visible nodes
+  // Track direct peers that are explicitly disconnected — nested children cannot override
   const newConnected = new Set();
   const newDisabled = new Set();
+  const directDisconnected = new Set();
+  // First pass: collect direct peers that are disconnected/disabled
+  for (const n of topo) {
+    if (n.disabled) newDisabled.add(n.name);
+    if (!n.is_self && !n.connected && !n.native) directDisconnected.add(n.name);
+  }
   function collectPeers(nodes, parentReachable) {
     for (const n of nodes) {
       if (n.disabled) newDisabled.add(n.name);
+      // Never mark a direct-disconnected peer as reachable via nested children
+      if (directDisconnected.has(n.name)) continue;
       const reachable = !n.disabled && (n.connected || n.is_self || n.native || n.latency_ms > 0 || parentReachable);
       if (reachable) newConnected.add(n.name);
       if (n.children) collectPeers(n.children, reachable);
@@ -2262,9 +2271,10 @@ function exitViaHTML(path) {
 function exitCellHTML(exitVia, exitPaths, exitMode) {
   const primary = `<span style="font-family:var(--mono);font-size:12px">${exitViaHTML(exitVia)}</span>`;
   const badge = exitModeBadge(exitMode);
-  const others = (exitPaths || []).filter(p => p !== exitVia);
-  if (others.length > 0) {
-    return `${primary}${badge} <span class="badge badge-muted" style="cursor:default;font-size:10px" data-exitpaths='${JSON.stringify(others)}'>+${others.length}</span>`;
+  const allPaths = exitPaths && exitPaths.length ? exitPaths : (exitVia ? [exitVia] : []);
+  if (allPaths.length > 1) {
+    const tipData = JSON.stringify({paths: allPaths, mode: exitMode || ''});
+    return `${primary}${badge} <span class="badge badge-muted" style="cursor:default;font-size:10px" data-exitpaths='${tipData}'>+${allPaths.length - 1}</span>`;
   }
   return `${primary}${badge}`;
 }
@@ -2807,8 +2817,38 @@ document.addEventListener('click', e => {
     clearTimeout(hideTimer);
     if (badge.dataset.exitpaths) {
       try {
-        const paths = JSON.parse(badge.dataset.exitpaths);
-        tip.innerHTML = paths.map(p => `<div style="font-family:var(--mono);font-size:12px;padding:1px 0">${exitViaHTML(p)}</div>`).join('');
+        const d = JSON.parse(badge.dataset.exitpaths);
+        const paths = d.paths || d;
+        const mode = d.mode || '';
+        const nm = normalizeMode(mode);
+        // Check which path is "active" (all hops reachable and not disabled)
+        function pathHealthy(p) {
+          return p.split('/').every(hop => !disabledPeers.has(hop) && connectedPeers.has(hop));
+        }
+        // For quality mode: first healthy path is the active one
+        let activeIdx = -1;
+        if (nm === 'quality' || (!nm && paths.length > 1)) {
+          activeIdx = paths.findIndex(pathHealthy);
+        }
+        tip.innerHTML = paths.map((p, i) => {
+          const pathHtml = exitViaHTML(p);
+          const healthy = pathHealthy(p);
+          let label = '';
+          if (nm === 'quality' || (!nm && paths.length > 1)) {
+            if (i === activeIdx) {
+              label = '<span style="color:var(--green);font-size:10px;margin-left:8px">● active</span>';
+            } else if (i === 0) {
+              label = healthy
+                ? '<span style="color:var(--green);font-size:10px;margin-left:8px">primary</span>'
+                : '<span style="color:var(--red);font-size:10px;margin-left:8px">primary ✗</span>';
+            } else {
+              label = `<span style="color:var(--text-muted);font-size:10px;margin-left:8px">fallback ${i}</span>`;
+            }
+          } else if (nm === 'aggregate') {
+            label = `<span style="color:#6c9bef;font-size:10px;margin-left:8px">path ${i + 1}</span>`;
+          }
+          return `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;font-family:var(--mono);font-size:12px;padding:2px 0">${pathHtml}${label}</div>`;
+        }).join('');
       } catch(e) { return; }
     } else if (badge.dataset.tip) {
       tip.textContent = badge.dataset.tip;
