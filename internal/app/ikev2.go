@@ -331,12 +331,13 @@ conn ikev2-mschapv2
     auto=add
     type=tunnel
     left=%%any
+    leftid=%s
     leftcert=ikev2-server.cert.pem
     leftsendcert=always
     leftsubnet=0.0.0.0/0
     right=%%any
     rightauth=eap-mschapv2
-    eap_identity=%%identity
+    eap_identity=%%any
     rightsourceip=%s
     rightdns=%s
     leftupdown=/etc/ipsec.d/ikev2-updown.sh
@@ -346,7 +347,7 @@ conn ikev2-mschapv2
     dpddelay=300s
     ike=aes256-sha256-modp2048,aes128-sha256-modp2048!
     esp=aes256-sha256,aes128-sha256!
-`, ipRange, dns)
+`, localID, ipRange, dns)
 
 		// Generate EAP secrets
 		a.updateEAPSecrets()
