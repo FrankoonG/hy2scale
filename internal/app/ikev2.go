@@ -527,16 +527,20 @@ esac
 	// "swanctl --load-all" loads connections+secrets from swanctl.conf (vici).
 	ensureStrongswanRunning()
 	time.Sleep(time.Second)
-	// Standard mode: load stroke connection from ipsec.conf via "ipsec update".
-	// Compat mode: SKIP "ipsec update" — the stroke connection (no if_id) must NOT
-	// be loaded, otherwise strongSwan selects it over the vici connection and
-	// PLUTO_IF_ID_OUT is empty → xfrm interface creation fails.
-	// Only "swanctl --load-all" loads the vici connection (with if_id).
 	if testIptablesAvailable() {
+		// Standard mode: stroke connection from ipsec.conf
 		run("ipsec", "update")
+		run("ipsec", "rereadsecrets")
+		// Also load swanctl for hot-reload support
+		run("swanctl", "--load-all", "--noprompt")
+	} else {
+		// Compat mode: ONLY vici connection (with if_id for xfrm interfaces).
+		// Do NOT run "ipsec update" — stroke connection has no if_id.
+		// Do NOT run "ipsec rereadsecrets" — stroke EAP secrets interfere with
+		// vici MSCHAPv2 on strongSwan 5.8.4 (dual secrets cause verification failure).
+		// swanctl --load-all loads connection + secrets exclusively via vici.
+		run("swanctl", "--load-all", "--noprompt")
 	}
-	run("ipsec", "rereadsecrets")
-	run("swanctl", "--load-all", "--noprompt")
 
 	log.Printf("[ikev2] server mode=%s pool=%s", cfg.Mode, cfg.Pool)
 	return nil
