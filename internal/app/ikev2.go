@@ -235,11 +235,11 @@ func (a *App) StartIKEv2(cfg IKEv2Config) error {
 	proxyPort := cfg.proxyPort()
 	hooksPort := proxyPort + 1
 
-	// Generate updown script for IKEv2 session tracking (strongswan format)
-	updownScript := fmt.Sprintf(`#!/bin/sh
-# strongswan updown script for IKEv2 session tracking
-# PLUTO_PEER_CLIENT = virtual IP assigned to client (e.g. 10.10.10.2/32)
-# PLUTO_PEER_ID = peer identity (username for EAP, or IP/@id for PSK)
+	os.MkdirAll("/etc/ipsec.d", 0755)
+
+	// Default updown script (iptables mode): simple session tracking only
+	// Compat mode will overwrite this with xfrm interface version later
+	defaultUpdown := fmt.Sprintf(`#!/bin/sh
 REMOTE_IP="${PLUTO_PEER_CLIENT%%%%/*}"
 case "$PLUTO_VERB" in
   up-client|up-client-v6)
@@ -250,9 +250,7 @@ case "$PLUTO_VERB" in
     ;;
 esac
 `, gateway, hooksPort, gateway, hooksPort)
-
-	os.MkdirAll("/etc/ipsec.d", 0755)
-	os.WriteFile("/etc/ipsec.d/ikev2-updown.sh", []byte(updownScript), 0755)
+	os.WriteFile("/etc/ipsec.d/ikev2-updown.sh", []byte(defaultUpdown), 0755)
 
 	// Resolve Local/Remote IDs
 	localID := cfg.LocalID
@@ -355,8 +353,10 @@ conn ikev2-mschapv2
 		return fmt.Errorf("ikev2: unknown mode %q", cfg.Mode)
 	}
 
-	// Append IKEv2 conn to ipsec.conf (only in standard mode; compat uses swanctl)
-	if !TunCaptureActive() {
+	// Append IKEv2 conn to ipsec.conf (only in standard iptables mode; compat uses swanctl)
+	// Check iptables availability BEFORE writing config to avoid ipsec.conf/swanctl conflict
+	iptablesOK := testIptablesAvailable()
+	if iptablesOK {
 		appendToIPSecConf(connConf)
 	}
 
@@ -378,7 +378,7 @@ conn ikev2-mschapv2
 	// Setup iptables (same dual-stack approach as L2TP)
 	os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
 
-	if testIptablesAvailable() {
+	if iptablesOK {
 		if iptUseChroot() {
 			log.Printf("[ikev2] mode: iptables via chroot /host (host kernel compat)")
 		} else {
