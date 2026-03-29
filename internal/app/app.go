@@ -1326,7 +1326,9 @@ func (a *App) dialExitWithMode(ctx context.Context, exitVia, exitMode, addr stri
 	return a.dialExit(ctx, exitVia, addr)
 }
 
-// dialExitWithPaths tries exit_paths in order (quality failover).
+// dialExitWithPaths races exit_paths concurrently with staggered start (quality failover).
+// First path starts immediately, subsequent paths start after 2s stagger.
+// First successful connection wins; others are closed.
 // If exitPaths is empty or mode is aggregate, falls back to dialExitWithMode.
 func (a *App) dialExitWithPaths(ctx context.Context, exitVia string, exitPaths []string, exitMode, addr string) (net.Conn, error) {
 	paths := exitPaths
@@ -1338,10 +1340,9 @@ func (a *App) dialExitWithPaths(ctx context.Context, exitVia string, exitPaths [
 	case "aggregate", "speed":
 		return a.dialExitWithMode(ctx, exitVia, exitMode, addr)
 	}
-	// Quality mode or no mode: try each path in order
-	var lastErr error
+	// Filter out disabled paths
+	var active []string
 	for _, p := range paths {
-		// Skip paths with disabled hops
 		skip := false
 		for _, hop := range strings.Split(p, "/") {
 			if a.isNodeDisabled(hop) {
@@ -1349,15 +1350,70 @@ func (a *App) dialExitWithPaths(ctx context.Context, exitVia string, exitPaths [
 				break
 			}
 		}
-		if skip {
+		if !skip {
+			active = append(active, p)
+		}
+	}
+	if len(active) == 0 {
+		return nil, fmt.Errorf("all exit paths disabled")
+	}
+	if len(active) == 1 {
+		return a.dialExit(ctx, active[0], addr)
+	}
+	// Race paths concurrently with 2s stagger
+	type result struct {
+		conn net.Conn
+		err  error
+		path string
+	}
+	raceCtx, raceCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer raceCancel()
+	ch := make(chan result, len(active))
+	for i, p := range active {
+		p := p
+		go func(idx int) {
+			// Stagger: first path immediate, rest wait 2s per position
+			if idx > 0 {
+				select {
+				case <-time.After(2 * time.Second):
+				case <-raceCtx.Done():
+					ch <- result{nil, raceCtx.Err(), p}
+					return
+				}
+			}
+			conn, err := a.dialExit(raceCtx, p, addr)
+			ch <- result{conn, err, p}
+		}(i)
+	}
+	// Return first success immediately, clean up others in background
+	var lastErr error
+	returned := 0
+	for returned < len(active) {
+		r := <-ch
+		returned++
+		if r.err != nil {
+			lastErr = r.err
+			if r.err != context.Canceled {
+				log.Printf("[exit] path %s failed: %v", r.path, r.err)
+			}
 			continue
 		}
-		conn, err := a.dialExit(ctx, p, addr)
-		if err == nil {
-			return conn, nil
+		// First success: cancel others and return immediately
+		raceCancel()
+		if r.path != active[0] {
+			log.Printf("[exit] failover: %s (primary %s unavailable)", r.path, active[0])
 		}
-		lastErr = err
-		log.Printf("[exit] path %s failed: %v, trying next", p, err)
+		// Drain remaining results in background to close late connections
+		go func() {
+			for returned < len(active) {
+				late := <-ch
+				returned++
+				if late.conn != nil {
+					late.conn.Close()
+				}
+			}
+		}()
+		return r.conn, nil
 	}
 	if lastErr != nil {
 		return nil, lastErr
