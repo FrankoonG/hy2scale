@@ -459,6 +459,10 @@ esac
 		go a.serveIKEv2Hooks(gateway, hooksPort, cfg)
 	}
 
+	// Ensure ipsec.conf exists (compat mode uses swanctl only, but ipsec starter needs the file)
+	if _, err := os.Stat("/etc/ipsec.conf"); os.IsNotExist(err) {
+		os.WriteFile("/etc/ipsec.conf", []byte("# managed by hy2scale\n"), 0644)
+	}
 	// Start strongswan or reload if already running
 	ensureStrongswanRunning()
 	// Reload config and secrets to pick up new IKEv2 connection
