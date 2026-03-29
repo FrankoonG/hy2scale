@@ -331,6 +331,7 @@ func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 				return
 			}
 			defer remote.Close()
+			log.Printf("[wg-fwd] %s -> %s connected", srcIP, dstAddr)
 
 			done := make(chan struct{})
 			go func() { io.Copy(remote, wgConn); done <- struct{}{} }()
