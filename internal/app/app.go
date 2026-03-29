@@ -129,6 +129,10 @@ type App struct {
 	appCtx       context.Context
 	mu           sync.Mutex
 	clientCancel map[string]context.CancelFunc
+
+	// Track last successful exit path per primary exit_via (for UI display)
+	activePathMu sync.RWMutex
+	activePaths  map[string]string // exitVia → last winning path
 	proxyHandles map[string]*proxyHandle
 	srvCancel    context.CancelFunc
 	ssListener   net.Listener
@@ -155,6 +159,7 @@ func New(dataDir string) (*App, error) {
 		tls:          NewTLSStore(dataDir),
 		dataDir:      dataDir,
 		clientCancel: make(map[string]context.CancelFunc),
+		activePaths:  make(map[string]string),
 		proxyHandles: make(map[string]*proxyHandle),
 		Sessions:     NewSessionManager(),
 	}, nil
@@ -166,6 +171,24 @@ func (a *App) TLS() *TLSStore     { return a.tls }
 func (a *App) DataDir() string     { return a.dataDir }
 
 func (a *App) GetConfig() Config { return a.store.Get() }
+
+// ActivePath returns the last successful exit path for a given primary exit_via.
+func (a *App) ActivePath(exitVia string) string {
+	a.activePathMu.RLock()
+	defer a.activePathMu.RUnlock()
+	return a.activePaths[exitVia]
+}
+
+// AllActivePaths returns all tracked active paths.
+func (a *App) AllActivePaths() map[string]string {
+	a.activePathMu.RLock()
+	defer a.activePathMu.RUnlock()
+	cp := make(map[string]string, len(a.activePaths))
+	for k, v := range a.activePaths {
+		cp[k] = v
+	}
+	return cp
+}
 
 func (a *App) UpdateWebCredentials(username, passHash string) {
 	a.store.Update(func(c *Config) {
@@ -1403,6 +1426,10 @@ func (a *App) dialExitWithPaths(ctx context.Context, exitVia string, exitPaths [
 		}
 		// First success: cancel others and return immediately
 		raceCancel()
+		// Record the winning path for UI display
+		a.activePathMu.Lock()
+		a.activePaths[exitVia] = r.path
+		a.activePathMu.Unlock()
 		if r.path != active[0] {
 			log.Printf("[exit] failover: %s (primary %s unavailable)", r.path, active[0])
 		}

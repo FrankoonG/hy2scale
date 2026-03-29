@@ -282,6 +282,7 @@ $('#login-user').addEventListener('keydown', e => { if (e.key === 'Enter') $('#l
 let pollTimer = null, lastTopoJSON = '', lastTopoStructKey = '';
 let connectedPeers = new Set(); // updated from topology
 let disabledPeers = new Set(); // updated from topology
+let activePaths = {}; // exitVia → last winning path (from backend)
 let _topoLoaded = false;
 async function ensureTopoLoaded() {
   if (_topoLoaded) return;
@@ -298,6 +299,7 @@ let proxiesLoaded = false;
 async function refresh() {
   try {
     const node = await api('/node');
+    if (node.active_paths) activePaths = node.active_paths;
     $('#node-badge').textContent = node.node_id;
     $('#node-name-display').textContent = node.name !== node.node_id ? node.name : '';
     _localVersion = node.version || '1.0.0';
@@ -2821,14 +2823,18 @@ document.addEventListener('click', e => {
         const paths = d.paths || d;
         const mode = d.mode || '';
         const nm = normalizeMode(mode);
-        // Check which path is "active" (all hops reachable and not disabled)
-        function pathHealthy(p) {
-          return p.split('/').every(hop => !disabledPeers.has(hop) && connectedPeers.has(hop));
-        }
-        // For quality mode: first healthy path is the active one
+        // Find active path from backend tracking (real dial result)
+        const primaryPath = paths[0] || '';
+        const realActive = activePaths[primaryPath] || '';
         let activeIdx = -1;
         if (nm === 'quality' || (!nm && paths.length > 1)) {
-          activeIdx = paths.findIndex(pathHealthy);
+          if (realActive) {
+            activeIdx = paths.indexOf(realActive);
+          }
+          // Fallback: first healthy path if no backend data yet
+          if (activeIdx < 0) {
+            activeIdx = paths.findIndex(p => p.split('/').every(hop => !disabledPeers.has(hop) && connectedPeers.has(hop)));
+          }
         }
         tip.innerHTML = paths.map((p, i) => {
           const pathHtml = exitViaHTML(p);
