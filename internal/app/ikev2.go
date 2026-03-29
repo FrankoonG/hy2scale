@@ -399,16 +399,10 @@ conn ikev2-mschapv2
 		return fmt.Errorf("ikev2: unknown mode %q", cfg.Mode)
 	}
 
-	// Write ipsec.conf connection ONLY in standard iptables mode.
-	// In compat mode, only the swanctl/vici connection (with if_id) must be loaded.
-	// If the stroke connection also loads, it gets selected (no if_id) and
-	// PLUTO_IF_ID_OUT is empty → xfrm interface creation fails.
-	// Previously used TunCaptureActive() which was false here (TUN not started yet);
-	// only worked when L2TP started first (its ensureTunCapture set the flag).
-	// Empty ipsec.conf is created below for "ipsec start" to succeed.
-	if testIptablesAvailable() {
-		appendToIPSecConf(connConf)
-	}
+	// Always write ipsec.conf (ipsec starter requires it).
+	// In compat mode, "ipsec update" is skipped below so this stroke connection
+	// is never loaded into charon — only the vici connection (with if_id) is used.
+	appendToIPSecConf(connConf)
 
 	// Write ipsec.secrets (shared by stroke AND vici/swanctl).
 	// Both modes need this — compat mode's swanctl also has its own secrets
@@ -531,14 +525,16 @@ esac
 	// "ipsec update" loads connections from ipsec.conf (stroke).
 	// "ipsec rereadsecrets" loads secrets from ipsec.secrets (stroke).
 	// "swanctl --load-all" loads connections+secrets from swanctl.conf (vici).
-	// In compat mode, only swanctl connection is loaded (with if_id).
-	// Ensure ipsec.conf exists (ipsec starter requires it even if empty).
-	if _, err := os.Stat("/etc/ipsec.conf"); os.IsNotExist(err) {
-		os.WriteFile("/etc/ipsec.conf", []byte("# managed by hy2scale\n"), 0644)
-	}
 	ensureStrongswanRunning()
 	time.Sleep(time.Second)
-	run("ipsec", "update")
+	// Standard mode: load stroke connection from ipsec.conf via "ipsec update".
+	// Compat mode: SKIP "ipsec update" — the stroke connection (no if_id) must NOT
+	// be loaded, otherwise strongSwan selects it over the vici connection and
+	// PLUTO_IF_ID_OUT is empty → xfrm interface creation fails.
+	// Only "swanctl --load-all" loads the vici connection (with if_id).
+	if testIptablesAvailable() {
+		run("ipsec", "update")
+	}
 	run("ipsec", "rereadsecrets")
 	run("swanctl", "--load-all", "--noprompt")
 
