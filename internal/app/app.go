@@ -1381,7 +1381,10 @@ func (a *App) dialExitWithPaths(ctx context.Context, exitVia string, exitPaths [
 					return
 				}
 			}
-			conn, err := a.dialExit(raceCtx, p, addr)
+			// Per-path timeout: 10s max per individual dial attempt
+			pathCtx, pathCancel := context.WithTimeout(raceCtx, 10*time.Second)
+			defer pathCancel()
+			conn, err := a.dialExit(pathCtx, p, addr)
 			ch <- result{conn, err, p}
 		}(i)
 	}
