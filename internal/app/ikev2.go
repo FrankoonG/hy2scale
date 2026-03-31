@@ -397,11 +397,11 @@ conn ikev2-mschapv2
 		iptRun("iptables-legacy", "-I", "FORWARD", "-s", subnet, "-o", "eth0", "-j", "ACCEPT")
 		iptRun("iptables-legacy", "-I", "FORWARD", "-d", subnet,
 			"-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
-		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", portStr,
+		iptRun("iptables-legacy", "-I", "INPUT", "-p", "tcp", "--dport", portStr,
 			"-s", subnet, "-j", "ACCEPT")
 		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", portStr, "-j", "DROP")
 		hooksPortStr := fmt.Sprintf("%d", hooksPort)
-		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr,
+		iptRun("iptables-legacy", "-I", "INPUT", "-p", "tcp", "--dport", hooksPortStr,
 			"-i", "lo", "-j", "ACCEPT")
 		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr, "-j", "DROP")
 		iptRun("iptables", "-I", "DOCKER-USER", "-s", subnet, "-j", "ACCEPT")

@@ -14,6 +14,7 @@ RUN cd /tmp/strongswan-5.8.4 && ./configure --prefix=/usr --sysconfdir=/etc \
     --disable-gmp --enable-openssl --enable-md4 --enable-eap-mschapv2 --enable-eap-identity \
     --enable-xauth-generic --enable-farp --enable-dhcp --enable-unity \
     --enable-vici --enable-swanctl --enable-stroke --enable-updown \
+    --enable-kernel-libipsec \
     && make -j$(nproc) && make DESTDIR=/out install
 
 # Build iptables 1.8.3 from source (Alpine's 1.8.10 incompatible with some kernels)
