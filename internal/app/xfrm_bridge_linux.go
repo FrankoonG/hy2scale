@@ -236,10 +236,19 @@ func xfrmBridgeGvisorWrite(data []byte) bool {
 		return false
 	}
 
-	// Find the xfrm interface for this client
+	// Find the xfrm interface for this client.
+	// With kernel-libipsec, all clients use "ipsec0" instead of per-client ikecN.
 	ifName := xfrmIfForClient(dstIP)
 	if ifName == "" {
-		return false
+		// Check if ipsec0 bridge is active (kernel-libipsec mode)
+		xfrmBridgeMu.Lock()
+		_, hasIpsec0 := xfrmBridgeClients["ipsec0"]
+		xfrmBridgeMu.Unlock()
+		if hasIpsec0 {
+			ifName = "ipsec0"
+		} else {
+			return false
+		}
 	}
 
 	writeToXfrm(ifName, data)
