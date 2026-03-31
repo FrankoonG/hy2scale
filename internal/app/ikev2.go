@@ -423,35 +423,19 @@ conn ikev2-mschapv2
 		}
 
 
-		// Generate swanctl-style updown script that creates xfrm interface
-		// and routes traffic to the TUN capture device
+		// Updown script for compat mode: session tracking only.
+		// With kernel-libipsec, ipsec0 TUN + AF_PACKET bridge handles all traffic.
+		// No xfrm interface (ikecN) creation needed.
 		xfrmUpdown := fmt.Sprintf(`#!/bin/sh
 case "$PLUTO_VERB" in
   up-client|up-client-v6)
-    IFID="${PLUTO_IF_ID_OUT%%%%/*}"
-    IFNAME="ikec${IFID}"
-    ip link del "$IFNAME" 2>/dev/null
-    ip link add "$IFNAME" type xfrm dev lo if_id "$IFID"
-    ip link set "$IFNAME" mtu %d up
-    if [ -n "$PLUTO_PEER_SOURCEIP" ]; then
-      ip route add "$PLUTO_PEER_SOURCEIP" dev "$IFNAME" 2>/dev/null
-      # Disable rp_filter and route xfrm traffic to TUN capture device
-      echo 0 > /proc/sys/net/ipv4/conf/$IFNAME/rp_filter 2>/dev/null
-      echo 0 > /proc/sys/net/ipv4/conf/all/rp_filter 2>/dev/null
-      # Add policy route: traffic from this client -> TUN for forwarding
-      ip rule add from "$PLUTO_PEER_SOURCEIP" lookup %s 2>/dev/null
-    fi
-    # Notify hy2scale of session (include iface name for xfrm bridge)
-    wget -qO- "http://%s:%d/ikev2/up?ip=${PLUTO_PEER_SOURCEIP}&user=${PLUTO_PEER_ID}&iface=${IFNAME}" 2>/dev/null
+    wget -qO- "http://%s:%d/ikev2/up?ip=${PLUTO_PEER_SOURCEIP}&user=${PLUTO_PEER_ID}" 2>/dev/null
     ;;
   down-client|down-client-v6)
-    IFID="${PLUTO_IF_ID_OUT%%%%/*}"
-    IFNAME="ikec${IFID}"
-    ip link del "$IFNAME" 2>/dev/null
     wget -qO- "http://%s:%d/ikev2/down?ip=${PLUTO_PEER_SOURCEIP}" 2>/dev/null
     ;;
 esac
-`, cfg.mtuVal(), tunRouteTable, gateway, hooksPort, gateway, hooksPort)
+`, gateway, hooksPort, gateway, hooksPort)
 
 		os.MkdirAll("/etc/ipsec.d", 0755)
 		os.WriteFile("/etc/ipsec.d/ikev2-updown.sh", []byte(xfrmUpdown), 0755)
@@ -472,6 +456,30 @@ esac
 	run("swanctl", "--load-all", "--noprompt")
 
 	log.Printf("[ikev2] server mode=%s pool=%s", cfg.Mode, cfg.Pool)
+
+	// Compat mode with kernel-libipsec: start AF_PACKET bridge on ipsec0.
+	// kernel-libipsec decrypts ESP in userspace and writes decrypted packets to the
+	// ipsec0 TUN device. Normally the kernel would route these to hy2cap0, but the
+	// container's FORWARD chain (set to DROP by Docker) blocks this.
+	// AF_PACKET captures at link layer BEFORE netfilter, bypassing FORWARD.
+	// This is the same mechanism as the xfrm bridge on ikecN, but on ipsec0.
+	if !iptablesOK && tunCaptureInst != nil {
+		go func() {
+			// Wait for ipsec0 to appear (created by kernel-libipsec at charon startup)
+			for i := 0; i < 10; i++ {
+				if err := waitForInterface("ipsec0", 3*time.Second); err == nil {
+					break
+				}
+				time.Sleep(time.Second)
+			}
+			if err := startXfrmBridge(a.appCtx, "ipsec0", tunCaptureInst.ep); err != nil {
+				log.Printf("[ikev2] ipsec0 AF_PACKET bridge failed: %v", err)
+			} else {
+				log.Printf("[ikev2] ipsec0 AF_PACKET bridge active (kernel-libipsec userspace ESP)")
+			}
+		}()
+	}
+
 	return nil
 }
 
