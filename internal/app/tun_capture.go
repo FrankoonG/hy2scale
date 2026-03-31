@@ -395,5 +395,13 @@ func ensureTunCapture(a *App, subnet string) error {
 	}
 	tunCaptureActive.Store(true)
 	log.Printf("[tun-capture] TUN capture mode active (compat)")
+
+	// Try to set FORWARD chain policy to ACCEPT.
+	// Docker sets FORWARD DROP in container namespaces, blocking forwarded packets
+	// (e.g. from ipsec0 to hy2cap0). On iKuai, iptables binaries can't modify
+	// the filter table, but raw setsockopt may work.
+	if err := setForwardAccept(); err != nil {
+		log.Printf("[tun-capture] set FORWARD ACCEPT failed: %v (forwarding may not work)", err)
+	}
 	return nil
 }
