@@ -359,11 +359,11 @@ conn ikev2-mschapv2
 	// All secrets come exclusively from swanctl to avoid duplicate EAP entries
 	// that cause MSCHAPv2 verification failure on strongSwan 5.8.4.
 	iptablesOK := testIptablesAvailable()
-	if iptablesOK {
-		appendToIPSecConf(connConf)
-	} else {
-		os.WriteFile("/etc/ipsec.conf", []byte("# compat: connections via swanctl\n"), 0644)
-	}
+	// Always write ipsec.conf. In compat mode with kernel-libipsec, the stroke
+	// connection handles EAP MSCHAPv2 auth (vici MSCHAPv2 is broken on 5.8.4).
+	// kernel-libipsec handles ESP in userspace via ipsec0 TUN.
+	// AF_PACKET bridge on ipsec0 captures decrypted packets, bypassing FORWARD DROP.
+	appendToIPSecConf(connConf)
 
 	// Update secrets — compat mode skips ipsec.secrets EAP entries
 	if cfg.Mode == "psk" && cfg.PSK != "" {
@@ -449,10 +449,8 @@ esac
 
 	ensureStrongswanRunning()
 	time.Sleep(time.Second)
-	if iptablesOK {
-		run("ipsec", "update")
-		run("ipsec", "rereadsecrets")
-	}
+	run("ipsec", "update")
+	run("ipsec", "rereadsecrets")
 	run("swanctl", "--load-all", "--noprompt")
 
 	log.Printf("[ikev2] server mode=%s pool=%s", cfg.Mode, cfg.Pool)
