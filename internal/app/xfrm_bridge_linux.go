@@ -191,11 +191,6 @@ func writeToXfrm(ifName string, data []byte) {
 
 	switch data[0] >> 4 {
 	case 4:
-		// Clear DF (Don't Fragment) flag to allow kernel fragmentation.
-		// iKuai's xfrm processing drops DF packets that exceed an internal PMTU
-		// after ESP decryption on the host side, even when interface MTU is sufficient.
-		data[6] &^= 0x40
-
 		var sa4 syscall.SockaddrInet4
 		copy(sa4.Addr[:], data[16:20])
 		syscall.Sendto(client.wfd, data, 0, &sa4)
