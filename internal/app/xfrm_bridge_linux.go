@@ -75,16 +75,13 @@ func startXfrmBridge(ctx context.Context, ifName string, ep *channel.Endpoint) e
 		return fmt.Errorf("bind to %s: %w", ifName, err)
 	}
 
-	// Open a raw IP socket for writing, bound to the xfrm interface.
-	// This goes through the normal IP output path, properly triggering xfrm ESP encapsulation.
+	// Open a raw IP socket for writing, bound to the interface.
 	wfd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_RAW)
 	if err != nil {
 		syscall.Close(fd)
 		return fmt.Errorf("raw IP socket: %w", err)
 	}
-	// IP_HDRINCL: we provide the full IP header
 	syscall.SetsockoptInt(wfd, syscall.IPPROTO_IP, syscall.IP_HDRINCL, 1)
-	// Bind to xfrm interface so packets go through xfrm encapsulation
 	syscall.SetsockoptString(wfd, syscall.SOL_SOCKET, syscall.SO_BINDTODEVICE, ifName)
 
 	childCtx, cancel := context.WithCancel(ctx)
@@ -191,14 +188,13 @@ func writeToXfrm(ifName string, data []byte) {
 		return
 	}
 
-	// Send via raw IP socket (bound to xfrm interface → triggers ESP encapsulation)
 	switch data[0] >> 4 {
 	case 4:
 		var sa4 syscall.SockaddrInet4
-		copy(sa4.Addr[:], data[16:20]) // destination IP from IP header
+		copy(sa4.Addr[:], data[16:20])
 		syscall.Sendto(client.wfd, data, 0, &sa4)
 	case 6:
-		// TODO: IPv6 support
+		// TODO: IPv6
 	}
 }
 
