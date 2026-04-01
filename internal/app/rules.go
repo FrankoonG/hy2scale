@@ -34,6 +34,7 @@ var (
 const (
 	ruleProxyPort    = 12380
 	ruleUDPProxyPort = 12381
+	ruleBypassMark   = 0x1234 // SO_MARK value to exclude proxy traffic from REDIRECT
 )
 
 // StartRuleEngine initializes the rule engine if in host network mode.
@@ -72,13 +73,31 @@ func (a *App) StartRuleEngine() {
 	go ruleEng.serveProxy(ctx)
 	go func() { <-ctx.Done(); ln.Close() }()
 
-	// Start UDP proxy
+	// Start UDP proxy — add bypass rule so proxy's own outbound UDP isn't REDIRECT'd
+	iptRun("iptables-legacy", "-t", "nat", "-I", "OUTPUT", "-m", "mark", "--mark",
+		fmt.Sprintf("0x%x", ruleBypassMark), "-p", "udp", "-j", "RETURN")
 	go ruleEng.serveUDPProxy(ctx)
 
 	log.Printf("[rules] engine started, proxy on %s", ruleEng.proxyAddr)
 
-	// Apply all enabled rules
+	// Exclude relay peer ports from rules (prevent REDIRECT intercepting QUIC)
 	cfg := a.store.Get()
+	for _, cl := range cfg.Clients {
+		addr := extractPrimaryAddr(cl.Addr)
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			continue
+		}
+		ips, _ := net.LookupHost(host)
+		for _, ip := range ips {
+			for _, proto := range []string{"tcp", "udp"} {
+				iptRun("iptables-legacy", "-t", "nat", "-I", "OUTPUT",
+					"-d", ip, "-p", proto, "--dport", port, "-j", "RETURN")
+			}
+		}
+	}
+
+	// Apply all enabled rules
 	for _, r := range cfg.Rules {
 		if r.Enabled {
 			ruleEng.applyRule(r)
@@ -422,9 +441,8 @@ func (e *ruleEngine) serveUDPProxy(ctx context.Context) {
 }
 
 func (e *ruleEngine) handleUDPPacket(ctx context.Context, src, origDst *net.UDPAddr, data []byte, listener *net.UDPConn) {
-	// UDP is always dialed directly for now (relay only supports TCP streams).
-	// TODO: implement UDP relay protocol for exit-via support.
-	remote, err := net.DialTimeout("udp", origDst.String(), 5*time.Second)
+	// Dial UDP with SO_MARK to bypass our own REDIRECT rule.
+	remote, err := dialUDPMarked(origDst.String(), ruleBypassMark)
 	if err != nil {
 		debugLog("[rules] UDP dial %s: %v", origDst, err)
 		return

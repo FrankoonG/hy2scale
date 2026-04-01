@@ -2,9 +2,27 @@ package app
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
+	"syscall"
+	"time"
 )
+
+// dialUDPMarked creates a UDP connection with SO_MARK set to bypass iptables REDIRECT.
+func dialUDPMarked(addr string, mark int) (net.Conn, error) {
+	d := net.Dialer{
+		Timeout: 5 * time.Second,
+		Control: func(network, address string, c syscall.RawConn) error {
+			var err error
+			c.Control(func(fd uintptr) {
+				err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_MARK, mark)
+			})
+			return err
+		},
+	}
+	return d.Dial("udp", addr)
+}
 
 // conntrackOrigDst looks up the original destination for a NAT'd UDP connection
 // using `conntrack -L`. This is needed because IP_RECVORIGDSTADDR doesn't work
