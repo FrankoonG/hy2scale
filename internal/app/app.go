@@ -951,6 +951,7 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 				MaxStreamReceiveWindow:         67108864,
 				InitialConnectionReceiveWindow: 134217728,
 				MaxConnectionReceiveWindow:     134217728,
+				DisablePathMTUDiscovery:        true,
 			},
 			BandwidthConfig: hyclient.BandwidthConfig{
 				MaxTx: 125000000,
@@ -1089,6 +1090,7 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 			MaxStreamReceiveWindow:         msw,
 			InitialConnectionReceiveWindow: icw,
 			MaxConnectionReceiveWindow:     mcw,
+			DisablePathMTUDiscovery:        true,
 		},
 		BandwidthConfig: hyclient.BandwidthConfig{
 			MaxTx: maxTx,
