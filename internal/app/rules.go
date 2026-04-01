@@ -447,29 +447,37 @@ func (e *ruleEngine) handleUDPPacket(ctx context.Context, src, origDst *net.UDPA
 	var remote net.Conn
 	var err error
 	if exitVia != "" {
-		// Route through exit node's UDP relay (Hysteria2 QUIC)
+		log.Printf("[rules] UDP %s → exit %s", origDst, exitVia)
 		remote, err = e.app.dialExitUDP(ctx, exitVia, origDst.String())
+		if err != nil {
+			log.Printf("[rules] UDP dialExitUDP %s: %v, falling back to direct", origDst, err)
+		}
 	}
 	if remote == nil || err != nil {
-		// Direct dial with SO_MARK to bypass our own REDIRECT rule
 		remote, err = dialUDPMarked(origDst.String(), ruleBypassMark)
 	}
 	if err != nil {
-		debugLog("[rules] UDP dial %s: %v", origDst, err)
+		log.Printf("[rules] UDP dial %s: %v", origDst, err)
 		return
 	}
 	defer remote.Close()
 
-	remote.Write(data)
+	if _, err := remote.Write(data); err != nil {
+		log.Printf("[rules] UDP write %s: %v", origDst, err)
+		return
+	}
+	log.Printf("[rules] UDP sent %d bytes to %s", len(data), origDst)
 
 	remote.SetReadDeadline(time.Now().Add(10 * time.Second))
 	resp := make([]byte, 65535)
-	n, err := remote.Read(resp)
+	rn, err := remote.Read(resp)
 	if err != nil {
+		log.Printf("[rules] UDP read %s: %v", origDst, err)
 		return
 	}
+	log.Printf("[rules] UDP reply %d bytes from %s", rn, origDst)
 
-	listener.WriteToUDP(resp[:n], src)
+	listener.WriteToUDP(resp[:rn], src)
 }
 
 // dnsRefreshLoop periodically re-resolves domain rules.
