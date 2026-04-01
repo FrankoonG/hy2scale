@@ -221,6 +221,11 @@ func (a *App) Run(ctx context.Context) error {
 		log.Printf("[debug] DEBUG mode enabled (set DEBUG=true in environment)")
 	}
 
+	// Ensure /dev/net/tun exists. When running with device_cgroup_rules
+	// instead of --device /dev/net/tun, the device node doesn't exist.
+	// Create it via mknod if the cgroup permits (major 10, minor 200).
+	ensureTunDevice()
+
 	// Start rate ticker, latency prober, and traffic flusher
 	go a.node.StartRateTicker(ctx)
 	go a.node.StartLatencyProber(ctx)
