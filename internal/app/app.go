@@ -1286,13 +1286,13 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 	go func() {
 		n, _ := copyCtx(ctx, remote, conn)
 		atomic.AddInt64(&up, n)
-		remote.Close()
+		cancel() // unblock the other direction
 		done <- struct{}{}
 	}()
 	n2, _ := copyCtx(ctx, conn, remote)
 	atomic.AddInt64(&down, n2)
+	cancel() // unblock the other direction
 	<-done
-	cancel()
 	a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))
 	if username != "" {
 		a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))
@@ -1354,11 +1354,19 @@ func (a *App) dialExitWithMode(ctx context.Context, exitVia, exitMode, addr stri
 		}
 	}
 	if exitMode != "" && exitVia != "" && !strings.Contains(exitVia, "/") {
+		var conn net.Conn
+		var err error
 		switch exitMode {
 		case "quality", "stability":
-			return a.dialAdaptive(ctx, exitVia, addr)
+			conn, err = a.dialAdaptive(ctx, exitVia, addr)
 		case "aggregate", "speed":
-			return a.dialBond(ctx, exitVia, addr)
+			conn, err = a.dialBond(ctx, exitVia, addr)
+		}
+		if conn != nil {
+			return wrapIdleTimeout(conn), err
+		}
+		if err != nil {
+			return nil, err
 		}
 	}
 	return a.dialExit(ctx, exitVia, addr)
@@ -1497,9 +1505,17 @@ func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, err
 				return a.dialExit(ctx, pick, addr)
 			}
 		}
-		return a.node.DialTCP(ctx, parts[0], addr)
+		conn, err := a.node.DialTCP(ctx, parts[0], addr)
+		if err != nil {
+			return nil, err
+		}
+		return wrapIdleTimeout(conn), nil
 	}
-	return a.node.DialVia(ctx, parts, addr)
+	conn, err := a.node.DialVia(ctx, parts, addr)
+	if err != nil {
+		return nil, err
+	}
+	return wrapIdleTimeout(conn), nil
 }
 
 // dialExitUDP opens a UDP connection through the specified exit node.
