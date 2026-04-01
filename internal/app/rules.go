@@ -358,8 +358,10 @@ func (e *ruleEngine) serveProxy(ctx context.Context) {
 	}
 }
 
-func (e *ruleEngine) handleConn(ctx context.Context, conn net.Conn) {
+func (e *ruleEngine) handleConn(parentCtx context.Context, conn net.Conn) {
 	defer conn.Close()
+	ctx, cancel := context.WithCancel(parentCtx)
+	defer cancel()
 
 	origDst, err := getOriginalDst(conn)
 	if err != nil {
@@ -377,8 +379,9 @@ func (e *ruleEngine) handleConn(ctx context.Context, conn net.Conn) {
 		}
 		defer remote.Close()
 		done := make(chan struct{})
-		go func() { copyCtx(ctx, remote, conn); done <- struct{}{} }()
+		go func() { copyCtx(ctx, remote, conn); cancel(); done <- struct{}{} }()
 		copyCtx(ctx, conn, remote)
+		cancel()
 		<-done
 		return
 	}
