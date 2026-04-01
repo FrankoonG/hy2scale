@@ -75,7 +75,8 @@ func startXfrmBridge(ctx context.Context, ifName string, ep *channel.Endpoint) e
 		return fmt.Errorf("bind to %s: %w", ifName, err)
 	}
 
-	// Open a raw IP socket for writing, bound to the interface.
+	// Open a raw IP socket for writing, bound to the xfrm interface.
+	// This goes through the normal IP output path to reach the TUN fd.
 	wfd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_RAW)
 	if err != nil {
 		syscall.Close(fd)
