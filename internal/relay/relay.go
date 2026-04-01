@@ -1115,6 +1115,56 @@ func (n *Node) wrapConn(peerName string, conn net.Conn) net.Conn {
 // --- Dial ---
 
 // DialTCP dials addr through a directly connected peer's network.
+// DialUDP opens a UDP session through a peer's Hysteria2 QUIC connection.
+// Returns a net.Conn-compatible wrapper for a single destination address.
+func (n *Node) DialUDP(ctx context.Context, peerName string, addr string) (net.Conn, error) {
+	n.mu.RLock()
+	p, ok := n.peers[peerName]
+	n.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
+	}
+	if p.client == nil {
+		return nil, fmt.Errorf("relay: peer %q is inbound (UDP relay requires outbound)")
+	}
+
+	cl := p.pickClient()
+	uc, err := cl.UDP()
+	if err != nil {
+		return nil, fmt.Errorf("relay: UDP session: %w", err)
+	}
+	return &hyUDPConnWrapper{uc: uc, addr: addr}, nil
+}
+
+// hyUDPConnWrapper adapts HyUDPConn to net.Conn for a single destination.
+type hyUDPConnWrapper struct {
+	uc   interface{ Send([]byte, string) error; Receive() ([]byte, string, error); Close() error }
+	addr string
+}
+
+func (w *hyUDPConnWrapper) Read(b []byte) (int, error) {
+	data, _, err := w.uc.Receive()
+	if err != nil {
+		return 0, err
+	}
+	n := copy(b, data)
+	return n, nil
+}
+
+func (w *hyUDPConnWrapper) Write(b []byte) (int, error) {
+	if err := w.uc.Send(b, w.addr); err != nil {
+		return 0, err
+	}
+	return len(b), nil
+}
+
+func (w *hyUDPConnWrapper) Close() error                       { return w.uc.Close() }
+func (w *hyUDPConnWrapper) LocalAddr() net.Addr                { return nil }
+func (w *hyUDPConnWrapper) RemoteAddr() net.Addr               { return nil }
+func (w *hyUDPConnWrapper) SetDeadline(t time.Time) error      { return nil }
+func (w *hyUDPConnWrapper) SetReadDeadline(t time.Time) error  { return nil }
+func (w *hyUDPConnWrapper) SetWriteDeadline(t time.Time) error { return nil }
+
 func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.Conn, error) {
 	n.mu.RLock()
 	p, ok := n.peers[peerName]
