@@ -106,6 +106,13 @@ func createCaptureStack(mtu int) (*channel.Endpoint, *stack.Stack, error) {
 
 	sackOpt := tcpip.TCPSACKEnabled(true)
 	s.SetTransportProtocolOption(tcp.ProtocolNumber, &sackOpt)
+	// Increase TCP buffer sizes for higher-latency relay connections.
+	// Default gvisor buffers are too small, causing window stalls when
+	// response data arrives faster than the VPN tunnel can ACK.
+	rcvBuf := tcpip.TCPReceiveBufferSizeRangeOption{Min: 4096, Default: 212992, Max: 4194304}
+	s.SetTransportProtocolOption(tcp.ProtocolNumber, &rcvBuf)
+	sndBuf := tcpip.TCPSendBufferSizeRangeOption{Min: 4096, Default: 212992, Max: 4194304}
+	s.SetTransportProtocolOption(tcp.ProtocolNumber, &sndBuf)
 
 	if tcpipErr := s.CreateNIC(1, ep); tcpipErr != nil {
 		return nil, nil, fmt.Errorf("CreateNIC: %v", tcpipErr)
@@ -263,7 +270,10 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 				atomic.AddInt64(&up, n)
 				done <- struct{}{}
 			}()
-			n, _ := copyCtx(ctx, tunConn, remote)
+			n, _ := copyBufCtx(ctx, tunConn, remote, 4096)
+			if exitVia != "" {
+				log.Printf("[tun-fwd] %s relay download: %d bytes", srcIP, n)
+			}
 			atomic.AddInt64(&down, n)
 			<-done
 			cancel()
