@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/netip"
@@ -244,7 +245,7 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 				}
 			}
 
-			debugLog("[tun-fwd] TCP %s(%s/%s) → %s exit=%q mode=%s",
+			log.Printf("[tun-fwd] TCP %s(%s/%s) → %s exit=%q mode=%s",
 				srcIP, username, protocol, dstAddr, exitVia, exitMode)
 
 			var remote net.Conn
@@ -255,7 +256,7 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 				remote, err = a.dialExitWithMode(context.Background(), exitVia, exitMode, dstAddr)
 			}
 			if err != nil {
-				debugLog("[tun-fwd] dial error: %s → %s: %v", srcIP, dstAddr, err)
+				log.Printf("[tun-fwd] dial error: %s → %s: %v", srcIP, dstAddr, err)
 				return
 			}
 			defer remote.Close()
@@ -270,11 +271,13 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 				atomic.AddInt64(&up, n)
 				done <- struct{}{}
 			}()
-			n, _ := copyBufCtx(ctx, tunConn, remote, 4096)
+			var downN int64
 			if exitVia != "" {
-				log.Printf("[tun-fwd] %s relay download: %d bytes", srcIP, n)
+				downN, _ = instrumentedCopy(ctx, tunConn, remote, srcIP)
+			} else {
+				downN, _ = copyCtx(ctx, tunConn, remote)
 			}
-			atomic.AddInt64(&down, n)
+			atomic.AddInt64(&down, downN)
 			<-done
 			cancel()
 			a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))
@@ -335,6 +338,59 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 }
 
 // setupCaptureRouting configures kernel routing for a VPN subnet to go through the TUN.
+// instrumentedCopy copies from src to dst with per-chunk timing logs.
+// Used to diagnose where relay download stalls (read from relay vs write to gvisor).
+func instrumentedCopy(ctx context.Context, dst io.Writer, src io.Reader, tag string) (int64, error) {
+	done := make(chan struct{})
+	var total int64
+	var copyErr error
+	go func() {
+		buf := make([]byte, 4096)
+		var chunks int
+		for {
+			t0 := time.Now()
+			nr, er := src.Read(buf)
+			readMs := time.Since(t0).Milliseconds()
+			if nr > 0 {
+				t1 := time.Now()
+				nw, ew := dst.Write(buf[:nr])
+				writeMs := time.Since(t1).Milliseconds()
+				total += int64(nw)
+				chunks++
+				if chunks <= 20 || readMs > 100 || writeMs > 100 {
+					log.Printf("[relay-copy] %s chunk#%d: read %db/%dms write %db/%dms total=%d",
+						tag, chunks, nr, readMs, nw, writeMs, total)
+				}
+				if ew != nil {
+					copyErr = ew
+					break
+				}
+			}
+			if er != nil {
+				if er != io.EOF {
+					copyErr = er
+				}
+				break
+			}
+		}
+		log.Printf("[relay-copy] %s done: %d bytes, %d chunks, err=%v", tag, total, chunks, copyErr)
+		close(done)
+	}()
+	select {
+	case <-done:
+		return total, copyErr
+	case <-ctx.Done():
+		if c, ok := src.(net.Conn); ok {
+			c.Close()
+		}
+		if c, ok := dst.(net.Conn); ok {
+			c.Close()
+		}
+		<-done
+		return total, ctx.Err()
+	}
+}
+
 func setupCaptureRouting(tunName, subnet string) error {
 	// Bring up TUN interface
 	exec.Command("ip", "link", "set", tunName, "up").Run()
