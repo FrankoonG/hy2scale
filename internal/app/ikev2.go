@@ -463,17 +463,29 @@ esac
 	// This is the same mechanism as the xfrm bridge on ikecN, but on ipsec0.
 	if !iptablesOK && tunCaptureInst != nil {
 		go func() {
-			// Wait for ipsec0 to appear (created by kernel-libipsec at charon startup)
-			for i := 0; i < 10; i++ {
-				if err := waitForInterface("ipsec0", 3*time.Second); err == nil {
+			// Wait for kernel-libipsec TUN device (ipsec0, ipsec1, etc.)
+			var ipsecIf string
+			for i := 0; i < 30; i++ {
+				for j := 0; j < 5; j++ {
+					name := fmt.Sprintf("ipsec%d", j)
+					if err := waitForInterface(name, time.Second); err == nil {
+						ipsecIf = name
+						break
+					}
+				}
+				if ipsecIf != "" {
 					break
 				}
 				time.Sleep(time.Second)
 			}
-			if err := startXfrmBridge(a.appCtx, "ipsec0", tunCaptureInst.ep); err != nil {
-				log.Printf("[ikev2] ipsec0 AF_PACKET bridge failed: %v", err)
+			if ipsecIf == "" {
+				log.Printf("[ikev2] no ipsec TUN device found after 30s")
+				return
+			}
+			if err := startXfrmBridge(a.appCtx, ipsecIf, tunCaptureInst.ep); err != nil {
+				log.Printf("[ikev2] %s AF_PACKET bridge failed: %v", ipsecIf, err)
 			} else {
-				log.Printf("[ikev2] ipsec0 AF_PACKET bridge active (kernel-libipsec userspace ESP)")
+				log.Printf("[ikev2] %s AF_PACKET bridge active (kernel-libipsec userspace ESP)", ipsecIf)
 			}
 		}()
 	}
@@ -534,6 +546,37 @@ func (a *App) updateEAPSecrets() {
 	exec.Command("swanctl", "--load-creds").Run()
 }
 
+// resolveEAPIdentity queries swanctl --list-sas to find the EAP username
+// for a client with the given virtual IP. This is needed because PLUTO_PEER_ID
+// gives the IKE identity, which may differ from the EAP username used for auth.
+// Returns the EAP username if found, or empty string.
+func resolveEAPIdentity(clientVIP string) string {
+	out, err := exec.Command("swanctl", "--list-sas").Output()
+	if err != nil {
+		return ""
+	}
+	// swanctl --list-sas output format:
+	//   remote 'ike-id' @ ip[port] EAP: 'eap-user' [virtual-ip]
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "remote ") {
+			continue
+		}
+		// Check if this line contains our client VIP in brackets
+		if !strings.Contains(line, "["+clientVIP+"]") {
+			continue
+		}
+		// Extract EAP identity: EAP: 'username'
+		if idx := strings.Index(line, "EAP: '"); idx >= 0 {
+			rest := line[idx+6:]
+			if end := strings.IndexByte(rest, '\''); end >= 0 {
+				return rest[:end]
+			}
+		}
+	}
+	return ""
+}
+
 // appendToIPSecConf appends a conn block to /etc/ipsec.conf.
 func appendToIPSecConf(connBlock string) {
 	f, err := os.OpenFile("/etc/ipsec.conf", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -572,18 +615,20 @@ func appendPSKSecret(psk string) {
 	}
 }
 
+var strongswanOnce sync.Once
+
 // ensureStrongswanRunning starts strongswan charon if not already running.
 func ensureStrongswanRunning() {
-	// Check if charon is already running
-	if exec.Command("ipsec", "status").Run() == nil {
-		debugLog("[ipsec] strongswan already running, skipping start")
-		return
-	}
-	log.Printf("[ipsec] starting strongswan...")
-	// Clean stale xfrm state/policy from previous runs (kernel persists them across restarts)
-	exec.Command("ip", "xfrm", "state", "flush").Run()
-	exec.Command("ip", "xfrm", "policy", "flush").Run()
-	go func() {
+	strongswanOnce.Do(func() {
+		// Clean stale PID files that survive container restart
+		os.Remove("/var/run/starter.charon.pid")
+		os.Remove("/var/run/charon.pid")
+		// Clean stale xfrm state/policy
+		exec.Command("ip", "xfrm", "state", "flush").Run()
+		exec.Command("ip", "xfrm", "policy", "flush").Run()
+
+		log.Printf("[ipsec] starting strongswan...")
+		go func() {
 		cmd := exec.Command("ipsec", "start", "--nofork")
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -591,15 +636,16 @@ func ensureStrongswanRunning() {
 			log.Printf("[ipsec] strongswan exited: %v", err)
 		}
 	}()
-	// Wait for charon to be ready
-	for i := 0; i < 20; i++ {
-		time.Sleep(500 * time.Millisecond)
-		if exec.Command("ipsec", "status").Run() == nil {
-			log.Printf("[ipsec] strongswan ready")
-			return
+		// Wait for charon to be ready
+		for i := 0; i < 20; i++ {
+			time.Sleep(500 * time.Millisecond)
+			if exec.Command("ipsec", "status").Run() == nil {
+				log.Printf("[ipsec] strongswan ready")
+				return
+			}
 		}
-	}
-	log.Printf("[ipsec] warning: strongswan may not be ready after 10s")
+		log.Printf("[ipsec] warning: strongswan may not be ready after 10s")
+	})
 }
 
 // runIKEv2Proxy runs the transparent proxy and hooks server for IKEv2.
@@ -661,6 +707,18 @@ func (a *App) serveIKEv2Hooks(gatewayIP string, port int, cfg IKEv2Config) {
 						}
 						if user != "" {
 							ikev2Sessions.Register(ip, user)
+							// For MSCHAPv2: PLUTO_PEER_ID is the IKE identity, which may
+							// differ from the EAP username. Resolve via swanctl if needed.
+							if cfg.Mode == "mschapv2" && user != "__psk__" {
+								go func(clientIP, ikeID string) {
+									time.Sleep(300 * time.Millisecond)
+									eapUser := resolveEAPIdentity(clientIP)
+									if eapUser != "" && eapUser != ikeID {
+										ikev2Sessions.Register(clientIP, eapUser)
+										log.Printf("[ikev2] EAP identity resolved: %s → %s (IKE: %s)", clientIP, eapUser, ikeID)
+									}
+								}(ip, user)
+							}
 						}
 						// In compat mode, start xfrm bridge for this client's interface
 						if ifn := params["iface"]; ifn != "" && TunCaptureActive() && tunCaptureInst != nil {

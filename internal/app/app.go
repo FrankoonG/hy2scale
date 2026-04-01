@@ -692,6 +692,7 @@ func (a *App) ToggleUser(id string, enabled bool) error {
 	})
 	if err == nil {
 		a.rebuildUserIndex()
+		a.syncVPNSecrets()
 	}
 	return err
 }
