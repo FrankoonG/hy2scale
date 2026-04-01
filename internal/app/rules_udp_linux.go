@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os/exec"
@@ -8,6 +9,26 @@ import (
 	"syscall"
 	"time"
 )
+
+// listenUDPTransparent creates a UDP socket with IP_TRANSPARENT.
+// This allows receiving REDIRECT'd packets on any local address.
+func listenUDPTransparent(addr string) (*net.UDPConn, error) {
+	lc := net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var err error
+			c.Control(func(fd uintptr) {
+				syscall.SetsockoptInt(int(fd), syscall.SOL_IP, syscall.IP_TRANSPARENT, 1)
+				err = syscall.SetsockoptInt(int(fd), syscall.SOL_IP, 20, 1) // IP_RECVORIGDSTADDR
+			})
+			return err
+		},
+	}
+	pc, err := lc.ListenPacket(context.Background(), "udp4", addr)
+	if err != nil {
+		return nil, err
+	}
+	return pc.(*net.UDPConn), nil
+}
 
 // dialUDPMarked creates a UDP connection with SO_MARK set to bypass iptables REDIRECT.
 func dialUDPMarked(addr string, mark int) (net.Conn, error) {

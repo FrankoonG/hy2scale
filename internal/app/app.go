@@ -1502,6 +1502,28 @@ func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, err
 	return a.node.DialVia(ctx, parts, addr)
 }
 
+// dialExitUDP opens a UDP connection through the specified exit node.
+func (a *App) dialExitUDP(ctx context.Context, exitVia, addr string) (net.Conn, error) {
+	parts := splitPath(exitVia)
+	if len(parts) > 0 && parts[0] == a.node.Name() {
+		parts = parts[1:]
+	}
+	if len(parts) == 0 {
+		return net.DialTimeout("udp", addr, 5*time.Second)
+	}
+	if len(parts) == 1 {
+		if !a.node.HasPeer(parts[0]) {
+			paths := a.findPathsTo(parts[0])
+			if len(paths) > 0 {
+				return a.dialExitUDP(ctx, paths[mrand.IntN(len(paths))], addr)
+			}
+		}
+		return a.node.DialUDP(ctx, parts[0], addr)
+	}
+	// Multi-hop UDP not supported, use first hop
+	return a.node.DialUDP(ctx, parts[0], addr)
+}
+
 func splitOn(s string, sep byte) []string {
 	var result []string
 	start := 0
