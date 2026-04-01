@@ -267,11 +267,11 @@ logfile /var/log/pppd.log
 	hooksPort := proxyPort + 1
 	ipUpScript := `#!/bin/sh
 # $1=interface $2=tty $3=speed $4=local_ip $5=remote_ip $6=ipparam
-wget -qO- "http://` + gateway + fmt.Sprintf(`:%d/ppp/up?ip=$5&user=$PEERNAME" 2>/dev/null
+wget -qO- "http://` + gateway + fmt.Sprintf(`:%d/ppp/up?ip=$5&user=$PEERNAME&iface=$1" 2>/dev/null
 `, hooksPort)
 
 	ipDownScript := `#!/bin/sh
-wget -qO- "http://` + gateway + fmt.Sprintf(`:%d/ppp/down?ip=$5" 2>/dev/null
+wget -qO- "http://` + gateway + fmt.Sprintf(`:%d/ppp/down?ip=$5&iface=$1" 2>/dev/null
 `, hooksPort)
 
 	os.WriteFile("/etc/ppp/ip-up.local", []byte(ipUpScript), 0755)
@@ -370,6 +370,8 @@ conn l2tp-psk
 			log.Printf("[l2tp] TUN capture failed: %v", err)
 			return err
 		}
+		// Start PPP hooks server (for AF_PACKET bridge on ppp interfaces)
+		go a.servePPPHooks(gateway, hooksPort)
 	}
 
 	// 9. Start strongswan (shared with IKEv2; auto=add connections load automatically)
@@ -488,6 +490,22 @@ func (a *App) servePPPHooks(gatewayIP string, port int) {
 						if user, ok := params["user"]; ok {
 							pppSessions.Register(ip, user)
 						}
+						// Compat mode: start AF_PACKET bridge on PPP interface
+						// to bypass FORWARD chain DROP (same approach as ipsec0 bridge)
+						if ifn, ok := params["iface"]; ok && ifn != "" && TunCaptureActive() && tunCaptureInst != nil {
+							registerXfrmClient(ip, ifn)
+							go func() {
+								if err := waitForInterface(ifn, 5*time.Second); err != nil {
+									log.Printf("[l2tp] ppp iface wait: %v", err)
+									return
+								}
+								if err := startXfrmBridge(a.appCtx, ifn, tunCaptureInst.ep); err != nil {
+									log.Printf("[l2tp] ppp AF_PACKET bridge: %v", err)
+								} else {
+									log.Printf("[l2tp] ppp AF_PACKET bridge on %s active", ifn)
+								}
+							}()
+						}
 					}
 				}
 			} else if strings.Contains(req, "/ppp/down?") {
@@ -499,6 +517,10 @@ func (a *App) servePPPHooks(gatewayIP string, port int) {
 					params := parseQuery(q)
 					if ip, ok := params["ip"]; ok {
 						pppSessions.Unregister(ip)
+						if ifn, ok := params["iface"]; ok && ifn != "" {
+							stopXfrmBridge(ifn)
+							unregisterXfrmClient(ip)
+						}
 					}
 				}
 			}
