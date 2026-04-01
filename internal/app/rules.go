@@ -185,7 +185,7 @@ func (e *ruleEngine) applyIPRule(r RoutingRule) {
 	e.removeIPTRulesLocked(r.ID)
 
 	var iptArgs []string
-	udpPort := fmt.Sprintf("%d", ruleUDPProxyPort)
+	udpProxyAddr := fmt.Sprintf("127.0.0.99:%d", ruleUDPProxyPort)
 	for _, target := range r.Targets {
 		target = strings.TrimSpace(target)
 		if target == "" {
@@ -202,8 +202,8 @@ func (e *ruleEngine) applyIPRule(r RoutingRule) {
 
 			udpArgs := []string{"-t", "nat", "-A", "OUTPUT",
 				"-m", "iprange", "--dst-range", target,
-				"-p", "udp", "-j", "REDIRECT",
-				"--to-ports", udpPort}
+				"-p", "udp", "-j", "DNAT",
+				"--to-destination", udpProxyAddr}
 			iptRun("iptables-legacy", udpArgs...)
 			iptArgs = append(iptArgs, strings.Join(udpArgs, " "))
 		} else {
@@ -217,8 +217,8 @@ func (e *ruleEngine) applyIPRule(r RoutingRule) {
 
 			udpArgs := []string{"-t", "nat", "-A", "OUTPUT",
 				"-d", target,
-				"-p", "udp", "-j", "REDIRECT",
-				"--to-ports", udpPort}
+				"-p", "udp", "-j", "DNAT",
+				"--to-destination", udpProxyAddr}
 			iptRun("iptables-legacy", udpArgs...)
 			iptArgs = append(iptArgs, strings.Join(udpArgs, " "))
 		}
@@ -244,7 +244,7 @@ func (e *ruleEngine) applyDomainRule(r RoutingRule) {
 			debugLog("[rules] DNS resolve %s: %v", domain, err)
 			continue
 		}
-		udpPort := fmt.Sprintf("%d", ruleUDPProxyPort)
+		udpDst := fmt.Sprintf("127.0.0.99:%d", ruleUDPProxyPort)
 		for _, ip := range ips {
 			tcpArgs := []string{"-t", "nat", "-A", "OUTPUT",
 				"-d", ip,
@@ -255,8 +255,8 @@ func (e *ruleEngine) applyDomainRule(r RoutingRule) {
 
 			udpArgs := []string{"-t", "nat", "-A", "OUTPUT",
 				"-d", ip,
-				"-p", "udp", "-j", "REDIRECT",
-				"--to-ports", udpPort}
+				"-p", "udp", "-j", "DNAT",
+				"--to-destination", udpDst}
 			iptRun("iptables-legacy", udpArgs...)
 			iptArgs = append(iptArgs, strings.Join(udpArgs, " "))
 
@@ -400,26 +400,26 @@ func (e *ruleEngine) handleConn(ctx context.Context, conn net.Conn) {
 // Uses conntrack to recover original destination since IP_RECVORIGDSTADDR
 // doesn't work for OUTPUT chain REDIRECT/DNAT on Linux.
 func (e *ruleEngine) serveUDPProxy(ctx context.Context) {
-	// Bind to 0.0.0.0 because iptables REDIRECT preserves the original
-	// destination IP (not 127.0.0.1). Only the port is changed.
-	addr := fmt.Sprintf("0.0.0.0:%d", ruleUDPProxyPort)
-	pc, err := net.ListenPacket("udp4", addr)
+	udpAddr, _ := net.ResolveUDPAddr("udp4", fmt.Sprintf("127.0.0.99:%d", ruleUDPProxyPort))
+	udpConn, err := net.ListenUDP("udp4", udpAddr)
 	if err != nil {
 		log.Printf("[rules] UDP proxy listen error: %v", err)
 		return
 	}
-	udpConn := pc.(*net.UDPConn)
 	go func() { <-ctx.Done(); udpConn.Close() }()
 
 	buf := make([]byte, 65535)
+	log.Printf("[rules] UDP proxy listening on %s", udpAddr)
 	for {
 		n, srcAddr, err := udpConn.ReadFromUDP(buf)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
+			log.Printf("[rules] UDP read error: %v", err)
 			continue
 		}
+		log.Printf("[rules] UDP packet from %s, %d bytes", srcAddr, n)
 
 		// Look up original destination via conntrack
 		origDst := conntrackOrigDst("udp", srcAddr.String(), ruleUDPProxyPort)
@@ -441,8 +441,19 @@ func (e *ruleEngine) serveUDPProxy(ctx context.Context) {
 }
 
 func (e *ruleEngine) handleUDPPacket(ctx context.Context, src, origDst *net.UDPAddr, data []byte, listener *net.UDPConn) {
-	// Dial UDP with SO_MARK to bypass our own REDIRECT rule.
-	remote, err := dialUDPMarked(origDst.String(), ruleBypassMark)
+	host := origDst.IP.String()
+	exitVia, _ := e.lookupExit(host)
+
+	var remote net.Conn
+	var err error
+	if exitVia != "" {
+		// Route through exit node's UDP relay (Hysteria2 QUIC)
+		remote, err = e.app.dialExitUDP(ctx, exitVia, origDst.String())
+	}
+	if remote == nil || err != nil {
+		// Direct dial with SO_MARK to bypass our own REDIRECT rule
+		remote, err = dialUDPMarked(origDst.String(), ruleBypassMark)
+	}
 	if err != nil {
 		debugLog("[rules] UDP dial %s: %v", origDst, err)
 		return
