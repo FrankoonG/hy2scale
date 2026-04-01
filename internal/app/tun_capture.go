@@ -33,7 +33,7 @@ import (
 const (
 	tunCaptureName = "hy2cap0"
 	tunCaptureIP   = "169.254.99.1"
-	tunCaptureMTU  = 1100 // Reduced: iKuai TUN driver drops packets >~1200 bytes via raw socket output path
+	tunCaptureMTU  = 1300 // Must fit within ipsec0 TUN MTU (1400) after TCP/IP headers
 	tunRouteTable  = "100"
 )
 
