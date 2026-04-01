@@ -31,7 +31,10 @@ var (
 	ruleEngOnce sync.Once
 )
 
-const ruleProxyPort = 12380
+const (
+	ruleProxyPort    = 12380
+	ruleUDPProxyPort = 12381
+)
 
 // StartRuleEngine initializes the rule engine if in host network mode.
 func (a *App) StartRuleEngine() {
@@ -59,7 +62,7 @@ func (a *App) StartRuleEngine() {
 	ctx, cancel := context.WithCancel(a.appCtx)
 	ruleEng.cancel = cancel
 
-	// Start transparent proxy
+	// Start transparent TCP proxy
 	ln, err := net.Listen("tcp", ruleEng.proxyAddr)
 	if err != nil {
 		log.Printf("[rules] proxy listen error: %v", err)
@@ -68,6 +71,9 @@ func (a *App) StartRuleEngine() {
 	ruleEng.listener = ln
 	go ruleEng.serveProxy(ctx)
 	go func() { <-ctx.Done(); ln.Close() }()
+
+	// Start UDP proxy
+	go ruleEng.serveUDPProxy(ctx)
 
 	log.Printf("[rules] engine started, proxy on %s", ruleEng.proxyAddr)
 
@@ -160,28 +166,42 @@ func (e *ruleEngine) applyIPRule(r RoutingRule) {
 	e.removeIPTRulesLocked(r.ID)
 
 	var iptArgs []string
+	udpPort := fmt.Sprintf("%d", ruleUDPProxyPort)
 	for _, target := range r.Targets {
 		target = strings.TrimSpace(target)
 		if target == "" {
 			continue
 		}
-		// Support: single IP, CIDR, IP range (x.x.x.x-y.y.y.y)
 		if strings.Contains(target, "-") && !strings.Contains(target, "/") {
-			// IP range: use -m iprange
-			args := []string{"-t", "nat", "-A", "OUTPUT",
+			// IP range — TCP DNAT + UDP REDIRECT
+			tcpArgs := []string{"-t", "nat", "-A", "OUTPUT",
 				"-m", "iprange", "--dst-range", target,
 				"-p", "tcp", "-j", "DNAT",
 				"--to-destination", e.proxyAddr}
-			iptRun("iptables-legacy", args...)
-			iptArgs = append(iptArgs, strings.Join(args, " "))
+			iptRun("iptables-legacy", tcpArgs...)
+			iptArgs = append(iptArgs, strings.Join(tcpArgs, " "))
+
+			udpArgs := []string{"-t", "nat", "-A", "OUTPUT",
+				"-m", "iprange", "--dst-range", target,
+				"-p", "udp", "-j", "REDIRECT",
+				"--to-ports", udpPort}
+			iptRun("iptables-legacy", udpArgs...)
+			iptArgs = append(iptArgs, strings.Join(udpArgs, " "))
 		} else {
-			// Single IP or CIDR
-			args := []string{"-t", "nat", "-A", "OUTPUT",
+			// Single IP or CIDR — TCP DNAT + UDP REDIRECT
+			tcpArgs := []string{"-t", "nat", "-A", "OUTPUT",
 				"-d", target,
 				"-p", "tcp", "-j", "DNAT",
 				"--to-destination", e.proxyAddr}
-			iptRun("iptables-legacy", args...)
-			iptArgs = append(iptArgs, strings.Join(args, " "))
+			iptRun("iptables-legacy", tcpArgs...)
+			iptArgs = append(iptArgs, strings.Join(tcpArgs, " "))
+
+			udpArgs := []string{"-t", "nat", "-A", "OUTPUT",
+				"-d", target,
+				"-p", "udp", "-j", "REDIRECT",
+				"--to-ports", udpPort}
+			iptRun("iptables-legacy", udpArgs...)
+			iptArgs = append(iptArgs, strings.Join(udpArgs, " "))
 		}
 		// Register all IPs for this target in destToExit
 		e.registerTargetExit(r.ID, target, r.ExitVia, r.ExitMode)
@@ -205,13 +225,22 @@ func (e *ruleEngine) applyDomainRule(r RoutingRule) {
 			debugLog("[rules] DNS resolve %s: %v", domain, err)
 			continue
 		}
+		udpPort := fmt.Sprintf("%d", ruleUDPProxyPort)
 		for _, ip := range ips {
-			args := []string{"-t", "nat", "-A", "OUTPUT",
+			tcpArgs := []string{"-t", "nat", "-A", "OUTPUT",
 				"-d", ip,
 				"-p", "tcp", "-j", "DNAT",
 				"--to-destination", e.proxyAddr}
-			iptRun("iptables-legacy", args...)
-			iptArgs = append(iptArgs, strings.Join(args, " "))
+			iptRun("iptables-legacy", tcpArgs...)
+			iptArgs = append(iptArgs, strings.Join(tcpArgs, " "))
+
+			udpArgs := []string{"-t", "nat", "-A", "OUTPUT",
+				"-d", ip,
+				"-p", "udp", "-j", "REDIRECT",
+				"--to-ports", udpPort}
+			iptRun("iptables-legacy", udpArgs...)
+			iptArgs = append(iptArgs, strings.Join(udpArgs, " "))
+
 			resolvedIPs = append(resolvedIPs, ip)
 			e.destToExit.Store(ip, ruleExitInfo{ruleID: r.ID, exitVia: r.ExitVia, exitMode: r.ExitMode})
 		}
@@ -346,6 +375,72 @@ func (e *ruleEngine) handleConn(ctx context.Context, conn net.Conn) {
 	go func() { copyCtx(ctx, remote, conn); done <- struct{}{} }()
 	copyCtx(ctx, conn, remote)
 	<-done
+}
+
+// serveUDPProxy handles redirected UDP packets.
+// Uses conntrack to recover original destination since IP_RECVORIGDSTADDR
+// doesn't work for OUTPUT chain REDIRECT/DNAT on Linux.
+func (e *ruleEngine) serveUDPProxy(ctx context.Context) {
+	// Bind to 0.0.0.0 because iptables REDIRECT preserves the original
+	// destination IP (not 127.0.0.1). Only the port is changed.
+	addr := fmt.Sprintf("0.0.0.0:%d", ruleUDPProxyPort)
+	pc, err := net.ListenPacket("udp4", addr)
+	if err != nil {
+		log.Printf("[rules] UDP proxy listen error: %v", err)
+		return
+	}
+	udpConn := pc.(*net.UDPConn)
+	go func() { <-ctx.Done(); udpConn.Close() }()
+
+	buf := make([]byte, 65535)
+	for {
+		n, srcAddr, err := udpConn.ReadFromUDP(buf)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			continue
+		}
+
+		// Look up original destination via conntrack
+		origDst := conntrackOrigDst("udp", srcAddr.String(), ruleUDPProxyPort)
+		if origDst == "" {
+			debugLog("[rules] UDP no conntrack for %s", srcAddr)
+			continue
+		}
+
+		data := make([]byte, n)
+		copy(data, buf[:n])
+
+		origAddr, _ := net.ResolveUDPAddr("udp4", origDst)
+		if origAddr == nil {
+			continue
+		}
+
+		go e.handleUDPPacket(ctx, srcAddr, origAddr, data, udpConn)
+	}
+}
+
+func (e *ruleEngine) handleUDPPacket(ctx context.Context, src, origDst *net.UDPAddr, data []byte, listener *net.UDPConn) {
+	// UDP is always dialed directly for now (relay only supports TCP streams).
+	// TODO: implement UDP relay protocol for exit-via support.
+	remote, err := net.DialTimeout("udp", origDst.String(), 5*time.Second)
+	if err != nil {
+		debugLog("[rules] UDP dial %s: %v", origDst, err)
+		return
+	}
+	defer remote.Close()
+
+	remote.Write(data)
+
+	remote.SetReadDeadline(time.Now().Add(10 * time.Second))
+	resp := make([]byte, 65535)
+	n, err := remote.Read(resp)
+	if err != nil {
+		return
+	}
+
+	listener.WriteToUDP(resp[:n], src)
 }
 
 // dnsRefreshLoop periodically re-resolves domain rules.
