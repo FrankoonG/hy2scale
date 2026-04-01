@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"os/exec"
 	"strings"
@@ -53,20 +54,23 @@ func conntrackOrigDst(proto, srcAddr string, dstPort int) string {
 	if len(parts) != 2 {
 		return ""
 	}
-	srcPort := parts[1]
+	srcIP, srcPort := parts[0], parts[1]
+	_ = srcIP
 
 	// conntrack -L output format:
 	// udp 17 28 src=172.17.0.1 dst=172.17.0.3 sport=58964 dport=19999 ... src=127.0.0.1 dst=... sport=12381 ...
 	// We match on: sport=<srcPort> and dport=<dstPort> in the reply tuple,
 	// then extract dst= and dport= from the original tuple.
-	out, err := exec.Command("conntrack", "-L", "-p", proto).Output()
+	out, err := exec.Command("conntrack", "-L", "-p", proto).CombinedOutput()
 	if err != nil {
+		log.Printf("[rules] conntrack -L error: %v", err)
 		return ""
 	}
 
 	// Look for lines where reply has sport=dstPort and dport=srcPort
 	replyNeedle := fmt.Sprintf("sport=%d dport=%s", dstPort, srcPort)
-	for _, line := range strings.Split(string(out), "\n") {
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
 		if !strings.Contains(line, replyNeedle) {
 			continue
 		}
@@ -82,9 +86,11 @@ func conntrackOrigDst(proto, srcAddr string, dstPort int) string {
 				break
 			}
 		}
-		if origDst != "" && origDport != "" && origDst != "127.0.0.1" {
+		if origDst != "" && origDport != "" && origDst != "127.0.0.1" && origDst != "127.0.0.99" {
+			log.Printf("[rules] conntrack resolved: %s:%s → %s:%s", srcIP, srcPort, origDst, origDport)
 			return origDst + ":" + origDport
 		}
 	}
+	log.Printf("[rules] conntrack: no match for %s (needle=%s, %d lines)", srcAddr, replyNeedle, len(lines))
 	return ""
 }

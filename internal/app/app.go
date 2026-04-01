@@ -1571,7 +1571,11 @@ func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
 }
 
 func (o *nodeOutbound) UDP(addr string) (hyserver.UDPConn, error) {
-	return &dummyUDP{}, nil
+	conn, err := net.DialTimeout("udp", addr, 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return &realUDP{conn: conn.(*net.UDPConn), addr: addr}, nil
 }
 
 // hy2Auth handles authentication for the hy2 server.
@@ -1607,11 +1611,22 @@ func (a *hy2Auth) Authenticate(addr net.Addr, auth string, tx uint64) (bool, str
 	return false, ""
 }
 
-type dummyUDP struct{}
+type realUDP struct {
+	conn *net.UDPConn
+	addr string
+}
 
-func (d *dummyUDP) ReadFrom(b []byte) (int, string, error) { select {} }
-func (d *dummyUDP) WriteTo(b []byte, addr string) (int, error) { return len(b), nil }
-func (d *dummyUDP) Close() error                               { return nil }
+func (u *realUDP) ReadFrom(b []byte) (int, string, error) {
+	u.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+	n, _, err := u.conn.ReadFromUDP(b)
+	return n, u.addr, err
+}
+
+func (u *realUDP) WriteTo(b []byte, addr string) (int, error) {
+	return u.conn.Write(b)
+}
+
+func (u *realUDP) Close() error { return u.conn.Close() }
 
 func loadCert(certFile, keyFile string) (tls.Certificate, error) {
 	if certFile != "" && keyFile != "" {
