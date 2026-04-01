@@ -1039,6 +1039,12 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 		return fmt.Errorf("invalid address %q: %w", cl.Addr, err)
 	}
 
+	// Ensure relay traffic bypasses VPN routing (strongSwan table 220).
+	// Without this, QUIC to the relay gets routed through ipsec0 → ESP loop.
+	if TunCaptureActive() {
+		excludeFromVPNRouting(addr.IP.String())
+	}
+
 	// TLS
 	tlsCfg := hyclient.TLSConfig{
 		InsecureSkipVerify: cl.Insecure,

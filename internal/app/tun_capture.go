@@ -392,6 +392,15 @@ func instrumentedCopy(ctx context.Context, dst io.Writer, src io.Reader, tag str
 	}
 }
 
+// excludeFromVPNRouting ensures the given IP bypasses strongSwan's routing
+// table 220 (which routes all traffic through ipsec0). Without this, relay
+// QUIC connections get encapsulated inside ESP, causing a routing loop.
+func excludeFromVPNRouting(ip string) {
+	// "throw" in table 220 makes the kernel skip this table for the given IP,
+	// falling through to the main table which routes via eth0 (Docker bridge).
+	exec.Command("ip", "route", "replace", "throw", ip+"/32", "table", "220").Run()
+}
+
 func setupCaptureRouting(tunName, subnet string) error {
 	// Bring up TUN interface
 	exec.Command("ip", "link", "set", tunName, "up").Run()
