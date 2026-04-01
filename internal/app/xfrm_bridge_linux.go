@@ -40,14 +40,23 @@ func startXfrmBridge(ctx context.Context, ifName string, ep *channel.Endpoint) e
 	xfrmBridgeMu.Lock()
 	defer xfrmBridgeMu.Unlock()
 
-	if _, ok := xfrmBridgeClients[ifName]; ok {
-		return nil // already bridged
-	}
-
 	// Get interface index
 	iface, err := net.InterfaceByName(ifName)
 	if err != nil {
 		return fmt.Errorf("interface %s: %w", ifName, err)
+	}
+
+	if existing, ok := xfrmBridgeClients[ifName]; ok {
+		if existing.ifIdx == iface.Index {
+			return nil // already bridged on correct interface
+		}
+		// Interface was recreated with a different index (e.g., ppp0 reconnect).
+		// Stop the stale bridge and create a fresh one.
+		log.Printf("[xfrm-bridge] %s: index changed %d→%d, restarting bridge", ifName, existing.ifIdx, iface.Index)
+		existing.cancel()
+		syscall.Close(existing.fd)
+		syscall.Close(existing.wfd)
+		delete(xfrmBridgeClients, ifName)
 	}
 
 	// Open AF_PACKET raw socket (SOCK_RAW for ARPHRD_NONE xfrm interfaces)
@@ -237,16 +246,19 @@ func xfrmBridgeGvisorWrite(data []byte) bool {
 	}
 
 	// Find the xfrm interface for this client.
-	// With kernel-libipsec, all clients use "ipsec0" instead of per-client ikecN.
+	// With kernel-libipsec, all clients use ipsec0/ipsec1 instead of per-client ikecN.
 	ifName := xfrmIfForClient(dstIP)
 	if ifName == "" {
-		// Check if ipsec0 bridge is active (kernel-libipsec mode)
+		// Check if any ipsec bridge is active (kernel-libipsec mode)
 		xfrmBridgeMu.Lock()
-		_, hasIpsec0 := xfrmBridgeClients["ipsec0"]
+		for name := range xfrmBridgeClients {
+			if len(name) >= 5 && name[:5] == "ipsec" {
+				ifName = name
+				break
+			}
+		}
 		xfrmBridgeMu.Unlock()
-		if hasIpsec0 {
-			ifName = "ipsec0"
-		} else {
+		if ifName == "" {
 			return false
 		}
 	}
