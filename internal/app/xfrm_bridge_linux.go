@@ -193,7 +193,16 @@ func writeToXfrm(ifName string, data []byte) {
 	case 4:
 		var sa4 syscall.SockaddrInet4
 		copy(sa4.Addr[:], data[16:20])
-		syscall.Sendto(client.wfd, data, 0, &sa4)
+		err := syscall.Sendto(client.wfd, data, 0, &sa4)
+		if len(data) > 500 {
+			log.Printf("[xfrm-w] %s: %d bytes, err=%v, ihl=%d totlen=%d proto=%d df=%v id=%d",
+				ifName, len(data), err,
+				int(data[0]&0xf)*4,
+				int(data[2])<<8|int(data[3]),
+				data[9],
+				data[6]&0x40 != 0,
+				int(data[4])<<8|int(data[5]))
+		}
 	case 6:
 		// TODO: IPv6
 	}
