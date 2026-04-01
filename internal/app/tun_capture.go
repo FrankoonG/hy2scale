@@ -33,7 +33,7 @@ import (
 const (
 	tunCaptureName = "hy2cap0"
 	tunCaptureIP   = "169.254.99.1"
-	tunCaptureMTU  = 1300 // Conservative: must fit within ESP encapsulation (IKEv2) and PPP (L2TP)
+	tunCaptureMTU  = 1100 // Reduced: iKuai TUN driver drops packets >~1200 bytes via raw socket output path
 	tunRouteTable  = "100"
 )
 
