@@ -11,17 +11,31 @@ import (
 // instead of --device /dev/net/tun (which iKuai's Docker security checker prohibits).
 // The mknod call requires the device cgroup to allow major 10, minor 200.
 func ensureTunDevice() {
-	const tunPath = "/dev/net/tun"
-	if _, err := os.Stat(tunPath); err == nil {
-		return // already exists
-	}
-	os.MkdirAll("/dev/net", 0755)
-	// mknod /dev/net/tun c 10 200
-	// dev_t = major<<8 | minor (Linux dev_t encoding for old-style mknod)
-	dev := int((10 << 8) | 200)
-	if err := syscall.Mknod(tunPath, syscall.S_IFCHR|0666, dev); err != nil {
-		log.Printf("[tun] mknod %s failed: %v (need device_cgroup_rules: ['c 10:200 rwm'])", tunPath, err)
+	// Create /dev/net/tun (TUN/TAP) if missing — needed by kernel-libipsec + TUN capture
+	ensureCharDevice("/dev/net/tun", 10, 200)
+	// Create /dev/ppp if missing — needed by pppd for L2TP
+	ensureCharDevice("/dev/ppp", 108, 0)
+}
+
+func ensureCharDevice(path string, major, minor int) {
+	if _, err := os.Stat(path); err == nil {
 		return
 	}
-	log.Printf("[tun] created %s via mknod", tunPath)
+	dir := path[:len(path)-len(path[findLastSlash(path):])]
+	os.MkdirAll(dir, 0755)
+	dev := int((major << 8) | minor)
+	if err := syscall.Mknod(path, syscall.S_IFCHR|0666, dev); err != nil {
+		log.Printf("[dev] mknod %s (c %d:%d) failed: %v", path, major, minor, err)
+		return
+	}
+	log.Printf("[dev] created %s (c %d:%d) via mknod", path, major, minor)
+}
+
+func findLastSlash(s string) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == '/' {
+			return i
+		}
+	}
+	return 0
 }
