@@ -1324,29 +1324,6 @@ func copyCtx(ctx context.Context, dst io.Writer, src io.Reader) (int64, error) {
 	}
 }
 
-func copyBufCtx(ctx context.Context, dst io.Writer, src io.Reader, bufSize int) (int64, error) {
-	done := make(chan struct{})
-	var n int64
-	var err error
-	go func() {
-		buf := make([]byte, bufSize)
-		n, err = io.CopyBuffer(dst, src, buf)
-		close(done)
-	}()
-	select {
-	case <-done:
-		return n, err
-	case <-ctx.Done():
-		if c, ok := src.(net.Conn); ok {
-			c.Close()
-		}
-		if c, ok := dst.(net.Conn); ok {
-			c.Close()
-		}
-		<-done
-		return n, ctx.Err()
-	}
-}
 
 func splitPath(s string) []string {
 	var parts []string
