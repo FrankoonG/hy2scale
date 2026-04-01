@@ -107,9 +107,10 @@ func createCaptureStack(mtu int) (*channel.Endpoint, *stack.Stack, error) {
 
 	sackOpt := tcpip.TCPSACKEnabled(true)
 	s.SetTransportProtocolOption(tcp.ProtocolNumber, &sackOpt)
-	// Increase TCP buffer sizes for higher-latency relay connections.
-	// Default gvisor buffers are too small, causing window stalls when
-	// response data arrives faster than the VPN tunnel can ACK.
+	// Enable delayed ACK for proper TCP behavior with high-latency relay connections
+	delayOpt := tcpip.TCPDelayEnabled(true)
+	s.SetTransportProtocolOption(tcp.ProtocolNumber, &delayOpt)
+	// Increase TCP buffer sizes for relay connections
 	rcvBuf := tcpip.TCPReceiveBufferSizeRangeOption{Min: 4096, Default: 212992, Max: 4194304}
 	s.SetTransportProtocolOption(tcp.ProtocolNumber, &rcvBuf)
 	sndBuf := tcpip.TCPSendBufferSizeRangeOption{Min: 4096, Default: 212992, Max: 4194304}
