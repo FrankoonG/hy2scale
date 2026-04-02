@@ -357,7 +357,24 @@ func installUDPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 
 		go func() {
 			defer udpConn.Close()
-			remote, derr := net.DialTimeout("udp", dstAddr, 5*time.Second)
+			srcIP := id.RemoteAddress.String()
+
+			// Look up exit routing for this WireGuard peer
+			wgCfg := a.store.Get().WireGuard
+			var remote net.Conn
+			var derr error
+			if wgCfg != nil {
+				exitVia, _, _ := findPeerExitInfo(*wgCfg, srcIP)
+				if exitVia != "" {
+					remote, derr = a.dialExitUDP(context.Background(), exitVia, dstAddr)
+					if derr != nil {
+						debugLog("[wg-fwd] UDP %s -> %s exit=%q dial: %v", srcIP, dstAddr, exitVia, derr)
+					}
+				}
+			}
+			if remote == nil {
+				remote, derr = net.DialTimeout("udp", dstAddr, 5*time.Second)
+			}
 			if derr != nil {
 				return
 			}
