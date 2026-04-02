@@ -73,14 +73,16 @@ func (a *App) StartRuleEngine() {
 	go ruleEng.serveProxy(ctx)
 	go func() { <-ctx.Done(); ln.Close() }()
 
-	// Start UDP proxy — add bypass rule so proxy's own outbound UDP isn't REDIRECT'd
-	iptRun("iptables-legacy", "-t", "nat", "-I", "OUTPUT", "-m", "mark", "--mark",
-		fmt.Sprintf("0x%x", ruleBypassMark), "-p", "udp", "-j", "RETURN")
+	// Start UDP proxy — add bypass rules in both OUTPUT and PREROUTING
+	for _, chain := range []string{"OUTPUT", "PREROUTING"} {
+		iptRun("iptables-legacy", "-t", "nat", "-I", chain, "-m", "mark", "--mark",
+			fmt.Sprintf("0x%x", ruleBypassMark), "-p", "udp", "-j", "RETURN")
+	}
 	go ruleEng.serveUDPProxy(ctx)
 
 	log.Printf("[rules] engine started, proxy on %s", ruleEng.proxyAddr)
 
-	// Exclude relay peer ports from rules (prevent REDIRECT intercepting QUIC)
+	// Exclude relay peer ports from rules (prevent DNAT intercepting QUIC)
 	cfg := a.store.Get()
 	for _, cl := range cfg.Clients {
 		addr := extractPrimaryAddr(cl.Addr)
@@ -90,9 +92,11 @@ func (a *App) StartRuleEngine() {
 		}
 		ips, _ := net.LookupHost(host)
 		for _, ip := range ips {
-			for _, proto := range []string{"tcp", "udp"} {
-				iptRun("iptables-legacy", "-t", "nat", "-I", "OUTPUT",
-					"-d", ip, "-p", proto, "--dport", port, "-j", "RETURN")
+			for _, chain := range []string{"OUTPUT", "PREROUTING"} {
+				for _, proto := range []string{"tcp", "udp"} {
+					iptRun("iptables-legacy", "-t", "nat", "-I", chain,
+						"-d", ip, "-p", proto, "--dport", port, "-j", "RETURN")
+				}
 			}
 		}
 	}
@@ -191,36 +195,35 @@ func (e *ruleEngine) applyIPRule(r RoutingRule) {
 		if target == "" {
 			continue
 		}
-		if strings.Contains(target, "-") && !strings.Contains(target, "/") {
-			// IP range — TCP DNAT + UDP REDIRECT
-			tcpArgs := []string{"-t", "nat", "-A", "OUTPUT",
-				"-m", "iprange", "--dst-range", target,
-				"-p", "tcp", "-j", "DNAT",
-				"--to-destination", e.proxyAddr}
-			iptRun("iptables-legacy", tcpArgs...)
-			iptArgs = append(iptArgs, strings.Join(tcpArgs, " "))
-
-			udpArgs := []string{"-t", "nat", "-A", "OUTPUT",
-				"-m", "iprange", "--dst-range", target,
-				"-p", "udp", "-j", "DNAT",
-				"--to-destination", udpProxyAddr}
-			iptRun("iptables-legacy", udpArgs...)
-			iptArgs = append(iptArgs, strings.Join(udpArgs, " "))
-		} else {
-			// Single IP or CIDR — TCP DNAT + UDP REDIRECT
-			tcpArgs := []string{"-t", "nat", "-A", "OUTPUT",
-				"-d", target,
-				"-p", "tcp", "-j", "DNAT",
-				"--to-destination", e.proxyAddr}
-			iptRun("iptables-legacy", tcpArgs...)
-			iptArgs = append(iptArgs, strings.Join(tcpArgs, " "))
-
-			udpArgs := []string{"-t", "nat", "-A", "OUTPUT",
-				"-d", target,
-				"-p", "udp", "-j", "DNAT",
-				"--to-destination", udpProxyAddr}
-			iptRun("iptables-legacy", udpArgs...)
-			iptArgs = append(iptArgs, strings.Join(udpArgs, " "))
+		// Apply DNAT to both OUTPUT (local traffic) and PREROUTING (forwarded traffic from VPN/WG)
+		for _, chain := range []string{"OUTPUT", "PREROUTING"} {
+			if strings.Contains(target, "-") && !strings.Contains(target, "/") {
+				for _, proto := range []string{"tcp", "udp"} {
+					dst := e.proxyAddr
+					if proto == "udp" {
+						dst = udpProxyAddr
+					}
+					args := []string{"-t", "nat", "-A", chain,
+						"-m", "iprange", "--dst-range", target,
+						"-p", proto, "-j", "DNAT",
+						"--to-destination", dst}
+					iptRun("iptables-legacy", args...)
+					iptArgs = append(iptArgs, strings.Join(args, " "))
+				}
+			} else {
+				for _, proto := range []string{"tcp", "udp"} {
+					dst := e.proxyAddr
+					if proto == "udp" {
+						dst = udpProxyAddr
+					}
+					args := []string{"-t", "nat", "-A", chain,
+						"-d", target,
+						"-p", proto, "-j", "DNAT",
+						"--to-destination", dst}
+					iptRun("iptables-legacy", args...)
+					iptArgs = append(iptArgs, strings.Join(args, " "))
+				}
+			}
 		}
 		// Register all IPs for this target in destToExit
 		e.registerTargetExit(r.ID, target, r.ExitVia, r.ExitMode)
@@ -246,20 +249,20 @@ func (e *ruleEngine) applyDomainRule(r RoutingRule) {
 		}
 		udpDst := fmt.Sprintf("127.0.0.99:%d", ruleUDPProxyPort)
 		for _, ip := range ips {
-			tcpArgs := []string{"-t", "nat", "-A", "OUTPUT",
-				"-d", ip,
-				"-p", "tcp", "-j", "DNAT",
-				"--to-destination", e.proxyAddr}
-			iptRun("iptables-legacy", tcpArgs...)
-			iptArgs = append(iptArgs, strings.Join(tcpArgs, " "))
-
-			udpArgs := []string{"-t", "nat", "-A", "OUTPUT",
-				"-d", ip,
-				"-p", "udp", "-j", "DNAT",
-				"--to-destination", udpDst}
-			iptRun("iptables-legacy", udpArgs...)
-			iptArgs = append(iptArgs, strings.Join(udpArgs, " "))
-
+			for _, chain := range []string{"OUTPUT", "PREROUTING"} {
+				for _, proto := range []string{"tcp", "udp"} {
+					dst := e.proxyAddr
+					if proto == "udp" {
+						dst = udpDst
+					}
+					args := []string{"-t", "nat", "-A", chain,
+						"-d", ip,
+						"-p", proto, "-j", "DNAT",
+						"--to-destination", dst}
+					iptRun("iptables-legacy", args...)
+					iptArgs = append(iptArgs, strings.Join(args, " "))
+				}
+			}
 			resolvedIPs = append(resolvedIPs, ip)
 			e.destToExit.Store(ip, ruleExitInfo{ruleID: r.ID, exitVia: r.ExitVia, exitMode: r.ExitMode})
 		}
