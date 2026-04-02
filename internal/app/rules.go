@@ -425,65 +425,104 @@ func (e *ruleEngine) serveUDPProxy(ctx context.Context) {
 			log.Printf("[rules] UDP read error: %v", err)
 			continue
 		}
-		log.Printf("[rules] UDP packet from %s, %d bytes", srcAddr, n)
-
-		// Look up original destination via conntrack
-		origDst := conntrackOrigDst("udp", srcAddr.String(), ruleUDPProxyPort)
-		if origDst == "" {
-			debugLog("[rules] UDP no conntrack for %s", srcAddr)
-			continue
-		}
+		log.Printf("[rules] UDP pkt from %s, %d bytes", srcAddr, n)
 
 		data := make([]byte, n)
 		copy(data, buf[:n])
 
+		// Check if there's an existing session for this source
+		srcKey := srcAddr.String()
+		udpSessionsMu.Lock()
+		sess, ok := udpSessions[srcKey]
+		udpSessionsMu.Unlock()
+		if ok {
+			sess.lastActivity = time.Now()
+			sess.remote.Write(data)
+			continue
+		}
+
+		// New source: look up original destination via conntrack
+		log.Printf("[rules] UDP new session for %s, querying conntrack", srcKey)
+		origDst := conntrackOrigDst("udp", srcAddr.String(), ruleUDPProxyPort)
+		log.Printf("[rules] UDP conntrack result for %s: %q", srcKey, origDst)
+		if origDst == "" {
+			debugLog("[rules] UDP no conntrack for %s", srcAddr)
+			continue
+		}
 		origAddr, _ := net.ResolveUDPAddr("udp4", origDst)
 		if origAddr == nil {
 			continue
 		}
 
-		go e.handleUDPPacket(ctx, srcAddr, origAddr, data, udpConn)
+		e.createUDPSession(ctx, srcAddr, origAddr, data, udpConn)
 	}
 }
 
-func (e *ruleEngine) handleUDPPacket(ctx context.Context, src, origDst *net.UDPAddr, data []byte, listener *net.UDPConn) {
+// udpSession tracks an ongoing UDP relay for a specific src→dst pair.
+type udpSession struct {
+	remote net.Conn
+	lastActivity time.Time
+}
+
+var (
+	udpSessions   = make(map[string]*udpSession) // "srcIP:srcPort→dstIP:dstPort" → session
+	udpSessionsMu sync.Mutex
+)
+
+func (e *ruleEngine) createUDPSession(ctx context.Context, src, origDst *net.UDPAddr, data []byte, listener *net.UDPConn) {
+	srcKey := src.String()
+
+	// New session: create relay connection
 	host := origDst.IP.String()
 	exitVia, _ := e.lookupExit(host)
 
 	var remote net.Conn
 	var err error
 	if exitVia != "" {
-		log.Printf("[rules] UDP %s → exit %s", origDst, exitVia)
 		remote, err = e.app.dialExitUDP(ctx, exitVia, origDst.String())
 		if err != nil {
-			log.Printf("[rules] UDP dialExitUDP %s: %v, falling back to direct", origDst, err)
+			debugLog("[rules] UDP dialExitUDP %s: %v, falling back to direct", origDst, err)
+			remote = nil
 		}
 	}
-	if remote == nil || err != nil {
+	if remote == nil {
 		remote, err = dialUDPMarked(origDst.String(), ruleBypassMark)
 	}
 	if err != nil {
-		log.Printf("[rules] UDP dial %s: %v", origDst, err)
+		udpSessionsMu.Unlock()
+		debugLog("[rules] UDP dial %s: %v", origDst, err)
 		return
 	}
-	defer remote.Close()
 
-	if _, err := remote.Write(data); err != nil {
-		log.Printf("[rules] UDP write %s: %v", origDst, err)
-		return
-	}
-	log.Printf("[rules] UDP sent %d bytes to %s", len(data), origDst)
+	sess := &udpSession{remote: remote, lastActivity: time.Now()}
+	udpSessionsMu.Lock()
+	udpSessions[srcKey] = sess
+	udpSessionsMu.Unlock()
 
-	remote.SetReadDeadline(time.Now().Add(10 * time.Second))
-	resp := make([]byte, 65535)
-	rn, err := remote.Read(resp)
-	if err != nil {
-		log.Printf("[rules] UDP read %s: %v", origDst, err)
-		return
-	}
-	log.Printf("[rules] UDP reply %d bytes from %s", rn, origDst)
+	debugLog("[rules] UDP session %s → %s (exit=%s)", src, origDst, exitVia)
 
-	listener.WriteToUDP(resp[:rn], src)
+	// Forward the first packet
+	remote.Write(data)
+
+	// Start reverse relay: remote → listener (runs until idle timeout)
+	go func() {
+		defer func() {
+			udpSessionsMu.Lock()
+			delete(udpSessions, srcKey)
+			udpSessionsMu.Unlock()
+			remote.Close()
+		}()
+		buf := make([]byte, 65535)
+		for {
+			remote.SetReadDeadline(time.Now().Add(60 * time.Second))
+			n, err := remote.Read(buf)
+			if err != nil {
+				return
+			}
+			sess.lastActivity = time.Now()
+			listener.WriteToUDP(buf[:n], src)
+		}
+	}()
 }
 
 // dnsRefreshLoop periodically re-resolves domain rules.
