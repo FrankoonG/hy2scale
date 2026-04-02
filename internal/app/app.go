@@ -106,6 +106,7 @@ type Config struct {
 	IKEv2      *IKEv2Config          `yaml:"ikev2,omitempty" json:"ikev2,omitempty"`
 	WireGuard  *WireGuardConfig      `yaml:"wireguard,omitempty" json:"wireguard,omitempty"`
 	Rules      []RoutingRule         `yaml:"rules,omitempty" json:"rules,omitempty"`
+	TunMode    *TunModeConfig        `yaml:"tun_mode,omitempty" json:"tun_mode,omitempty"`
 	UIListen    string                `yaml:"ui_listen,omitempty" json:"ui_listen,omitempty"`
 	UIBasePath  string                `yaml:"ui_base_path,omitempty" json:"ui_base_path,omitempty"`
 	WebUsername string                `yaml:"web_username,omitempty" json:"web_username,omitempty"`
@@ -226,10 +227,16 @@ func (a *App) Run(ctx context.Context) error {
 	// Create it via mknod if the cgroup permits (major 10, minor 200).
 	ensureTunDevice()
 
+	// Detect runtime mode early (normal/bridge/compat/limited)
+	DetectRuntimeMode()
+
 	// Start rate ticker, latency prober, and traffic flusher
 	go a.node.StartRateTicker(ctx)
 	go a.node.StartLatencyProber(ctx)
 	go a.StartTrafficFlusher(ctx)
+
+	// Register IP tunnel handler on all nodes (any node can be an exit for TUN mode)
+	a.registerExitIPTunHandler(ctx)
 	a.rebuildUserIndex()
 
 	// Apply nested discovery
@@ -1335,6 +1342,41 @@ func splitPath(s string) []string {
 	return parts
 }
 
+// localExitGateway caches the Docker gateway IP for local exit rewriting.
+// When running in Docker, connecting to the host's own IP causes services
+// to see connections from themselves (Docker NAT hairpin). Using the Docker
+// gateway (host.docker.internal) instead makes the source appear as 127.0.0.1.
+var localExitGateway = sync.OnceValue(func() string {
+	// Explicit override via environment variable
+	if gw := os.Getenv("LOCAL_EXIT_GATEWAY"); gw != "" {
+		log.Printf("[exit] using LOCAL_EXIT_GATEWAY=%s", gw)
+		return gw
+	}
+	// Auto-detect Docker gateway
+	ips, err := net.LookupHost("host.docker.internal")
+	if err == nil && len(ips) > 0 {
+		log.Printf("[exit] detected Docker gateway: %s", ips[0])
+		return ips[0]
+	}
+	return ""
+})
+
+// rewriteLocalAddr replaces the host IP with the Docker gateway when available.
+// This ensures services on the host don't see connections from their own IP.
+func rewriteLocalAddr(addr string) string {
+	gw := localExitGateway()
+	if gw == "" {
+		return addr
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	rewritten := net.JoinHostPort(gw, port)
+	log.Printf("[exit] rewriting local exit %s → %s", addr, rewritten)
+	return rewritten
+}
+
 // dialExit routes traffic through an exit path, stripping the local node name prefix.
 // dialExitWithMode routes traffic with the specified exit mode.
 // mode: "" = direct, "quality" = adaptive failover, "aggregate" = load balance
@@ -1493,7 +1535,7 @@ func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, err
 		parts = parts[1:]
 	}
 	if len(parts) == 0 {
-		return net.DialTimeout("tcp", addr, 10*time.Second)
+		return net.DialTimeout("tcp", rewriteLocalAddr(addr), 10*time.Second)
 	}
 	if len(parts) == 1 {
 		// If target is not a direct peer, find a path through intermediates
@@ -1525,7 +1567,7 @@ func (a *App) dialExitUDP(ctx context.Context, exitVia, addr string) (net.Conn, 
 		parts = parts[1:]
 	}
 	if len(parts) == 0 {
-		return net.DialTimeout("udp", addr, 5*time.Second)
+		return net.DialTimeout("udp", rewriteLocalAddr(addr), 5*time.Second)
 	}
 	if len(parts) == 1 {
 		if !a.node.HasPeer(parts[0]) {
@@ -1583,11 +1625,11 @@ func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
 	// Note: hy2 server doesn't pass user info to Outbound, so we can't do per-user
 	// routing here. Native hy2 client users exit directly (local network).
 	// Per-user exit routing works through SOCKS5/SS where we control the full flow.
-	return net.DialTimeout("tcp", reqAddr, 10*time.Second)
+	return net.DialTimeout("tcp", rewriteLocalAddr(reqAddr), 10*time.Second)
 }
 
 func (o *nodeOutbound) UDP(addr string) (hyserver.UDPConn, error) {
-	conn, err := net.DialTimeout("udp", addr, 5*time.Second)
+	conn, err := net.DialTimeout("udp", rewriteLocalAddr(addr), 5*time.Second)
 	if err != nil {
 		return nil, err
 	}

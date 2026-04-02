@@ -19,6 +19,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,37 @@ import (
 
 	hyclient "github.com/apernet/hysteria/core/v2/client"
 )
+
+// localExitGW caches the Docker gateway for local exit address rewriting.
+var localExitGW = sync.OnceValue(func() string {
+	if gw := os.Getenv("LOCAL_EXIT_GATEWAY"); gw != "" {
+		log.Printf("[relay] using LOCAL_EXIT_GATEWAY=%s", gw)
+		return gw
+	}
+	ips, err := net.LookupHost("host.docker.internal")
+	if err == nil && len(ips) > 0 {
+		log.Printf("[relay] detected Docker gateway: %s", ips[0])
+		return ips[0]
+	}
+	return ""
+})
+
+// rewriteLocalAddr replaces the destination host with the Docker gateway
+// when running inside Docker. This prevents services on the host from
+// seeing connections from their own IP (Docker NAT hairpin issue).
+func (n *Node) rewriteLocalAddr(addr string) string {
+	gw := localExitGW()
+	if gw == "" {
+		return addr
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	rewritten := net.JoinHostPort(gw, port)
+	log.Printf("[relay] rewriting exit %s → %s", addr, rewritten)
+	return rewritten
+}
 
 // ErrNotHy2scale indicates the remote is a plain hy2 server without relay protocol.
 var ErrNotHy2scale = fmt.Errorf("relay: remote is not hy2scale")
@@ -38,6 +70,7 @@ const (
 	streamViaPrefix     = "_relay_via_"
 	streamDataPrefix    = "_relay_data_"
 	streamDataSuffix    = ":0"
+	streamIPTunPrefix   = "_relay_iptun_"
 )
 
 // IsRelayStream returns true if addr is a relay internal stream.
@@ -47,7 +80,8 @@ func IsRelayStream(addr string) bool {
 		addr == streamListPeers ||
 		addr == streamLatencyReport ||
 		strings.HasPrefix(addr, streamViaPrefix) ||
-		strings.HasPrefix(addr, streamDataPrefix)
+		strings.HasPrefix(addr, streamDataPrefix) ||
+		strings.HasPrefix(addr, streamIPTunPrefix)
 }
 
 // PeerInfo describes a connected peer.
@@ -209,6 +243,9 @@ type Node struct {
 	latencyMu    sync.RWMutex
 	latencies    map[string]int
 	peersOfCache map[string][]PeerInfo // cached PeersOf results from prober
+
+	// IP tunnel handler for TUN-based raw packet forwarding
+	ipTunHandler func(peerName string, stream net.Conn)
 }
 
 // PeerRates returns per-peer traffic rates.
@@ -581,6 +618,16 @@ func (n *Node) HandleStream(ctx context.Context, reqAddr string, stream net.Conn
 		n.handleListPeers(stream)
 
 	default:
+		// IP tunnel stream for TUN-based raw packet forwarding
+		if strings.HasPrefix(reqAddr, streamIPTunPrefix) {
+			peerName := reqAddr[len(streamIPTunPrefix):]
+			if n.ipTunHandler != nil {
+				n.ipTunHandler(peerName, stream)
+			} else {
+				stream.Close()
+			}
+			return
+		}
 		if nodeName, targetAddr, ok := parseVia(reqAddr); ok {
 			n.handleVia(ctx, nodeName, targetAddr, stream)
 			return
@@ -729,6 +776,20 @@ func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclie
 	// UDP dial request: addr starts with "udp:"
 	if strings.HasPrefix(addr, "udp:") {
 		n.dialUDPAndStream(ctx, peerName, client, id, addr[4:])
+		return
+	}
+
+	// IP tunnel request: deliver stream to IP tunnel handler
+	if strings.HasPrefix(addr, streamIPTunPrefix) {
+		stream, err := client.TCP(streamDataPrefix + id + streamDataSuffix)
+		if err != nil {
+			return
+		}
+		if n.ipTunHandler != nil {
+			n.ipTunHandler(addr[len(streamIPTunPrefix):], stream)
+		} else {
+			stream.Close()
+		}
 		return
 	}
 
@@ -1327,6 +1388,55 @@ func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.C
 			return nil, fmt.Errorf("relay: dial via %q failed", peerName)
 		}
 		return n.wrapConn(peerName, conn), nil
+	case <-ctx.Done():
+		p.writeMu.Lock()
+		delete(p.waiting, id)
+		p.writeMu.Unlock()
+		return nil, ctx.Err()
+	}
+}
+
+// SetIPTunHandler registers a handler for incoming IP tunnel streams from peers.
+func (n *Node) SetIPTunHandler(handler func(peerName string, stream net.Conn)) {
+	n.ipTunHandler = handler
+}
+
+// DialIPTun opens a bidirectional IP packet tunnel stream to a peer.
+// The stream uses 2-byte length-prefixed framing for raw IP packets.
+func (n *Node) DialIPTun(ctx context.Context, peerName string) (net.Conn, error) {
+	n.mu.RLock()
+	p, ok := n.peers[peerName]
+	n.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
+	}
+
+	addr := streamIPTunPrefix + n.name
+
+	if p.client != nil {
+		cl := p.pickClient()
+		return cl.TCP(addr)
+	}
+
+	// Inbound peer: send request via control stream
+	if p.ctrlW == nil {
+		return nil, fmt.Errorf("relay: peer %q control not ready", peerName)
+	}
+	id := fmt.Sprintf("%d", n.seq.Add(1))
+	ch := make(chan net.Conn, 1)
+	p.writeMu.Lock()
+	p.waiting[id] = ch
+	err := writeRequest(p.ctrlW, id, addr)
+	p.writeMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	select {
+	case conn := <-ch:
+		if conn == nil {
+			return nil, fmt.Errorf("relay: IP tunnel to %q failed", peerName)
+		}
+		return conn, nil
 	case <-ctx.Done():
 		p.writeMu.Lock()
 		delete(p.waiting, id)
