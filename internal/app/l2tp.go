@@ -135,6 +135,35 @@ func testIptablesAvailable() bool {
 	return true
 }
 
+// cachedIptablesAvail caches iptables detection at startup.
+var cachedIptablesAvail = sync.OnceValue(func() bool {
+	return testIptablesAvailable()
+})
+
+// IsCompatMode returns true when the node has NET_ADMIN but no working iptables
+// (e.g. iKuai minimal Linux). Detected once at startup.
+func IsCompatMode() bool {
+	capOK, _ := CheckCapability()
+	return capOK && !cachedIptablesAvail()
+}
+
+// DetectRuntimeMode runs early detection and logs the result.
+func DetectRuntimeMode() {
+	capOK, _ := CheckCapability()
+	hostNet := CheckHostNetwork()
+	iptOK := cachedIptablesAvail()
+
+	if !capOK {
+		log.Printf("[runtime] mode: limited (no NET_ADMIN)")
+	} else if hostNet && iptOK {
+		log.Printf("[runtime] mode: normal (host network, iptables OK)")
+	} else if !hostNet && iptOK {
+		log.Printf("[runtime] mode: bridge (iptables OK, no host network)")
+	} else if !iptOK {
+		log.Printf("[runtime] mode: compat (NET_ADMIN OK, iptables unavailable)")
+	}
+}
+
 func (s *pppSession) Lookup(ip string) (string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

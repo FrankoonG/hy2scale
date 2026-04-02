@@ -204,14 +204,19 @@ func (s *vpnSession) Lookup(ip string) (string, bool) {
 
 // CheckHostNetwork returns true if the container appears to be running with --network host.
 func CheckHostNetwork() bool {
-	// In host network mode, /sys/class/net/eth0 typically doesn't exist as a veth,
-	// or we can check if we can see the host's real interfaces.
-	// Simplest: check if we can bind to port 0 on a non-local IP (host network allows it).
-	// Alternative: check if docker0 bridge is visible from inside the container.
-	// In host network mode, container sees many host interfaces (docker0, br-xxx, etc.)
-	// In bridge mode, container only sees eth0 + lo
+	// In host network mode the container sees host-level interfaces like
+	// docker0, br-xxx, real NICs. In bridge/custom network mode, these
+	// are NOT visible — only eth0 (veth) + lo + any TUN/ipsec/ppp
+	// interfaces created by the app itself.
+	// Check for docker0 or br-* which only exist in host network mode.
 	entries, _ := os.ReadDir("/sys/class/net")
-	return len(entries) > 3
+	for _, e := range entries {
+		name := e.Name()
+		if name == "docker0" || strings.HasPrefix(name, "br-") {
+			return true
+		}
+	}
+	return false
 }
 
 // StartIKEv2 configures and starts IKEv2/IPsec VPN.

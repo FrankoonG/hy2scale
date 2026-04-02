@@ -171,6 +171,8 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("PUT /api/rules/{id}", s.updateRule)
 	authed.HandleFunc("DELETE /api/rules/{id}", s.deleteRule)
 	authed.HandleFunc("PUT /api/rules/{id}/toggle", s.toggleRule)
+	authed.HandleFunc("GET /api/rules/tun-mode", s.getTunMode)
+	authed.HandleFunc("PUT /api/rules/tun-mode", s.setTunMode)
 
 	// Port check
 	authed.HandleFunc("POST /api/check-ports", s.checkPorts)
@@ -458,7 +460,7 @@ func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // Version is the application version. Update this on each release.
-const Version = "1.2.1"
+const Version = "1.2.2"
 
 func init() {
 	app.AppVersion = Version
@@ -468,7 +470,7 @@ func init() {
 func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
 	capOK, _ := app.CheckCapability()
-	limited := !capOK || !app.CheckHostNetwork()
+	limited := !capOK // NET_ADMIN+NET_RAW → L2TP/IKEv2 available
 	writeJSON(w, map[string]any{
 		"node_id":       cfg.NodeID,
 		"name":          cfg.Name,
@@ -476,7 +478,7 @@ func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 		"server":        cfg.Server,
 		"version":       Version,
 		"limited":       limited,
-		"compat":        app.TunCaptureActive(),
+		"compat":        app.IsCompatMode(),
 		"hy2_user_auth": cfg.Hy2UserAuth,
 		"active_paths":  s.app.AllActivePaths(),
 	})
@@ -1818,6 +1820,43 @@ func (s *Server) toggleRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.app.ToggleRule(id, body.Enabled)
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) getTunMode(w http.ResponseWriter, r *http.Request) {
+	cfg := s.app.Store().Get()
+	tm := cfg.TunMode
+	if tm == nil {
+		tm = &app.TunModeConfig{}
+	}
+	result := map[string]any{
+		"enabled": tm.Enabled,
+		"mode":    tm.Mode,
+		"active":  app.TunModeActive(),
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) setTunMode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Enabled bool   `json:"enabled"`
+		Mode    string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if body.Mode == "" {
+		body.Mode = "mixed"
+	}
+	if body.Enabled {
+		if err := s.app.EnableTunMode(body.Mode); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	} else {
+		s.app.DisableTunMode()
+	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 

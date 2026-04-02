@@ -31,7 +31,7 @@ func listenUDPTransparent(addr string) (*net.UDPConn, error) {
 	return pc.(*net.UDPConn), nil
 }
 
-// dialUDPMarked creates a UDP connection with SO_MARK set to bypass iptables REDIRECT.
+// dialUDPMarked creates a UDP connection with SO_MARK set to bypass iptables DNAT.
 func dialUDPMarked(addr string, mark int) (net.Conn, error) {
 	d := net.Dialer{
 		Timeout: 5 * time.Second,
@@ -44,6 +44,21 @@ func dialUDPMarked(addr string, mark int) (net.Conn, error) {
 		},
 	}
 	return d.Dial("udp", addr)
+}
+
+// dialTCPMarked creates a TCP connection with SO_MARK set to bypass iptables DNAT.
+func dialTCPMarked(addr string, mark int) (net.Conn, error) {
+	d := net.Dialer{
+		Timeout: 10 * time.Second,
+		Control: func(network, address string, c syscall.RawConn) error {
+			var err error
+			c.Control(func(fd uintptr) {
+				err = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_MARK, mark)
+			})
+			return err
+		},
+	}
+	return d.Dial("tcp", addr)
 }
 
 // conntrackOrigDst looks up the original destination for a NAT'd UDP connection
