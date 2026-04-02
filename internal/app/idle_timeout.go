@@ -5,9 +5,9 @@ import (
 	"time"
 )
 
-// idleTimeoutConn wraps a net.Conn with a hard read idle timeout.
-// Uses a goroutine-based timeout because QUIC streams don't support
-// SetReadDeadline or Close() to unblock pending Reads.
+// idleTimeoutConn wraps a net.Conn with a goroutine-based read timeout.
+// If Read() doesn't return within the timeout, the connection is closed.
+// This prevents dead relay streams from hanging forever when QUIC reconnects.
 type idleTimeoutConn struct {
 	net.Conn
 	timeout time.Duration
@@ -27,7 +27,6 @@ func (c *idleTimeoutConn) Read(b []byte) (int, error) {
 	case r := <-ch:
 		return r.n, r.err
 	case <-time.After(c.timeout):
-		// Force close to eventually unblock the goroutine
 		c.Conn.Close()
 		return 0, net.ErrClosed
 	}
