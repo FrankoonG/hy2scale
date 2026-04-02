@@ -48,6 +48,15 @@ type RoutingRule struct {
 	Enabled   bool     `yaml:"enabled" json:"enabled"`
 }
 
+// TunModeConfig controls TUN-based IP packet forwarding for the rules engine.
+// When enabled, raw IP packets are forwarded through the relay instead of
+// TCP/UDP proxy, preserving end-to-end connections (required for protocols
+// like Moonlight ENC-RTSP that bind encryption to TCP sessions).
+type TunModeConfig struct {
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+	Mode    string `yaml:"mode" json:"mode"` // "mixed" (routable=TUN, others=proxy) or "full" (all TUN)
+}
+
 // ConfigStore manages dynamic configuration with persistence.
 type ConfigStore struct {
 	mu   sync.RWMutex

@@ -1098,16 +1098,12 @@ async function refreshProxies() {
     $('#l2tp-pool').value = l.pool || '';
     $('#l2tp-psk').value = l.psk || '';
     $('#l2tp-mtu').value = l.mtu || 1280;
-    // Capability check
+    // Capability check — only NET_ADMIN+NET_RAW needed (compat mode handles non-host)
     const panel = $('#ptab-l2tp');
     const warn = $('#l2tp-warn');
-    const blocked = !l.capable || !l.host_network;
+    const blocked = !l.capable;
     if (blocked) {
-      if (!l.capable) {
-        warn.textContent = t('l2tp.warnText');
-      } else if (!l.host_network) {
-        warn.textContent = t('l2tp.warnHostNetwork');
-      }
+      warn.textContent = t('l2tp.warnText');
       warn.style.display = '';
       panel.querySelectorAll('.card').forEach(el => { el.style.opacity = '0.45'; el.style.pointerEvents = 'none'; });
       warn.style.pointerEvents = 'auto';
@@ -1245,16 +1241,12 @@ async function loadIKEv2() {
       }
     } catch(e) {}
 
-    // Capability check
+    // Capability check — only NET_ADMIN needed (compat mode handles non-host)
     const panel = $('#ptab-ikev2');
     const warn = $('#ikev2-warn');
-    const blocked = !cfg.capable || !cfg.host_network;
+    const blocked = !cfg.capable;
     if (blocked) {
-      if (!cfg.capable) {
-        warn.textContent = t('ikev2.warnText');
-      } else if (!cfg.host_network) {
-        warn.textContent = t('ikev2.warnHostNetwork');
-      }
+      warn.textContent = t('ikev2.warnText');
       warn.style.display = '';
       panel.querySelectorAll('.card').forEach(el => { el.style.opacity = '0.45'; el.style.pointerEvents = 'none'; });
       warn.style.pointerEvents = 'auto';
@@ -2476,7 +2468,63 @@ async function refreshRules() {
     const rules = data.rules || [];
     renderRuleList('ip', rules.filter(r => r.type === 'ip'));
     renderRuleList('domain', rules.filter(r => r.type === 'domain'));
+    loadTunMode();
   } catch(e) { console.error(e); }
+}
+
+async function loadTunMode() {
+  try {
+    const data = await api('/rules/tun-mode');
+    const toggle = document.getElementById('tun-mode-toggle');
+    const select = document.getElementById('tun-mode-select');
+    const options = document.getElementById('tun-mode-options');
+    const status = document.getElementById('tun-status');
+    if (toggle) toggle.checked = data.enabled;
+    if (select) select.value = data.mode || 'mixed';
+    if (options) options.style.display = data.enabled ? '' : 'none';
+    if (status) {
+      if (data.active) {
+        status.innerHTML = '<span class="card-count" style="background:rgba(39,174,96,.12);color:#27ae60">' + t('rules.tunActive') + '</span>';
+      } else if (data.enabled) {
+        status.innerHTML = '<span class="card-count" style="background:rgba(230,126,34,.12);color:#e67e22">' + t('rules.tunStarting') + '</span>';
+      } else {
+        status.textContent = '';
+      }
+    }
+  } catch(e) { console.error(e); }
+}
+
+async function toggleTunMode() {
+  const enabled = document.getElementById('tun-mode-toggle').checked;
+  const mode = document.getElementById('tun-mode-select').value;
+  try {
+    await api('/rules/tun-mode', {
+      method: 'PUT',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ enabled, mode })
+    });
+    document.getElementById('tun-mode-options').style.display = enabled ? '' : 'none';
+    toast(enabled ? t('rules.tunEnabled') : t('rules.tunDisabled'), 'success');
+    setTimeout(loadTunMode, 1000);
+  } catch(e) {
+    toast(t('rules.tunError') + ': ' + e.message, 'error');
+    document.getElementById('tun-mode-toggle').checked = !enabled;
+  }
+}
+
+async function setTunModeOption() {
+  const enabled = document.getElementById('tun-mode-toggle').checked;
+  if (!enabled) return;
+  const mode = document.getElementById('tun-mode-select').value;
+  try {
+    await api('/rules/tun-mode', {
+      method: 'PUT',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ enabled, mode })
+    });
+    toast(t('rules.tunModeChanged'), 'success');
+    setTimeout(loadTunMode, 1000);
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 function renderRuleList(type, rules) {

@@ -389,6 +389,7 @@
           <div class="proxy-tabs">
             <div class="proxy-tab active" data-ruletab="ip" onclick="switchRuleTab(this)" data-i18n="rules.ipRules">IP Rules</div>
             <div class="proxy-tab" data-ruletab="domain" onclick="switchRuleTab(this)" data-i18n="rules.domainRules">Domain Rules</div>
+            <div class="proxy-tab" data-ruletab="advanced" onclick="switchRuleTab(this)" data-i18n="rules.advancedMode">Advanced</div>
           </div>
 
           <div class="rule-panel" id="ruletab-ip">
@@ -416,6 +417,30 @@
                 <button class="act-btn enable" onclick="openRuleDialog('domain')" data-i18n="rules.newRule">+ New Rule</button>
               </div>
               <div id="domain-rules-list"><div class="empty" data-i18n="rules.noRules">No rules configured.</div></div>
+            </div>
+          </div>
+
+          <div class="rule-panel" id="ruletab-advanced" style="display:none">
+            <div class="card">
+              <div class="card-header">
+                <span class="card-title" data-i18n="rules.tunMode">TUN Mode</span>
+                <span class="spacer"></span>
+                <span id="tun-status"></span>
+              </div>
+              <div class="form-col" style="max-width:400px">
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px" data-i18n="rules.tunDesc">TUN mode forwards raw IP packets through the relay, preserving end-to-end TCP/UDP sessions. Required for protocols like Moonlight that use encrypted RTSP.</div>
+                <div class="form-group">
+                  <label data-i18n="rules.tunEnabled">TUN Forwarding</label>
+                  <label class="toggle" style="margin-top:4px"><input type="checkbox" id="tun-mode-toggle" onchange="toggleTunMode()"><span class="slider"></span></label>
+                </div>
+                <div class="form-group" id="tun-mode-options" style="display:none">
+                  <label data-i18n="rules.tunModeLabel">Mode</label>
+                  <select id="tun-mode-select" onchange="setTunModeOption()">
+                    <option value="mixed" data-i18n="rules.tunModeMixed">Mixed</option>
+                    <option value="full" data-i18n="rules.tunModeFull">Full</option>
+                  </select>
+                </div>
+              </div>
             </div>
           </div>
         </div>
