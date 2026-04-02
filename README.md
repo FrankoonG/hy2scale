@@ -41,7 +41,9 @@ Open `http://<host>:5565/scale/` — default login: `admin` / `admin`
 - **Routing Rules** — IP and domain-based traffic routing through specific exit nodes
 - **TLS & CA** — Certificate management with CA signing for IKEv2
 - **Web UI** — Single-page dashboard with real-time topology, traffic monitoring, and i18n (EN/KO)
+- **TUN Mode** — Raw IP packet forwarding through relay, preserving end-to-end TCP/UDP sessions for protocols like Moonlight
 - **Minimal Linux Compatible** — Runs on stripped-down Linux systems (e.g., router firmware) in non-host Docker without `--privileged`
+- **[iKuai v4 Support](https://github.com/FrankoonG/hy2scale/wiki/iKuai-v4-Installation)** — Install via `.ipkg` package on iKuai Application Store with automatic compat mode
 - **Hot Reload** — L2TP, IKEv2, WireGuard, proxies all reload without container restart
 
 ## Screenshots
