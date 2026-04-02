@@ -726,6 +726,12 @@ func (n *Node) deliverDataStream(id string, stream net.Conn) {
 }
 
 func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclient.Client, id, addr string) {
+	// UDP dial request: addr starts with "udp:"
+	if strings.HasPrefix(addr, "udp:") {
+		n.dialUDPAndStream(ctx, peerName, client, id, addr[4:])
+		return
+	}
+
 	var target net.Conn
 	var err error
 
@@ -762,6 +768,61 @@ func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclie
 	}
 	go func() { n.copyCount(stream, target, &n.rxBytes, prx); stream.Close() }()
 	n.copyCount(target, stream, &n.txBytes, ptx)
+}
+
+// dialUDPAndStream handles a remote UDP dial request.
+// Dials UDP to addr, then relays datagrams over a QUIC stream with 2-byte length framing.
+func (n *Node) dialUDPAndStream(ctx context.Context, peerName string, client hyclient.Client, id, addr string) {
+	udpConn, err := net.DialTimeout("udp", addr, 5*time.Second)
+	if err != nil {
+		return
+	}
+	defer udpConn.Close()
+
+	stream, err := client.TCP(streamDataPrefix + id + streamDataSuffix)
+	if err != nil {
+		return
+	}
+	defer stream.Close()
+
+	n.conns.Add(1)
+	defer n.conns.Add(-1)
+
+	// stream → UDP: read framed datagrams from stream, send to UDP
+	go func() {
+		defer udpConn.Close()
+		defer stream.Close()
+		var lenBuf [2]byte
+		for {
+			if _, err := io.ReadFull(stream, lenBuf[:]); err != nil {
+				return
+			}
+			dlen := int(binary.BigEndian.Uint16(lenBuf[:]))
+			buf := make([]byte, dlen)
+			if _, err := io.ReadFull(stream, buf); err != nil {
+				return
+			}
+			udpConn.Write(buf)
+		}
+	}()
+
+	// UDP → stream: read datagrams from UDP, write framed to stream
+	buf := make([]byte, 65535)
+	for {
+		udpConn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		n, err := udpConn.Read(buf)
+		if err != nil {
+			return
+		}
+		var lenBuf [2]byte
+		binary.BigEndian.PutUint16(lenBuf[:], uint16(n))
+		if _, err := stream.Write(lenBuf[:]); err != nil {
+			return
+		}
+		if _, err := stream.Write(buf[:n]); err != nil {
+			return
+		}
+	}
 }
 
 // --- Peer queries ---
@@ -1124,17 +1185,79 @@ func (n *Node) DialUDP(ctx context.Context, peerName string, addr string) (net.C
 	if !ok {
 		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
 	}
-	if p.client == nil {
-		return nil, fmt.Errorf("relay: peer %q is inbound (UDP relay requires outbound)")
+
+	// Outbound peer: use hy2 client's native UDP
+	if p.client != nil {
+		cl := p.pickClient()
+		uc, err := cl.UDP()
+		if err != nil {
+			return nil, fmt.Errorf("relay: UDP session: %w", err)
+		}
+		return &hyUDPConnWrapper{uc: uc, addr: addr}, nil
 	}
 
-	cl := p.pickClient()
-	uc, err := cl.UDP()
-	if err != nil {
-		return nil, fmt.Errorf("relay: UDP session: %w", err)
+	// Inbound peer: request UDP dial via control stream (same as TCP but with "udp:" prefix)
+	if p.ctrlW == nil {
+		return nil, fmt.Errorf("relay: peer %q control not ready", peerName)
 	}
-	return &hyUDPConnWrapper{uc: uc, addr: addr}, nil
+
+	id := fmt.Sprintf("%d", n.seq.Add(1))
+	ch := make(chan net.Conn, 1)
+	p.writeMu.Lock()
+	p.waiting[id] = ch
+	err := writeRequest(p.ctrlW, id, "udp:"+addr)
+	p.writeMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	select {
+	case conn := <-ch:
+		if conn == nil {
+			return nil, fmt.Errorf("relay: UDP dial via %q failed", peerName)
+		}
+		// Wrap the QUIC stream with datagram framing for UDP
+		return &streamUDPConn{stream: conn}, nil
+	case <-ctx.Done():
+		p.writeMu.Lock()
+		delete(p.waiting, id)
+		p.writeMu.Unlock()
+		return nil, ctx.Err()
+	}
 }
+
+// streamUDPConn wraps a QUIC stream with 2-byte length framing for UDP datagrams.
+type streamUDPConn struct {
+	stream net.Conn
+}
+
+func (c *streamUDPConn) Read(b []byte) (int, error) {
+	var lenBuf [2]byte
+	if _, err := io.ReadFull(c.stream, lenBuf[:]); err != nil {
+		return 0, err
+	}
+	dlen := int(binary.BigEndian.Uint16(lenBuf[:]))
+	if dlen > len(b) {
+		dlen = len(b)
+	}
+	return io.ReadFull(c.stream, b[:dlen])
+}
+
+func (c *streamUDPConn) Write(b []byte) (int, error) {
+	var lenBuf [2]byte
+	binary.BigEndian.PutUint16(lenBuf[:], uint16(len(b)))
+	if _, err := c.stream.Write(lenBuf[:]); err != nil {
+		return 0, err
+	}
+	return c.stream.Write(b)
+}
+
+func (c *streamUDPConn) Close() error                       { return c.stream.Close() }
+func (c *streamUDPConn) LocalAddr() net.Addr                { return c.stream.LocalAddr() }
+func (c *streamUDPConn) RemoteAddr() net.Addr               { return c.stream.RemoteAddr() }
+func (c *streamUDPConn) SetDeadline(t time.Time) error      { return c.stream.SetDeadline(t) }
+func (c *streamUDPConn) SetReadDeadline(t time.Time) error  { return c.stream.SetReadDeadline(t) }
+func (c *streamUDPConn) SetWriteDeadline(t time.Time) error { return c.stream.SetWriteDeadline(t) }
 
 // hyUDPConnWrapper adapts HyUDPConn to net.Conn for a single destination.
 type hyUDPConnWrapper struct {
