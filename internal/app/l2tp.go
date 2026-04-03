@@ -225,6 +225,12 @@ func (a *App) StartL2TP(cfg L2TPConfig) error {
 		return fmt.Errorf("insufficient privileges")
 	}
 
+	// Create cancellable context for this L2TP session
+	l2tpCtx, l2tpCancelFn := context.WithCancel(a.appCtx)
+	a.mu.Lock()
+	a.l2tpCancel = l2tpCancelFn
+	a.mu.Unlock()
+
 	// Parse pool: "192.168.25.1/24" → gateway=192.168.25.1, range=192.168.25.2-254
 	gateway, subnet, ipRange, err := parsePool(cfg.Pool)
 	if err != nil {
@@ -391,7 +397,7 @@ conn l2tp-psk
 		iptRun("iptables", "-I", "DOCKER-USER", "-d", subnet, "-j", "ACCEPT")
 		iptRun("iptables", "-t", "nat", "-A", "POSTROUTING",
 			"-s", subnet, "-j", "MASQUERADE")
-		go a.runTransparentProxy(gateway, proxyPort)
+		go a.runTransparentProxy(l2tpCtx, gateway, proxyPort)
 	} else {
 		// Compat mode: TUN capture with gvisor netstack (no iptables needed)
 		log.Printf("[l2tp] iptables unavailable, using TUN capture mode (compat)")
@@ -400,7 +406,7 @@ conn l2tp-psk
 			return err
 		}
 		// Start PPP hooks server (for AF_PACKET bridge on ppp interfaces)
-		go a.servePPPHooks(gateway, hooksPort)
+		go a.servePPPHooks(l2tpCtx, gateway, hooksPort)
 	}
 
 	// 9. Start strongswan (shared with IKEv2; auto=add connections load automatically)
@@ -463,7 +469,7 @@ func (a *App) updateChapSecrets() {
 }
 
 // runTransparentProxy listens on the gateway IP for redirected connections.
-func (a *App) runTransparentProxy(gatewayIP string, port int) {
+func (a *App) runTransparentProxy(ctx context.Context, gatewayIP string, port int) {
 	addr := fmt.Sprintf("%s:%d", gatewayIP, port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -474,9 +480,9 @@ func (a *App) runTransparentProxy(gatewayIP string, port int) {
 	log.Printf("[l2tp] transparent proxy on %s", addr)
 
 	// Also serve PPP ip-up/ip-down hooks on HTTP
-	go a.servePPPHooks(gatewayIP, port+1)
+	go a.servePPPHooks(ctx, gatewayIP, port+1)
 
-	go func() { <-a.appCtx.Done(); ln.Close() }()
+	go func() { <-ctx.Done(); ln.Close() }()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -487,7 +493,7 @@ func (a *App) runTransparentProxy(gatewayIP string, port int) {
 }
 
 // servePPPHooks handles ip-up/ip-down notifications from pppd.
-func (a *App) servePPPHooks(gatewayIP string, port int) {
+func (a *App) servePPPHooks(ctx context.Context, gatewayIP string, port int) {
 	// Simple HTTP server on the gateway IP for PPP hooks (only from localhost)
 	httpLn, err := net.Listen("tcp", fmt.Sprintf("%s:%d", gatewayIP, port))
 	if err != nil {
@@ -495,7 +501,7 @@ func (a *App) servePPPHooks(gatewayIP string, port int) {
 		return
 	}
 	defer httpLn.Close()
-	go func() { <-a.appCtx.Done(); httpLn.Close() }()
+	go func() { <-ctx.Done(); httpLn.Close() }()
 
 	for {
 		conn, err := httpLn.Accept()
