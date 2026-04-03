@@ -229,10 +229,17 @@ func (a *App) StartIKEv2(cfg IKEv2Config) error {
 		return fmt.Errorf("insufficient privileges")
 	}
 
+	// Create cancellable context for this IKEv2 session
+	ikev2Ctx, ikev2CancelFn := context.WithCancel(a.appCtx)
+	a.mu.Lock()
+	a.ikev2Cancel = ikev2CancelFn
+	a.mu.Unlock()
+
 	gateway, subnet, ipRange, err := parsePool(cfg.Pool)
 	if err != nil {
 		return fmt.Errorf("ikev2: invalid pool %q: %w", cfg.Pool, err)
 	}
+	_ = ikev2Ctx // used below in goroutines
 
 	// Add gateway IP to loopback for transparent proxy binding
 	run("ip", "addr", "add", fmt.Sprintf("%s/32", gateway), "dev", "lo")
@@ -413,7 +420,7 @@ conn ikev2-mschapv2
 		iptRun("iptables", "-I", "DOCKER-USER", "-d", subnet, "-j", "ACCEPT")
 		iptRun("iptables", "-t", "nat", "-A", "POSTROUTING",
 			"-s", subnet, "-j", "MASQUERADE")
-		go a.runIKEv2Proxy(gateway, proxyPort, hooksPort, cfg)
+		go a.runIKEv2Proxy(ikev2Ctx, gateway, proxyPort, hooksPort, cfg)
 	} else {
 		// Compat mode: xfrm interface + TUN capture (swanctl with if_id)
 		log.Printf("[ikev2] mode: compat (iptables unavailable → xfrm interface + AF_PACKET bridge + gvisor netstack)")
@@ -449,7 +456,7 @@ esac
 		a.writeSwanctlIKEv2(cfg, localID, remoteID, ipRange, dns)
 
 		// Hooks server for session tracking
-		go a.serveIKEv2Hooks(gateway, hooksPort, cfg)
+		go a.serveIKEv2Hooks(ikev2Ctx, gateway, hooksPort, cfg)
 	}
 
 	ensureStrongswanRunning()
@@ -621,10 +628,12 @@ func appendPSKSecret(psk string) {
 }
 
 var strongswanOnce sync.Once
+var strongswanRunning bool
 
 // ensureStrongswanRunning starts strongswan charon if not already running.
 func ensureStrongswanRunning() {
 	strongswanOnce.Do(func() {
+		strongswanRunning = true
 		// Clean stale PID files that survive container restart
 		os.Remove("/var/run/starter.charon.pid")
 		os.Remove("/var/run/charon.pid")
@@ -654,7 +663,7 @@ func ensureStrongswanRunning() {
 }
 
 // runIKEv2Proxy runs the transparent proxy and hooks server for IKEv2.
-func (a *App) runIKEv2Proxy(gatewayIP string, proxyPort, hooksPort int, cfg IKEv2Config) {
+func (a *App) runIKEv2Proxy(ctx context.Context, gatewayIP string, proxyPort, hooksPort int, cfg IKEv2Config) {
 	addr := fmt.Sprintf("%s:%d", gatewayIP, proxyPort)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -664,8 +673,8 @@ func (a *App) runIKEv2Proxy(gatewayIP string, proxyPort, hooksPort int, cfg IKEv
 	defer ln.Close()
 	log.Printf("[ikev2] transparent proxy on %s", addr)
 
-	go a.serveIKEv2Hooks(gatewayIP, hooksPort, cfg)
-	go func() { <-a.appCtx.Done(); ln.Close() }()
+	go a.serveIKEv2Hooks(ctx, gatewayIP, hooksPort, cfg)
+	go func() { <-ctx.Done(); ln.Close() }()
 
 	for {
 		conn, err := ln.Accept()
@@ -677,14 +686,14 @@ func (a *App) runIKEv2Proxy(gatewayIP string, proxyPort, hooksPort int, cfg IKEv
 }
 
 // serveIKEv2Hooks handles IKEv2 updown notifications.
-func (a *App) serveIKEv2Hooks(gatewayIP string, port int, cfg IKEv2Config) {
+func (a *App) serveIKEv2Hooks(ctx context.Context, gatewayIP string, port int, cfg IKEv2Config) {
 	httpLn, err := net.Listen("tcp", fmt.Sprintf("%s:%d", gatewayIP, port))
 	if err != nil {
 		log.Printf("[ikev2] hooks listener error: %v", err)
 		return
 	}
 	defer httpLn.Close()
-	go func() { <-a.appCtx.Done(); httpLn.Close() }()
+	go func() { <-ctx.Done(); httpLn.Close() }()
 
 	for {
 		conn, err := httpLn.Accept()
