@@ -24,12 +24,32 @@
 
 ## Quick Start
 
+### Full mode (host network — all features including Rules engine)
+
 ```bash
 docker run -d --name hy2scale \
-  --network host --cap-add NET_ADMIN \
+  --network host --privileged \
   -v hy2scale-data:/data \
+  --restart unless-stopped \
   frankoong/hy2scale:latest
 ```
+
+### Bridge mode (L2TP/IKEv2/WireGuard, no Rules engine)
+
+```bash
+docker run -d --name hy2scale \
+  --cap-add NET_ADMIN --cap-add NET_RAW \
+  -p 5565:5565/tcp -p 5565:5565/udp \
+  -v hy2scale-data:/data \
+  --restart unless-stopped \
+  frankoong/hy2scale:latest
+```
+
+### iKuai v4
+
+Download the `.ipkg` from [Releases](https://github.com/FrankoonG/hy2scale/releases) and install via **Applications → Application Store → Local installation**. See the [iKuai v4 guide](https://github.com/FrankoonG/hy2scale/wiki/iKuai-v4-Installation) for details.
+
+---
 
 Open `http://<host>:5565/scale/` — default login: `admin` / `admin`
 
