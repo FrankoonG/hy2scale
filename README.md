@@ -13,7 +13,7 @@
   <a href="https://hub.docker.com/r/frankoong/hy2scale"><img src="https://img.shields.io/docker/v/frankoong/hy2scale?sort=semver&label=Docker%20Hub" alt="Docker Hub"></a>
   <a href="https://github.com/FrankoonG/hy2scale/wiki"><img src="https://img.shields.io/badge/docs-Wiki-blue" alt="Wiki"></a>
   <br>
-  <b>English</b> | <a href="README-ko.md">한국어</a>
+  <b>English</b> | <a href="README-zh.md">中文</a> | <a href="README-ko.md">한국어</a>
 </p>
 
 ---
