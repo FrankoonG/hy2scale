@@ -343,6 +343,7 @@ conn ikev2-mschapv2
     auto=add
     type=tunnel
     left=%%any
+    leftid=%s
     leftcert=ikev2-server.cert.pem
     leftsendcert=always
     leftsubnet=0.0.0.0/0
@@ -358,7 +359,7 @@ conn ikev2-mschapv2
     dpddelay=300s
     ike=aes256-sha256-modp2048,aes128-sha256-modp2048!
     esp=aes256-sha256,aes128-sha256!
-`, ipRange, dns)
+`, localID, ipRange, dns)
 
 		// Generate EAP secrets
 		a.updateEAPSecrets()
@@ -370,7 +371,10 @@ conn ikev2-mschapv2
 	// Compat mode: empty ipsec.conf (no stroke connection), no stroke EAP secrets.
 	// All secrets come exclusively from swanctl to avoid duplicate EAP entries
 	// that cause MSCHAPv2 verification failure on strongSwan 5.8.4.
-	iptablesOK := testIptablesAvailable()
+	// IKEv2 uses kernel-libipsec which writes decrypted packets to ipsec0 TUN.
+	// In non-host network mode, ipsec0 traffic bypasses PREROUTING (e.g. iKuai fastpath),
+	// so iptables DNAT cannot intercept it. Only use iptables path in host network.
+	iptablesOK := testIptablesAvailable() && CheckHostNetwork()
 	// Always write ipsec.conf. In compat mode with kernel-libipsec, the stroke
 	// connection handles EAP MSCHAPv2 auth (vici MSCHAPv2 is broken on 5.8.4).
 	// kernel-libipsec handles ESP in userspace via ipsec0 TUN.
@@ -394,7 +398,7 @@ conn ikev2-mschapv2
 	// Setup iptables (same dual-stack approach as L2TP)
 	os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
 
-	if testIptablesAvailable() {
+	if iptablesOK {
 		if iptUseChroot() {
 			log.Printf("[ikev2] mode: iptables via chroot /host (host kernel compat)")
 		} else {
