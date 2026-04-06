@@ -371,10 +371,7 @@ conn ikev2-mschapv2
 	// Compat mode: empty ipsec.conf (no stroke connection), no stroke EAP secrets.
 	// All secrets come exclusively from swanctl to avoid duplicate EAP entries
 	// that cause MSCHAPv2 verification failure on strongSwan 5.8.4.
-	// IKEv2 uses kernel-libipsec which writes decrypted packets to ipsec0 TUN.
-	// In non-host network mode, ipsec0 traffic bypasses PREROUTING (e.g. iKuai fastpath),
-	// so iptables DNAT cannot intercept it. Only use iptables path in host network.
-	iptablesOK := testIptablesAvailable() && CheckHostNetwork()
+	iptablesOK := testIptablesAvailable()
 	// Always write ipsec.conf. In compat mode with kernel-libipsec, the stroke
 	// connection handles EAP MSCHAPv2 auth (vici MSCHAPv2 is broken on 5.8.4).
 	// kernel-libipsec handles ESP in userspace via ipsec0 TUN.
