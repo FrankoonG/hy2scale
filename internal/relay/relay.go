@@ -10,7 +10,6 @@
 package relay
 
 import (
-	"bufio"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -18,7 +17,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -82,6 +80,19 @@ func IsRelayStream(addr string) bool {
 		strings.HasPrefix(addr, streamViaPrefix) ||
 		strings.HasPrefix(addr, streamDataPrefix) ||
 		strings.HasPrefix(addr, streamIPTunPrefix)
+}
+
+// isLocalRelayStream returns true if addr is a relay stream that can be handled
+// locally via HandleStream in a reverse-dial context. Excludes transport-level
+// streams (register, ctrl, data delivery) that are part of connection setup.
+func isLocalRelayStream(addr string) bool {
+	if addr == streamRegister || addr == streamCtrlS2C {
+		return false
+	}
+	if strings.HasPrefix(addr, streamDataPrefix) {
+		return false
+	}
+	return IsRelayStream(addr)
 }
 
 // PeerInfo describes a connected peer.
@@ -244,6 +255,10 @@ type Node struct {
 	latencies    map[string]int
 	peersOfCache map[string][]PeerInfo // cached PeersOf results from prober
 
+	// Injected handler: returns rich peer list JSON (with children) for nested discovery.
+	// If nil, falls back to flat n.Peers() JSON.
+	listPeersFunc func() []byte
+
 	// IP tunnel handler for TUN-based raw packet forwarding
 	ipTunHandler func(peerName string, stream net.Conn)
 }
@@ -319,29 +334,34 @@ func (n *Node) StartLatencyProber(ctx context.Context) {
 			}
 			n.mu.RUnlock()
 			for i, p := range peers {
-				if p.client == nil {
-					continue
-				}
 				go func(name string, p *peer) {
-					rtt := n.PingPeer(name)
-					if rtt >= 0 {
-						n.SetLatency(name, int(rtt.Milliseconds()))
-						p.failCount.Store(0)
-						// Cache peer's sub-peers only if nested discovery is enabled
-						if n.IsNestedEnabled(name) {
-							if subPeers, err := n.PeersOf(name); err == nil {
-								n.peerRateMu.Lock()
-								n.peersOfCache[name] = subPeers
-								n.peerRateMu.Unlock()
+					if p.client != nil {
+						// Outbound peer: ping + nested discovery
+						rtt := n.PingPeer(name)
+						if rtt >= 0 {
+							n.SetLatency(name, int(rtt.Milliseconds()))
+							p.failCount.Store(0)
+						} else {
+							n.SetLatency(name, -1)
+							fails := p.failCount.Add(1)
+							if fails >= 3 && p.cancel != nil {
+								log.Printf("[relay] %s: %d consecutive ping failures, disconnecting for reconnect", name, fails)
+								p.cancel()
 							}
 						}
-					} else {
-						n.SetLatency(name, -1)
-						fails := p.failCount.Add(1)
-						if fails >= 3 && p.cancel != nil {
-							log.Printf("[relay] %s: %d consecutive ping failures, disconnecting for reconnect", name, fails)
-							p.cancel()
+					}
+					// Cache nested sub-peers for both outbound AND inbound peers
+					if n.IsNestedEnabled(name) {
+						if subPeers, err := n.PeersOf(name); err == nil {
+							n.peerRateMu.Lock()
+							n.peersOfCache[name] = subPeers
+							n.peerRateMu.Unlock()
 						}
+					} else {
+						// Nested disabled: remove stale cache
+						n.peerRateMu.Lock()
+						delete(n.peersOfCache, name)
+						n.peerRateMu.Unlock()
 					}
 				}(names[i], p)
 			}
@@ -683,13 +703,28 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 	}
 
 	n.mu.Lock()
+	existing, exists := n.peers[name]
+	if exists && existing.ctrlW != nil {
+		// Peer already registered with an active ctrl stream (e.g. extra IP verification).
+		// Don't overwrite — just update version if newer.
+		if remoteMeta.Version != "" && remoteMeta.Version != "1.0.0" {
+			existing.info.Version = remoteMeta.Version
+		}
+		n.mu.Unlock()
+		peerCancel()
+		<-peerCtx.Done()
+		return
+	}
 	n.peers[name] = p
 	n.mu.Unlock()
 
 	<-peerCtx.Done()
 
 	n.mu.Lock()
-	delete(n.peers, name)
+	// Only delete if we're still the current entry (not replaced by another registration)
+	if current, ok := n.peers[name]; ok && current == p {
+		delete(n.peers, name)
+	}
 	n.mu.Unlock()
 }
 
@@ -711,6 +746,10 @@ func (n *Node) handleLatencyReport(stream net.Conn) {
 
 func (n *Node) handleListPeers(stream net.Conn) {
 	defer stream.Close()
+	if n.listPeersFunc != nil {
+		stream.Write(n.listPeersFunc())
+		return
+	}
 	peers := n.Peers()
 	data, _ := json.Marshal(peers)
 	stream.Write(data)
@@ -779,17 +818,16 @@ func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclie
 		return
 	}
 
-	// IP tunnel request: deliver stream to IP tunnel handler
-	if strings.HasPrefix(addr, streamIPTunPrefix) {
+	// Relay internal stream: handle locally via HandleStream — the same dispatch
+	// used for direct inbound QUIC streams. Any future relay stream added to
+	// HandleStream automatically works for both outbound and inbound peers.
+	// Excludes transport-level streams (register, ctrl, data delivery).
+	if isLocalRelayStream(addr) {
 		stream, err := client.TCP(streamDataPrefix + id + streamDataSuffix)
 		if err != nil {
 			return
 		}
-		if n.ipTunHandler != nil {
-			n.ipTunHandler(addr[len(streamIPTunPrefix):], stream)
-		} else {
-			stream.Close()
-		}
+		n.HandleStream(ctx, addr, stream)
 		return
 	}
 
@@ -905,8 +943,9 @@ func (n *Node) Peers() []PeerInfo {
 	return result
 }
 
-// PeersOf returns a peer's peers. Requires nested discovery enabled for that peer.
-func (n *Node) PeersOf(peerName string) ([]PeerInfo, error) {
+// PeersOfRaw returns the raw JSON from a peer's streamListPeers response.
+// Used by the API server to get rich tree data (with children).
+func (n *Node) PeersOfRaw(peerName string) ([]byte, error) {
 	n.mu.RLock()
 	p, ok := n.peers[peerName]
 	n.mu.RUnlock()
@@ -915,8 +954,8 @@ func (n *Node) PeersOf(peerName string) ([]PeerInfo, error) {
 	}
 
 	type result struct {
-		peers []PeerInfo
-		err   error
+		data []byte
+		err  error
 	}
 	ch := make(chan result, 1)
 	go func() {
@@ -931,41 +970,41 @@ func (n *Node) PeersOf(peerName string) ([]PeerInfo, error) {
 			defer stream.Close()
 			data, err = io.ReadAll(stream)
 		} else {
-			// Inbound peer: query via HTTP through reverse tunnel to their API
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			conn, cerr := n.DialTCP(ctx, peerName, "127.0.0.1:5565")
+			conn, cerr := n.DialTCP(ctx, peerName, streamListPeers)
 			if cerr != nil {
 				ch <- result{nil, cerr}
 				return
 			}
 			defer conn.Close()
-			fmt.Fprintf(conn, "GET /scale/api/internal/peers HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-			resp, rerr := http.ReadResponse(bufio.NewReader(conn), nil)
-			if rerr != nil {
-				ch <- result{nil, rerr}
-				return
-			}
-			defer resp.Body.Close()
-			data, err = io.ReadAll(resp.Body)
+			data, err = io.ReadAll(conn)
 		}
 		if err != nil {
 			ch <- result{nil, err}
 			return
 		}
-		var peers []PeerInfo
-		if err := json.Unmarshal(data, &peers); err != nil {
-			ch <- result{nil, err}
-			return
-		}
-		ch <- result{peers, nil}
+		ch <- result{data, nil}
 	}()
 	select {
 	case r := <-ch:
-		return r.peers, r.err
+		return r.data, r.err
 	case <-time.After(3 * time.Second):
 		return nil, fmt.Errorf("relay: peer %q query timeout", peerName)
 	}
+}
+
+// PeersOf returns a peer's peers (flat list). Used by the prober for cache.
+func (n *Node) PeersOf(peerName string) ([]PeerInfo, error) {
+	data, err := n.PeersOfRaw(peerName)
+	if err != nil {
+		return nil, err
+	}
+	var peers []PeerInfo
+	if err := json.Unmarshal(data, &peers); err != nil {
+		return nil, err
+	}
+	return peers, nil
 }
 
 // PeersOfVia returns a peer's peers through a multi-hop path.
@@ -1394,6 +1433,12 @@ func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.C
 		p.writeMu.Unlock()
 		return nil, ctx.Err()
 	}
+}
+
+// SetListPeersFunc registers a function that returns rich peer list JSON (with children).
+// Used by handleListPeers so both outbound and inbound nested discovery return identical data.
+func (n *Node) SetListPeersFunc(fn func() []byte) {
+	n.listPeersFunc = fn
 }
 
 // SetIPTunHandler registers a handler for incoming IP tunnel streams from peers.
