@@ -550,6 +550,19 @@ async function refreshTopology() {
     return;
   }
 
+  // Sort topology: self first, then by name; children sorted recursively by name
+  function sortChildren(nodes) {
+    if (!nodes) return;
+    nodes.sort((a, b) => a.name.localeCompare(b.name));
+    for (const n of nodes) if (n.children?.length) sortChildren(n.children);
+  }
+  topo.sort((a, b) => {
+    if (a.is_self) return -1;
+    if (b.is_self) return 1;
+    return a.name.localeCompare(b.name);
+  });
+  for (const n of topo) if (n.children?.length) sortChildren(n.children);
+
   let count = 0, rows = '';
   for (const n of topo) {
     count++;
@@ -557,7 +570,7 @@ async function refreshTopology() {
     if (n.children?.length) {
       for (let i = 0; i < n.children.length; i++) {
         count++;
-        const parentChain = [n.name]; // always include parent (selfID for inbound, peerName for outbound)
+        const parentChain = [n.name];
         rows += childRowHTML(n.children[i], i === n.children.length - 1, 1, parentChain, []);
       }
     }
