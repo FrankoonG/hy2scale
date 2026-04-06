@@ -770,6 +770,11 @@ func (a *App) StartTrafficFlusher(ctx context.Context) {
 // --- Nested discovery ---
 
 func (a *App) SetNested(peer string, enabled bool) error {
+	// Strip self prefix — inbound peers under self use selfID/name in UI paths
+	// but are direct peers in config (same as dialExit stripping)
+	if parts := strings.SplitN(peer, "/", 2); len(parts) == 2 && parts[0] == a.node.Name() {
+		peer = parts[1]
+	}
 	a.node.SetNestedDiscovery(peer, enabled)
 	return a.store.Update(func(c *Config) {
 		if c.Peers == nil {
@@ -778,6 +783,15 @@ func (a *App) SetNested(peer string, enabled bool) error {
 		pc := c.Peers[peer]
 		pc.Nested = enabled
 		c.Peers[peer] = pc
+		// Cascade: disabling nested also clears all descendant nested configs
+		if !enabled {
+			prefix := peer + "/"
+			for key := range c.Peers {
+				if len(key) > len(prefix) && key[:len(prefix)] == prefix {
+					delete(c.Peers, key)
+				}
+			}
+		}
 	})
 }
 

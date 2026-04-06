@@ -464,7 +464,7 @@ function childRowHTML(c, isLast, depth, parentChain, guides) {
 
   let html = `<tr class="sub-row${dis ? ' disabled' : ''}${cSyncing ? ' syncing' : ''}">
     <td>${childToggle}</td>
-    <td class="col-status">${dis ? latencyHTML(-1, c.name) : latencyHTML(c.latency_ms, c.name)}</td>
+    <td class="col-status">${dis ? latencyHTML(-1, cFullPath) : latencyHTML(c.latency_ms, cFullPath)}</td>
     <td class="col-dir">${dir}</td>
     <td class="col-name">
       ${treeHTML}<span class="sub-name-wrap">
@@ -557,7 +557,7 @@ async function refreshTopology() {
     if (n.children?.length) {
       for (let i = 0; i < n.children.length; i++) {
         count++;
-        const parentChain = n.is_self ? [] : [n.name];
+        const parentChain = [n.name]; // always include parent (selfID for inbound, peerName for outbound)
         rows += childRowHTML(n.children[i], i === n.children.length - 1, 1, parentChain, []);
       }
     }
@@ -1966,7 +1966,8 @@ function buildExitPaths(topo) {
         names.add(n.name);
         if (n.children) walk(n.children, p);
       } else if (n.children) {
-        walk(n.children, '');
+        // Inbound peers under self need self ID prefix to distinguish from outbound
+        walk(n.children, n.name);
       }
     }
   }

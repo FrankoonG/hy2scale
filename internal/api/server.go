@@ -57,6 +57,7 @@ type Server struct {
 	// Cached nested sub-peers (updated asynchronously)
 	subPeersMu    sync.RWMutex
 	subPeersCache map[string][]topoSubPeer
+	subPeersKick  chan struct{} // signal immediate refresh
 }
 
 // validAddrSpec checks "host:portspec" where portspec can be "5565", "1000,2000", "20000-30000"
@@ -112,6 +113,7 @@ func NewServer(a *app.App, addr, basePath string) *Server {
 		passHash:   passHash,
 		oldNodeIDs:    make(map[string]string),
 		subPeersCache: make(map[string][]topoSubPeer),
+		subPeersKick:  make(chan struct{}, 1),
 		sessions: make(map[string]time.Time),
 	}
 }
@@ -703,7 +705,8 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			selfChildren[i].RxRate = pr.RxRate
 		}
 		if c.Nested {
-			selfChildren[i].Children = s.getCachedSubPeers(c.Name)
+			children := filterSelfFromChildren(s.getCachedSubPeers(c.Name), cfg.NodeID)
+			selfChildren[i].Children = filterChildrenByNestedConfig(children, c.Name, cfg)
 		}
 	}
 	sort.Slice(selfChildren, func(i, j int) bool { return selfChildren[i].Name < selfChildren[j].Name })
@@ -760,9 +763,9 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Load sub-peers from background cache only (never blocks)
-		// Nested config controls DISPLAY only, not path discovery cache
 		if tn.Nested && tn.Connected && !tn.Native {
-			tn.Children = filterChildrenByNestedConfig(s.getCachedSubPeers(name), name, cfg)
+			children := filterSelfFromChildren(s.getCachedSubPeers(name), cfg.NodeID)
+			tn.Children = filterChildrenByNestedConfig(children, name, cfg)
 		}
 		// Also load children for inbound peers nested under self
 		// (they can have outbound connections visible if nested is enabled)
@@ -779,7 +782,25 @@ func (s *Server) getCachedSubPeers(name string) []topoSubPeer {
 }
 
 // StartSubPeersUpdater runs in background, periodically refreshes nested peer data.
+// Uses relay streamListPeers for both outbound and inbound peers (same mechanism).
 func (s *Server) StartSubPeersUpdater(ctx context.Context) {
+	// Register rich peer list handler so remote nodes return tree data via relay stream
+	s.app.Node().SetListPeersFunc(func() []byte {
+		peers := s.app.Node().Peers()
+		type peerWithChildren struct {
+			relay.PeerInfo
+			Children []topoSubPeer `json:"children,omitempty"`
+		}
+		result := make([]peerWithChildren, 0, len(peers))
+		for _, p := range peers {
+			pc := peerWithChildren{PeerInfo: p}
+			pc.Children = s.getCachedSubPeers(p.Name)
+			result = append(result, pc)
+		}
+		data, _ := json.Marshal(result)
+		return data
+	})
+
 	time.Sleep(2 * time.Second) // offset from prober
 	t := time.NewTicker(7 * time.Second)
 	defer t.Stop()
@@ -788,94 +809,93 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			newCache := make(map[string][]topoSubPeer)
-			// Collect all connected non-native outbound peers
-			connectedPeers := s.app.Node().ConnectedPeerNames()
-			nativeMap := s.app.Node().NativeMap()
-			for _, name := range connectedPeers {
-				if nativeMap[name] {
-					continue
-				}
-				// Only fetch sub-peers for peers with nested enabled
-				cfg := s.app.Store().Get()
-				if pc, ok := cfg.Peers[name]; !ok || !pc.Nested {
-					continue
-				}
-				ch := make(chan []topoSubPeer, 1)
-				go func(n string) {
-					ch <- s.fetchSubPeersViaHTTP(n)
-				}(name)
-				select {
-				case children := <-ch:
-					if children != nil {
-						newCache[name] = children
-					}
-				case <-time.After(10 * time.Second):
-				}
-			}
-			s.subPeersMu.Lock()
-			s.subPeersCache = newCache
-			s.subPeersMu.Unlock()
+		case <-s.subPeersKick:
+		}
 
-			// Feed sub-peer data into relay's peersOfCache for path discovery
-			// Recursively cache all levels of nested children
-			// Feed ALL nested topology into relay cache.
-			// Walk the subPeersCache tree and for each node, record its children.
-			// Also walk children recursively to get deeper levels.
-			visited := make(map[string]bool)
-			var walkAndCache func(parentName string, children []topoSubPeer)
-			walkAndCache = func(parentName string, children []topoSubPeer) {
-				if visited[parentName] {
-					return
+		newCache := make(map[string][]topoSubPeer)
+		connectedPeers := s.app.Node().ConnectedPeerNames()
+		nativeMap := s.app.Node().NativeMap()
+		cfg := s.app.Store().Get()
+
+		// Collect peers that need fetching
+		var fetchNames []string
+		for _, name := range connectedPeers {
+			if nativeMap[name] {
+				continue
+			}
+			if pc, ok := cfg.Peers[name]; !ok || !pc.Nested {
+				continue
+			}
+			fetchNames = append(fetchNames, name)
+		}
+
+		// Fetch all in parallel (same mechanism for outbound and inbound)
+		type fetchResult struct {
+			name     string
+			children []topoSubPeer
+		}
+		resultCh := make(chan fetchResult, len(fetchNames))
+		for _, name := range fetchNames {
+			go func(n string) {
+				resultCh <- fetchResult{n, s.fetchSubPeersViaStream(n)}
+			}(name)
+		}
+		for range fetchNames {
+			select {
+			case r := <-resultCh:
+				if r.children != nil {
+					newCache[r.name] = r.children
 				}
-				visited[parentName] = true
-				var infos []relay.PeerInfo
-				for _, c := range children {
-					infos = append(infos, relay.PeerInfo{
-						Name:     c.Name,
-						ExitNode: c.ExitNode,
-						Native:   c.Native,
-					})
-				}
-				if len(infos) > 0 {
-					s.app.Node().SetPeersOfCache(parentName, infos)
-				}
-				// Recurse into children that have their own children
-				for _, c := range children {
-					if len(c.Children) > 0 {
-						walkAndCache(c.Name, c.Children)
-					} else {
-						// For leaf children, try to get their sub-peers from the cache too
-						if cached, ok := newCache[c.Name]; ok && len(cached) > 0 {
-							walkAndCache(c.Name, cached)
-						}
+			case <-time.After(6 * time.Second):
+			}
+		}
+
+		s.subPeersMu.Lock()
+		s.subPeersCache = newCache
+		s.subPeersMu.Unlock()
+
+		// Feed sub-peer data into relay's peersOfCache for path discovery
+		visited := make(map[string]bool)
+		var walkAndCache func(parentName string, children []topoSubPeer)
+		walkAndCache = func(parentName string, children []topoSubPeer) {
+			if visited[parentName] {
+				return
+			}
+			visited[parentName] = true
+			var infos []relay.PeerInfo
+			for _, c := range children {
+				infos = append(infos, relay.PeerInfo{
+					Name:     c.Name,
+					ExitNode: c.ExitNode,
+					Native:   c.Native,
+				})
+			}
+			if len(infos) > 0 {
+				s.app.Node().SetPeersOfCache(parentName, infos)
+			}
+			for _, c := range children {
+				if len(c.Children) > 0 {
+					walkAndCache(c.Name, c.Children)
+				} else {
+					if cached, ok := newCache[c.Name]; ok && len(cached) > 0 {
+						walkAndCache(c.Name, cached)
 					}
 				}
 			}
-			for peerName, children := range newCache {
-				walkAndCache(peerName, children)
-			}
+		}
+		for peerName, children := range newCache {
+			walkAndCache(peerName, children)
 		}
 	}
 }
 
-// fetchSubPeersViaHTTP queries an inbound peer's topology via HTTP reverse tunnel.
-// The peer returns its peers with pre-cached children, so no recursion is needed.
-func (s *Server) fetchSubPeersViaHTTP(peerName string) []topoSubPeer {
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
-	defer cancel()
-	conn, err := s.app.Node().DialTCP(ctx, peerName, "127.0.0.1:5565")
-	if err != nil {
-		return nil
-	}
-	defer conn.Close()
-	fmt.Fprintf(conn, "GET /scale/api/internal/peers HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+// fetchSubPeersViaStream queries a peer's topology via relay streamListPeers.
+// Same mechanism for both outbound and inbound peers — no HTTP, no exit handler.
+// fetchSubPeersViaStream queries a peer's topology via relay streamListPeers.
+// Does NOT filter self — cache stores unfiltered data so remote nodes can see all peers.
+// Self-filtering happens only at display time (getTopology).
+func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
+	data, err := s.app.Node().PeersOfRaw(peerName)
 	if err != nil {
 		return nil
 	}
@@ -884,22 +904,17 @@ func (s *Server) fetchSubPeersViaHTTP(peerName string) []topoSubPeer {
 		ExitNode  bool          `json:"exit_node"`
 		Direction string        `json:"direction"`
 		Native    bool          `json:"native"`
-		Nested    bool          `json:"nested"`
 		LatencyMs int           `json:"latency_ms"`
+		Version   string        `json:"version,omitempty"`
 		Children  []topoSubPeer `json:"children,omitempty"`
 	}
 	var remotePeers []peerWithChildren
 	if err := json.Unmarshal(data, &remotePeers); err != nil {
 		return nil
 	}
-	cfg := s.app.Store().Get()
-	myID := cfg.NodeID
 	parentLatency := s.app.Node().GetLatency(peerName)
 	children := make([]topoSubPeer, 0, len(remotePeers))
 	for _, rp := range remotePeers {
-		if rp.Name == myID {
-			continue
-		}
 		childLatency := rp.LatencyMs
 		if childLatency > 0 && parentLatency > 0 {
 			childLatency += parentLatency
@@ -910,9 +925,8 @@ func (s *Server) fetchSubPeersViaHTTP(peerName string) []topoSubPeer {
 			Direction: rp.Direction,
 			Via:       peerName,
 			LatencyMs: childLatency,
-			Nested:    rp.Nested,
 			Native:    rp.Native,
-			Children:  truncateAndFilter(rp.Children, parentLatency, myID, 4),
+			Children:  rp.Children,
 		}
 		children = append(children, child)
 	}
@@ -1091,6 +1105,11 @@ func (s *Server) setNested(w http.ResponseWriter, r *http.Request) {
 	if err := s.app.SetNested(name, body.Enabled); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
+	}
+	// Signal immediate cache refresh (non-blocking)
+	select {
+	case s.subPeersKick <- struct{}{}:
+	default:
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }
