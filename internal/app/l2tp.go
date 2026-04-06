@@ -86,8 +86,11 @@ var iptUseChroot = sync.OnceValue(func() bool {
 })
 
 func iptExec(prog string, args ...string) *exec.Cmd {
+	// Platform adapter: iKuai, OpenWrt, etc. may provide custom iptables binary
+	if cmd := platformIPTExec(prog, args); cmd != nil {
+		return cmd
+	}
 	if iptUseChroot() {
-		// Map prog name to host path
 		hostProg := prog
 		switch prog {
 		case "iptables-legacy":
@@ -136,12 +139,25 @@ func testIptablesAvailable() bool {
 }
 
 // cachedIptablesAvail caches iptables detection at startup.
+// If standard iptables fails, tries platform-specific fix before falling back to gvisor.
 var cachedIptablesAvail = sync.OnceValue(func() bool {
-	return testIptablesAvailable()
+	if testIptablesAvailable() {
+		return true
+	}
+	// Standard iptables failed. Try platform-specific compatibility fix.
+	initPlatformAdapter()
+	if platformFixIPTables() {
+		// Re-test with the platform-provided binary
+		if testIptablesAvailable() {
+			return true
+		}
+		log.Printf("[iptables] platform fix applied but iptables still failing")
+	}
+	return false
 })
 
-// IsCompatMode returns true when the node has NET_ADMIN but no working iptables
-// (e.g. iKuai minimal Linux). Detected once at startup.
+// IsCompatMode returns true when the node has NET_ADMIN but no working iptables.
+// This is now a last-resort fallback — iKuai with bundled host iptables runs normal mode.
 func IsCompatMode() bool {
 	capOK, _ := CheckCapability()
 	return capOK && !cachedIptablesAvail()
@@ -152,6 +168,11 @@ func DetectRuntimeMode() {
 	capOK, _ := CheckCapability()
 	hostNet := CheckHostNetwork()
 	iptOK := cachedIptablesAvail()
+	platform := DetectPlatform()
+
+	if platform != PlatformLinux {
+		log.Printf("[runtime] platform: %s", platform)
+	}
 
 	if !capOK {
 		log.Printf("[runtime] mode: limited (no NET_ADMIN)")
