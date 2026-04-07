@@ -18,16 +18,20 @@ export function ExitViaCell({ exitVia, exitPaths, exitMode }: ExitViaCellProps) 
   const renderPath = (path: string) => {
     const hops = path.split('/');
     let unreachable = false;
-    return hops.map((hop, i) => {
-      if (!unreachable && !isHopReachable(hop)) unreachable = true;
-      const color = unreachable ? 'var(--red)' : 'var(--green)';
-      return (
-        <span key={i}>
-          {i > 0 && <span style={{ color: 'var(--text-muted)' }}>/</span>}
-          <span style={{ color, fontFamily: 'var(--mono)', fontSize: 12 }}>{hop}</span>
-        </span>
-      );
-    });
+    return (
+      <span style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>
+        {hops.map((hop, i) => {
+          if (!unreachable && !isHopReachable(hop)) unreachable = true;
+          const color = unreachable ? 'var(--red)' : 'var(--green)';
+          return (
+            <span key={i}>
+              {i > 0 && <span style={{ color: 'var(--text-muted)', margin: '0 2px' }}>/</span>}
+              <span style={{ color, fontWeight: 600 }}>{hop}</span>
+            </span>
+          );
+        })}
+      </span>
+    );
   };
 
   const modeBadge = exitMode === 'quality' ? (
