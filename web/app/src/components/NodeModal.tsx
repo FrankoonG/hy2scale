@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
+import { Reorder, useDragControls } from 'framer-motion';
 import {
   Modal, Button, Input, PasswordInput, Toggle, Textarea, Select,
   FormGroup, FormGrid, Tabs, TabPanel, useToast,
@@ -16,6 +17,9 @@ const GripIcon = () => (
     <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
   </svg>
 );
+
+interface AddrItem { id: number; host: string; port: string; }
+let addrNextId = 1;
 
 interface Props {
   open: boolean;
@@ -57,7 +61,8 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
 
   const [tab, setTab] = useState('addrs');
   const [loading, setLoading] = useState(false);
-  const [addrRows, setAddrRows] = useState<AddrRow[]>([{ host: '', port: '' }]);
+  const [addrItems, setAddrItems] = useState<AddrItem[]>([{ id: addrNextId++, host: '', port: '' }]);
+  const addrListRef = useRef<HTMLUListElement>(null);
   const [connMode, setConnMode] = useState<'' | 'quality' | 'aggregate'>('');
   const [addrError, setAddrError] = useState('');
 
@@ -94,7 +99,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
     setAddrError('');
     if (!editingName) {
       // Reset for add
-      setAddrRows([{ host: '', port: '' }]);
+      setAddrItems([{ id: addrNextId++, host: '', port: '' }]);
       setConnMode('');
       setPassword(''); setFastOpen(false);
       setMaxTx(''); setMaxRx('');
@@ -110,7 +115,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       const c = clients.find((cl) => cl.name === editingName);
       if (!c) return;
       const addrs = c.addrs && c.addrs.length ? c.addrs : (c.addr ? [c.addr] : ['']);
-      setAddrRows(addrs.map(parseAddr));
+      setAddrItems(addrs.map(a => { const p = parseAddr(a); return { id: addrNextId++, host: p.host, port: p.port }; }));
       setConnMode(c.conn_mode || '');
       setPassword(c.password || '');
       setFastOpen(c.fast_open || false);
@@ -143,57 +148,41 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
 
   // Sync connection mode when address count changes
   useEffect(() => {
-    const count = addrRows.length;
+    const count = addrItems.length;
     if (count <= 1) {
       setConnMode('');
     } else if (connMode === '') {
       setConnMode('quality');
     }
-  }, [addrRows.length]);
+  }, [addrItems.length]);
 
   const addAddrRow = () => {
-    setAddrRows([...addrRows, { host: '', port: '' }]);
+    setAddrItems([...addrItems, { id: addrNextId++, host: '', port: '' }]);
   };
 
-  const updateAddrRow = (i: number, field: 'host' | 'port', val: string) => {
-    const rows = [...addrRows];
-    rows[i] = { ...rows[i], [field]: val };
-    setAddrRows(rows);
+  const updateAddrItem = (id: number, field: 'host' | 'port', val: string) => {
+    setAddrItems(prev => prev.map(it => it.id === id ? { ...it, [field]: val } : it));
   };
 
-  const removeAddrRow = (i: number) => {
-    setAddrRows(addrRows.filter((_, idx) => idx !== i));
+  const removeAddrItem = (id: number) => {
+    setAddrItems(prev => prev.filter(it => it.id !== id));
   };
-
-  const dragRef = useRef<number | null>(null);
-  const handleDragStart = (i: number) => { dragRef.current = i; };
-  const handleDragOver = (e: React.DragEvent, i: number) => {
-    e.preventDefault();
-    if (dragRef.current === null || dragRef.current === i) return;
-    const rows = [...addrRows];
-    const [moved] = rows.splice(dragRef.current, 1);
-    rows.splice(i, 0, moved);
-    dragRef.current = i;
-    setAddrRows(rows);
-  };
-  const handleDragEnd = () => { dragRef.current = null; };
 
   const validateAddrs = (): string[] | null => {
     setAddrError('');
-    for (let i = 0; i < addrRows.length; i++) {
-      const { host, port } = addrRows[i];
-      if (!host.trim()) {
+    for (const item of addrItems) {
+      if (!item.host.trim()) {
         setAddrError(t('nodes.hostRequired'));
         setTab('addrs');
         return null;
       }
-      if (!port.trim() || !validatePortSpec(port.trim())) {
+      if (!item.port.trim() || !validatePortSpec(item.port.trim())) {
         setAddrError(t('nodes.invalidPort'));
         setTab('addrs');
         return null;
       }
     }
-    const strs = addrRows.map(r => `${r.host.trim()}:${r.port.trim()}`);
+    const strs = addrItems.map(r => `${r.host.trim()}:${r.port.trim()}`);
     const seen = new Set<string>();
     for (const s of strs) {
       if (seen.has(s)) {
@@ -260,7 +249,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   };
 
   const title = editingName ? t('nodes.editPrefix', { name: editingName }) : t('nodes.addTitle');
-  const hasMultiAddr = addrRows.length > 1;
+  const hasMultiAddr = addrItems.length > 1;
 
   // Build CA select options
   const caOptions = [
@@ -332,47 +321,31 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
 
             {/* Address rows */}
             {addrError && <div style={{ color: 'var(--red)', fontSize: 13 }}>{addrError}</div>}
-            <div className="addr-list">
-              {addrRows.map((row, i) => (
-                <div
-                  key={i}
-                  className="addr-row"
-                  draggable={addrRows.length > 1}
-                  onDragStart={() => handleDragStart(i)}
-                  onDragOver={(e) => handleDragOver(e, i)}
-                  onDragEnd={handleDragEnd}
-                >
-                  {addrRows.length > 1 && (
-                    <div className="addr-drag">
-                      <GripIcon />
-                    </div>
-                  )}
-                  <Input
-                    value={row.host}
-                    onChange={(e) => updateAddrRow(i, 'host', e.target.value)}
-                    placeholder={t('nodes.host')}
-                    style={{ flex: 1 }}
-                  />
-                  <Input
-                    value={row.port}
-                    onChange={(e) => updateAddrRow(i, 'port', e.target.value)}
-                    placeholder={t('nodes.port')}
-                    style={{ width: 140 }}
-                  />
-                  <button
-                    type="button"
-                    className="addr-del"
-                    onClick={() => removeAddrRow(i)}
-                    disabled={addrRows.length <= 1}
-                    title={t('app.delete')}
-                  >
-                    −
-                  </button>
-                </div>
+            <Reorder.Group
+              ref={addrListRef}
+              axis="y"
+              values={addrItems}
+              onReorder={setAddrItems}
+              className="addr-list"
+              style={{ listStyle: 'none', padding: 0, margin: 0 }}
+            >
+              {addrItems.map((item) => (
+                <AddrRowItem
+                  key={item.id}
+                  item={item}
+                  canDrag={addrItems.length > 1}
+                  canRemove={addrItems.length > 1}
+                  constraintsRef={addrListRef}
+                  hostPlaceholder={t('nodes.host')}
+                  portPlaceholder={t('nodes.port')}
+                  deleteTitle={t('app.delete')}
+                  onUpdate={(field, val) => updateAddrItem(item.id, field, val)}
+                  onRemove={() => removeAddrItem(item.id)}
+                />
               ))}
-              <div className="addr-add-row" onClick={addAddrRow}>
-                {t('nodes.addAddress')}
-              </div>
+            </Reorder.Group>
+            <div className="addr-add-row" onClick={addAddrRow}>
+              {t('nodes.addAddress')}
             </div>
           </div>
         ) : (
@@ -449,5 +422,53 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
         )}
       </TabPanel>
     </Modal>
+  );
+}
+
+interface AddrRowItemProps {
+  item: AddrItem;
+  canDrag: boolean;
+  canRemove: boolean;
+  constraintsRef: React.RefObject<HTMLElement | null>;
+  hostPlaceholder: string;
+  portPlaceholder: string;
+  deleteTitle: string;
+  onUpdate: (field: 'host' | 'port', val: string) => void;
+  onRemove: () => void;
+}
+
+function AddrRowItem({ item, canDrag, canRemove, constraintsRef, hostPlaceholder, portPlaceholder, deleteTitle, onUpdate, onRemove }: AddrRowItemProps) {
+  const controls = useDragControls();
+  return (
+    <Reorder.Item
+      value={item}
+      dragListener={false}
+      dragControls={controls}
+      dragConstraints={constraintsRef}
+      dragElastic={0.1}
+      className="addr-row"
+      style={{ listStyle: 'none' }}
+    >
+      {canDrag && (
+        <div className="addr-drag" onPointerDown={(e) => controls.start(e)}>
+          <GripIcon />
+        </div>
+      )}
+      <Input
+        value={item.host}
+        onChange={(e) => onUpdate('host', e.target.value)}
+        placeholder={hostPlaceholder}
+        style={{ flex: 1 }}
+      />
+      <Input
+        value={item.port}
+        onChange={(e) => onUpdate('port', e.target.value)}
+        placeholder={portPlaceholder}
+        style={{ width: 140 }}
+      />
+      {canRemove && (
+        <button type="button" className="addr-del" onClick={onRemove} title={deleteTitle}>−</button>
+      )}
+    </Reorder.Item>
   );
 }
