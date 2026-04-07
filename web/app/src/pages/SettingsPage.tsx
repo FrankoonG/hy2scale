@@ -142,84 +142,84 @@ export default function SettingsPage() {
         onChange={(key) => setActiveTab(key as 'system' | 'web')}
       />
 
-      {activeTab === 'system' && (
-        <>
-          {/* System: DNS */}
-          <Card title={t('settings.system')}>
-            <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <FormGroup label={t('settings.dns')}>
-                <Input value={dns} onChange={(e) => setDns(e.target.value)} placeholder="8.8.8.8,1.1.1.1" />
-              </FormGroup>
-              <Button variant="primary" onClick={handleSaveDns} loading={savingDns} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
-            </div>
-          </Card>
-
-          {/* Credentials */}
-          <Card title={t('settings.changePassword')}>
-            <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <FormGroup label={t('settings.currentPassword')} required>
-                <PasswordInput value={curPw} onChange={(e) => setCurPw(e.target.value)} />
-              </FormGroup>
-              <FormGroup label={t('settings.newUsernameOpt')}>
-                <Input value={newUser} onChange={(e) => setNewUser(e.target.value)} />
-              </FormGroup>
-              <FormGroup label={t('settings.newPassword')}>
-                <PasswordInput value={newPw} onChange={(e) => setNewPw(e.target.value)} />
-              </FormGroup>
-              <FormGroup label={t('settings.confirmPassword')}>
-                <PasswordInput value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} />
-              </FormGroup>
-              <Button variant="primary" onClick={handleChangePw} loading={savingPw} style={{ alignSelf: 'flex-start' }}>{t('settings.update')}</Button>
-            </div>
-          </Card>
-
-          {/* Backup & Restore */}
-          <Card title={t('settings.backup')}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('settings.backupDesc')}</div>
-              <div style={{ display: 'flex', gap: 12 }}>
-                <Button onClick={handleBackup}>{t('settings.downloadBackup')}</Button>
-                <Button variant="danger" onClick={() => restoreRef.current?.click()}>{t('settings.restoreFromFile')}</Button>
-                <input
-                  ref={restoreRef}
-                  type="file"
-                  accept=".tar"
-                  style={{ display: 'none' }}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) handleRestore(file);
-                    e.target.value = '';
-                  }}
-                />
+      <TabPanel activeKey={activeTab} keys={['system', 'web']}>
+        {activeTab === 'system' ? (
+          <>
+            {/* System: DNS */}
+            <Card title={t('settings.system')}>
+              <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <FormGroup label={t('settings.dns')}>
+                  <Input value={dns} onChange={(e) => setDns(e.target.value)} placeholder="8.8.8.8,1.1.1.1" />
+                </FormGroup>
+                <Button variant="primary" onClick={handleSaveDns} loading={savingDns} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
               </div>
+            </Card>
+
+            {/* Credentials */}
+            <Card title={t('settings.changePassword')}>
+              <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <FormGroup label={t('settings.currentPassword')} required>
+                  <PasswordInput value={curPw} onChange={(e) => setCurPw(e.target.value)} />
+                </FormGroup>
+                <FormGroup label={t('settings.newUsernameOpt')}>
+                  <Input value={newUser} onChange={(e) => setNewUser(e.target.value)} />
+                </FormGroup>
+                <FormGroup label={t('settings.newPassword')}>
+                  <PasswordInput value={newPw} onChange={(e) => setNewPw(e.target.value)} />
+                </FormGroup>
+                <FormGroup label={t('settings.confirmPassword')}>
+                  <PasswordInput value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} />
+                </FormGroup>
+                <Button variant="primary" onClick={handleChangePw} loading={savingPw} style={{ alignSelf: 'flex-start' }}>{t('settings.update')}</Button>
+              </div>
+            </Card>
+
+            {/* Backup & Restore */}
+            <Card title={t('settings.backup')}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('settings.backupDesc')}</div>
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <Button onClick={handleBackup}>{t('settings.downloadBackup')}</Button>
+                  <Button variant="danger" onClick={() => restoreRef.current?.click()}>{t('settings.restoreFromFile')}</Button>
+                  <input
+                    ref={restoreRef}
+                    type="file"
+                    accept=".tar"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleRestore(file);
+                      e.target.value = '';
+                    }}
+                  />
+                </div>
+              </div>
+            </Card>
+          </>
+        ) : (
+          <Card title={t('settings.webUi')}>
+            <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <FormGroup label={t('settings.listenAddress')}>
+                <Input value={listen} onChange={(e) => setListen(e.target.value)} placeholder=":5565" />
+              </FormGroup>
+              <FormGroup label={t('settings.basePath')}>
+                <Input value={basePath} onChange={(e) => setBasePath(e.target.value)} placeholder="/scale" />
+              </FormGroup>
+              <FormGroup label={t('settings.forceHttps')}>
+                <Toggle checked={forceHttps} onChange={(e) => setForceHttps(e.target.checked)} />
+              </FormGroup>
+              <FormGroup label={t('settings.httpsCert')}>
+                <Select value={httpsCertId} onChange={(e) => setHttpsCertId(e.target.value)} options={certOptions} />
+              </FormGroup>
+              <FormGroup label={t('settings.sessionTimeout')}>
+                <Input type="number" value={sessionTimeout} onChange={(e) => setSessionTimeout(e.target.value)} suffix="h" />
+              </FormGroup>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t('settings.restartRequired')}</div>
+              <Button variant="primary" onClick={handleSaveWeb} loading={savingUI} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
             </div>
           </Card>
-        </>
-      )}
-
-      {activeTab === 'web' && (
-        <Card title={t('settings.webUi')}>
-          <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <FormGroup label={t('settings.listenAddress')}>
-              <Input value={listen} onChange={(e) => setListen(e.target.value)} placeholder=":5565" />
-            </FormGroup>
-            <FormGroup label={t('settings.basePath')}>
-              <Input value={basePath} onChange={(e) => setBasePath(e.target.value)} placeholder="/scale" />
-            </FormGroup>
-            <FormGroup label={t('settings.forceHttps')}>
-              <Toggle checked={forceHttps} onChange={(e) => setForceHttps(e.target.checked)} />
-            </FormGroup>
-            <FormGroup label={t('settings.httpsCert')}>
-              <Select value={httpsCertId} onChange={(e) => setHttpsCertId(e.target.value)} options={certOptions} />
-            </FormGroup>
-            <FormGroup label={t('settings.sessionTimeout')}>
-              <Input type="number" value={sessionTimeout} onChange={(e) => setSessionTimeout(e.target.value)} suffix="h" />
-            </FormGroup>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t('settings.restartRequired')}</div>
-            <Button variant="primary" onClick={handleSaveWeb} loading={savingUI} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
-          </div>
-        </Card>
-      )}
+        )}
+      </TabPanel>
     </div>
   );
 }
