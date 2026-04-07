@@ -258,7 +258,7 @@ func (s *Server) Start(ctx context.Context) error {
 				case strings.HasSuffix(path, ".json"):
 					w.Header().Set("Content-Type", "application/json")
 				}
-				w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 				w.Write(data)
 				return
 			}
@@ -266,6 +266,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 		if frontendRoutes[path] {
 			w.Header().Set("Content-Type", "text/html")
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 			w.Write(indexBytes)
 			return
 		}
