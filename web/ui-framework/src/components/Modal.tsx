@@ -20,7 +20,6 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
     return () => window.removeEventListener('keydown', handler);
   }, [open, onClose]);
 
-  // Calculate transform origin from click position
   const getOrigin = () => {
     if (!animateFrom) return undefined;
     const cx = window.innerWidth / 2;
@@ -30,8 +29,6 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
     return `${50 + ox}% ${50 + oy}%`;
   };
 
-  // Portal to document.body to escape any parent transform/overflow that would
-  // break position:fixed (e.g. PageTransition's framer-motion transform)
   return createPortal(
     <AnimatePresence>
       {open && (
@@ -62,7 +59,7 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
                 <button className="hy-icon-btn" onClick={onClose}>✕</button>
               </div>
             )}
-            <AnimatedBody>{children}</AnimatedBody>
+            <SmoothBody>{children}</SmoothBody>
             {footer && <div className="hy-modal-footer">{footer}</div>}
           </motion.div>
         </motion.div>
@@ -72,37 +69,45 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
   );
 }
 
-/** Wrapper that smoothly animates height when children change size */
-function AnimatedBody({ children }: { children: ReactNode }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [height, setHeight] = useState<number | 'auto'>('auto');
-  const initialized = useRef(false);
+/**
+ * Measures inner content height via ResizeObserver and animates
+ * the outer wrapper's height with a spring transition.
+ * First measurement is instant (no animation on open).
+ */
+function SmoothBody({ children }: { children: ReactNode }) {
+  const innerRef = useRef<HTMLDivElement>(null);
+  const [h, setH] = useState<number>(0);
+  const count = useRef(0);
 
   useEffect(() => {
-    const el = ref.current;
+    const el = innerRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => {
-      const h = el.scrollHeight;
-      if (!initialized.current) {
-        // First measure — set immediately without animation
-        initialized.current = true;
-        setHeight(h);
-      } else {
-        setHeight(h);
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const newH = Math.ceil(entry.contentRect.height);
+        setH(newH);
       }
     });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
 
+  // Skip animation for the first two measurements (mount + first content render)
+  const shouldAnimate = count.current > 1;
+  if (h > 0) count.current++;
+
   return (
     <motion.div
       className="hy-modal-body"
-      animate={{ height }}
-      transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-      style={{ overflow: 'hidden' }}
+      animate={{ height: h || 'auto' }}
+      initial={false}
+      transition={shouldAnimate
+        ? { type: 'spring', stiffness: 300, damping: 30 }
+        : { duration: 0 }
+      }
+      style={{ overflow: 'hidden', flex: 'none' }}
     >
-      <div ref={ref}>{children}</div>
+      <div ref={innerRef}>{children}</div>
     </motion.div>
   );
 }
