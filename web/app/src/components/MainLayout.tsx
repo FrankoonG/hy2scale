@@ -47,7 +47,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
 
   // Version badge matching old frontend style (green/orange/red + mode text)
   const versionBadge = node?.version ? (
-    <span className={`version-badge${node.limited ? ' limited' : node.compat ? ' compat' : ''}`}>
+    <span className={`version-badge${node.limited ? ' limited' : node.compat ? ' compat' : ''}`} style={{ fontSize: 10 }}>
       v{node.version}{node.limited ? ' Limited' : node.compat ? ' Compat' : ''}
     </span>
   ) : null;
