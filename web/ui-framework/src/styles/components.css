@@ -229,6 +229,8 @@ a.peer-link:hover{text-decoration:underline}
 .hy-toast.info{background:var(--primary)}
 
 /* ====== Tabs (proxy-style button group) ====== */
+.hy-tabs-row{display:flex;align-items:center;gap:8px;margin-bottom:16px}
+.hy-tabs-row .hy-tabs{margin-bottom:0}
 .hy-tabs{display:inline-flex;gap:0;margin-bottom:16px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow-x:auto;overflow-y:hidden;max-width:100%;width:fit-content;-webkit-overflow-scrolling:touch}
 .hy-tabs::-webkit-scrollbar{display:none}
 .hy-tab{padding:8px 20px;text-align:center;font-size:13px;font-weight:600;cursor:pointer;color:var(--text-muted);background:var(--bg);transition:all .15s;border-right:1px solid var(--border);white-space:nowrap;flex-shrink:0;border:none;border-radius:0}
@@ -302,6 +304,12 @@ a.peer-link:hover{text-decoration:underline}
 .hy-copy-btn{display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:var(--text-muted);font-size:12px;background:none;border:none;padding:2px 6px;border-radius:4px;transition:all .15s}
 .hy-copy-btn:hover{color:var(--primary);background:var(--primary-light)}
 .hy-copy-btn.copied{color:var(--green)}
+
+/* ====== Circle icon button ====== */
+.hy-circle-btn{width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:var(--surface);color:var(--text-secondary);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;transition:all .15s;flex-shrink:0}
+.hy-circle-btn:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-light)}
+.hy-circle-btn:disabled{opacity:.4;cursor:not-allowed}
+.hy-circle-btn svg{width:14px;height:14px}
 
 /* ====== Language / text button ====== */
 .hy-lang-btn{border:none;background:none;cursor:pointer;display:flex;align-items:center;gap:4px;color:var(--text-secondary);font-size:13px;font-weight:500;font-family:var(--font);padding:4px 0}
