@@ -1,6 +1,5 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Reorder, useDragControls } from 'framer-motion';
 import { Autocomplete, FormGroup } from '@hy2scale/ui';
 import { useExitPaths } from '@/hooks/useExitPaths';
 import clsx from 'clsx';
@@ -51,9 +50,19 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
     onChange({ paths: value.paths, mode: m });
   }, [value.paths, onChange]);
 
-  const handleReorder = useCallback((newPaths: string[]) => {
+  // HTML5 drag-and-drop reorder
+  const dragRef = useRef<number | null>(null);
+  const handleDragStart = (i: number) => { dragRef.current = i; };
+  const handleDragOver = (e: React.DragEvent, i: number) => {
+    e.preventDefault();
+    if (dragRef.current === null || dragRef.current === i) return;
+    const newPaths = [...paths];
+    const [moved] = newPaths.splice(dragRef.current, 1);
+    newPaths.splice(i, 0, moved);
+    dragRef.current = i;
     onChange({ paths: newPaths, mode: value.mode });
-  }, [value.mode, onChange]);
+  };
+  const handleDragEnd = () => { dragRef.current = null; };
 
   const hasMultiple = paths.filter(Boolean).length > 1;
   const singleOnly = !hasMultiple && paths.filter(Boolean).length <= 1;
@@ -77,69 +86,44 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
       </div>
 
       {/* Path inputs */}
-      <Reorder.Group axis="y" values={paths} onReorder={handleReorder} className="addr-list" style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+      <div className="addr-list">
         {paths.map((p, i) => (
-          <PathRow
-            key={`path-${i}-${paths.length}`}
-            path={p}
-            index={i}
-            canRemove={paths.length > 1}
-            canDrag={paths.length > 1}
-            exitPaths={exitPaths}
-            placeholder={t('users.exitViaHint')}
-            deleteTitle={t('app.delete')}
-            onUpdate={(v) => updatePath(i, v)}
-            onRemove={() => removePath(i)}
-          />
+          <div
+            key={i}
+            className="addr-row"
+            draggable={paths.length > 1}
+            onDragStart={() => handleDragStart(i)}
+            onDragOver={(e) => handleDragOver(e, i)}
+            onDragEnd={handleDragEnd}
+          >
+            {paths.length > 1 && (
+              <div className="addr-drag">
+                <GripIcon />
+              </div>
+            )}
+            <Autocomplete
+              options={exitPaths}
+              value={p}
+              onChange={(v) => updatePath(i, v)}
+              placeholder={t('users.exitViaHint')}
+            />
+            {paths.length > 1 && (
+              <button
+                type="button"
+                className="addr-del"
+                onClick={() => removePath(i)}
+                title={t('app.delete')}
+              >
+                ×
+              </button>
+            )}
+          </div>
         ))}
-      </Reorder.Group>
-      <div className="addr-add-row" onClick={addPath}>
-        {t('exit.addPath')}
+        <div className="addr-add-row" onClick={addPath}>
+          {t('exit.addPath')}
+        </div>
       </div>
     </FormGroup>
-  );
-}
-
-interface PathRowProps {
-  path: string;
-  index: number;
-  canRemove: boolean;
-  canDrag: boolean;
-  exitPaths: string[];
-  placeholder: string;
-  deleteTitle: string;
-  onUpdate: (val: string) => void;
-  onRemove: () => void;
-}
-
-function PathRow({ path, canRemove, canDrag, exitPaths, placeholder, deleteTitle, onUpdate, onRemove }: PathRowProps) {
-  const controls = useDragControls();
-
-  return (
-    <Reorder.Item
-      value={path}
-      dragListener={false}
-      dragControls={controls}
-      className="addr-row"
-      style={{ listStyle: 'none' }}
-    >
-      {canDrag && (
-        <div className="addr-drag" onPointerDown={(e) => controls.start(e)}>
-          <GripIcon />
-        </div>
-      )}
-      <Autocomplete
-        options={exitPaths}
-        value={path}
-        onChange={onUpdate}
-        placeholder={placeholder}
-      />
-      {canRemove && (
-        <button type="button" className="addr-del" onClick={onRemove} title={deleteTitle}>
-          ×
-        </button>
-      )}
-    </Reorder.Item>
   );
 }
 
