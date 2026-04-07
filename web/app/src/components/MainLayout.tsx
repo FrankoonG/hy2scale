@@ -68,7 +68,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
             <>
               <div className="logo"><img src="./logo.svg" alt="" className="logo-img" /></div>
               <div>
-                <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-.3px', lineHeight: 1.2 }}>HY2<br/>SCALE</div>
+                <div style={{ fontSize: 14, fontWeight: 700, letterSpacing: '-.3px', whiteSpace: 'nowrap' }}>HY2 SCALE</div>
                 {versionBadge}
               </div>
             </>
