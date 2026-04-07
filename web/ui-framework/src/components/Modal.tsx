@@ -13,6 +13,11 @@ export interface ModalProps {
 }
 
 export function Modal({ open, onClose, title, footer, wide, animateFrom, children }: ModalProps) {
+  // Store animateFrom at open time so close animation uses the same origin
+  const originRef = useRef(animateFrom);
+  if (open && animateFrom) originRef.current = animateFrom;
+  const from = originRef.current;
+
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -20,14 +25,15 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
     return () => window.removeEventListener('keydown', handler);
   }, [open, onClose]);
 
-  const getOrigin = () => {
-    if (!animateFrom) return undefined;
+  // Calculate offset from viewport center to mouse position
+  const getOffset = () => {
+    if (!from) return { x: 0, y: 0 };
     const cx = window.innerWidth / 2;
     const cy = window.innerHeight / 2;
-    const ox = ((animateFrom.x - cx) / cx) * 100;
-    const oy = ((animateFrom.y - cy) / cy) * 100;
-    return `${50 + ox}% ${50 + oy}%`;
+    return { x: from.x - cx, y: from.y - cy };
   };
+
+  const off = getOffset();
 
   return createPortal(
     <AnimatePresence>
@@ -37,21 +43,20 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.15 }}
+          transition={{ duration: 0.2 }}
           onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
         >
           <motion.div
             className={`hy-modal${wide ? ' wide' : ''}`}
-            initial={{ scale: 0.3, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            exit={{ scale: 0.9, opacity: 0 }}
+            initial={{ scale: 0.15, opacity: 0, x: off.x, y: off.y }}
+            animate={{ scale: 1, opacity: 1, x: 0, y: 0 }}
+            exit={{ scale: 0.15, opacity: 0, x: off.x, y: off.y }}
             transition={{
               type: 'spring',
-              stiffness: 400,
-              damping: 25,
-              mass: 0.8,
+              stiffness: 300,
+              damping: 26,
+              mass: 0.9,
             }}
-            style={{ transformOrigin: getOrigin() }}
           >
             {title && (
               <div className="hy-modal-header">
