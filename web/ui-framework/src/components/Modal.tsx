@@ -48,14 +48,13 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
         >
           <motion.div
             className={`hy-modal${wide ? ' wide' : ''}`}
+            style={{ willChange: 'transform, opacity' }}
             initial={{ scale: 0.15, opacity: 0, x: off.x, y: off.y }}
             animate={{ scale: 1, opacity: 1, x: 0, y: 0 }}
             exit={{ scale: 0.15, opacity: 0, x: off.x, y: off.y }}
             transition={{
-              type: 'spring',
-              stiffness: 300,
-              damping: 26,
-              mass: 0.9,
+              default: { duration: 0.35, ease: [0.16, 1, 0.3, 1] },
+              opacity: { duration: 0.2, ease: 'easeOut' },
             }}
           >
             {title && (
