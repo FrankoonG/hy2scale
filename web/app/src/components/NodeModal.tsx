@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import {
   Modal, Button, Input, PasswordInput, Toggle, Textarea, Select,
-  FormGroup, FormGrid, Tabs, useToast,
+  FormGroup, FormGrid, Tabs, TabPanel, useToast,
 } from '@hy2scale/ui';
 import clsx from 'clsx';
 import * as api from '@/api';
@@ -269,149 +269,149 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
         onChange={setTab}
       />
 
-      {tab === 'addrs' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {/* Connection Mode */}
-          <div className={clsx('exit-mode-options', !hasMultiAddr && 'exit-mode-disabled')}>
-            <label className="exit-mode-opt">
-              <input
-                type="radio"
-                name="connMode"
-                checked={connMode === ''}
-                onChange={() => setConnMode('')}
-                disabled={hasMultiAddr}
-              />
-              {t('exit.modeNone')}
-            </label>
-            <label className="exit-mode-opt">
-              <input
-                type="radio"
-                name="connMode"
-                checked={connMode === 'quality'}
-                onChange={() => setConnMode('quality')}
-                disabled={!hasMultiAddr}
-              />
-              {t('exit.modeStability')}
-            </label>
-            <label className="exit-mode-opt">
-              <input
-                type="radio"
-                name="connMode"
-                checked={connMode === 'aggregate'}
-                onChange={() => setConnMode('aggregate')}
-                disabled={!hasMultiAddr}
-              />
-              {t('exit.modeSpeed')}
-            </label>
-          </div>
+      <TabPanel activeKey={tab}>
+        {tab === 'addrs' ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {/* Connection Mode */}
+            <div className={clsx('exit-mode-options', !hasMultiAddr && 'exit-mode-disabled')}>
+              <label className="exit-mode-opt">
+                <input
+                  type="radio"
+                  name="connMode"
+                  checked={connMode === ''}
+                  onChange={() => setConnMode('')}
+                  disabled={hasMultiAddr}
+                />
+                {t('exit.modeNone')}
+              </label>
+              <label className="exit-mode-opt">
+                <input
+                  type="radio"
+                  name="connMode"
+                  checked={connMode === 'quality'}
+                  onChange={() => setConnMode('quality')}
+                  disabled={!hasMultiAddr}
+                />
+                {t('exit.modeStability')}
+              </label>
+              <label className="exit-mode-opt">
+                <input
+                  type="radio"
+                  name="connMode"
+                  checked={connMode === 'aggregate'}
+                  onChange={() => setConnMode('aggregate')}
+                  disabled={!hasMultiAddr}
+                />
+                {t('exit.modeSpeed')}
+              </label>
+            </div>
 
-          {/* Address rows */}
-          {addrError && <div style={{ color: 'var(--red)', fontSize: 13 }}>{addrError}</div>}
-          <div className="addr-list">
-            {addrRows.map((row, i) => (
-              <div key={i} className="addr-row">
-                <Input
-                  value={row.host}
-                  onChange={(e) => updateAddrRow(i, 'host', e.target.value)}
-                  placeholder={t('nodes.host')}
-                  style={{ flex: 1 }}
-                />
-                <Input
-                  value={row.port}
-                  onChange={(e) => updateAddrRow(i, 'port', e.target.value)}
-                  placeholder={t('nodes.port')}
-                  style={{ width: 140 }}
-                />
-                <button
-                  type="button"
-                  className="addr-del"
-                  onClick={() => removeAddrRow(i)}
-                  disabled={addrRows.length <= 1}
-                  title={t('app.delete')}
-                >
-                  −
-                </button>
+            {/* Address rows */}
+            {addrError && <div style={{ color: 'var(--red)', fontSize: 13 }}>{addrError}</div>}
+            <div className="addr-list">
+              {addrRows.map((row, i) => (
+                <div key={i} className="addr-row">
+                  <Input
+                    value={row.host}
+                    onChange={(e) => updateAddrRow(i, 'host', e.target.value)}
+                    placeholder={t('nodes.host')}
+                    style={{ flex: 1 }}
+                  />
+                  <Input
+                    value={row.port}
+                    onChange={(e) => updateAddrRow(i, 'port', e.target.value)}
+                    placeholder={t('nodes.port')}
+                    style={{ width: 140 }}
+                  />
+                  <button
+                    type="button"
+                    className="addr-del"
+                    onClick={() => removeAddrRow(i)}
+                    disabled={addrRows.length <= 1}
+                    title={t('app.delete')}
+                  >
+                    −
+                  </button>
+                </div>
+              ))}
+              <div className="addr-add-row" onClick={addAddrRow}>
+                {t('nodes.addAddress')}
               </div>
-            ))}
-            <div className="addr-add-row" onClick={addAddrRow}>
-              {t('nodes.addAddress')}
             </div>
           </div>
-        </div>
-      )}
-
-      {tab === 'conn' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <FormGroup label={t('nodes.password')} required>
-            <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} />
-          </FormGroup>
-
-          <FormGroup label={t('nodes.fastOpen')}>
-            <Toggle checked={fastOpen} onChange={(e) => setFastOpen(e.target.checked)} />
-          </FormGroup>
-
-          {/* Bandwidth */}
-          <FormGrid>
-            <FormGroup label={t('nodes.upload')}>
-              <Input type="number" value={maxTx} onChange={(e) => setMaxTx(e.target.value)} placeholder="0" suffix="Mbps" />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <FormGroup label={t('nodes.password')} required>
+              <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} />
             </FormGroup>
-            <FormGroup label={t('nodes.download')}>
-              <Input type="number" value={maxRx} onChange={(e) => setMaxRx(e.target.value)} placeholder="0" suffix="Mbps" />
-            </FormGroup>
-          </FormGrid>
 
-          {/* TLS */}
-          <FormGrid>
-            <FormGroup label={t('nodes.sni')}>
-              <Input value={sni} onChange={(e) => setSni(e.target.value)} placeholder="server.example.com" />
+            <FormGroup label={t('nodes.fastOpen')}>
+              <Toggle checked={fastOpen} onChange={(e) => setFastOpen(e.target.checked)} />
             </FormGroup>
-            <FormGroup label={t('nodes.skipVerify')}>
-              <div style={{ paddingTop: 6 }}>
-                <Toggle checked={insecure} onChange={(e) => setInsecure(e.target.checked)} />
-              </div>
-            </FormGroup>
-          </FormGrid>
 
-          <FormGroup label={t('nodes.caCert')}>
-            <Select
-              value={caSource}
-              onChange={(e) => setCaSource(e.target.value)}
-              options={caOptions}
-            />
-            {caSource === '__manual__' && (
-              <Textarea
-                value={caManual}
-                onChange={(e) => setCaManual(e.target.value)}
-                rows={3}
-                monospace
-                placeholder="-----BEGIN CERTIFICATE-----"
-                style={{ marginTop: 8 }}
-              />
-            )}
-          </FormGroup>
-
-          {/* QUIC Advanced */}
-          <details open={showQuic} onToggle={(e) => setShowQuic((e.target as HTMLDetailsElement).open)}>
-            <summary style={{ cursor: 'pointer', fontSize: 13, color: 'var(--text-secondary)', marginBottom: 10 }}>
-              {t('nodes.quicAdvanced')}
-            </summary>
+            {/* Bandwidth */}
             <FormGrid>
-              <FormGroup label={t('nodes.initStreamWindow')}>
-                <Input type="number" value={initStreamWin} onChange={(e) => setInitStreamWin(e.target.value)} />
+              <FormGroup label={t('nodes.upload')}>
+                <Input type="number" value={maxTx} onChange={(e) => setMaxTx(e.target.value)} placeholder="0" suffix="Mbps" />
               </FormGroup>
-              <FormGroup label={t('nodes.maxStreamWindow')}>
-                <Input type="number" value={maxStreamWin} onChange={(e) => setMaxStreamWin(e.target.value)} />
-              </FormGroup>
-              <FormGroup label={t('nodes.initConnWindow')}>
-                <Input type="number" value={initConnWin} onChange={(e) => setInitConnWin(e.target.value)} />
-              </FormGroup>
-              <FormGroup label={t('nodes.maxConnWindow')}>
-                <Input type="number" value={maxConnWin} onChange={(e) => setMaxConnWin(e.target.value)} />
+              <FormGroup label={t('nodes.download')}>
+                <Input type="number" value={maxRx} onChange={(e) => setMaxRx(e.target.value)} placeholder="0" suffix="Mbps" />
               </FormGroup>
             </FormGrid>
-          </details>
-        </div>
-      )}
+
+            {/* TLS */}
+            <FormGrid>
+              <FormGroup label={t('nodes.sni')}>
+                <Input value={sni} onChange={(e) => setSni(e.target.value)} placeholder="server.example.com" />
+              </FormGroup>
+              <FormGroup label={t('nodes.skipVerify')}>
+                <div style={{ paddingTop: 6 }}>
+                  <Toggle checked={insecure} onChange={(e) => setInsecure(e.target.checked)} />
+                </div>
+              </FormGroup>
+            </FormGrid>
+
+            <FormGroup label={t('nodes.caCert')}>
+              <Select
+                value={caSource}
+                onChange={(e) => setCaSource(e.target.value)}
+                options={caOptions}
+              />
+              {caSource === '__manual__' && (
+                <Textarea
+                  value={caManual}
+                  onChange={(e) => setCaManual(e.target.value)}
+                  rows={3}
+                  monospace
+                  placeholder="-----BEGIN CERTIFICATE-----"
+                  style={{ marginTop: 8 }}
+                />
+              )}
+            </FormGroup>
+
+            {/* QUIC Advanced */}
+            <details open={showQuic} onToggle={(e) => setShowQuic((e.target as HTMLDetailsElement).open)}>
+              <summary style={{ cursor: 'pointer', fontSize: 13, color: 'var(--text-secondary)', marginBottom: 10 }}>
+                {t('nodes.quicAdvanced')}
+              </summary>
+              <FormGrid>
+                <FormGroup label={t('nodes.initStreamWindow')}>
+                  <Input type="number" value={initStreamWin} onChange={(e) => setInitStreamWin(e.target.value)} />
+                </FormGroup>
+                <FormGroup label={t('nodes.maxStreamWindow')}>
+                  <Input type="number" value={maxStreamWin} onChange={(e) => setMaxStreamWin(e.target.value)} />
+                </FormGroup>
+                <FormGroup label={t('nodes.initConnWindow')}>
+                  <Input type="number" value={initConnWin} onChange={(e) => setInitConnWin(e.target.value)} />
+                </FormGroup>
+                <FormGroup label={t('nodes.maxConnWindow')}>
+                  <Input type="number" value={maxConnWin} onChange={(e) => setMaxConnWin(e.target.value)} />
+                </FormGroup>
+              </FormGrid>
+            </details>
+          </div>
+        )}
+      </TabPanel>
     </Modal>
   );
 }
