@@ -4,10 +4,12 @@ import { DropdownMenu } from '@hy2scale/ui';
 const languages = [
   { code: 'en', name: 'English' },
   { code: 'ko', name: '한국어' },
+  { code: 'zh', name: '简体中文' },
 ];
 
 export default function LanguageSwitcher() {
-  const currentLang = i18n.language?.startsWith('ko') ? 'ko' : 'en';
+  const lang = i18n.language || 'en';
+  const currentLang = languages.find((l) => lang.startsWith(l.code))?.code || 'en';
   const currentName = languages.find((l) => l.code === currentLang)?.name || currentLang;
 
   return (
