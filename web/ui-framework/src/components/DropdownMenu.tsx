@@ -1,5 +1,6 @@
 import { useState, useRef, type ReactNode } from 'react';
 import clsx from 'clsx';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useClickOutside } from '../hooks/useClickOutside';
 
 export interface DropdownItem {
@@ -22,19 +23,28 @@ export function DropdownMenu({ trigger, items }: DropdownMenuProps) {
   return (
     <div ref={ref} style={{ position: 'relative', display: 'inline-flex' }}>
       <span onClick={() => setOpen(!open)}>{trigger}</span>
-      {open && (
-        <div className="hy-dropdown" style={{ top: '100%', right: 0 }}>
-          {items.map((item) => (
-            <button
-              key={item.key}
-              className={clsx('hy-dropdown-item', item.danger && 'danger')}
-              onClick={() => { item.onClick(); setOpen(false); }}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      )}
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            className="hy-dropdown"
+            style={{ top: '100%', right: 0 }}
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.15, ease: 'easeOut' }}
+          >
+            {items.map((item) => (
+              <button
+                key={item.key}
+                className={clsx('hy-dropdown-item', item.danger && 'danger')}
+                onClick={() => { item.onClick(); setOpen(false); }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
