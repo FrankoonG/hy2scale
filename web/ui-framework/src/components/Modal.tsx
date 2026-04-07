@@ -93,16 +93,21 @@ function SmoothBody({ children }: { children: ReactNode }) {
   const shouldAnimate = count.current > 1;
   if (h > 0) count.current++;
 
+  // Cap height: modal header ~60px, footer ~60px, margin ~30px => body max ≈ vh - 150
+  const maxH = typeof window !== 'undefined' ? window.innerHeight - 150 : 9999;
+  const cappedH = h > 0 ? Math.min(h, maxH) : 0;
+  const needsScroll = h > maxH;
+
   return (
     <motion.div
       className="hy-modal-body"
-      animate={{ height: h || 'auto' }}
+      animate={{ height: cappedH || 'auto' }}
       initial={false}
       transition={shouldAnimate
         ? { type: 'spring', stiffness: 300, damping: 30 }
         : { duration: 0 }
       }
-      style={{ overflow: 'hidden', flex: 'none', padding: 0 }}
+      style={{ overflow: needsScroll ? 'auto' : 'hidden', flex: 'none', padding: 0 }}
     >
       <div ref={innerRef} style={{ padding: '20px 24px' }}>{children}</div>
     </motion.div>
