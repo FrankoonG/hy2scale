@@ -76,10 +76,13 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   });
   const caCerts = (certs || []).filter((c: CertInfo) => c.is_ca);
 
-  // Load existing data when editing
+  // Reset tab on close so next open starts fresh
   useEffect(() => {
-    if (!open) return;
-    setTab('addrs');
+    if (!open) {
+      setTab('addrs');
+      setAddrError('');
+      return;
+    }
     setAddrError('');
     if (!editingName) {
       // Reset for add
