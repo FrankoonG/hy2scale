@@ -171,8 +171,8 @@ function PathRow({ item, canDrag, canRemove, constraintsRef, exitPaths, placehol
       dragControls={controls}
       dragConstraints={constraintsRef}
       dragElastic={0.1}
-      onDragStart={() => setDragging(true)}
-      onDragEnd={() => setDragging(false)}
+      onDragStart={() => { setDragging(true); document.body.classList.add('dragging-active'); }}
+      onDragEnd={() => { setDragging(false); document.body.classList.remove('dragging-active'); }}
       className={clsx('addr-row', dragging && 'dragging')}
       style={{ listStyle: 'none' }}
     >
