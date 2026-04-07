@@ -224,7 +224,8 @@ export default function NodesPage() {
               {versionBadge}
               {nativeBadge && <> {nativeBadge}</>}
               {ipTooltip && <> {ipTooltip}</>}
-              {n.addr && <span className="peer-addr-sub">{n.addr}</span>}
+              {n.via ? <span className="peer-addr-sub">via {n.via}</span>
+                : n.addr ? <span className="peer-addr-sub">{n.addr}</span> : null}
             </span>
           </TreeCell>
         );

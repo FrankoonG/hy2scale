@@ -43,6 +43,7 @@ export interface TopologyNode {
   latency_ms: number;
   tx_rate: number;
   rx_rate: number;
+  via?: string;
   is_self: boolean;
   children?: TopologyNode[];
 }
