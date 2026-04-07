@@ -210,7 +210,7 @@ a.peer-link:hover{text-decoration:underline}
 .hy-modal.wide{max-width:680px}
 .hy-modal-header{display:flex;align-items:center;padding:20px 24px 16px;border-bottom:1px solid var(--border-light)}
 .hy-modal-header h2{font-size:16px;font-weight:600;flex:1}
-.hy-modal-body{padding:0 24px 20px;overflow-y:auto;flex:1}
+.hy-modal-body{padding:20px 24px;overflow-y:auto;flex:1}
 .hy-modal-footer{display:flex;justify-content:flex-end;gap:8px;padding:16px 24px;border-top:1px solid var(--border-light)}
 
 /* ====== Toast ====== */
