@@ -279,8 +279,7 @@ a.peer-link:hover{text-decoration:underline}
 
 /* ====== Tooltip ====== */
 .hy-tooltip-wrap{position:relative;display:inline-flex}
-.hy-tooltip{position:fixed;z-index:99999;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:var(--mono);font-size:12px;box-shadow:0 4px 16px rgba(0,0,0,.12);pointer-events:none;white-space:pre;line-height:1.8;max-width:300px}
-.hy-tooltip.bottom{margin-top:6px}
+.hy-tooltip{position:fixed;z-index:99999;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:var(--mono);font-size:12px;box-shadow:0 4px 16px rgba(0,0,0,.12);pointer-events:none;white-space:pre;line-height:1.8;max-width:300px;margin-top:2px}
 
 /* ====== Spinner ====== */
 .hy-spinner{display:inline-block;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:hy-spin .6s linear infinite}
