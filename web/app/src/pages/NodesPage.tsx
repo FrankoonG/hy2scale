@@ -225,16 +225,18 @@ export default function NodesPage() {
               {nativeBadge && <> {nativeBadge}</>}
               {n.conn_mode === 'quality' && <> <Badge variant="green">Q</Badge></>}
               {n.conn_mode === 'aggregate' && <> <Badge variant="blue">A</Badge></>}
-              {n.addrs && n.addrs.length > 1 && (
-                <> <Tooltip content={n.addrs.join('\n')}>
-                  <Badge variant="muted">+{n.addrs.length - 1}</Badge>
-                </Tooltip></>
-              )}
               {ipTooltip && <> {ipTooltip}</>}
               {n.via ? (
                 <span className="peer-addr-sub">via {n.via}</span>
               ) : n.addr ? (
-                <span className="peer-addr-sub">{n.addr}</span>
+                <span className="peer-addr-sub">
+                  {n.addr}
+                  {n.addrs && n.addrs.length > 1 && (
+                    <> <Tooltip content={n.addrs.join('\n')}>
+                      <Badge variant="muted">+{n.addrs.length - 1}</Badge>
+                    </Tooltip></>
+                  )}
+                </span>
               ) : null}
             </span>
           </TreeCell>
