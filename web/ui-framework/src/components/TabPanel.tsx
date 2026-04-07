@@ -27,16 +27,18 @@ export function TabPanel({ activeKey, children, keys }: TabPanelProps) {
   const offset = 20 * direction;
 
   return (
-    <AnimatePresence mode="wait" initial={false}>
-      <motion.div
-        key={activeKey}
-        initial={{ opacity: 0, x: offset }}
-        animate={{ opacity: 1, x: 0 }}
-        exit={{ opacity: 0, x: -offset }}
-        transition={{ duration: 0.1, ease: 'easeInOut' }}
-      >
-        {children}
-      </motion.div>
-    </AnimatePresence>
+    <div style={{ position: 'relative' }}>
+      <AnimatePresence initial={false}>
+        <motion.div
+          key={activeKey}
+          initial={{ opacity: 0, x: offset }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: -offset, position: 'absolute', top: 0, left: 0, right: 0 }}
+          transition={{ duration: 0.2, ease: 'easeInOut' }}
+        >
+          {children}
+        </motion.div>
+      </AnimatePresence>
+    </div>
   );
 }
