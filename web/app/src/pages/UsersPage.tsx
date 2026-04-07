@@ -1,9 +1,7 @@
 import { useState, useCallback, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  Card, Button, Table, Toggle, Badge, CopyButton, useToast, useConfirm, type Column,
-} from '@hy2scale/ui';
+import { Card, Button, Toggle, Badge, useToast, useConfirm } from '@hy2scale/ui';
 import type { UserConfig, Session } from '@/api';
 import * as api from '@/api';
 import { fmtBytes } from '@/hooks/useFormat';
@@ -17,7 +15,6 @@ export default function UsersPage() {
   const confirm = useConfirm();
   const queryClient = useQueryClient();
 
-  // Both users and devices cards are always visible (no tabs)
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [clickPos, setClickPos] = useState<{ x: number; y: number } | undefined>();
@@ -81,51 +78,14 @@ export default function UsersPage() {
     } catch (e: any) { toast.error(String(e.message || e)); }
   }, [queryClient, toast, t]);
 
-  const userColumns: Column<UserConfig>[] = [
-    { key: 'on', title: t('users.on'), width: '40px', render: (u) => <Toggle checked={u.enabled} onChange={() => handleToggle(u)} size="sm" /> },
-    { key: 'username', title: t('users.username'), render: (u) => <strong>{u.username}</strong> },
-    {
-      key: 'password', title: t('users.password'), render: (u) => (
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <span className="mono" style={{ fontSize: 12 }}>{'••••••••'}</span>
-          <CopyButton text={u.password} />
-        </div>
-      ),
-    },
-    { key: 'exit', title: t('users.exitVia'), render: (u) => <ExitViaCell exitVia={u.exit_via} exitPaths={u.exit_paths} exitMode={u.exit_mode} /> },
-    {
-      key: 'traffic', title: t('users.traffic'), render: (u) => {
-        const limit = u.traffic_limit > 0 ? fmtBytes(u.traffic_limit) : '∞';
-        return <span className="mono">{fmtBytes(u.traffic_used)} / {limit}</span>;
-      },
-    },
-    { key: 'expiry', title: t('users.expiry'), render: (u) => u.expiry_date || '—' },
-    {
-      key: 'actions', title: '', width: '120px', render: (u) => (
-        <div className="actions">
-          <button className="hy-icon-btn" onClick={(e) => openEdit(u.id, e as any)} title={t('app.edit')}>✎</button>
-          <button className="hy-icon-btn" onClick={() => handleReset(u)} title={t('users.reset')}>↺</button>
-          <button className="hy-icon-btn danger" onClick={() => handleDelete(u)} title={t('app.delete')}>✕</button>
-        </div>
-      ),
-    },
-  ];
-
-  const sessionColumns: Column<Session>[] = [
-    { key: 'user', title: t('devices.user'), render: (s) => <strong>{s.user}</strong> },
-    { key: 'ip', title: t('devices.ip'), render: (s) => <span className="mono">{s.ip}</span> },
-    { key: 'proxy', title: t('devices.proxy'), render: (s) => s.proxy },
-    { key: 'conn', title: t('devices.conn'), render: (s) => s.conns },
-    { key: 'traffic', title: t('devices.traffic'), render: (s) => <span className="mono">{fmtBytes(s.tx_bytes + s.rx_bytes)}</span> },
-    { key: 'duration', title: t('devices.duration'), render: (s) => s.duration },
-    {
-      key: 'kick', title: '', width: '60px',
-      render: (s) => <Button size="sm" variant="danger" onClick={() => handleKick(s)}>{t('devices.kick')}</Button>,
-    },
-  ];
+  const isExpired = (date?: string) => {
+    if (!date) return false;
+    try { return new Date(date) < new Date(); } catch { return false; }
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Users */}
       <Card
         title={t('users.title')}
         count={users.length}
@@ -137,21 +97,101 @@ export default function UsersPage() {
         }
         noPadding
       >
-        <Table
-          columns={userColumns}
-          data={users}
-          rowKey={(u) => u.id}
-          emptyText={t('users.noUsers')}
-        />
+        {users.length === 0 ? (
+          <div className="hy-empty" dangerouslySetInnerHTML={{ __html: t('users.noUsers') }} />
+        ) : (
+          <div className="hy-table-wrap">
+            <table className="hy-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 50 }}>{t('users.on')}</th>
+                  <th style={{ width: 120 }}>{t('users.username')}</th>
+                  <th style={{ minWidth: 180 }}>{t('users.exitVia')}</th>
+                  <th style={{ width: 130, textAlign: 'right' }}>{t('users.traffic')}</th>
+                  <th style={{ width: 90, textAlign: 'right' }}>{t('users.expiry')}</th>
+                  <th style={{ width: 150 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {users.map((u) => {
+                  const limitGB = u.traffic_limit > 0 ? (u.traffic_limit / 1073741824).toFixed(1) + ' GB' : '∞';
+                  const usedGB = (u.traffic_used / 1073741824).toFixed(2) + ' GB';
+                  const pct = u.traffic_limit > 0 ? Math.min(100, (u.traffic_used / u.traffic_limit * 100)) : 0;
+                  const expired = isExpired(u.expiry_date);
+                  return (
+                    <tr key={u.id} className={!u.enabled ? 'disabled-row' : undefined}>
+                      <td>
+                        <Toggle checked={u.enabled} onChange={() => handleToggle(u)} />
+                      </td>
+                      <td><b>{u.username}</b></td>
+                      <td><ExitViaCell exitVia={u.exit_via} exitPaths={u.exit_paths} exitMode={u.exit_mode} /></td>
+                      <td style={{ textAlign: 'right' }}>
+                        <span style={{ fontSize: 12 }}>{usedGB} / {limitGB}</span>
+                        {u.traffic_limit > 0 && (
+                          <div style={{ background: 'var(--border-light)', height: 3, borderRadius: 2, marginTop: 3 }}>
+                            <div style={{ background: pct > 90 ? 'var(--red)' : 'var(--primary)', height: '100%', width: `${pct}%`, borderRadius: 2 }} />
+                          </div>
+                        )}
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <span style={{ fontSize: 12, color: expired ? 'var(--red)' : undefined }}>{u.expiry_date || '—'}</span>
+                      </td>
+                      <td className="col-actions">
+                        <div className="act-group">
+                          <button className="act-btn edit" onClick={(e) => openEdit(u.id, e)}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                          </button>
+                          <button className="act-btn warn" onClick={() => handleReset(u)}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 105.64-12.36L1 10"/></svg>
+                          </button>
+                          <button className="act-btn danger" onClick={() => handleDelete(u)}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
 
+      {/* Active Devices */}
       <Card title={t('devices.title')} count={sessions.length} noPadding>
-        <Table
-          columns={sessionColumns}
-          data={sessions}
-          rowKey={(s) => s.key}
-          emptyText={t('devices.noDevices')}
-        />
+        {sessions.length === 0 ? (
+          <div className="hy-empty">{t('devices.noDevices')}</div>
+        ) : (
+          <div className="hy-table-wrap">
+            <table className="hy-table">
+              <thead>
+                <tr>
+                  <th>{t('devices.user')}</th>
+                  <th>{t('devices.ip')}</th>
+                  <th>{t('devices.proxy')}</th>
+                  <th>{t('devices.conn')}</th>
+                  <th>{t('devices.traffic')}</th>
+                  <th>{t('devices.duration')}</th>
+                  <th style={{ width: 60 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {sessions.map((s) => (
+                  <tr key={s.key}>
+                    <td><b>{s.user}</b></td>
+                    <td><span className="mono">{s.ip}</span></td>
+                    <td>{s.proxy}</td>
+                    <td>{s.conns}</td>
+                    <td><span className="mono">{fmtBytes(s.tx_bytes + s.rx_bytes)}</span></td>
+                    <td>{s.duration}</td>
+                    <td><Button size="sm" variant="danger" onClick={() => handleKick(s)}>{t('devices.kick')}</Button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </Card>
 
       <UserModal

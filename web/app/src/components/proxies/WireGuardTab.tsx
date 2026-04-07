@@ -216,14 +216,12 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
               </button>
             </div>
           </FormGroup>
-          {wg?.public_key && (
-            <FormGroup label={t('wg.pubKey')}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Input value={wg.public_key} readOnly style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-muted)' }} />
-                <CopyButton text={wg.public_key} />
-              </div>
-            </FormGroup>
-          )}
+          <FormGroup label={t('wg.pubKey')}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Input value={wg?.public_key || ''} readOnly style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-muted)' }} />
+              {wg?.public_key && <CopyButton text={wg.public_key} />}
+            </div>
+          </FormGroup>
           <FormGroup label={t('wg.mtu')}>
             <Input type="number" value={wgMtu} onChange={(e) => setWgMtu(e.target.value)} />
           </FormGroup>
