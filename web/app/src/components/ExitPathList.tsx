@@ -1,5 +1,6 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Reorder, useDragControls } from 'framer-motion';
 import { Autocomplete, FormGroup } from '@hy2scale/ui';
 import { useExitPaths } from '@/hooks/useExitPaths';
 import clsx from 'clsx';
@@ -15,6 +16,11 @@ interface ExitPathListProps {
   label?: string;
 }
 
+interface PathItem {
+  id: number;
+  value: string;
+}
+
 const GripIcon = () => (
   <svg viewBox="0 0 24 24" fill="currentColor">
     <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
@@ -23,49 +29,74 @@ const GripIcon = () => (
   </svg>
 );
 
+let nextId = 1;
+function toItems(paths: string[]): PathItem[] {
+  return paths.map((v) => ({ id: nextId++, value: v }));
+}
+
 export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
   const { t } = useTranslation();
   const { exitPaths } = useExitPaths();
 
-  const paths = value.paths.length > 0 ? value.paths : [''];
+  // Stable ID items — sync from value.paths on mount/reset
+  const [items, setItems] = useState<PathItem[]>(() => toItems(value.paths.length > 0 ? value.paths : ['']));
+  const prevPathsRef = useRef(value.paths);
+
+  // Sync items when external paths change (e.g. modal open with new data)
+  if (value.paths !== prevPathsRef.current) {
+    const extPaths = value.paths.length > 0 ? value.paths : [''];
+    // Only reset if the actual content changed (not from our own reorder)
+    const curValues = items.map((it) => it.value);
+    if (JSON.stringify(extPaths) !== JSON.stringify(curValues)) {
+      setItems(toItems(extPaths));
+    }
+    prevPathsRef.current = value.paths;
+  }
+
   const mode = value.mode;
 
-  const updatePath = useCallback((index: number, val: string) => {
-    const newPaths = [...paths];
-    newPaths[index] = val;
-    onChange({ paths: newPaths, mode: value.mode });
-  }, [paths, value.mode, onChange]);
+  const emitChange = useCallback((newItems: PathItem[], newMode?: string) => {
+    const paths = newItems.map((it) => it.value);
+    onChange({ paths, mode: (newMode ?? mode) as ExitPathValue['mode'] });
+  }, [onChange, mode]);
+
+  const updateItem = useCallback((id: number, val: string) => {
+    setItems((prev) => {
+      const next = prev.map((it) => it.id === id ? { ...it, value: val } : it);
+      emitChange(next);
+      return next;
+    });
+  }, [emitChange]);
 
   const addPath = useCallback(() => {
-    onChange({ paths: [...paths, ''], mode: paths.length === 0 ? '' : (value.mode || 'quality') });
-  }, [paths, value.mode, onChange]);
+    setItems((prev) => {
+      const next = [...prev, { id: nextId++, value: '' }];
+      const newMode = prev.length === 0 ? '' : (mode || 'quality');
+      emitChange(next, newMode);
+      return next;
+    });
+  }, [emitChange, mode]);
 
-  const removePath = useCallback((index: number) => {
-    const newPaths = paths.filter((_, i) => i !== index);
-    const newMode = newPaths.length <= 1 ? '' : value.mode;
-    onChange({ paths: newPaths, mode: newMode });
-  }, [paths, value.mode, onChange]);
+  const removePath = useCallback((id: number) => {
+    setItems((prev) => {
+      const next = prev.filter((it) => it.id !== id);
+      const newMode = next.length <= 1 ? '' : mode;
+      emitChange(next, newMode);
+      return next;
+    });
+  }, [emitChange, mode]);
+
+  const handleReorder = useCallback((newItems: PathItem[]) => {
+    setItems(newItems);
+    emitChange(newItems);
+  }, [emitChange]);
 
   const setMode = useCallback((m: '' | 'quality' | 'aggregate') => {
-    onChange({ paths: value.paths, mode: m });
-  }, [value.paths, onChange]);
+    onChange({ paths: items.map((it) => it.value), mode: m });
+  }, [items, onChange]);
 
-  // HTML5 drag-and-drop reorder
-  const dragRef = useRef<number | null>(null);
-  const handleDragStart = (i: number) => { dragRef.current = i; };
-  const handleDragOver = (e: React.DragEvent, i: number) => {
-    e.preventDefault();
-    if (dragRef.current === null || dragRef.current === i) return;
-    const newPaths = [...paths];
-    const [moved] = newPaths.splice(dragRef.current, 1);
-    newPaths.splice(i, 0, moved);
-    dragRef.current = i;
-    onChange({ paths: newPaths, mode: value.mode });
-  };
-  const handleDragEnd = () => { dragRef.current = null; };
-
-  const hasMultiple = paths.filter(Boolean).length > 1;
-  const singleOnly = !hasMultiple && paths.filter(Boolean).length <= 1;
+  const hasMultiple = items.filter((it) => it.value).length > 1;
+  const singleOnly = !hasMultiple && items.filter((it) => it.value).length <= 1;
 
   return (
     <FormGroup label={label || t('users.exitVia')}>
@@ -86,44 +117,73 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
       </div>
 
       {/* Path inputs */}
-      <div className="addr-list">
-        {paths.map((p, i) => (
-          <div
-            key={i}
-            className="addr-row"
-            draggable={paths.length > 1}
-            onDragStart={() => handleDragStart(i)}
-            onDragOver={(e) => handleDragOver(e, i)}
-            onDragEnd={handleDragEnd}
-          >
-            {paths.length > 1 && (
-              <div className="addr-drag">
-                <GripIcon />
-              </div>
-            )}
-            <Autocomplete
-              options={exitPaths}
-              value={p}
-              onChange={(v) => updatePath(i, v)}
-              placeholder={t('users.exitViaHint')}
-            />
-            {paths.length > 1 && (
-              <button
-                type="button"
-                className="addr-del"
-                onClick={() => removePath(i)}
-                title={t('app.delete')}
-              >
-                ×
-              </button>
-            )}
-          </div>
+      <Reorder.Group
+        axis="y"
+        values={items}
+        onReorder={handleReorder}
+        className="addr-list"
+        style={{ listStyle: 'none', padding: 0, margin: 0 }}
+      >
+        {items.map((item) => (
+          <PathRow
+            key={item.id}
+            item={item}
+            canDrag={items.length > 1}
+            canRemove={items.length > 1}
+            exitPaths={exitPaths}
+            placeholder={t('users.exitViaHint')}
+            deleteTitle={t('app.delete')}
+            onUpdate={(val) => updateItem(item.id, val)}
+            onRemove={() => removePath(item.id)}
+          />
         ))}
-        <div className="addr-add-row" onClick={addPath}>
-          {t('exit.addPath')}
-        </div>
+      </Reorder.Group>
+      <div className="addr-add-row" onClick={addPath}>
+        {t('exit.addPath')}
       </div>
     </FormGroup>
+  );
+}
+
+interface PathRowProps {
+  item: PathItem;
+  canDrag: boolean;
+  canRemove: boolean;
+  exitPaths: string[];
+  placeholder: string;
+  deleteTitle: string;
+  onUpdate: (val: string) => void;
+  onRemove: () => void;
+}
+
+function PathRow({ item, canDrag, canRemove, exitPaths, placeholder, deleteTitle, onUpdate, onRemove }: PathRowProps) {
+  const controls = useDragControls();
+
+  return (
+    <Reorder.Item
+      value={item}
+      dragListener={false}
+      dragControls={controls}
+      className="addr-row"
+      style={{ listStyle: 'none' }}
+    >
+      {canDrag && (
+        <div className="addr-drag" onPointerDown={(e) => controls.start(e)}>
+          <GripIcon />
+        </div>
+      )}
+      <Autocomplete
+        options={exitPaths}
+        value={item.value}
+        onChange={onUpdate}
+        placeholder={placeholder}
+      />
+      {canRemove && (
+        <button type="button" className="addr-del" onClick={onRemove} title={deleteTitle}>
+          ×
+        </button>
+      )}
+    </Reorder.Item>
   );
 }
 
