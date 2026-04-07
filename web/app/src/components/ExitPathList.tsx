@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Reorder, useDragControls } from 'framer-motion';
 import { Autocomplete, FormGroup } from '@hy2scale/ui';
@@ -95,6 +95,7 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
     onChange({ paths: items.map((it) => it.value), mode: m });
   }, [items, onChange]);
 
+  const listRef = useRef<HTMLUListElement>(null);
   const hasMultiple = items.filter((it) => it.value).length > 1;
   const singleOnly = !hasMultiple && items.filter((it) => it.value).length <= 1;
 
@@ -118,6 +119,7 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
 
       {/* Path inputs */}
       <Reorder.Group
+        ref={listRef}
         axis="y"
         values={items}
         onReorder={handleReorder}
@@ -130,6 +132,7 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
             item={item}
             canDrag={items.length > 1}
             canRemove={items.length > 1}
+            constraintsRef={listRef}
             exitPaths={exitPaths}
             placeholder={t('users.exitViaHint')}
             deleteTitle={t('app.delete')}
@@ -149,6 +152,7 @@ interface PathRowProps {
   item: PathItem;
   canDrag: boolean;
   canRemove: boolean;
+  constraintsRef: RefObject<HTMLElement | null>;
   exitPaths: string[];
   placeholder: string;
   deleteTitle: string;
@@ -156,15 +160,20 @@ interface PathRowProps {
   onRemove: () => void;
 }
 
-function PathRow({ item, canDrag, canRemove, exitPaths, placeholder, deleteTitle, onUpdate, onRemove }: PathRowProps) {
+function PathRow({ item, canDrag, canRemove, constraintsRef, exitPaths, placeholder, deleteTitle, onUpdate, onRemove }: PathRowProps) {
   const controls = useDragControls();
+  const [dragging, setDragging] = useState(false);
 
   return (
     <Reorder.Item
       value={item}
       dragListener={false}
       dragControls={controls}
-      className="addr-row"
+      dragConstraints={constraintsRef}
+      dragElastic={0.1}
+      onDragStart={() => setDragging(true)}
+      onDragEnd={() => setDragging(false)}
+      className={clsx('addr-row', dragging && 'dragging')}
       style={{ listStyle: 'none' }}
     >
       {canDrag && (
