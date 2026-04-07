@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -45,7 +45,6 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
         >
           <motion.div
             className={`hy-modal${wide ? ' wide' : ''}`}
-            layout
             initial={{ scale: 0.3, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.9, opacity: 0 }}
@@ -54,7 +53,6 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
               stiffness: 400,
               damping: 25,
               mass: 0.8,
-              layout: { type: 'spring', stiffness: 300, damping: 30 },
             }}
             style={{ transformOrigin: getOrigin() }}
           >
@@ -64,12 +62,47 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
                 <button className="hy-icon-btn" onClick={onClose}>✕</button>
               </div>
             )}
-            <motion.div className="hy-modal-body" layout="position">{children}</motion.div>
+            <AnimatedBody>{children}</AnimatedBody>
             {footer && <div className="hy-modal-footer">{footer}</div>}
           </motion.div>
         </motion.div>
       )}
     </AnimatePresence>,
     document.body,
+  );
+}
+
+/** Wrapper that smoothly animates height when children change size */
+function AnimatedBody({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState<number | 'auto'>('auto');
+  const initialized = useRef(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const h = el.scrollHeight;
+      if (!initialized.current) {
+        // First measure — set immediately without animation
+        initialized.current = true;
+        setHeight(h);
+      } else {
+        setHeight(h);
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  return (
+    <motion.div
+      className="hy-modal-body"
+      animate={{ height }}
+      transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+      style={{ overflow: 'hidden' }}
+    >
+      <div ref={ref}>{children}</div>
+    </motion.div>
   );
 }
