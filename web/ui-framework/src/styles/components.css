@@ -306,7 +306,7 @@ a.peer-link:hover{text-decoration:underline}
 .hy-copy-btn.copied{color:var(--green)}
 
 /* ====== Circle icon button ====== */
-.hy-circle-btn{width:28px;height:28px;border-radius:50%;border:1px solid var(--border);background:var(--surface);color:var(--text-secondary);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;transition:all .15s;flex-shrink:0}
+.hy-circle-btn{width:32px;height:32px;border-radius:50%;border:1px solid var(--text-muted);background:var(--surface);color:var(--text-secondary);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;transition:all .15s;flex-shrink:0}
 .hy-circle-btn:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-light)}
 .hy-circle-btn:disabled{opacity:.4;cursor:not-allowed}
 .hy-circle-btn svg{width:14px;height:14px}
