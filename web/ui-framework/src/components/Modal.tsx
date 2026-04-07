@@ -82,11 +82,8 @@ function SmoothBody({ children }: { children: ReactNode }) {
   useEffect(() => {
     const el = innerRef.current;
     if (!el) return;
-    const ro = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const newH = Math.ceil(entry.contentRect.height);
-        setH(newH);
-      }
+    const ro = new ResizeObserver(() => {
+      setH(el.offsetHeight);
     });
     ro.observe(el);
     return () => ro.disconnect();
