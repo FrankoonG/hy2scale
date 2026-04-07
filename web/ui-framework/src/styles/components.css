@@ -182,9 +182,17 @@ a.peer-link:hover{text-decoration:underline}
 .hy-pw-eye.visible{color:var(--primary)}
 
 /* ====== Select ====== */
-.hy-select{background:var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%239098a8' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") no-repeat right 10px center;appearance:none;-webkit-appearance:none;padding:8px 30px 8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:13px;font-family:var(--font);outline:none;transition:border .15s;width:100%;cursor:pointer}
-.hy-select:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(67,97,238,.1)}
+.hy-select-wrap{position:relative;width:100%}
+.hy-select{display:flex;align-items:center;width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font-size:13px;font-family:var(--font);cursor:pointer;outline:none;transition:border .15s}
+.hy-select:hover{border-color:var(--text-muted)}
+.hy-select:focus,.hy-select.open{border-color:var(--primary);box-shadow:0 0 0 3px rgba(67,97,238,.1)}
 .hy-select:disabled{opacity:.6;cursor:not-allowed}
+.hy-select-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+.hy-select-label.placeholder{color:var(--text-muted)}
+.hy-select-arrow{width:14px;height:14px;flex-shrink:0;color:var(--text-muted);margin-left:8px;transition:transform .2s}
+.hy-select.open .hy-select-arrow{transform:rotate(180deg)}
+.hy-select-wrap .hy-dropdown{max-height:240px;overflow-y:auto}
+.hy-dropdown-item.active{color:var(--primary);font-weight:600;background:var(--primary-light)}
 
 /* ====== Buttons ====== */
 .hy-btn{padding:8px 16px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--surface);color:var(--text);cursor:pointer;font-size:13px;font-family:var(--font);font-weight:500;transition:all .15s;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
