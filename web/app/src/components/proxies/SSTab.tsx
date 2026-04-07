@@ -52,9 +52,12 @@ export default function SSTab() {
               value={method}
               onChange={(e) => setMethod(e.target.value)}
               options={[
-                { value: 'aes-128-gcm', label: 'AES-128-GCM' },
-                { value: 'aes-256-gcm', label: 'AES-256-GCM' },
-                { value: 'chacha20-ietf-poly1305', label: 'ChaCha20-Poly1305' },
+                { value: 'aes-128-gcm', label: 'aes-128-gcm' },
+                { value: 'aes-256-gcm', label: 'aes-256-gcm' },
+                { value: 'chacha20-ietf-poly1305', label: 'chacha20-ietf-poly1305' },
+                { value: '2022-blake3-aes-128-gcm', label: '2022-blake3-aes-128-gcm' },
+                { value: '2022-blake3-aes-256-gcm', label: '2022-blake3-aes-256-gcm' },
+                { value: 'none', label: 'none (no encryption)' },
               ]}
             />
           </FormGroup>

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, Button, Input, Select, Toggle, FormGroup, FormGrid, useToast } from '@hy2scale/ui';
+import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
 import * as api from '@/api';
 
 export default function IKEv2Tab({ limited }: { limited?: boolean }) {
@@ -19,7 +20,7 @@ export default function IKEv2Tab({ limited }: { limited?: boolean }) {
   const [psk, setPsk] = useState('');
   const [localId, setLocalId] = useState('');
   const [mtu, setMtu] = useState('1400');
-  const [defaultExit, setDefaultExit] = useState('');
+  const [exitPath, setExitPath] = useState<ExitPathValue>({ paths: [''], mode: '' });
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -31,7 +32,7 @@ export default function IKEv2Tab({ limited }: { limited?: boolean }) {
       setPsk(ikev2.psk || '');
       setLocalId(ikev2.local_id || '');
       setMtu(String(ikev2.mtu || 1400));
-      setDefaultExit(ikev2.default_exit || '');
+      setExitPath(apiToExitPath(ikev2.default_exit, ikev2.default_exit_paths, ikev2.default_exit_mode));
     }
   }, [ikev2]);
 
@@ -42,10 +43,13 @@ export default function IKEv2Tab({ limited }: { limited?: boolean }) {
 
     setLoading(true);
     try {
+      const exitData = mode === 'psk' ? exitPathToApi(exitPath) : {};
       await api.updateIKEv2({
         enabled, mode, pool, cert_id: certId, psk, local_id: localId,
         mtu: parseInt(mtu) || 1400,
-        default_exit: mode === 'psk' ? defaultExit : '',
+        default_exit: (exitData as any).exit_via || '',
+        default_exit_paths: (exitData as any).exit_paths,
+        default_exit_mode: (exitData as any).exit_mode,
       } as any);
       toast.success(t('ikev2.saved'));
       queryClient.invalidateQueries({ queryKey: ['ikev2'] });
@@ -116,9 +120,7 @@ export default function IKEv2Tab({ limited }: { limited?: boolean }) {
             <FormGroup label={t('ikev2.psk')} required>
               <Input value={psk} onChange={(e) => setPsk(e.target.value)} />
             </FormGroup>
-            <FormGroup label={t('ikev2.defaultExit')}>
-              <Input value={defaultExit} onChange={(e) => setDefaultExit(e.target.value)} placeholder="node ID or empty for direct" />
-            </FormGroup>
+            <ExitPathList value={exitPath} onChange={setExitPath} label={t('ikev2.defaultExit')} />
             <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('ikev2.pskDesc')}</div>
           </>
         )}
