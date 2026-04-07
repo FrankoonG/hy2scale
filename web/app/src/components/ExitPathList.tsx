@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Reorder, useDragControls } from 'framer-motion';
-import { Autocomplete, FormGroup } from '@hy2scale/ui';
+import { Autocomplete, FormGroup, GripIcon } from '@hy2scale/ui';
 import { useExitPaths } from '@/hooks/useExitPaths';
 import clsx from 'clsx';
 
@@ -20,14 +20,6 @@ interface PathItem {
   id: number;
   value: string;
 }
-
-const GripIcon = () => (
-  <svg viewBox="0 0 24 24" fill="currentColor">
-    <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
-    <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
-    <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
-  </svg>
-);
 
 let nextId = 1;
 function toItems(paths: string[]): PathItem[] {
