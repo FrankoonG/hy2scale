@@ -335,6 +335,10 @@ a.peer-link:hover{text-decoration:underline}
 /* ====== Address list ====== */
 .addr-list{display:flex;flex-direction:column;gap:6px}
 .addr-row{display:flex;gap:8px;align-items:center}
+.addr-drag{width:20px;height:32px;display:flex;align-items:center;justify-content:center;cursor:grab;color:var(--text-muted);flex-shrink:0;touch-action:none;opacity:.5;transition:opacity .15s}
+.addr-drag:hover{opacity:1}
+.addr-drag:active{cursor:grabbing}
+.addr-drag svg{width:14px;height:14px}
 .addr-row .hy-input{flex:1;min-width:0}
 .addr-del{width:32px;height:32px;border:1px solid var(--border);border-radius:var(--radius-sm);background:none;cursor:pointer;color:var(--red);font-size:16px;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0;padding:0}
 .addr-del:hover{background:rgba(239,68,68,.1);border-color:var(--red)}
