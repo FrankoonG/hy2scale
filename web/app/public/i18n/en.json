@@ -361,5 +361,6 @@
   "nodes.passRequired": "Password is required",
   "tls.generated": "Certificate generated",
   "tls.editTitle": "Edit Certificate",
-  "tls.optional": "optional"
+  "tls.optional": "optional",
+  "wg.privKeyHint": "stored for config download"
 }
