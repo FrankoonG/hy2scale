@@ -10,13 +10,13 @@ export interface TabPanelProps {
 
 export function TabPanel({ activeKey, children, keys }: TabPanelProps) {
   const prevKey = useRef(activeKey);
-  let direction = 1; // 1 = forward (left), -1 = backward (right)
+  const dirRef = useRef(1);
 
-  if (keys && keys.length > 0) {
+  if (keys && keys.length > 0 && prevKey.current !== activeKey) {
     const prevIdx = keys.indexOf(prevKey.current);
     const curIdx = keys.indexOf(activeKey);
     if (prevIdx >= 0 && curIdx >= 0) {
-      direction = curIdx > prevIdx ? 1 : -1;
+      dirRef.current = curIdx > prevIdx ? 1 : -1;
     }
   }
 
@@ -24,16 +24,22 @@ export function TabPanel({ activeKey, children, keys }: TabPanelProps) {
     prevKey.current = activeKey;
   }
 
-  const offset = 20 * direction;
+  const dir = dirRef.current;
 
   return (
     <div style={{ position: 'relative' }}>
-      <AnimatePresence initial={false}>
+      <AnimatePresence initial={false} custom={dir}>
         <motion.div
           key={activeKey}
-          initial={{ opacity: 0, x: offset }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: -offset, position: 'absolute', top: 0, left: 0, right: 0 }}
+          custom={dir}
+          initial="enter"
+          animate="center"
+          exit="exit"
+          variants={{
+            enter: (d: number) => ({ opacity: 0, x: 20 * d }),
+            center: { opacity: 1, x: 0 },
+            exit: (d: number) => ({ opacity: 0, x: -20 * d, position: 'absolute' as const, top: 0, left: 0, right: 0 }),
+          }}
           transition={{ duration: 0.2, ease: 'easeInOut' }}
         >
           {children}
