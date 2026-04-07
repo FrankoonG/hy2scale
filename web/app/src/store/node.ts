@@ -54,11 +54,12 @@ function extractPeers(topo: TopologyNode[]) {
   const connected = new Set<string>();
   const disabled = new Set<string>();
 
-  function walk(nodes: TopologyNode[]) {
+  function walk(nodes: TopologyNode[], isChild = false) {
     for (const n of nodes) {
-      if (n.connected || n.is_self) connected.add(n.name);
+      // Root nodes have explicit `connected` field; children are reachable if they appear in the tree
+      if (n.connected || n.is_self || isChild) connected.add(n.name);
       if (n.disabled) disabled.add(n.name);
-      if (n.children) walk(n.children);
+      if (n.children) walk(n.children, true);
     }
   }
   walk(topo);
