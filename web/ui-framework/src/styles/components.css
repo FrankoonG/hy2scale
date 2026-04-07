@@ -343,7 +343,7 @@ a.peer-link:hover{text-decoration:underline}
 /* ====== Address list ====== */
 .addr-list{display:flex;flex-direction:column;gap:6px;position:relative}
 .addr-row{display:flex;gap:8px;align-items:center}
-.addr-row.dragging,.addr-row.dragging *{user-select:none;-webkit-user-select:none}
+.addr-row:has(.addr-drag){user-select:none;-webkit-user-select:none}
 .addr-drag{width:20px;height:32px;display:flex;align-items:center;justify-content:center;cursor:grab;color:var(--text-muted);flex-shrink:0;touch-action:none;opacity:.5;transition:opacity .15s;user-select:none;-webkit-user-select:none}
 .addr-drag:hover{opacity:1}
 .addr-drag:active{cursor:grabbing}
