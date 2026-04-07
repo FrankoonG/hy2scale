@@ -17,13 +17,21 @@ export default function TLSPage() {
   const { data: certs = [] } = useQuery({ queryKey: ['certs'], queryFn: api.getCerts });
 
   const [modalOpen, setModalOpen] = useState(false);
-  const [certTab, setCertTab] = useState('manual');
+  const [certTab, setCertTab] = useState('paste');
   const [clickPos, setClickPos] = useState<{ x: number; y: number } | undefined>();
   const [saving, setSaving] = useState(false);
+  const [generating, setGenerating] = useState(false);
 
-  // Manual input
+  // Common fields
   const [certId, setCertId] = useState('');
   const [certName, setCertName] = useState('');
+  const [editMode, setEditMode] = useState(false);
+
+  // CA signing
+  const [caId, setCaId] = useState('');
+  const [cn, setCn] = useState('');
+
+  // Manual input (paste)
   const [certPem, setCertPem] = useState('');
   const [keyPem, setKeyPem] = useState('');
 
@@ -31,20 +39,12 @@ export default function TLSPage() {
   const [certPath, setCertPath] = useState('');
   const [keyPath, setKeyPath] = useState('');
 
-  // Generate
-  const [domains, setDomains] = useState('');
-
-  // Sign
-  const [caId, setCaId] = useState('');
-  const [cn, setCn] = useState('');
-  const [editMode, setEditMode] = useState(false);
-
   const openNew = (e: MouseEvent) => {
     setEditMode(false);
     setClickPos({ x: e.clientX, y: e.clientY });
     setCertId(''); setCertName(''); setCertPem(''); setKeyPem('');
-    setCertPath(''); setKeyPath(''); setDomains(''); setCaId(''); setCn('');
-    setCertTab('manual');
+    setCertPath(''); setKeyPath(''); setCaId(''); setCn('');
+    setCertTab('paste');
     setModalOpen(true);
   };
 
@@ -53,8 +53,8 @@ export default function TLSPage() {
     setCertId(cert.id);
     setCertName(cert.name || '');
     setCertPem(''); setKeyPem('');
-    setCertPath(''); setKeyPath(''); setDomains(''); setCaId(''); setCn('');
-    setCertTab('manual');
+    setCertPath(''); setKeyPath(''); setCaId(''); setCn('');
+    setCertTab('paste');
     setEditMode(true);
     try {
       const pem = await api.getCertPem(cert.id);
@@ -64,29 +64,38 @@ export default function TLSPage() {
     setModalOpen(true);
   };
 
+  const handleGenerate = async () => {
+    if (!certId) { toast.error(t('tls.fillIdFirst')); return; }
+    setGenerating(true);
+    try {
+      if (caId) {
+        // CA-signed
+        await api.signCert({ ca_id: caId, id: certId, name: certName, cn: cn || certId, days: 7300 });
+      } else {
+        // Self-signed
+        await api.generateCert({ id: certId, name: certName, domains: [certId], days: 3650 });
+      }
+      // Fetch generated PEM
+      const pem = await api.getCertPem(certId);
+      setCertPem(pem.cert || '');
+      setKeyPem(pem.key || '');
+      setCertTab('paste');
+      toast.success(t('tls.generated'));
+      queryClient.invalidateQueries({ queryKey: ['certs'] });
+    } catch (e: any) { toast.error(String(e.message || e)); }
+    finally { setGenerating(false); }
+  };
+
   const handleSave = async () => {
     if (!certId) { toast.error(t('tls.idRequired')); return; }
     setSaving(true);
     try {
-      switch (certTab) {
-        case 'manual':
-          if (!certPem) { toast.error(t('tls.certPemRequired')); setSaving(false); return; }
-          await api.importCert({ id: certId, name: certName, cert: certPem, key: keyPem || undefined });
-          break;
-        case 'path':
-          if (!certPath) { toast.error(t('tls.certPathRequired')); setSaving(false); return; }
-          await api.importCertPath({ id: certId, name: certName, cert_path: certPath, key_path: keyPath || undefined });
-          break;
-        case 'generate':
-          await api.generateCert({
-            id: certId, name: certName,
-            domains: domains.split(/[,\n]/).map((d) => d.trim()).filter(Boolean),
-          });
-          break;
-        case 'sign':
-          if (!caId) { toast.error(t('tls.fillIdFirst')); setSaving(false); return; }
-          await api.signCert({ ca_id: caId, id: certId, name: certName, cn });
-          break;
+      if (certTab === 'paste') {
+        if (!certPem) { toast.error(t('tls.certPemRequired')); setSaving(false); return; }
+        await api.importCert({ id: certId, name: certName, cert: certPem, key: keyPem || undefined });
+      } else {
+        if (!certPath) { toast.error(t('tls.certPathRequired')); setSaving(false); return; }
+        await api.importCertPath({ id: certId, name: certName, cert_path: certPath, key_path: keyPath || undefined });
       }
       toast.success(t('tls.certSaved'));
       queryClient.invalidateQueries({ queryKey: ['certs'] });
@@ -115,7 +124,7 @@ export default function TLSPage() {
 
   const caOptions = [
     { value: '', label: t('tls.noneSelfSigned') },
-    ...certs.filter((c) => c.is_ca).map((c) => ({ value: c.id, label: c.name || c.id })),
+    ...certs.filter((c) => c.is_ca && c.has_key).map((c) => ({ value: c.id, label: c.name || c.id })),
   ];
 
   return (
@@ -124,6 +133,7 @@ export default function TLSPage() {
         title={t('tls.title')}
         count={certs.length}
         actions={<Button size="sm" variant="primary" onClick={openNew}>{t('tls.new')}</Button>}
+        noPadding
       >
         {certs.length === 0 ? (
           <div className="hy-empty" dangerouslySetInnerHTML={{ __html: t('tls.noCerts') }} />
@@ -150,12 +160,17 @@ export default function TLSPage() {
                     </td>
                     <td>{cert.subject}</td>
                     <td>{cert.issuer}{cert.is_ca && <> <Badge variant="blue">CA</Badge></>}</td>
-                    <td><span style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>{cert.expires}</span></td>
+                    <td><span className="mono">{cert.expires}</span></td>
                     <td>{cert.has_key ? <Badge variant="green">{t('app.yes')}</Badge> : <Badge variant="muted">{t('app.no')}</Badge>}</td>
-                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-                      <button className="act-btn edit" onClick={(e) => handleEdit(cert, e)}>{t('app.edit')}</button>
-                      {' '}
-                      <button className="act-btn danger" onClick={() => handleDelete(cert)}>{t('app.delete')}</button>
+                    <td className="col-actions">
+                      <div className="act-group">
+                        <button className="act-btn edit" onClick={(e) => handleEdit(cert, e)}>
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                        </button>
+                        <button className="act-btn danger" onClick={() => handleDelete(cert)}>
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -165,77 +180,98 @@ export default function TLSPage() {
         )}
       </Card>
 
-      {/* New Cert Modal */}
+      {/* Cert Modal — matches old frontend: 2 tabs + generate button + CA select */}
       <Modal
         open={modalOpen} onClose={() => setModalOpen(false)}
-        title={t('tls.newTitle')}
-        wide
+        title={editMode ? t('tls.editTitle') : t('tls.newTitle')}
         animateFrom={clickPos}
         footer={
           <>
             <Button onClick={() => setModalOpen(false)}>{t('app.cancel')}</Button>
-            <Button variant="primary" onClick={handleSave} loading={saving}>{t('app.save')}</Button>
+            <Button variant="primary" onClick={handleSave} loading={saving}>
+              {editMode ? t('app.save') : t('tls.new')}
+            </Button>
           </>
         }
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <FormGrid>
             <FormGroup label={t('tls.id')} required>
-              <Input value={certId} onChange={(e) => setCertId(e.target.value)} />
+              <Input value={certId} onChange={(e) => setCertId(e.target.value)} placeholder="e.g. my-cert" disabled={editMode} />
             </FormGroup>
             <FormGroup label={t('tls.name')}>
-              <Input value={certName} onChange={(e) => setCertName(e.target.value)} />
+              <Input value={certName} onChange={(e) => setCertName(e.target.value)} placeholder={t('tls.optional')} />
             </FormGroup>
           </FormGrid>
 
-          <Tabs
-            items={[
-              { key: 'manual', label: t('tls.manualInput') },
-              { key: 'path', label: t('tls.filePath') },
-              { key: 'generate', label: t('tls.generate') },
-              { key: 'sign', label: t('tls.signWithCA') },
-            ]}
-            activeKey={certTab}
-            onChange={setCertTab}
-          />
+          {/* CA signing select */}
+          {!editMode && (
+            <FormGroup label={t('tls.signWithCA')}>
+              <Select value={caId} onChange={(e) => setCaId(e.target.value)} options={caOptions} />
+            </FormGroup>
+          )}
 
-          <TabPanel activeKey={certTab} keys={['manual', 'path', 'generate', 'sign']}>
-            {certTab === 'manual' && (
-              <>
-                <FormGroup label={t('tls.certPem')} required>
-                  <Textarea value={certPem} onChange={(e) => setCertPem(e.target.value)} rows={5} monospace />
-                </FormGroup>
-                <FormGroup label={t('tls.keyPem')}>
-                  <Textarea value={keyPem} onChange={(e) => setKeyPem(e.target.value)} rows={5} monospace />
-                </FormGroup>
-              </>
-            )}
-            {certTab === 'path' && (
-              <FormGrid>
-                <FormGroup label={t('tls.certPath')} required>
-                  <Input value={certPath} onChange={(e) => setCertPath(e.target.value)} placeholder="/etc/ssl/cert.pem" />
-                </FormGroup>
-                <FormGroup label={t('tls.keyPath')}>
-                  <Input value={keyPath} onChange={(e) => setKeyPath(e.target.value)} placeholder="/etc/ssl/key.pem" />
-                </FormGroup>
-              </FormGrid>
-            )}
-            {certTab === 'generate' && (
-              <FormGroup label={`${t('tls.subject')} (domains)`}>
-                <Textarea value={domains} onChange={(e) => setDomains(e.target.value)} rows={3} monospace placeholder="example.com&#10;*.example.com" />
-              </FormGroup>
-            )}
-            {certTab === 'sign' && (
-              <>
-                <FormGroup label="CA">
-                  <Select value={caId} onChange={(e) => setCaId(e.target.value)} options={caOptions} />
-                </FormGroup>
-                <FormGroup label={t('tls.commonName')}>
-                  <Input value={cn} onChange={(e) => setCn(e.target.value)} />
-                </FormGroup>
-              </>
-            )}
-          </TabPanel>
+          {/* CN field — visible when CA selected */}
+          {caId && !editMode && (
+            <FormGroup label={t('tls.commonName')} required>
+              <Input value={cn} onChange={(e) => setCn(e.target.value)} placeholder="e.g. vpn.example.com" />
+            </FormGroup>
+          )}
+
+          {/* Tabs + Generate button */}
+          {(!caId || editMode) && (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Tabs
+                  items={[
+                    { key: 'paste', label: t('tls.manualInput') },
+                    { key: 'path', label: t('tls.filePath') },
+                  ]}
+                  activeKey={certTab}
+                  onChange={setCertTab}
+                />
+                {!editMode && (
+                  <button
+                    className="hy-icon-btn"
+                    title={t('tls.generate')}
+                    onClick={handleGenerate}
+                    disabled={generating}
+                    style={{
+                      border: '1px solid var(--border)', borderRadius: '50%',
+                      width: 28, height: 28, padding: 0,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
+                      <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
+                    </svg>
+                  </button>
+                )}
+              </div>
+
+              <TabPanel activeKey={certTab} keys={['paste', 'path']}>
+                {certTab === 'paste' ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                    <FormGroup label={t('tls.certPem')} required>
+                      <Textarea value={certPem} onChange={(e) => setCertPem(e.target.value)} rows={5} monospace placeholder="-----BEGIN CERTIFICATE-----" />
+                    </FormGroup>
+                    <FormGroup label={t('tls.keyPem')}>
+                      <Textarea value={keyPem} onChange={(e) => setKeyPem(e.target.value)} rows={4} monospace placeholder="-----BEGIN EC PRIVATE KEY-----" />
+                    </FormGroup>
+                  </div>
+                ) : (
+                  <FormGrid>
+                    <FormGroup label={t('tls.certPath')} required>
+                      <Input value={certPath} onChange={(e) => setCertPath(e.target.value)} placeholder="/etc/ssl/cert.pem" />
+                    </FormGroup>
+                    <FormGroup label={t('tls.keyPath')}>
+                      <Input value={keyPath} onChange={(e) => setKeyPath(e.target.value)} placeholder="/etc/ssl/key.pem" />
+                    </FormGroup>
+                  </FormGrid>
+                )}
+              </TabPanel>
+            </>
+          )}
         </div>
       </Modal>
     </div>
