@@ -4,19 +4,11 @@ import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { Reorder, useDragControls } from 'framer-motion';
 import {
   Modal, Button, Input, PasswordInput, Toggle, Textarea, Select,
-  FormGroup, FormGrid, Tabs, TabPanel, useToast,
+  FormGroup, FormGrid, Tabs, TabPanel, GripIcon, useToast,
 } from '@hy2scale/ui';
 import clsx from 'clsx';
 import * as api from '@/api';
 import type { ClientEntry, CertInfo } from '@/api';
-
-const GripIcon = () => (
-  <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
-    <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
-    <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
-    <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
-  </svg>
-);
 
 interface AddrItem { id: number; host: string; port: string; }
 let addrNextId = 1;

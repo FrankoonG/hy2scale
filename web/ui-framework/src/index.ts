@@ -64,6 +64,8 @@ export { Progress } from './components/Progress';
 export { Chip } from './components/Chip';
 export { CopyButton } from './components/CopyButton';
 
+export { GripIcon } from './components/GripIcon';
+
 // Hooks
 export { useClickOutside } from './hooks/useClickOutside';
 export { useMediaQuery } from './hooks/useMediaQuery';
