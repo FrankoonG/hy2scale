@@ -67,7 +67,7 @@
 
 /* ====== Peer Table ====== */
 .hy-table-wrap{overflow-x:auto;overflow-y:visible;-webkit-overflow-scrolling:touch}
-.hy-table{width:100%;border-collapse:collapse;user-select:none;-webkit-user-select:none}
+.hy-table{width:100%;min-width:700px;border-collapse:collapse;user-select:none;-webkit-user-select:none}
 .hy-table th{text-align:left;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;padding:8px 10px;border-bottom:2px solid var(--border);white-space:nowrap}
 .hy-table th:first-child,.hy-table td:first-child{padding-left:20px}
 .hy-table th:last-child,.hy-table td:last-child{padding-right:20px}
