@@ -41,6 +41,7 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailConfig, setDetailConfig] = useState('');
   const [detailName, setDetailName] = useState('');
+  const [detailQR, setDetailQR] = useState('');
 
   const [clickPos, setClickPos] = useState<{ x: number; y: number } | undefined>();
 
@@ -162,6 +163,12 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
       const text = await (res as any).text();
       setDetailName(name);
       setDetailConfig(text);
+      // Fetch QR as blob with auth header
+      try {
+        const qrRes = await api.getWGQR(text);
+        const blob = await (qrRes as any).blob();
+        setDetailQR(URL.createObjectURL(blob));
+      } catch { setDetailQR(''); }
       setDetailOpen(true);
     } catch (e: any) { toast.error(String(e.message || e)); }
   }, [toast]);
@@ -335,14 +342,16 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
       >
         {detailConfig && (
           <>
-            <div style={{ textAlign: 'center', marginBottom: 16 }}>
-              <img
-                src={api.getWGQRUrl(detailConfig)}
-                alt="QR"
-                style={{ width: 256, height: 256, border: '1px solid var(--border)', borderRadius: 8 }}
-              />
-            </div>
-            <pre style={{ fontSize: 11, fontFamily: 'var(--mono)', background: 'var(--bg)', padding: 10, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', overflow: 'auto', maxHeight: 160, whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>
+            {detailQR && (
+              <div style={{ textAlign: 'center', marginBottom: 16 }}>
+                <img
+                  src={detailQR}
+                  alt="QR"
+                  style={{ width: 256, height: 256, border: '1px solid var(--border)', borderRadius: 8 }}
+                />
+              </div>
+            )}
+            <pre style={{ fontSize: 11, fontFamily: 'var(--mono)', background: 'var(--surface)', color: 'var(--text)', padding: 10, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', overflow: 'auto', maxHeight: 160, whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>
               {detailConfig}
             </pre>
           </>
