@@ -358,5 +358,8 @@
   "nodes.invalidPort": "잘못된 포트 형식입니다. 예: 5565, 1000,2000, 20000-30000",
   "nodes.dupAddress": "중복 주소: {addr}",
   "nodes.hostRequired": "각 주소에 IP/호스트명이 필요합니다",
-  "nodes.passRequired": "비밀번호를 입력해 주세요"
+  "nodes.passRequired": "비밀번호를 입력해 주세요",
+  "tls.generated": "인증서가 생성되었습니다",
+  "tls.editTitle": "인증서 편집",
+  "tls.optional": "선택 사항"
 }

@@ -358,5 +358,8 @@
   "nodes.invalidPort": "Invalid port format. Use: 5565 or 1000,2000 or 20000-30000",
   "nodes.dupAddress": "Duplicate address: {addr}",
   "nodes.hostRequired": "IP/hostname is required for each address",
-  "nodes.passRequired": "Password is required"
+  "nodes.passRequired": "Password is required",
+  "tls.generated": "Certificate generated",
+  "tls.editTitle": "Edit Certificate",
+  "tls.optional": "optional"
 }
