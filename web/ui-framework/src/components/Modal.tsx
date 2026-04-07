@@ -105,9 +105,9 @@ function SmoothBody({ children }: { children: ReactNode }) {
         ? { type: 'spring', stiffness: 300, damping: 30 }
         : { duration: 0 }
       }
-      style={{ overflow: 'hidden', flex: 'none' }}
+      style={{ overflow: 'hidden', flex: 'none', padding: 0 }}
     >
-      <div ref={innerRef}>{children}</div>
+      <div ref={innerRef} style={{ padding: '20px 24px' }}>{children}</div>
     </motion.div>
   );
 }
