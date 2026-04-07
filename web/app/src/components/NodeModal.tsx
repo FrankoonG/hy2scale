@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import {
@@ -8,6 +8,14 @@ import {
 import clsx from 'clsx';
 import * as api from '@/api';
 import type { ClientEntry, CertInfo } from '@/api';
+
+const GripIcon = () => (
+  <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14">
+    <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
+    <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+    <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
+  </svg>
+);
 
 interface Props {
   open: boolean;
@@ -156,6 +164,19 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   const removeAddrRow = (i: number) => {
     setAddrRows(addrRows.filter((_, idx) => idx !== i));
   };
+
+  const dragRef = useRef<number | null>(null);
+  const handleDragStart = (i: number) => { dragRef.current = i; };
+  const handleDragOver = (e: React.DragEvent, i: number) => {
+    e.preventDefault();
+    if (dragRef.current === null || dragRef.current === i) return;
+    const rows = [...addrRows];
+    const [moved] = rows.splice(dragRef.current, 1);
+    rows.splice(i, 0, moved);
+    dragRef.current = i;
+    setAddrRows(rows);
+  };
+  const handleDragEnd = () => { dragRef.current = null; };
 
   const validateAddrs = (): string[] | null => {
     setAddrError('');
@@ -313,7 +334,19 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
             {addrError && <div style={{ color: 'var(--red)', fontSize: 13 }}>{addrError}</div>}
             <div className="addr-list">
               {addrRows.map((row, i) => (
-                <div key={i} className="addr-row">
+                <div
+                  key={i}
+                  className="addr-row"
+                  draggable={addrRows.length > 1}
+                  onDragStart={() => handleDragStart(i)}
+                  onDragOver={(e) => handleDragOver(e, i)}
+                  onDragEnd={handleDragEnd}
+                >
+                  {addrRows.length > 1 && (
+                    <div className="addr-drag">
+                      <GripIcon />
+                    </div>
+                  )}
                   <Input
                     value={row.host}
                     onChange={(e) => updateAddrRow(i, 'host', e.target.value)}
