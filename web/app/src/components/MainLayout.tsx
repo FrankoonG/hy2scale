@@ -45,10 +45,10 @@ export default function MainLayout({ children }: { children: ReactNode }) {
     icon: n.icon,
   }));
 
-  // Version badge matching old style
+  // Version badge matching old frontend style (green/orange/red + mode text)
   const versionBadge = node?.version ? (
-    <span className={`version-badge${node.compat ? ' compat' : ''}${node.limited ? ' limited' : ''}`}>
-      v{node.version}
+    <span className={`version-badge${node.limited ? ' limited' : node.compat ? ' compat' : ''}`}>
+      v{node.version}{node.limited ? ' Limited' : node.compat ? ' Compat' : ''}
     </span>
   ) : null;
 
@@ -67,8 +67,10 @@ export default function MainLayout({ children }: { children: ReactNode }) {
           logo={
             <>
               <div className="logo"><img src="./logo.svg" alt="" className="logo-img" /></div>
-              <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-.3px' }}>HY2 SCALE</span>
-              {versionBadge}
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-.3px', lineHeight: 1.2 }}>HY2<br/>SCALE</div>
+                {versionBadge}
+              </div>
             </>
           }
           footer={

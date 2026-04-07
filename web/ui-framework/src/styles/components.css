@@ -78,6 +78,7 @@
 .hy-table .col-status{width:75px;text-align:center}
 .hy-table .col-dir{width:55px}
 .hy-table .col-name{min-width:200px;user-select:text;-webkit-user-select:text}
+.hy-table .col-name .hy-badge,.hy-table .col-name .version-badge,.hy-table .col-name .hy-tooltip-wrap{user-select:none;-webkit-user-select:none}
 .hy-table .col-traffic{width:160px;font-size:11px;font-family:var(--mono);white-space:nowrap}
 .hy-table .col-nested{width:70px;text-align:center}
 .hy-table .col-actions{width:150px;text-align:right}
