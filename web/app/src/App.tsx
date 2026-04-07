@@ -15,6 +15,7 @@ import SettingsPage from '@/pages/SettingsPage';
 
 function AuthenticatedRoutes() {
   const setNode = useNodeStore((s) => s.setNode);
+  const setTopology = useNodeStore((s) => s.setTopology);
   const navigate = useNavigate();
 
   // Fetch node info once on mount
@@ -26,6 +27,18 @@ function AuthenticatedRoutes() {
       return node;
     },
     staleTime: 30000,
+  });
+
+  // Fetch topology globally so peer status colors work on all pages
+  useQuery({
+    queryKey: ['topology'],
+    queryFn: async () => {
+      const { getTopology } = await import('@/api');
+      const topo = await getTopology();
+      setTopology(topo);
+      return topo;
+    },
+    refetchInterval: 5000,
   });
 
   // Listen for session expired events
