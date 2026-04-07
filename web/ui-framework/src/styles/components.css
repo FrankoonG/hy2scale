@@ -221,7 +221,7 @@ a.peer-link:hover{text-decoration:underline}
 .hy-toast.info{background:var(--primary)}
 
 /* ====== Tabs (proxy-style button group) ====== */
-.hy-tabs{display:inline-flex;gap:0;margin-bottom:16px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow-x:auto;overflow-y:hidden;max-width:100%;-webkit-overflow-scrolling:touch}
+.hy-tabs{display:inline-flex;gap:0;margin-bottom:16px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow-x:auto;overflow-y:hidden;max-width:100%;width:fit-content;-webkit-overflow-scrolling:touch}
 .hy-tabs::-webkit-scrollbar{display:none}
 .hy-tab{padding:8px 20px;text-align:center;font-size:13px;font-weight:600;cursor:pointer;color:var(--text-muted);background:var(--bg);transition:all .15s;border-right:1px solid var(--border);white-space:nowrap;flex-shrink:0;border:none;border-radius:0}
 .hy-tab:last-child{border-right:none}
