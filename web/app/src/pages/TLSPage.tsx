@@ -221,33 +221,26 @@ export default function TLSPage() {
           {/* Tabs + Generate button */}
           {(!caId || editMode) && (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Tabs
-                  items={[
-                    { key: 'paste', label: t('tls.manualInput') },
-                    { key: 'path', label: t('tls.filePath') },
-                  ]}
-                  activeKey={certTab}
-                  onChange={setCertTab}
-                />
-                {!editMode && (
+              <Tabs
+                items={[
+                  { key: 'paste', label: t('tls.manualInput') },
+                  { key: 'path', label: t('tls.filePath') },
+                ]}
+                activeKey={certTab}
+                onChange={setCertTab}
+                addon={!editMode ? (
                   <button
-                    className="hy-icon-btn"
+                    className="hy-circle-btn"
                     title={t('tls.generate')}
                     onClick={handleGenerate}
                     disabled={generating}
-                    style={{
-                      border: '1px solid var(--border)', borderRadius: '50%',
-                      width: 28, height: 28, padding: 0,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    }}
                   >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                       <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
                     </svg>
                   </button>
-                )}
-              </div>
+                ) : undefined}
+              />
 
               <TabPanel activeKey={certTab} keys={['paste', 'path']}>
                 {certTab === 'paste' ? (
