@@ -1,9 +1,18 @@
+# Build React frontend
+FROM node:20-alpine AS frontend
+WORKDIR /web
+COPY web/ .
+RUN cd ui-framework && npm ci && npm run build
+RUN cd app && npm ci && npm run build
+
 FROM golang:1.24-alpine AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 ARG CACHEBUST=0
 COPY . .
+# Copy built frontend into static dir before Go embed
+COPY --from=frontend /web/app/dist/ internal/web/static/
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /hy2scale ./cmd/node
 
 # Build strongswan 5.8.4 (5.9.x has L2TP transport mode xfrm outbound bug)
