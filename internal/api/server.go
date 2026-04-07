@@ -736,6 +736,9 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				tn.Addrs = addrs
 			}
 			tn.ConnMode = cl.ConnMode
+			if tn.ConnMode == "" && len(addrs) > 1 {
+				tn.ConnMode = "quality"
+			}
 			tn.Direction = "outbound"
 		}
 		for _, p := range peers {
