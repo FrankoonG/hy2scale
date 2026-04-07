@@ -40,7 +40,7 @@ export function TabPanel({ activeKey, children, keys }: TabPanelProps) {
             center: { opacity: 1, x: 0 },
             exit: (d: number) => ({ opacity: 0, x: -20 * d, position: 'absolute' as const, top: 0, left: 0, right: 0 }),
           }}
-          transition={{ duration: 0.2, ease: 'easeInOut' }}
+          transition={{ duration: 0.3, ease: 'easeInOut' }}
         >
           {children}
         </motion.div>
