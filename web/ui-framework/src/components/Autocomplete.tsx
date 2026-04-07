@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect, type KeyboardEvent } from 'react';
 import clsx from 'clsx';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useClickOutside } from '../hooks/useClickOutside';
 
 export interface AutocompleteProps {
@@ -54,6 +55,8 @@ export function Autocomplete({
 
   useEffect(() => { setHighlighted(-1); }, [value]);
 
+  const showList = open && filtered.length > 0;
+
   return (
     <div ref={ref} className={clsx('hy-autocomplete', className)}>
       <div className="hy-input-wrap">
@@ -80,19 +83,27 @@ export function Autocomplete({
           </button>
         )}
       </div>
-      {open && filtered.length > 0 && (
-        <div className="hy-autocomplete-list">
-          {filtered.map((opt, i) => (
-            <div
-              key={opt}
-              className={clsx('hy-autocomplete-item', i === highlighted && 'highlighted')}
-              onMouseDown={(e) => { e.preventDefault(); select(opt); }}
-            >
-              {opt}
-            </div>
-          ))}
-        </div>
-      )}
+      <AnimatePresence>
+        {showList && (
+          <motion.div
+            className="hy-autocomplete-list"
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.15, ease: 'easeOut' }}
+          >
+            {filtered.map((opt, i) => (
+              <div
+                key={opt}
+                className={clsx('hy-autocomplete-item', i === highlighted && 'highlighted')}
+                onMouseDown={(e) => { e.preventDefault(); select(opt); }}
+              >
+                {opt}
+              </div>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
