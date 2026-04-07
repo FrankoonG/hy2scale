@@ -199,7 +199,7 @@ export default function TLSPage() {
             onChange={setCertTab}
           />
 
-          <TabPanel activeKey={certTab}>
+          <TabPanel activeKey={certTab} keys={['manual', 'path', 'generate', 'sign']}>
             {certTab === 'manual' && (
               <>
                 <FormGroup label={t('tls.certPem')} required>
