@@ -45,6 +45,7 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
         >
           <motion.div
             className={`hy-modal${wide ? ' wide' : ''}`}
+            layout
             initial={{ scale: 0.3, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.9, opacity: 0 }}
@@ -53,6 +54,7 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
               stiffness: 400,
               damping: 25,
               mass: 0.8,
+              layout: { type: 'spring', stiffness: 300, damping: 30 },
             }}
             style={{ transformOrigin: getOrigin() }}
           >
@@ -62,7 +64,7 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
                 <button className="hy-icon-btn" onClick={onClose}>✕</button>
               </div>
             )}
-            <div className="hy-modal-body">{children}</div>
+            <motion.div className="hy-modal-body" layout="position">{children}</motion.div>
             {footer && <div className="hy-modal-footer">{footer}</div>}
           </motion.div>
         </motion.div>
