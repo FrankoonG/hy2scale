@@ -361,5 +361,6 @@
   "nodes.passRequired": "비밀번호를 입력해 주세요",
   "tls.generated": "인증서가 생성되었습니다",
   "tls.editTitle": "인증서 편집",
-  "tls.optional": "선택 사항"
+  "tls.optional": "선택 사항",
+  "wg.privKeyHint": "설정 다운로드용으로 저장"
 }
