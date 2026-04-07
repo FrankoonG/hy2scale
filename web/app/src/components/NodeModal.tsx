@@ -272,7 +272,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
         onChange={setTab}
       />
 
-      <TabPanel activeKey={tab}>
+      <TabPanel activeKey={tab} keys={['addrs', 'conn']}>
         {tab === 'addrs' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             {/* Connection Mode */}
