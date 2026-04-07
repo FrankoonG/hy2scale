@@ -23,6 +23,7 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
   const [listenPort, setListenPort] = useState('');
   const [address, setAddress] = useState('');
   const [privKey, setPrivKey] = useState('');
+  const [pubKey, setPubKey] = useState('');
   const [wgMtu, setWgMtu] = useState('1420');
   const [saving, setSaving] = useState(false);
 
@@ -51,6 +52,7 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
       setListenPort(String(wg.listen_port || ''));
       setAddress(wg.address || '');
       setPrivKey(wg.private_key || '');
+      setPubKey(wg.public_key || '');
       setWgMtu(String(wg.mtu || 1420));
     }
   }, [wg]);
@@ -70,8 +72,9 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
 
   const generateServerKey = async () => {
     try {
-      const { private_key } = await api.generateWGKey();
+      const { private_key, public_key } = await api.generateWGKey();
       setPrivKey(private_key);
+      setPubKey(public_key);
     } catch (e: any) { toast.error(String(e.message || e)); }
   };
 
@@ -226,8 +229,8 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
           </FormGroup>
           <FormGroup label={t('wg.pubKey')}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Input value={wg?.public_key || ''} readOnly style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-muted)' }} />
-              {wg?.public_key && <CopyButton text={wg.public_key} />}
+              <Input value={pubKey} readOnly style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-muted)' }} />
+              {pubKey && <CopyButton text={pubKey} />}
             </div>
           </FormGroup>
           <FormGroup label={t('wg.mtu')}>
@@ -351,7 +354,7 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
                 />
               </div>
             )}
-            <pre style={{ fontSize: 11, fontFamily: 'var(--mono)', background: 'var(--surface)', color: 'var(--text)', padding: 10, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', overflow: 'auto', maxHeight: 160, whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>
+            <pre className="hy-code-block">
               {detailConfig}
             </pre>
           </>
