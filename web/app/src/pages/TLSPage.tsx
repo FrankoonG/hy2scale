@@ -1,4 +1,4 @@
-import { useState, type MouseEvent } from 'react';
+import { useState, useCallback, type MouseEvent, type DragEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -7,6 +7,21 @@ import {
 } from '@hy2scale/ui';
 import * as api from '@/api';
 import type { CertInfo } from '@/api';
+
+const PEM_EXTS = ['.pem', '.crt', '.cer', '.key', '.pub', '.txt'];
+const MAX_FILE = 64 * 1024;
+
+function readPemFile(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (file.size > MAX_FILE) { reject('File too large'); return; }
+    const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
+    if (!PEM_EXTS.includes(ext)) { reject('Unsupported file type'); return; }
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as string);
+    r.onerror = () => reject('Read error');
+    r.readAsText(file);
+  });
+}
 
 export default function TLSPage() {
   const { t } = useTranslation();
@@ -34,6 +49,16 @@ export default function TLSPage() {
   // Manual input (paste)
   const [certPem, setCertPem] = useState('');
   const [keyPem, setKeyPem] = useState('');
+
+  // Drag-drop PEM file handler
+  const makeDrop = useCallback((setter: (v: string) => void) => ({
+    onDragOver: (e: DragEvent) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; },
+    onDrop: (e: DragEvent) => {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (file) readPemFile(file).then(setter).catch((err) => toast.error(String(err)));
+    },
+  }), [toast]);
 
   // File path
   const [certPath, setCertPath] = useState('');
@@ -228,7 +253,7 @@ export default function TLSPage() {
                 ]}
                 activeKey={certTab}
                 onChange={setCertTab}
-                addon={!editMode ? (
+                addon={
                   <button
                     className="hy-circle-btn"
                     title={t('tls.generate')}
@@ -239,17 +264,17 @@ export default function TLSPage() {
                       <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
                     </svg>
                   </button>
-                ) : undefined}
+                }
               />
 
               <TabPanel activeKey={certTab} keys={['paste', 'path']}>
                 {certTab === 'paste' ? (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                     <FormGroup label={t('tls.certPem')} required>
-                      <Textarea value={certPem} onChange={(e) => setCertPem(e.target.value)} rows={5} monospace placeholder="-----BEGIN CERTIFICATE-----" />
+                      <Textarea value={certPem} onChange={(e) => setCertPem(e.target.value)} rows={5} monospace placeholder="-----BEGIN CERTIFICATE-----" {...makeDrop(setCertPem)} />
                     </FormGroup>
                     <FormGroup label={t('tls.keyPem')}>
-                      <Textarea value={keyPem} onChange={(e) => setKeyPem(e.target.value)} rows={4} monospace placeholder="-----BEGIN EC PRIVATE KEY-----" />
+                      <Textarea value={keyPem} onChange={(e) => setKeyPem(e.target.value)} rows={4} monospace placeholder="-----BEGIN EC PRIVATE KEY-----" {...makeDrop(setKeyPem)} />
                     </FormGroup>
                   </div>
                 ) : (
