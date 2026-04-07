@@ -155,7 +155,8 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
     } catch (e: any) { toast.error(String(e.message || e)); }
   }, [confirm, t, queryClient, toast]);
 
-  const showPeerDetail = useCallback(async (name: string) => {
+  const showPeerDetail = useCallback(async (name: string, e?: MouseEvent) => {
+    if (e) setClickPos({ x: e.clientX, y: e.clientY });
     try {
       const res = await api.getWGPeerConfig(name);
       const text = await (res as any).text();
@@ -254,7 +255,7 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
                 {peers.map((p) => (
                   <tr key={p.name}>
                     <td>
-                      <a href="#" onClick={(e) => { e.preventDefault(); showPeerDetail(p.name); }} style={{ fontWeight: 600, color: 'var(--primary)', textDecoration: 'none' }}>
+                      <a href="#" onClick={(e) => { e.preventDefault(); showPeerDetail(p.name, e); }} style={{ fontWeight: 600, color: 'var(--primary)', textDecoration: 'none' }}>
                         {p.name}
                       </a>
                     </td>
@@ -324,6 +325,7 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
       <Modal
         open={detailOpen} onClose={() => setDetailOpen(false)}
         title={detailName}
+        animateFrom={clickPos}
         footer={
           <>
             <Button onClick={() => setDetailOpen(false)}>{t('app.close')}</Button>
