@@ -446,6 +446,8 @@ function AddrRowItem({ item, canDrag, canRemove, constraintsRef, hostPlaceholder
       dragControls={controls}
       dragConstraints={constraintsRef}
       dragElastic={0.1}
+      onDragStart={() => document.body.classList.add('dragging-active')}
+      onDragEnd={() => document.body.classList.remove('dragging-active')}
       className="addr-row"
       style={{ listStyle: 'none' }}
     >
