@@ -628,6 +628,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		Name       string            `json:"name"`
 		Addr       string            `json:"addr,omitempty"`
 		Addrs      []string          `json:"addrs,omitempty"`
+		ConnMode   string            `json:"conn_mode,omitempty"`
 		IPStatuses []relay.IPStatus  `json:"ip_statuses,omitempty"`
 		ExitNode   bool              `json:"exit_node"`
 		Direction string          `json:"direction"`
@@ -734,6 +735,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				tn.IPStatuses = s.app.Node().PeerIPStatuses(name)
 				tn.Addrs = addrs
 			}
+			tn.ConnMode = cl.ConnMode
 			tn.Direction = "outbound"
 		}
 		for _, p := range peers {
