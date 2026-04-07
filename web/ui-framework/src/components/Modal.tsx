@@ -53,8 +53,8 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
             animate={{ scale: 1, opacity: 1, x: 0, y: 0 }}
             exit={{ scale: 0.15, opacity: 0, x: off.x, y: off.y }}
             transition={{
-              default: { duration: 0.35, ease: [0.16, 1, 0.3, 1] },
-              opacity: { duration: 0.2, ease: 'easeOut' },
+              default: { duration: 0.47, ease: [0.16, 1, 0.3, 1] },
+              opacity: { duration: 0.27, ease: 'easeOut' },
             }}
           >
             {title && (

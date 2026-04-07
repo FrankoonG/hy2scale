@@ -97,11 +97,8 @@ export const deleteWGPeer = (name: string) =>
   api(`/wireguard/peers/${encodeURIComponent(name)}`, { method: 'DELETE' });
 export const getWGPeerConfig = (name: string) =>
   api<Response>(`/wireguard/peers/${encodeURIComponent(name)}/config`);
-export const getWGQRUrl = (text: string) => {
-  const base = (window as any).__BASE__ || '';
-  const token = sessionStorage.getItem('token:' + base);
-  return `${base}/api/wireguard/qr?text=${encodeURIComponent(text)}&token=${token || ''}`;
-};
+export const getWGQR = (text: string) =>
+  api<Response>(`/wireguard/qr?text=${encodeURIComponent(text)}`);
 
 // Rules
 export const getRules = () => api<{ available: boolean; rules: RoutingRule[] }>('/rules');
