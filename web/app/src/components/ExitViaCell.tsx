@@ -1,0 +1,62 @@
+import { Badge, Tooltip } from '@hy2scale/ui';
+import { useExitPaths } from '@/hooks/useExitPaths';
+
+interface ExitViaCellProps {
+  exitVia: string;
+  exitPaths?: string[];
+  exitMode?: string;
+}
+
+export function ExitViaCell({ exitVia, exitPaths, exitMode }: ExitViaCellProps) {
+  const { isHopReachable } = useExitPaths();
+
+  if (!exitVia) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
+
+  const paths = exitPaths && exitPaths.length > 0 ? exitPaths : [exitVia];
+  const primary = paths[0];
+
+  const renderPath = (path: string) => {
+    const hops = path.split('/');
+    let unreachable = false;
+    return hops.map((hop, i) => {
+      if (!unreachable && !isHopReachable(hop)) unreachable = true;
+      const color = unreachable ? 'var(--red)' : 'var(--green)';
+      return (
+        <span key={i}>
+          {i > 0 && <span style={{ color: 'var(--text-muted)' }}>/</span>}
+          <span style={{ color, fontFamily: 'var(--mono)', fontSize: 12 }}>{hop}</span>
+        </span>
+      );
+    });
+  };
+
+  const modeBadge = exitMode === 'quality' ? (
+    <Badge variant="green" className="ml-1">Q</Badge>
+  ) : exitMode === 'aggregate' ? (
+    <Badge variant="blue" className="ml-1">A</Badge>
+  ) : null;
+
+  const extraCount = paths.length - 1;
+
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      {renderPath(primary)}
+      {modeBadge}
+      {extraCount > 0 && (
+        <Tooltip
+          content={
+            <div>
+              {paths.map((p, i) => (
+                <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>
+                  {i === 0 ? 'primary: ' : `fallback ${i}: `}{p}
+                </div>
+              ))}
+            </div>
+          }
+        >
+          <Badge variant="muted">+{extraCount}</Badge>
+        </Tooltip>
+      )}
+    </span>
+  );
+}

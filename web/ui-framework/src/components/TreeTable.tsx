@@ -1,0 +1,119 @@
+import { type ReactNode } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import clsx from 'clsx';
+
+export interface TreeColumn<T> {
+  key: string;
+  title: ReactNode;
+  render: (row: T, meta: TreeRowMeta) => ReactNode;
+  className?: string;
+  width?: string;
+}
+
+export interface TreeRowMeta {
+  depth: number;
+  isLast: boolean;
+  guides: boolean[]; // which ancestor levels have continuing lines
+  isExpanded?: boolean;
+  nodeKey: string; // the TreeNode key — useful for qualified path lookups
+}
+
+export interface TreeNode<T> {
+  data: T;
+  key: string;
+  children?: TreeNode<T>[];
+  expanded?: boolean;
+  className?: string;
+}
+
+export interface TreeTableProps<T> {
+  columns: TreeColumn<T>[];
+  nodes: TreeNode<T>[];
+  emptyText?: ReactNode;
+}
+
+function flattenNodes<T>(
+  nodes: TreeNode<T>[],
+  depth = 0,
+  guides: boolean[] = [],
+): { node: TreeNode<T>; meta: TreeRowMeta }[] {
+  const result: { node: TreeNode<T>; meta: TreeRowMeta }[] = [];
+  nodes.forEach((node, i) => {
+    const isLast = i === nodes.length - 1;
+    const meta: TreeRowMeta = { depth, isLast, guides: [...guides], isExpanded: node.expanded, nodeKey: node.key };
+    result.push({ node, meta });
+    if (node.children && node.expanded !== false) {
+      // Root nodes (depth 0) don't render tree lines, so don't propagate
+      // a root-level guide flag — it would create an orphaned "|" in children
+      const childGuides = depth === 0 ? [] : [...guides, !isLast];
+      result.push(...flattenNodes(node.children, depth + 1, childGuides));
+    }
+  });
+  return result;
+}
+
+export function TreeTable<T>({ columns, nodes, emptyText }: TreeTableProps<T>) {
+  const rows = flattenNodes(nodes);
+
+  if (rows.length === 0 && emptyText) {
+    return <div className="hy-empty" dangerouslySetInnerHTML={typeof emptyText === 'string' ? { __html: emptyText } : undefined}>{typeof emptyText !== 'string' ? emptyText : undefined}</div>;
+  }
+
+  return (
+    <div className="hy-table-wrap">
+      <table className="hy-table">
+        <thead>
+          <tr>
+            {columns.map((col) => (
+              <th key={col.key} style={col.width ? { width: col.width } : undefined} className={col.className}>
+                {col.title}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <AnimatePresence>
+          <tbody>
+            {rows.map(({ node, meta }) => {
+              const dimmed = node.className?.includes('syncing') || node.className?.includes('disabled-row');
+              return (
+              <motion.tr
+                key={node.key}
+                className={clsx(node.className)}
+                layout
+                initial={{ opacity: 0 }}
+                animate={{ opacity: dimmed ? 0.45 : 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+              >
+                {columns.map((col) => (
+                  <td key={col.key} className={col.className}>{col.render(node.data, meta)}</td>
+                ))}
+              </motion.tr>
+              );
+            })}
+          </tbody>
+        </AnimatePresence>
+      </table>
+    </div>
+  );
+}
+
+// Helper component for tree cell with guide lines
+export interface TreeCellProps {
+  meta: TreeRowMeta;
+  children: ReactNode;
+}
+
+export function TreeCell({ meta, children }: TreeCellProps) {
+  return (
+    <div className="tree-cell">
+      {meta.depth > 0 && meta.guides.slice(0, meta.depth - 1).map((hasLine, i) => (
+        <span key={i} className={clsx('tree-guide', hasLine && 'tree-guide-active')} aria-hidden="true" />
+      ))}
+      {meta.depth > 0 && (
+        <span className={clsx('tree-branch', meta.isLast && 'tree-last')} aria-hidden="true" />
+      )}
+      {children}
+    </div>
+  );
+}

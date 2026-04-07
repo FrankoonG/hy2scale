@@ -34,3 +34,7 @@ docs/
 CLAUDE.md
 ipkg/
 prompts/
+
+# Frontend build artifacts
+node_modules/
+web/*/dist/

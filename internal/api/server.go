@@ -213,11 +213,8 @@ func (s *Server) Start(ctx context.Context) error {
 	// Static files with SPA fallback — inject basePath into index.html
 	staticFS, _ := fs.Sub(web.Static, "static")
 	rawIndex, _ := fs.ReadFile(staticFS, "index.html")
-	cacheBust := fmt.Sprintf("?v=%s&t=%d", Version, time.Now().Unix())
-	baseScript := "<script>window.__BASE__=\"" + s.basePath + "\";</script><script src=\"i18n.js" + cacheBust + "\"></script><script src=\"xlsx.min.js" + cacheBust + "\"></script><script src=\"app.js" + cacheBust + "\"></script>"
-	indexHTML := strings.Replace(string(rawIndex), "<script src=\"i18n.js\"></script>", "", 1)
-	indexHTML = strings.Replace(indexHTML, "<script src=\"xlsx.min.js\"></script>", "", 1)
-	indexHTML = strings.Replace(indexHTML, "<script src=\"app.js\"></script>", baseScript, 1)
+	baseTag := `<script>window.__BASE__="` + s.basePath + `";</script>`
+	indexHTML := strings.Replace(string(rawIndex), "<head>", "<head>"+baseTag, 1)
 	indexBytes := []byte(indexHTML)
 
 	// Known frontend routes that should serve index.html
