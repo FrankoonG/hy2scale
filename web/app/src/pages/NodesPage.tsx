@@ -224,8 +224,20 @@ export default function NodesPage() {
               {versionBadge}
               {nativeBadge && <> {nativeBadge}</>}
               {ipTooltip && <> {ipTooltip}</>}
-              {n.via ? <span className="peer-addr-sub">via {n.via}</span>
-                : n.addr ? <span className="peer-addr-sub">{n.addr}</span> : null}
+              {n.via ? (
+                <span className="peer-addr-sub">via {n.via}</span>
+              ) : n.addr ? (
+                <span className="peer-addr-sub">
+                  {n.addr}
+                  {n.conn_mode === 'quality' && <> <span style={{ fontSize: 10 }}><Badge variant="green">{t('exit.modeStability')}</Badge></span></>}
+                  {n.conn_mode === 'aggregate' && <> <span style={{ fontSize: 10 }}><Badge variant="blue">{t('exit.modeSpeed')}</Badge></span></>}
+                  {n.addrs && n.addrs.length > 1 && (
+                    <> <Tooltip content={n.addrs.join('\n')}>
+                      <span style={{ fontSize: 10 }}><Badge variant="muted">+{n.addrs.length - 1}</Badge></span>
+                    </Tooltip></>
+                  )}
+                </span>
+              ) : null}
             </span>
           </TreeCell>
         );
