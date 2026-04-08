@@ -211,19 +211,12 @@ export default function NodesPage() {
 
         const nativeBadge = n.native ? <Badge variant="muted">native</Badge> : null;
 
-        const ipTooltip = n.ip_statuses && n.ip_statuses.length > 1 ? (
-          <Tooltip content={n.ip_statuses.map((s) => `${s.addr}: ${s.status}`).join('\n')}>
-            <Badge variant="muted">+{n.ip_statuses.length - 1}</Badge>
-          </Tooltip>
-        ) : null;
-
         return (
           <TreeCell meta={meta}>
             <span className="sub-name-wrap">
               {nameEl}
               {versionBadge}
               {nativeBadge && <> {nativeBadge}</>}
-              {ipTooltip && <> {ipTooltip}</>}
               {n.via ? (
                 <span className="peer-addr-sub">via {n.via}</span>
               ) : n.addr ? (

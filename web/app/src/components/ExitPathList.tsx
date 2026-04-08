@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Reorder, useDragControls } from 'framer-motion';
 import { Autocomplete, FormGroup, GripIcon } from '@hy2scale/ui';
 import { useExitPaths } from '@/hooks/useExitPaths';
+import { useNodeStore } from '@/store/node';
 import clsx from 'clsx';
 
 export interface ExitPathValue {
@@ -88,8 +89,25 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
   }, [items, onChange]);
 
   const listRef = useRef<HTMLUListElement>(null);
-  const hasMultiple = items.filter((it) => it.value).length > 1;
-  const singleOnly = !hasMultiple && items.filter((it) => it.value).length <= 1;
+  const topology = useNodeStore((s) => s.topology);
+  const filledItems = items.filter((it) => it.value);
+  const hasMultiple = filledItems.length > 1;
+
+  // Check if single exit target has multiple addrs (enables quality/aggregate)
+  let targetHasMultiAddr = false;
+  if (filledItems.length === 1) {
+    const targetName = filledItems[0].value.split('/').pop() || '';
+    const findNode = (nodes: any[]): any => {
+      for (const n of nodes) {
+        if (n.name === targetName) return n;
+        if (n.children) { const r = findNode(n.children); if (r) return r; }
+      }
+      return null;
+    };
+    const node = findNode(topology);
+    if (node && node.addrs && node.addrs.length > 1) targetHasMultiAddr = true;
+  }
+  const singleOnly = !hasMultiple && !targetHasMultiAddr && filledItems.length <= 1;
 
   return (
     <FormGroup label={label || t('users.exitVia')}>
