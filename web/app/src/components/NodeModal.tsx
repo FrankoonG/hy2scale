@@ -6,7 +6,6 @@ import {
   Modal, Button, Input, PasswordInput, Toggle, Textarea, Select,
   FormGroup, FormGrid, Tabs, TabPanel, GripIcon, useToast,
 } from '@hy2scale/ui';
-import clsx from 'clsx';
 import * as api from '@/api';
 import type { ClientEntry, CertInfo } from '@/api';
 
@@ -55,7 +54,6 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   const [loading, setLoading] = useState(false);
   const [addrItems, setAddrItems] = useState<AddrItem[]>([{ id: addrNextId++, host: '', port: '' }]);
   const addrListRef = useRef<HTMLUListElement>(null);
-  const [connMode, setConnMode] = useState<'' | 'quality' | 'aggregate'>('');
   const [addrError, setAddrError] = useState('');
 
   // Connection tab
@@ -92,7 +90,6 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
     if (!editingName) {
       // Reset for add
       setAddrItems([{ id: addrNextId++, host: '', port: '' }]);
-      setConnMode('');
       setPassword(''); setFastOpen(false);
       setMaxTx(''); setMaxRx('');
       setSni(''); setInsecure(true);
@@ -108,7 +105,6 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       if (!c) return;
       const addrs = c.addrs && c.addrs.length ? c.addrs : (c.addr ? [c.addr] : ['']);
       setAddrItems(addrs.map(a => { const p = parseAddr(a); return { id: addrNextId++, host: p.host, port: p.port }; }));
-      setConnMode(c.conn_mode || '');
       setPassword(c.password || '');
       setFastOpen(c.fast_open || false);
       setMaxTx(c.max_tx ? String(c.max_tx / 125000) : '');
@@ -139,15 +135,6 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   }, [open, editingName]);
 
   // Sync connection mode when address count changes
-  useEffect(() => {
-    const count = addrItems.length;
-    if (count <= 1) {
-      setConnMode('');
-    } else if (connMode === '') {
-      setConnMode('quality');
-    }
-  }, [addrItems.length]);
-
   const addAddrRow = () => {
     setAddrItems([...addrItems, { id: addrNextId++, host: '', port: '' }]);
   };
@@ -210,7 +197,6 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       addr: addrs[0],
       addrs: addrs.length > 1 ? addrs : undefined,
       password: password.trim(),
-      conn_mode: connMode || undefined,
       sni: sni.trim() || undefined,
       insecure: insecure || undefined,
       ca: caVal,
@@ -241,7 +227,6 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   };
 
   const title = editingName ? t('nodes.editPrefix', { name: editingName }) : t('nodes.addTitle');
-  const hasMultiAddr = addrItems.length > 1;
 
   // Build CA select options
   const caOptions = [
@@ -277,40 +262,6 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       <TabPanel activeKey={tab} keys={['addrs', 'conn']}>
         {tab === 'addrs' ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {/* Connection Mode */}
-            <div className={clsx('exit-mode-options', !hasMultiAddr && 'exit-mode-disabled')}>
-              <label className="exit-mode-opt">
-                <input
-                  type="radio"
-                  name="connMode"
-                  checked={connMode === ''}
-                  onChange={() => setConnMode('')}
-                  disabled={hasMultiAddr}
-                />
-                {t('exit.modeNone')}
-              </label>
-              <label className="exit-mode-opt">
-                <input
-                  type="radio"
-                  name="connMode"
-                  checked={connMode === 'quality'}
-                  onChange={() => setConnMode('quality')}
-                  disabled={!hasMultiAddr}
-                />
-                {t('exit.modeStability')}
-              </label>
-              <label className="exit-mode-opt">
-                <input
-                  type="radio"
-                  name="connMode"
-                  checked={connMode === 'aggregate'}
-                  onChange={() => setConnMode('aggregate')}
-                  disabled={!hasMultiAddr}
-                />
-                {t('exit.modeSpeed')}
-              </label>
-            </div>
-
             {/* Address rows */}
             {addrError && <div style={{ color: 'var(--red)', fontSize: 13 }}>{addrError}</div>}
             <Reorder.Group
