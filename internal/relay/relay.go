@@ -251,8 +251,9 @@ type Node struct {
 	peerRates  map[string]PeerTraffic
 
 	// Per-peer latency (updated by background prober)
-	latencyMu    sync.RWMutex
-	latencies    map[string]int
+	latencyMu      sync.RWMutex
+	latencies      map[string]int
+	addrLatencies  map[string]map[string]int // peer → addr → ms
 	peersOfCache map[string][]PeerInfo // cached PeersOf results from prober
 
 	// Injected handler: returns rich peer list JSON (with children) for nested discovery.
@@ -284,14 +285,84 @@ func (n *Node) SetLatency(peerName string, ms int) {
 	n.latencyMu.Unlock()
 }
 
-// GetLatency returns stored latency for a peer. -1 if unknown.
+// GetLatency returns stored latency for a peer. For multi-addr peers, returns
+// average of all addr latencies. -1 if unknown.
 func (n *Node) GetLatency(peerName string) int {
 	n.latencyMu.RLock()
 	defer n.latencyMu.RUnlock()
+	// If per-addr latencies exist, return average
+	if al, ok := n.addrLatencies[peerName]; ok && len(al) > 0 {
+		sum, count := 0, 0
+		for _, ms := range al {
+			if ms > 0 {
+				sum += ms
+				count++
+			}
+		}
+		if count > 0 {
+			return sum / count
+		}
+	}
 	if ms, ok := n.latencies[peerName]; ok {
 		return ms
 	}
 	return -1
+}
+
+// GetAddrLatencies returns per-address latency for a multi-addr peer.
+func (n *Node) GetAddrLatencies(peerName string) map[string]int {
+	n.latencyMu.RLock()
+	defer n.latencyMu.RUnlock()
+	if al, ok := n.addrLatencies[peerName]; ok {
+		out := make(map[string]int, len(al))
+		for k, v := range al {
+			out[k] = v
+		}
+		return out
+	}
+	return nil
+}
+
+// setAddrLatency stores latency for a specific address of a peer.
+func (n *Node) setAddrLatency(peerName, addr string, ms int) {
+	n.latencyMu.Lock()
+	defer n.latencyMu.Unlock()
+	if n.addrLatencies[peerName] == nil {
+		n.addrLatencies[peerName] = make(map[string]int)
+	}
+	n.addrLatencies[peerName][addr] = ms
+}
+
+// probeExtraConns pings each extra QUIC connection and stores per-addr latency.
+func (n *Node) probeExtraConns(name string, p *peer) {
+	if len(p.extraConns) == 0 {
+		return
+	}
+	for i, ec := range p.extraConns {
+		if ec == nil {
+			continue
+		}
+		addr := ""
+		if i+1 < len(p.connAddrs) {
+			addr = p.connAddrs[i+1] // connAddrs[0] is primary, extras start at [1]
+		}
+		if addr == "" {
+			continue
+		}
+		rtt := n.pingClient(ec)
+		if rtt >= 0 {
+			n.setAddrLatency(name, addr, int(rtt.Milliseconds()))
+			// Update status to online
+			if i < len(p.connStatuses) {
+				p.connStatuses[i] = "online"
+			}
+		} else {
+			n.setAddrLatency(name, addr, -1)
+			if i < len(p.connStatuses) {
+				p.connStatuses[i] = "offline"
+			}
+		}
+	}
 }
 
 // SetPeersOfCache sets the cached peer list for a given peer name.
@@ -341,6 +412,10 @@ func (n *Node) StartLatencyProber(ctx context.Context) {
 						if rtt >= 0 {
 							n.SetLatency(name, int(rtt.Milliseconds()))
 							p.failCount.Store(0)
+							// Store per-addr latency for primary
+							if len(p.connAddrs) > 0 {
+								n.setAddrLatency(name, p.connAddrs[0], int(rtt.Milliseconds()))
+							}
 						} else {
 							n.SetLatency(name, -1)
 							fails := p.failCount.Add(1)
@@ -348,7 +423,12 @@ func (n *Node) StartLatencyProber(ctx context.Context) {
 								log.Printf("[relay] %s: %d consecutive ping failures, disconnecting for reconnect", name, fails)
 								p.cancel()
 							}
+							if len(p.connAddrs) > 0 {
+								n.setAddrLatency(name, p.connAddrs[0], -1)
+							}
 						}
+						// Probe extra connections for per-addr latency
+						n.probeExtraConns(name, p)
 					}
 					// Cache nested sub-peers for both outbound AND inbound peers
 					if n.IsNestedEnabled(name) {
@@ -450,7 +530,8 @@ func NewNode(name string, exitNode bool) *Node {
 		nested:    make(map[string]bool),
 		blocked:   make(map[string]bool),
 		peerRates: make(map[string]PeerTraffic),
-		latencies:    make(map[string]int),
+		latencies:     make(map[string]int),
+		addrLatencies: make(map[string]map[string]int),
 		peersOfCache: make(map[string][]PeerInfo),
 	}
 }
@@ -1100,8 +1181,9 @@ func (n *Node) AddPeerConn(name string, client hyclient.Client, addr, status str
 
 // IPStatus represents per-IP connection info.
 type IPStatus struct {
-	Addr   string `json:"addr"`
-	Status string `json:"status"` // "online", "offline", "mismatch", "native"
+	Addr      string `json:"addr"`
+	Status    string `json:"status"` // "online", "offline", "mismatch", "native"
+	LatencyMs int    `json:"latency_ms,omitempty"`
 }
 
 // PeerIPStatuses returns per-IP status for a peer.
@@ -1205,6 +1287,31 @@ func (n *Node) PingPeer(name string) time.Duration {
 			return
 		}
 		stream, err := p.client.TCP(streamListPeers)
+		if err != nil {
+			ch <- -1
+			return
+		}
+		io.ReadAll(stream)
+		stream.Close()
+		ch <- time.Since(start)
+	}()
+	select {
+	case d := <-ch:
+		return d
+	case <-time.After(2 * time.Second):
+		return -1
+	}
+}
+
+// pingClient measures RTT to a specific QUIC client connection. Returns -1 if unreachable.
+func (n *Node) pingClient(c hyclient.Client) time.Duration {
+	if c == nil {
+		return -1
+	}
+	ch := make(chan time.Duration, 1)
+	go func() {
+		start := time.Now()
+		stream, err := c.TCP(streamListPeers)
 		if err != nil {
 			ch <- -1
 			return

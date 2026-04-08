@@ -43,7 +43,6 @@ export interface TopologyNode {
   latency_ms: number;
   tx_rate: number;
   rx_rate: number;
-  conn_mode?: string;
   via?: string;
   is_self: boolean;
   children?: TopologyNode[];
@@ -52,6 +51,7 @@ export interface TopologyNode {
 export interface IPStatus {
   addr: string;
   status: string;
+  latency_ms?: number;
 }
 
 // ===== Clients (Peers) =====

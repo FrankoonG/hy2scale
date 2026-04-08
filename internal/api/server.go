@@ -628,7 +628,6 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		Name       string            `json:"name"`
 		Addr       string            `json:"addr,omitempty"`
 		Addrs      []string          `json:"addrs,omitempty"`
-		ConnMode   string            `json:"conn_mode,omitempty"`
 		IPStatuses []relay.IPStatus  `json:"ip_statuses,omitempty"`
 		ExitNode   bool              `json:"exit_node"`
 		Direction string          `json:"direction"`
@@ -732,12 +731,29 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			tn.Addr = cl.PrimaryAddr()
 			addrs := cl.AllAddrs()
 			if len(addrs) > 1 {
-				tn.IPStatuses = s.app.Node().PeerIPStatuses(name)
+				ipStatuses := s.app.Node().PeerIPStatuses(name)
+				addrLats := s.app.Node().GetAddrLatencies(name)
+				primaryAddr := cl.PrimaryAddr()
+				// Ensure primary addr is included
+				hasPrimary := false
+				for _, s := range ipStatuses {
+					if s.Addr == primaryAddr {
+						hasPrimary = true
+						break
+					}
+				}
+				if !hasPrimary {
+					primaryLat := latencyCache[name]
+					ipStatuses = append([]relay.IPStatus{{Addr: primaryAddr, Status: "online", LatencyMs: primaryLat}}, ipStatuses...)
+				}
+				// Enrich with per-addr latency
+				for i := range ipStatuses {
+					if ms, ok := addrLats[ipStatuses[i].Addr]; ok {
+						ipStatuses[i].LatencyMs = ms
+					}
+				}
+				tn.IPStatuses = ipStatuses
 				tn.Addrs = addrs
-			}
-			tn.ConnMode = cl.ConnMode
-			if tn.ConnMode == "" && len(addrs) > 1 {
-				tn.ConnMode = "quality"
 			}
 			tn.Direction = "outbound"
 		}

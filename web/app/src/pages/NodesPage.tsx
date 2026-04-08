@@ -223,17 +223,20 @@ export default function NodesPage() {
               {nameEl}
               {versionBadge}
               {nativeBadge && <> {nativeBadge}</>}
-              {n.conn_mode === 'quality' && <> <Badge variant="green">Q</Badge></>}
-              {n.conn_mode === 'aggregate' && <> <Badge variant="blue">A</Badge></>}
               {ipTooltip && <> {ipTooltip}</>}
               {n.via ? (
                 <span className="peer-addr-sub">via {n.via}</span>
               ) : n.addr ? (
                 <span className="peer-addr-sub">
                   {n.addr}
-                  {n.addrs && n.addrs.length > 1 && (
-                    <> <Tooltip content={n.addrs.join('\n')}>
-                      <Badge variant="muted">+{n.addrs.length - 1}</Badge>
+                  {n.ip_statuses && n.ip_statuses.length > 0 && (
+                    <> <Tooltip content={
+                      n.ip_statuses.map((s) => {
+                        const lat = s.latency_ms && s.latency_ms > 0 ? `${s.latency_ms}ms` : s.latency_ms === -1 ? 'timeout' : s.status;
+                        return `${s.addr} — ${lat}`;
+                      }).join('\n')
+                    }>
+                      <Badge variant="muted">+{n.ip_statuses.length - 1}</Badge>
                     </Tooltip></>
                   )}
                 </span>

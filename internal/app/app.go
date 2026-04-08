@@ -46,9 +46,6 @@ type ClientEntry struct {
 	InitConnWindow   int `yaml:"init_conn_window,omitempty" json:"init_conn_window"`
 	MaxConnWindow    int `yaml:"max_conn_window,omitempty" json:"max_conn_window"`
 
-	// Connection mode for multi-IP: "" = direct (single IP), "quality", "aggregate"
-	ConnMode string `yaml:"conn_mode,omitempty" json:"conn_mode,omitempty"`
-
 	// Misc
 	FastOpen bool `yaml:"fast_open,omitempty" json:"fast_open"`
 	Disabled bool `yaml:"disabled,omitempty" json:"disabled"`
