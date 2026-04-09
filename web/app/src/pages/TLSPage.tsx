@@ -164,7 +164,6 @@ export default function TLSPage() {
     try {
       await Promise.all([...selection.selected].map((id) => api.deleteCert(id)));
       toast.success(`${t('app.bulkDelete')}: ${selection.count}`);
-      selection.clear();
       queryClient.invalidateQueries({ queryKey: ['certs'] });
     } catch (e: any) { toast.error(String(e.message || e)); }
   }, [selection, confirm, queryClient, toast, t]);

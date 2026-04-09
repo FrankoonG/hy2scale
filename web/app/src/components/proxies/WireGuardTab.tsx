@@ -207,7 +207,6 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
     try {
       await Promise.all([...peerSelection.selected].map((name) => api.deleteWGPeer(name)));
       toast.success(`${t('app.bulkDelete')}: ${peerSelection.count}`);
-      peerSelection.clear();
       queryClient.invalidateQueries({ queryKey: ['wireguard'] });
     } catch (e: any) { toast.error(String(e.message || e)); }
   }, [peerSelection, confirm, queryClient, toast, t]);

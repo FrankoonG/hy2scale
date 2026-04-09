@@ -79,7 +79,6 @@ export default function RulesPage() {
     try {
       await Promise.all([...selection.selected].map((id) => api.toggleRule(id, enabled)));
       toast.success(`${enabled ? t('app.bulkEnable') : t('app.bulkDisable')}: ${selection.count}`);
-      selection.clear();
       queryClient.invalidateQueries({ queryKey: ['rules'] });
     } catch (e: any) { toast.error(String(e.message || e)); }
   }, [selection, queryClient, toast, t]);
@@ -93,7 +92,6 @@ export default function RulesPage() {
     try {
       await Promise.all([...selection.selected].map((id) => api.deleteRule(id)));
       toast.success(`${t('app.bulkDelete')}: ${selection.count}`);
-      selection.clear();
       queryClient.invalidateQueries({ queryKey: ['rules'] });
     } catch (e: any) { toast.error(String(e.message || e)); }
   }, [selection, confirmDlg, queryClient, toast, t]);
