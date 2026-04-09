@@ -271,7 +271,6 @@ export default function NodesPage() {
         return api.disableClient(key, disabled);
       }));
       toast.success(`${!disabled ? t('app.bulkEnable') : t('app.bulkDisable')}: ${keys.length}`);
-      selection.clear();
       queryClient.invalidateQueries({ queryKey: ['topology'] });
     } catch (e: any) { toast.error(String(e.message || e)); }
   }, [selection, queryClient, toast, t]);
@@ -280,7 +279,6 @@ export default function NodesPage() {
     try {
       await Promise.all([...selection.selected].map((key) => api.setNested(key, nested)));
       toast.success(`${nested ? t('nodes.bulkEnableNested') : t('nodes.bulkDisableNested')}: ${selection.count}`);
-      selection.clear();
       queryClient.invalidateQueries({ queryKey: ['topology'] });
     } catch (e: any) { toast.error(String(e.message || e)); }
   }, [selection, queryClient, toast, t]);
@@ -295,7 +293,6 @@ export default function NodesPage() {
       const rootKeys = [...selection.selected].filter((key) => !key.includes('/'));
       await Promise.all(rootKeys.map((name) => api.deleteClient(name)));
       toast.success(`${t('app.bulkDelete')}: ${selection.count}`);
-      selection.clear();
       queryClient.invalidateQueries({ queryKey: ['topology'] });
     } catch (e: any) { toast.error(String(e.message || e)); }
   }, [selection, confirm, queryClient, toast, t]);
