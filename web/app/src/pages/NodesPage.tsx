@@ -139,9 +139,10 @@ export default function NodesPage() {
       data: c,
       expanded: true,
       className: `sub-row${syncingNodes.has(qp) ? ' syncing' : ''}${c.disabled ? ' disabled-row' : ''}`,
-      children: c.children
-        ? [...c.children].sort((a, b) => a.name.localeCompare(b.name)).map((cc) => buildChildNode(cc, qp))
-        : undefined,
+      // Don't expand children of a disabled node — they're effectively unreachable
+      children: c.disabled || !c.children
+        ? undefined
+        : [...c.children].sort((a, b) => a.name.localeCompare(b.name)).map((cc) => buildChildNode(cc, qp)),
     };
   };
 
@@ -149,6 +150,7 @@ export default function NodesPage() {
     if (qualifiedPath && syncingNodes.has(qualifiedPath)) {
       return <span className="latency latency-sync">{t('nodes.syncing')}</span>;
     }
+    if (n.disabled) return <span className="latency latency-off">{t('nodes.offline')}</span>;
     if (n.is_self) return <span className="latency latency-good">∞</span>;
     if (n.latency_ms === -1) return <span className="latency latency-off">{t('nodes.offline')}</span>;
     if (n.latency_ms === 0) return <span className="latency latency-na">—</span>;
