@@ -109,11 +109,10 @@
 .hy-table tr.self-row td{background:var(--primary-light)}
 .hy-table tr.self-row .peer-name-cell{color:var(--primary)}
 /* Syncing / disabled */
-.hy-table tr.syncing td{opacity:0.45}
-.hy-table tr.syncing td.col-check{opacity:1}
+/* Dim only the contents of cells (not the cells themselves), so backgrounds stay uniform */
+.hy-table tr.syncing td:not(.col-check)>*{opacity:.45}
 .hy-table tr.syncing{pointer-events:none}
-.hy-table tr.disabled-row td{opacity:.45}
-.hy-table tr.disabled-row td.col-check{opacity:1}
+.hy-table tr.disabled-row td:not(.col-check)>*{opacity:.45}
 
 /* Sub-row (nested children) */
 .hy-table tr.sub-row td{padding:8px 10px;font-size:13px}
