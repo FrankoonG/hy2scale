@@ -87,9 +87,9 @@
 .hy-table .col-check{width:40px;text-align:center;user-select:none;-webkit-user-select:none;vertical-align:middle}
 .hy-table .col-check input[type="checkbox"]{width:16px;height:16px;cursor:pointer;accent-color:var(--primary);margin:0;vertical-align:middle;border-radius:3px;border:1.5px solid var(--border);appearance:none;-webkit-appearance:none;background:var(--surface);transition:all .15s;position:relative;flex-shrink:0;display:inline-block}
 .hy-table .col-check input[type="checkbox"]:checked{background:var(--primary);border-color:var(--primary)}
-.hy-table .col-check input[type="checkbox"]:checked::after{content:'';position:absolute;left:4.5px;top:1.5px;width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg)}
+.hy-table .col-check input[type="checkbox"]:checked::after{content:'';position:absolute;left:50%;top:45%;width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:translate(-50%,-50%) rotate(45deg)}
 .hy-table .col-check input[type="checkbox"]:indeterminate{background:var(--primary);border-color:var(--primary)}
-.hy-table .col-check input[type="checkbox"]:indeterminate::after{content:'';position:absolute;left:3px;top:6.5px;width:8px;height:2px;background:#fff;border-radius:1px}
+.hy-table .col-check input[type="checkbox"]:indeterminate::after{content:'';position:absolute;left:50%;top:50%;width:8px;height:2px;background:#fff;border-radius:1px;transform:translate(-50%,-50%)}
 .hy-table .col-check input[type="checkbox"]:hover{border-color:var(--primary)}
 .hy-table tr.selected td{background:var(--primary-light)}
 
@@ -111,6 +111,7 @@
 /* Syncing / disabled */
 .hy-table tr.syncing{opacity:0.45;pointer-events:none}
 .hy-table tr.disabled-row td{opacity:.45}
+.hy-table tr.disabled-row td.col-check{opacity:1}
 
 /* Sub-row (nested children) */
 .hy-table tr.sub-row td{padding:8px 10px;font-size:13px}
