@@ -261,11 +261,14 @@ export default function NodesPage() {
 
   const bulkToggleNodes = useCallback(async (disabled: boolean) => {
     try {
-      await Promise.all([...selection.selected].map((key) => {
-        const name = key.includes('/') ? key.split('/').pop()! : key;
-        return api.disableClient(name, disabled);
-      }));
-      toast.success(`${!disabled ? t('app.bulkEnable') : t('app.bulkDisable')}: ${selection.count}`);
+      // Only disable root-level outbound nodes (no "/" in key)
+      const rootKeys = [...selection.selected].filter((key) => !key.includes('/'));
+      if (rootKeys.length === 0) {
+        toast.error('Enable/Disable only applies to root-level outbound nodes');
+        return;
+      }
+      await Promise.all(rootKeys.map((name) => api.disableClient(name, disabled)));
+      toast.success(`${!disabled ? t('app.bulkEnable') : t('app.bulkDisable')}: ${rootKeys.length}`);
       selection.clear();
       queryClient.invalidateQueries({ queryKey: ['topology'] });
     } catch (e: any) { toast.error(String(e.message || e)); }
@@ -287,10 +290,8 @@ export default function NodesPage() {
     });
     if (!ok) return;
     try {
-      await Promise.all([...selection.selected].map((key) => {
-        const name = key.includes('/') ? key.split('/').pop()! : key;
-        return api.deleteClient(name);
-      }));
+      const rootKeys = [...selection.selected].filter((key) => !key.includes('/'));
+      await Promise.all(rootKeys.map((name) => api.deleteClient(name)));
       toast.success(`${t('app.bulkDelete')}: ${selection.count}`);
       selection.clear();
       queryClient.invalidateQueries({ queryKey: ['topology'] });
@@ -348,16 +349,19 @@ export default function NodesPage() {
                   return search(treeNodes);
                 };
                 const items = sel.map(findData).filter(Boolean) as TopologyNode[];
-                const hasDisabled = items.some((n) => n.disabled);
-                const hasEnabled = items.some((n) => !n.disabled);
+                const rootKeys = sel.filter((k) => !k.includes('/'));
+                const rootItems = rootKeys.map(findData).filter(Boolean) as TopologyNode[];
+                const hasDisabled = rootItems.some((n) => n.disabled);
+                const hasEnabled = rootItems.some((n) => !n.disabled);
                 const hasNested = items.some((n) => n.nested);
                 const hasUnnested = items.some((n) => !n.nested);
+                const hasRoot = rootKeys.length > 0;
                 return <>
-                  {hasDisabled && <Button size="sm" onClick={() => bulkToggleNodes(false)}>{t('app.bulkEnable')}</Button>}
-                  {hasEnabled && <Button size="sm" onClick={() => bulkToggleNodes(true)}>{t('app.bulkDisable')}</Button>}
+                  {hasRoot && hasDisabled && <Button size="sm" onClick={() => bulkToggleNodes(false)}>{t('app.bulkEnable')}</Button>}
+                  {hasRoot && hasEnabled && <Button size="sm" onClick={() => bulkToggleNodes(true)}>{t('app.bulkDisable')}</Button>}
                   {hasUnnested && <Button size="sm" onClick={() => bulkNested(true)}>{t('nodes.bulkEnableNested')}</Button>}
                   {hasNested && <Button size="sm" onClick={() => bulkNested(false)}>{t('nodes.bulkDisableNested')}</Button>}
-                  <Button size="sm" variant="danger" onClick={bulkDeleteNodes}>{t('app.bulkDelete')}</Button>
+                  {hasRoot && <Button size="sm" variant="danger" onClick={bulkDeleteNodes}>{t('app.bulkDelete')}</Button>}
                 </>;
               })()}
             </BulkActionBar>
