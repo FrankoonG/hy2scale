@@ -7,7 +7,8 @@ interface NodeState {
   exitPaths: string[];
   syncingNodes: Map<string, { enabled: boolean }>;
   connectedPeers: Set<string>;
-  disabledPeers: Set<string>;
+  disabledPeers: Set<string>;           // root-level disabled names (client disables)
+  disabledPaths: Set<string>;           // qualified paths disabled (sub-row disables), backend convention
 
   setNode: (node: NodeConfig) => void;
   setTopology: (topo: TopologyNode[]) => void;
@@ -52,18 +53,34 @@ function buildExitPaths(topo: TopologyNode[], selfId?: string): string[] {
 
 function extractPeers(topo: TopologyNode[]) {
   const connected = new Set<string>();
-  const disabled = new Set<string>();
+  const disabled = new Set<string>();           // root-level disabled names
+  const disabledPaths = new Set<string>();      // qualified paths (backend convention, no self prefix)
 
-  function walk(nodes: TopologyNode[], isChild = false) {
+  function walk(nodes: TopologyNode[], parent: string, isChild: boolean) {
     for (const n of nodes) {
-      // Root nodes have explicit `connected` field; children are reachable if they appear in the tree
-      if (n.connected || n.is_self || isChild) connected.add(n.name);
-      if (n.disabled) disabled.add(n.name);
-      if (n.children) walk(n.children, true);
+      if (n.is_self) {
+        connected.add(n.name);
+        // Self's children: walk with empty parent (matches backend self-strip convention)
+        if (n.children) walk(n.children, '', true);
+        continue;
+      }
+      const qp = parent ? parent + '/' + n.name : n.name;
+      if (n.connected || isChild) connected.add(n.name);
+      if (n.disabled) {
+        if (parent === '') {
+          // Root-level disable (root outbound or direct inbound under self)
+          // Use bare name — matches both cfg.Clients and cfg.Peers single-key entries
+          disabled.add(n.name);
+        } else {
+          // Deeper sub-row disable — qualified path
+          disabledPaths.add(qp);
+        }
+      }
+      if (n.children) walk(n.children, qp, true);
     }
   }
-  walk(topo);
-  return { connected, disabled };
+  walk(topo, '', false);
+  return { connected, disabled, disabledPaths };
 }
 
 export const useNodeStore = create<NodeState>((set, get) => ({
@@ -73,13 +90,14 @@ export const useNodeStore = create<NodeState>((set, get) => ({
   syncingNodes: new Map(),
   connectedPeers: new Set(),
   disabledPeers: new Set(),
+  disabledPaths: new Set(),
 
   setNode: (node) => set({ node }),
 
   setTopology: (topo) => {
     const { node, syncingNodes } = get();
     const exitPaths = buildExitPaths(topo, node?.node_id);
-    const { connected, disabled } = extractPeers(topo);
+    const { connected, disabled, disabledPaths } = extractPeers(topo);
 
     // Clear syncing for nodes whose state has settled
     const newSyncing = new Map(syncingNodes);
@@ -92,7 +110,7 @@ export const useNodeStore = create<NodeState>((set, get) => ({
       }
     }
 
-    set({ topology: topo, exitPaths, connectedPeers: connected, disabledPeers: disabled });
+    set({ topology: topo, exitPaths, connectedPeers: connected, disabledPeers: disabled, disabledPaths });
   },
 
   setSyncing: (qualifiedPath, enabled) => {

@@ -8,7 +8,7 @@ interface ExitViaCellProps {
 }
 
 export function ExitViaCell({ exitVia, exitPaths, exitMode }: ExitViaCellProps) {
-  const { isHopReachable } = useExitPaths();
+  const { isReachableAt } = useExitPaths();
 
   if (!exitVia) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
 
@@ -21,7 +21,9 @@ export function ExitViaCell({ exitVia, exitPaths, exitMode }: ExitViaCellProps) 
     return (
       <span style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>
         {hops.map((hop, i) => {
-          if (!unreachable && !isHopReachable(hop)) unreachable = true;
+          // Build qualified prefix for this hop position
+          const qp = hops.slice(0, i + 1).join('/');
+          if (!unreachable && !isReachableAt(qp)) unreachable = true;
           const color = unreachable ? 'var(--red)' : 'var(--green)';
           return (
             <span key={i}>
