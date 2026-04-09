@@ -90,7 +90,6 @@ export function TreeTable<T>({ columns, nodes, emptyText, selection, isSelectabl
         <AnimatePresence>
           <tbody>
             {rows.map(({ node, meta }) => {
-              const dimmed = node.className?.includes('syncing') || node.className?.includes('disabled-row');
               const selectable = !selection || !isSelectable || isSelectable(node, meta);
               const isSelected = selection && selectable && selection.selected.has(node.key);
               return (
@@ -99,7 +98,7 @@ export function TreeTable<T>({ columns, nodes, emptyText, selection, isSelectabl
                   className={clsx(node.className, isSelected && 'selected')}
                   layout
                   initial={{ opacity: 0 }}
-                  animate={{ opacity: dimmed ? 0.45 : 1 }}
+                  animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                   transition={{ type: 'spring', stiffness: 500, damping: 35 }}
                 >
