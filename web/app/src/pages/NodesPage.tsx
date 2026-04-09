@@ -261,14 +261,16 @@ export default function NodesPage() {
 
   const bulkToggleNodes = useCallback(async (disabled: boolean) => {
     try {
-      // Only disable root-level outbound nodes (no "/" in key)
-      const rootKeys = [...selection.selected].filter((key) => !key.includes('/'));
-      if (rootKeys.length === 0) {
-        toast.error('Enable/Disable only applies to root-level outbound nodes');
-        return;
-      }
-      await Promise.all(rootKeys.map((name) => api.disableClient(name, disabled)));
-      toast.success(`${!disabled ? t('app.bulkEnable') : t('app.bulkDisable')}: ${rootKeys.length}`);
+      const keys = [...selection.selected];
+      await Promise.all(keys.map((key) => {
+        if (key.includes('/')) {
+          // Sub-row: use setNested (unnest = disable, nest = enable)
+          return api.setNested(key, !disabled);
+        }
+        // Root-level: use disableClient
+        return api.disableClient(key, disabled);
+      }));
+      toast.success(`${!disabled ? t('app.bulkEnable') : t('app.bulkDisable')}: ${keys.length}`);
       selection.clear();
       queryClient.invalidateQueries({ queryKey: ['topology'] });
     } catch (e: any) { toast.error(String(e.message || e)); }
@@ -350,15 +352,20 @@ export default function NodesPage() {
                 };
                 const items = sel.map(findData).filter(Boolean) as TopologyNode[];
                 const rootKeys = sel.filter((k) => !k.includes('/'));
-                const rootItems = rootKeys.map(findData).filter(Boolean) as TopologyNode[];
-                const hasDisabled = rootItems.some((n) => n.disabled);
-                const hasEnabled = rootItems.some((n) => !n.disabled);
+                // For enable/disable: root nodes check disabled flag, sub-rows check !nested (unnested = disabled)
+                const hasDisabledRoot = rootKeys.some((k) => { const n = findData(k); return n?.disabled; });
+                const hasEnabledRoot = rootKeys.some((k) => { const n = findData(k); return n && !n.disabled; });
+                const subKeys = sel.filter((k) => k.includes('/'));
+                const hasDisabledSub = subKeys.some((k) => { const n = findData(k); return n && !n.nested; });
+                const hasEnabledSub = subKeys.some((k) => { const n = findData(k); return n?.nested; });
+                const hasDisabled = hasDisabledRoot || hasDisabledSub;
+                const hasEnabled = hasEnabledRoot || hasEnabledSub;
                 const hasNested = items.some((n) => n.nested);
                 const hasUnnested = items.some((n) => !n.nested);
                 const hasRoot = rootKeys.length > 0;
                 return <>
-                  {hasRoot && hasDisabled && <Button size="sm" onClick={() => bulkToggleNodes(false)}>{t('app.bulkEnable')}</Button>}
-                  {hasRoot && hasEnabled && <Button size="sm" onClick={() => bulkToggleNodes(true)}>{t('app.bulkDisable')}</Button>}
+                  {hasDisabled && <Button size="sm" onClick={() => bulkToggleNodes(false)}>{t('app.bulkEnable')}</Button>}
+                  {hasEnabled && <Button size="sm" onClick={() => bulkToggleNodes(true)}>{t('app.bulkDisable')}</Button>}
                   {hasUnnested && <Button size="sm" onClick={() => bulkNested(true)}>{t('nodes.bulkEnableNested')}</Button>}
                   {hasNested && <Button size="sm" onClick={() => bulkNested(false)}>{t('nodes.bulkDisableNested')}</Button>}
                   {hasRoot && <Button size="sm" variant="danger" onClick={bulkDeleteNodes}>{t('app.bulkDelete')}</Button>}
