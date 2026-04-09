@@ -109,7 +109,9 @@
 .hy-table tr.self-row td{background:var(--primary-light)}
 .hy-table tr.self-row .peer-name-cell{color:var(--primary)}
 /* Syncing / disabled */
-.hy-table tr.syncing{opacity:0.45;pointer-events:none}
+.hy-table tr.syncing td{opacity:0.45}
+.hy-table tr.syncing td.col-check{opacity:1}
+.hy-table tr.syncing{pointer-events:none}
 .hy-table tr.disabled-row td{opacity:.45}
 .hy-table tr.disabled-row td.col-check{opacity:1}
 
