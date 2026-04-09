@@ -136,6 +136,11 @@
 .latency-na{color:var(--text-muted)}
 .latency-sync{color:var(--orange);font-weight:500;font-family:var(--font)}
 
+/* Tree expand/collapse triangle */
+.hy-tree-toggle{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;margin-right:4px;border:none;background:transparent;cursor:pointer;color:var(--text-muted);border-radius:3px;flex-shrink:0}
+.hy-tree-toggle:hover{color:var(--primary);background:var(--primary-light)}
+.hy-tree-toggle svg{width:10px;height:10px;display:block}
+
 /* Peer name */
 .peer-name-cell{font-weight:600}
 a.peer-link{color:var(--primary);text-decoration:none;cursor:pointer}

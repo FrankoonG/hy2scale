@@ -196,9 +196,27 @@ export default function NodesPage() {
 
         const nativeBadge = n.native ? <Badge variant="muted">native</Badge> : null;
 
+        // Tree expand/collapse triangle: shown for non-self, non-native nodes
+        // ▶ = nested false (collapsed), ▼ = nested true (expanded)
+        // Clicking toggles nested state
+        const canExpand = !n.is_self && !n.native;
+        const triangle = canExpand ? (
+          <button
+            type="button"
+            className="hy-tree-toggle"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleNestedToggle(n, meta.nodeKey); }}
+            aria-label={n.nested ? 'Collapse' : 'Expand'}
+          >
+            <svg viewBox="0 0 24 24" fill="currentColor" style={{ transform: n.nested ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform .15s' }}>
+              <path d="M8 5l8 7-8 7V5z" />
+            </svg>
+          </button>
+        ) : null;
+
         return (
           <TreeCell meta={meta}>
             <span className="sub-name-wrap">
+              {triangle}
               {nameEl}
               {versionBadge}
               {nativeBadge && <> {nativeBadge}</>}
