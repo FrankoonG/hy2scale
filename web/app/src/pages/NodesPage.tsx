@@ -334,11 +334,32 @@ export default function NodesPage() {
         actions={
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <BulkActionBar count={selection.count} onClear={selection.clear}>
-              <Button size="sm" onClick={() => bulkToggleNodes(false)}>{t('app.bulkEnable')}</Button>
-              <Button size="sm" onClick={() => bulkToggleNodes(true)}>{t('app.bulkDisable')}</Button>
-              <Button size="sm" onClick={() => bulkNested(true)}>{t('nodes.bulkEnableNested')}</Button>
-              <Button size="sm" onClick={() => bulkNested(false)}>{t('nodes.bulkDisableNested')}</Button>
-              <Button size="sm" variant="danger" onClick={bulkDeleteNodes}>{t('app.bulkDelete')}</Button>
+              {(() => {
+                // Inspect selected nodes to decide which buttons to show
+                const sel = [...selection.selected];
+                const findData = (key: string): TopologyNode | undefined => {
+                  const search = (nodes: TreeNode<TopologyNode>[]): TopologyNode | undefined => {
+                    for (const n of nodes) {
+                      if (n.key === key) return n.data;
+                      if (n.children) { const r = search(n.children); if (r) return r; }
+                    }
+                    return undefined;
+                  };
+                  return search(treeNodes);
+                };
+                const items = sel.map(findData).filter(Boolean) as TopologyNode[];
+                const hasDisabled = items.some((n) => n.disabled);
+                const hasEnabled = items.some((n) => !n.disabled);
+                const hasNested = items.some((n) => n.nested);
+                const hasUnnested = items.some((n) => !n.nested);
+                return <>
+                  {hasDisabled && <Button size="sm" onClick={() => bulkToggleNodes(false)}>{t('app.bulkEnable')}</Button>}
+                  {hasEnabled && <Button size="sm" onClick={() => bulkToggleNodes(true)}>{t('app.bulkDisable')}</Button>}
+                  {hasUnnested && <Button size="sm" onClick={() => bulkNested(true)}>{t('nodes.bulkEnableNested')}</Button>}
+                  {hasNested && <Button size="sm" onClick={() => bulkNested(false)}>{t('nodes.bulkDisableNested')}</Button>}
+                  <Button size="sm" variant="danger" onClick={bulkDeleteNodes}>{t('app.bulkDelete')}</Button>
+                </>;
+              })()}
             </BulkActionBar>
             <ImportExportButton target="nodes" />
             <Button size="sm" variant="primary" onClick={openAdd}>{t('nodes.addNode')}</Button>

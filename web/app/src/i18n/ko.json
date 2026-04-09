@@ -368,7 +368,7 @@
   "app.bulkEnable": "활성화",
   "app.bulkDisable": "비활성화",
   "app.bulkDelete": "삭제",
-  "nodes.bulkEnableNested": "중첩 활성화",
-  "nodes.bulkDisableNested": "중첩 비활성화",
+  "nodes.bulkEnableNested": "중첩",
+  "nodes.bulkDisableNested": "중첩 해제",
   "users.bulkResetTraffic": "트래픽 초기화"
 }
