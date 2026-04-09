@@ -85,7 +85,7 @@
 
 /* Checkbox column */
 .hy-table .col-check{width:40px;text-align:center;user-select:none;-webkit-user-select:none;vertical-align:middle}
-.hy-table .col-check input[type="checkbox"]{width:16px;height:16px;cursor:pointer;accent-color:var(--primary);margin:0;vertical-align:middle;border-radius:3px;border:1.5px solid var(--border);appearance:none;-webkit-appearance:none;background:var(--surface);transition:all .15s;position:relative;flex-shrink:0;display:inline-block}
+.hy-table .col-check input[type="checkbox"]{width:16px;height:16px;cursor:pointer;accent-color:var(--primary);margin:0;vertical-align:middle;border-radius:3px;border:1.5px solid var(--border);appearance:none;-webkit-appearance:none;background:transparent;transition:all .15s;position:relative;flex-shrink:0;display:inline-block}
 .hy-table .col-check input[type="checkbox"]:checked{background:var(--primary);border-color:var(--primary)}
 .hy-table .col-check input[type="checkbox"]:checked::after{content:'';position:absolute;left:50%;top:45%;width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:translate(-50%,-50%) rotate(45deg)}
 .hy-table .col-check input[type="checkbox"]:indeterminate{background:var(--primary);border-color:var(--primary)}
