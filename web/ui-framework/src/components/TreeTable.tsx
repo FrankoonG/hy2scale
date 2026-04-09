@@ -1,6 +1,7 @@
-import { type ReactNode } from 'react';
+import { type ReactNode, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
+import type { SelectionState } from './Table';
 
 export interface TreeColumn<T> {
   key: string;
@@ -13,9 +14,9 @@ export interface TreeColumn<T> {
 export interface TreeRowMeta {
   depth: number;
   isLast: boolean;
-  guides: boolean[]; // which ancestor levels have continuing lines
+  guides: boolean[];
   isExpanded?: boolean;
-  nodeKey: string; // the TreeNode key — useful for qualified path lookups
+  nodeKey: string;
 }
 
 export interface TreeNode<T> {
@@ -30,6 +31,8 @@ export interface TreeTableProps<T> {
   columns: TreeColumn<T>[];
   nodes: TreeNode<T>[];
   emptyText?: ReactNode;
+  selection?: SelectionState;
+  isSelectable?: (node: TreeNode<T>, meta: TreeRowMeta) => boolean;
 }
 
 function flattenNodes<T>(
@@ -43,8 +46,6 @@ function flattenNodes<T>(
     const meta: TreeRowMeta = { depth, isLast, guides: [...guides], isExpanded: node.expanded, nodeKey: node.key };
     result.push({ node, meta });
     if (node.children && node.expanded !== false) {
-      // Root nodes (depth 0) don't render tree lines, so don't propagate
-      // a root-level guide flag — it would create an orphaned "|" in children
       const childGuides = depth === 0 ? [] : [...guides, !isLast];
       result.push(...flattenNodes(node.children, depth + 1, childGuides));
     }
@@ -52,7 +53,13 @@ function flattenNodes<T>(
   return result;
 }
 
-export function TreeTable<T>({ columns, nodes, emptyText }: TreeTableProps<T>) {
+function IndeterminateCheckbox({ checked, indeterminate, onChange }: { checked: boolean; indeterminate: boolean; onChange: () => void }) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (ref.current) ref.current.indeterminate = indeterminate; }, [indeterminate]);
+  return <input ref={ref} type="checkbox" checked={checked} onChange={onChange} />;
+}
+
+export function TreeTable<T>({ columns, nodes, emptyText, selection, isSelectable }: TreeTableProps<T>) {
   const rows = flattenNodes(nodes);
 
   if (rows.length === 0 && emptyText) {
@@ -64,6 +71,15 @@ export function TreeTable<T>({ columns, nodes, emptyText }: TreeTableProps<T>) {
       <table className="hy-table">
         <thead>
           <tr>
+            {selection && (
+              <th className="col-check">
+                <IndeterminateCheckbox
+                  checked={selection.isAllSelected}
+                  indeterminate={selection.isSomeSelected}
+                  onChange={selection.toggleAll}
+                />
+              </th>
+            )}
             {columns.map((col) => (
               <th key={col.key} style={col.width ? { width: col.width } : undefined} className={col.className}>
                 {col.title}
@@ -75,20 +91,29 @@ export function TreeTable<T>({ columns, nodes, emptyText }: TreeTableProps<T>) {
           <tbody>
             {rows.map(({ node, meta }) => {
               const dimmed = node.className?.includes('syncing') || node.className?.includes('disabled-row');
+              const selectable = !selection || !isSelectable || isSelectable(node, meta);
+              const isSelected = selection && selectable && selection.selected.has(node.key);
               return (
-              <motion.tr
-                key={node.key}
-                className={clsx(node.className)}
-                layout
-                initial={{ opacity: 0 }}
-                animate={{ opacity: dimmed ? 0.45 : 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ type: 'spring', stiffness: 500, damping: 35 }}
-              >
-                {columns.map((col) => (
-                  <td key={col.key} className={col.className}>{col.render(node.data, meta)}</td>
-                ))}
-              </motion.tr>
+                <motion.tr
+                  key={node.key}
+                  className={clsx(node.className, isSelected && 'selected')}
+                  layout
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: dimmed ? 0.45 : 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+                >
+                  {selection && (
+                    <td className="col-check">
+                      {selectable ? (
+                        <input type="checkbox" checked={!!isSelected} onChange={() => selection.toggle(node.key)} />
+                      ) : null}
+                    </td>
+                  )}
+                  {columns.map((col) => (
+                    <td key={col.key} className={col.className}>{col.render(node.data, meta)}</td>
+                  ))}
+                </motion.tr>
               );
             })}
           </tbody>

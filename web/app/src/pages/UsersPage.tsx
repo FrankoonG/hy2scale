@@ -1,13 +1,14 @@
 import { useState, useCallback, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Card, Button, Toggle, Badge, useToast, useConfirm } from '@hy2scale/ui';
+import { Card, Button, Badge, useToast, useConfirm, useSelection } from '@hy2scale/ui';
 import type { UserConfig, Session } from '@/api';
 import * as api from '@/api';
 import { fmtBytes } from '@/hooks/useFormat';
 import { ExitViaCell } from '@/components/ExitViaCell';
 import UserModal from '@/components/UserModal';
 import ImportExportButton from '@/components/ImportExportButton';
+import BulkActionBar from '@/components/BulkActionBar';
 
 export default function UsersPage() {
   const { t } = useTranslation();
@@ -83,6 +84,45 @@ export default function UsersPage() {
     try { return new Date(date) < new Date(); } catch { return false; }
   };
 
+  const selection = useSelection(users.map((u) => u.id));
+
+  const bulkToggle = useCallback(async (enabled: boolean) => {
+    try {
+      await Promise.all([...selection.selected].map((id) => api.toggleUser(id, enabled)));
+      toast.success(`${enabled ? t('app.bulkEnable') : t('app.bulkDisable')}: ${selection.count}`);
+      selection.clear();
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+    } catch (e: any) { toast.error(String(e.message || e)); }
+  }, [selection, queryClient, toast, t]);
+
+  const bulkReset = useCallback(async () => {
+    const ok = await confirm({
+      title: t('users.resetTitle'), message: t('users.resetConfirm'),
+      confirmText: t('users.reset'), cancelText: t('app.cancel'),
+    });
+    if (!ok) return;
+    try {
+      await Promise.all([...selection.selected].map((id) => api.resetTraffic(id)));
+      toast.success(`${t('users.bulkResetTraffic')}: ${selection.count}`);
+      selection.clear();
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+    } catch (e: any) { toast.error(String(e.message || e)); }
+  }, [selection, confirm, queryClient, toast, t]);
+
+  const bulkDelete = useCallback(async () => {
+    const ok = await confirm({
+      title: t('app.bulkDelete'), message: t('users.deleteConfirm', { name: `${selection.count} users` }),
+      danger: true, confirmText: t('app.delete'), cancelText: t('app.cancel'),
+    });
+    if (!ok) return;
+    try {
+      await Promise.all([...selection.selected].map((id) => api.deleteUser(id)));
+      toast.success(`${t('app.bulkDelete')}: ${selection.count}`);
+      selection.clear();
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+    } catch (e: any) { toast.error(String(e.message || e)); }
+  }, [selection, confirm, queryClient, toast, t]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {/* Users */}
@@ -90,7 +130,13 @@ export default function UsersPage() {
         title={t('users.title')}
         count={users.length}
         actions={
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <BulkActionBar count={selection.count} onClear={selection.clear}>
+              <Button size="sm" onClick={() => bulkToggle(true)}>{t('app.bulkEnable')}</Button>
+              <Button size="sm" onClick={() => bulkToggle(false)}>{t('app.bulkDisable')}</Button>
+              <Button size="sm" onClick={bulkReset}>{t('users.bulkResetTraffic')}</Button>
+              <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>
+            </BulkActionBar>
             <ImportExportButton target="users" />
             <Button size="sm" variant="primary" onClick={openAdd}>{t('users.addUser')}</Button>
           </div>
@@ -104,12 +150,19 @@ export default function UsersPage() {
             <table className="hy-table">
               <thead>
                 <tr>
-                  <th style={{ width: 50 }}>{t('users.on')}</th>
+                  <th className="col-check">
+                    <input
+                      type="checkbox"
+                      checked={selection.isAllSelected}
+                      ref={(el) => { if (el) el.indeterminate = selection.isSomeSelected; }}
+                      onChange={selection.toggleAll}
+                    />
+                  </th>
                   <th style={{ width: 120 }}>{t('users.username')}</th>
                   <th style={{ minWidth: 180 }}>{t('users.exitVia')}</th>
                   <th style={{ width: 130, textAlign: 'right' }}>{t('users.traffic')}</th>
                   <th style={{ width: 90, textAlign: 'right' }}>{t('users.expiry')}</th>
-                  <th style={{ width: 150 }}></th>
+                  <th style={{ width: 40 }}></th>
                 </tr>
               </thead>
               <tbody>
@@ -118,10 +171,11 @@ export default function UsersPage() {
                   const usedGB = (u.traffic_used / 1073741824).toFixed(2) + ' GB';
                   const pct = u.traffic_limit > 0 ? Math.min(100, (u.traffic_used / u.traffic_limit * 100)) : 0;
                   const expired = isExpired(u.expiry_date);
+                  const isSelected = selection.selected.has(u.id);
                   return (
-                    <tr key={u.id} className={!u.enabled ? 'disabled-row' : undefined}>
-                      <td>
-                        <Toggle checked={u.enabled} onChange={() => handleToggle(u)} />
+                    <tr key={u.id} className={`${!u.enabled ? 'disabled-row' : ''}${isSelected ? ' selected' : ''}`}>
+                      <td className="col-check">
+                        <input type="checkbox" checked={isSelected} onChange={() => selection.toggle(u.id)} />
                       </td>
                       <td><b>{u.username}</b></td>
                       <td><ExitViaCell exitVia={u.exit_via} exitPaths={u.exit_paths} exitMode={u.exit_mode} /></td>
@@ -136,18 +190,10 @@ export default function UsersPage() {
                       <td style={{ textAlign: 'right' }}>
                         <span style={{ fontSize: 12, color: expired ? 'var(--red)' : undefined }}>{u.expiry_date || '—'}</span>
                       </td>
-                      <td className="col-actions">
-                        <div className="act-group">
-                          <button className="act-btn edit" onClick={(e) => openEdit(u.id, e)}>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                          </button>
-                          <button className="act-btn warn" onClick={() => handleReset(u)}>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 105.64-12.36L1 10"/></svg>
-                          </button>
-                          <button className="act-btn danger" onClick={() => handleDelete(u)}>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
-                          </button>
-                        </div>
+                      <td>
+                        <button className="hy-row-edit" onClick={(e) => openEdit(u.id, e)} title={t('app.edit')}>
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                        </button>
                       </td>
                     </tr>
                   );

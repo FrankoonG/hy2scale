@@ -3,11 +3,12 @@ import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Card, Button, Table, Toggle, Badge, Modal, Input, Select, Textarea,
-  FormGroup, useToast, useConfirm, type Column,
+  FormGroup, useToast, useConfirm, useSelection, type Column,
 } from '@hy2scale/ui';
 import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
 import { ExitViaCell } from '@/components/ExitViaCell';
 import ImportExportButton from '@/components/ImportExportButton';
+import BulkActionBar from '@/components/BulkActionBar';
 import type { RoutingRule } from '@/api';
 import * as api from '@/api';
 
@@ -22,6 +23,8 @@ export default function RulesPage() {
 
   const rules = data?.rules || [];
   const available = data?.available !== false;
+
+  const selection = useSelection(rules.map((r) => r.id));
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -71,25 +74,29 @@ export default function RulesPage() {
     finally { setSaving(false); }
   };
 
-  const handleToggle = useCallback(async (r: RoutingRule) => {
+  // Bulk actions
+  const bulkToggle = useCallback(async (enabled: boolean) => {
     try {
-      await api.toggleRule(r.id, !r.enabled);
+      await Promise.all([...selection.selected].map((id) => api.toggleRule(id, enabled)));
+      toast.success(`${enabled ? t('app.bulkEnable') : t('app.bulkDisable')}: ${selection.count}`);
+      selection.clear();
       queryClient.invalidateQueries({ queryKey: ['rules'] });
     } catch (e: any) { toast.error(String(e.message || e)); }
-  }, [queryClient, toast]);
+  }, [selection, queryClient, toast, t]);
 
-  const handleDelete = useCallback(async (r: RoutingRule) => {
+  const bulkDelete = useCallback(async () => {
     const ok = await confirmDlg({
-      title: t('app.delete'), message: t('rules.deleteConfirm'),
+      title: t('app.bulkDelete'), message: t('rules.deleteConfirm'),
       danger: true, confirmText: t('app.delete'), cancelText: t('app.cancel'),
     });
     if (!ok) return;
     try {
-      await api.deleteRule(r.id);
-      toast.success(t('rules.deleted'));
+      await Promise.all([...selection.selected].map((id) => api.deleteRule(id)));
+      toast.success(`${t('app.bulkDelete')}: ${selection.count}`);
+      selection.clear();
       queryClient.invalidateQueries({ queryKey: ['rules'] });
     } catch (e: any) { toast.error(String(e.message || e)); }
-  }, [confirmDlg, t, queryClient, toast]);
+  }, [selection, confirmDlg, queryClient, toast, t]);
 
   // TUN mode handlers
   const handleTunToggle = async () => {
@@ -117,17 +124,15 @@ export default function RulesPage() {
   }
 
   const columns: Column<RoutingRule>[] = [
-    { key: 'on', title: '', width: '40px', render: (r) => <Toggle checked={r.enabled} onChange={() => handleToggle(r)} size="sm" /> },
     { key: 'name', title: t('rules.name'), render: (r) => <strong>{r.name}</strong> },
     { key: 'type', title: '', width: '70px', render: (r) => <Badge variant={r.type === 'ip' ? 'blue' : 'orange'}>{r.type === 'ip' ? 'IP' : 'Domain'}</Badge> },
     { key: 'targets', title: t('rules.targets'), render: (r) => <span className="mono" style={{ fontSize: 11 }}>{r.targets.slice(0, 3).join(', ')}{r.targets.length > 3 ? ` +${r.targets.length - 3}` : ''}</span> },
     { key: 'exit', title: t('rules.exitVia'), render: (r) => <ExitViaCell exitVia={r.exit_via} exitPaths={r.exit_paths} exitMode={r.exit_mode} /> },
     {
-      key: 'actions', title: '', width: '80px', render: (r) => (
-        <div className="actions">
-          <button className="hy-icon-btn" onClick={(e) => openEdit(r, e as any)} title={t('app.edit')}>✎</button>
-          <button className="hy-icon-btn danger" onClick={() => handleDelete(r)} title={t('app.delete')}>✕</button>
-        </div>
+      key: 'actions', title: '', width: '40px', render: (r) => (
+        <button className="hy-row-edit" onClick={(e) => openEdit(r, e as any)} title={t('app.edit')}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </button>
       ),
     },
   ];
@@ -164,14 +169,26 @@ export default function RulesPage() {
         title={t('rules.title')}
         count={rules.length}
         actions={
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <BulkActionBar count={selection.count} onClear={selection.clear}>
+              <Button size="sm" onClick={() => bulkToggle(true)}>{t('app.bulkEnable')}</Button>
+              <Button size="sm" onClick={() => bulkToggle(false)}>{t('app.bulkDisable')}</Button>
+              <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>
+            </BulkActionBar>
             <ImportExportButton target="rules" />
             <Button size="sm" variant="primary" onClick={openAdd}>{t('rules.newRule')}</Button>
           </div>
         }
         noPadding
       >
-        <Table columns={columns} data={rules} rowKey={(r) => r.id} emptyText={t('rules.noRules')} />
+        <Table
+          columns={columns}
+          data={rules}
+          rowKey={(r) => r.id}
+          rowClassName={(r) => !r.enabled ? 'disabled-row' : undefined}
+          emptyText={t('rules.noRules')}
+          selection={selection}
+        />
       </Card>
 
       {/* Rule Modal */}

@@ -37,7 +37,7 @@ export type { DropdownMenuProps, DropdownItem } from './components/DropdownMenu'
 
 // Data
 export { Table } from './components/Table';
-export type { TableProps, Column } from './components/Table';
+export type { TableProps, Column, SelectionState } from './components/Table';
 export { TreeTable, TreeCell } from './components/TreeTable';
 export type { TreeTableProps, TreeColumn, TreeNode, TreeRowMeta, TreeCellProps } from './components/TreeTable';
 
@@ -67,6 +67,7 @@ export { CopyButton } from './components/CopyButton';
 export { GripIcon } from './components/GripIcon';
 
 // Hooks
+export { useSelection } from './hooks/useSelection';
 export { useClickOutside } from './hooks/useClickOutside';
 export { useMediaQuery } from './hooks/useMediaQuery';
 export { useDebounce } from './hooks/useDebounce';

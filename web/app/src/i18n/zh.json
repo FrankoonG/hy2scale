@@ -177,9 +177,9 @@
   "ikev2.poolRequired": "地址池为必填项",
   "ikev2.certRequired": "MSCHAPv2 模式需要证书",
   "ikev2.pskRequired": "预共享密钥为必填项",
-  "ikev2.reachable": "\u2713 {name} 可达",
-  "ikev2.notConnected": "\u2717 {name} 未连接",
-  "ikev2.notFound": "\u2717 {name} 未找到",
+  "ikev2.reachable": "✓ {name} 可达",
+  "ikev2.notConnected": "✗ {name} 未连接",
+  "ikev2.notFound": "✗ {name} 未找到",
   "wg.title": "WireGuard 服务器",
   "wg.port": "监听端口",
   "wg.address": "地址 (CIDR)",
@@ -362,5 +362,13 @@
   "tls.generated": "证书已生成",
   "tls.editTitle": "编辑证书",
   "tls.optional": "可选",
-  "wg.privKeyHint": "存储以供配置文件下载"
+  "wg.privKeyHint": "存储以供配置文件下载",
+  "app.selected": "已选择 {{count}} 项",
+  "app.clearSelection": "清除",
+  "app.bulkEnable": "启用",
+  "app.bulkDisable": "禁用",
+  "app.bulkDelete": "删除",
+  "nodes.bulkEnableNested": "启用嵌套",
+  "nodes.bulkDisableNested": "禁用嵌套",
+  "users.bulkResetTraffic": "重置流量"
 }
