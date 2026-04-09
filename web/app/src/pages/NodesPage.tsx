@@ -261,16 +261,10 @@ export default function NodesPage() {
 
   const bulkToggleNodes = useCallback(async (disabled: boolean) => {
     try {
-      const keys = [...selection.selected];
-      await Promise.all(keys.map((key) => {
-        if (key.includes('/')) {
-          // Sub-row: use setNested (unnest = disable, nest = enable)
-          return api.setNested(key, !disabled);
-        }
-        // Root-level: use disableClient
-        return api.disableClient(key, disabled);
-      }));
-      toast.success(`${!disabled ? t('app.bulkEnable') : t('app.bulkDisable')}: ${keys.length}`);
+      // Only root-level outbound nodes have real client connections that can be disabled
+      const rootKeys = [...selection.selected].filter((k) => !k.includes('/'));
+      await Promise.all(rootKeys.map((name) => api.disableClient(name, disabled)));
+      toast.success(`${!disabled ? t('app.bulkEnable') : t('app.bulkDisable')}: ${rootKeys.length}`);
       queryClient.invalidateQueries({ queryKey: ['topology'] });
     } catch (e: any) { toast.error(String(e.message || e)); }
   }, [selection, queryClient, toast, t]);
@@ -349,14 +343,10 @@ export default function NodesPage() {
                 };
                 const items = sel.map(findData).filter(Boolean) as TopologyNode[];
                 const rootKeys = sel.filter((k) => !k.includes('/'));
-                // For enable/disable: root nodes check disabled flag, sub-rows check !nested (unnested = disabled)
-                const hasDisabledRoot = rootKeys.some((k) => { const n = findData(k); return n?.disabled; });
-                const hasEnabledRoot = rootKeys.some((k) => { const n = findData(k); return n && !n.disabled; });
-                const subKeys = sel.filter((k) => k.includes('/'));
-                const hasDisabledSub = subKeys.some((k) => { const n = findData(k); return n && !n.nested; });
-                const hasEnabledSub = subKeys.some((k) => { const n = findData(k); return n?.nested; });
-                const hasDisabled = hasDisabledRoot || hasDisabledSub;
-                const hasEnabled = hasEnabledRoot || hasEnabledSub;
+                // Enable/Disable only applies to root-level outbound nodes (real client connections)
+                // Sub-rows are remote topology — they can only be Nest/Unnest (visibility), not disabled
+                const hasDisabled = rootKeys.some((k) => { const n = findData(k); return n?.disabled; });
+                const hasEnabled = rootKeys.some((k) => { const n = findData(k); return n && !n.disabled; });
                 const hasNested = items.some((n) => n.nested);
                 const hasUnnested = items.some((n) => !n.nested);
                 const hasRoot = rootKeys.length > 0;
