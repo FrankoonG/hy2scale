@@ -362,5 +362,13 @@
   "tls.generated": "인증서가 생성되었습니다",
   "tls.editTitle": "인증서 편집",
   "tls.optional": "선택 사항",
-  "wg.privKeyHint": "설정 다운로드용으로 저장"
+  "wg.privKeyHint": "설정 다운로드용으로 저장",
+  "app.selected": "{{count}}개 선택",
+  "app.clearSelection": "선택 해제",
+  "app.bulkEnable": "활성화",
+  "app.bulkDisable": "비활성화",
+  "app.bulkDelete": "삭제",
+  "nodes.bulkEnableNested": "중첩 활성화",
+  "nodes.bulkDisableNested": "중첩 비활성화",
+  "users.bulkResetTraffic": "트래픽 초기화"
 }

@@ -83,6 +83,23 @@
 .hy-table .col-nested{width:70px;text-align:center}
 .hy-table .col-actions{width:150px;text-align:right}
 
+/* Checkbox column */
+.hy-table .col-check{width:40px;text-align:center;user-select:none;-webkit-user-select:none}
+.hy-table .col-check input[type="checkbox"]{width:15px;height:15px;cursor:pointer;accent-color:var(--primary)}
+.hy-table tr.selected td{background:var(--primary-light)}
+
+/* Ghost row edit button */
+.hy-row-edit{padding:6px;border:none;background:transparent;color:var(--text-muted);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;border-radius:var(--radius-sm);transition:all .15s;opacity:.5}
+.hy-row-edit:hover{color:var(--primary);background:var(--primary-light);opacity:1}
+.hy-row-edit svg{width:15px;height:15px}
+
+/* Bulk action bar */
+.hy-bulk-bar{display:inline-flex;align-items:center;gap:8px;animation:bulkFadeIn .2s ease}
+.hy-bulk-bar .hy-bulk-count{font-size:12px;font-weight:600;color:var(--primary);padding:2px 8px;background:var(--primary-light);border-radius:10px}
+.hy-bulk-bar .hy-bulk-clear{border:none;background:none;color:var(--text-muted);cursor:pointer;font-size:12px;padding:2px 6px}
+.hy-bulk-bar .hy-bulk-clear:hover{color:var(--text)}
+@keyframes bulkFadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+
 /* Self row */
 .hy-table tr.self-row td{background:var(--primary-light)}
 .hy-table tr.self-row .peer-name-cell{color:var(--primary)}

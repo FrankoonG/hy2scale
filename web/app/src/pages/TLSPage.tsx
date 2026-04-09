@@ -2,9 +2,10 @@ import { useState, useCallback, type MouseEvent, type DragEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Card, Button, Badge, Tabs, Modal, Input, Textarea, Select,
-  FormGroup, FormGrid, TabPanel, useToast, useConfirm,
+  Card, Button, Badge, Tabs, Table, Modal, Input, Textarea, Select,
+  FormGroup, FormGrid, TabPanel, useToast, useConfirm, useSelection, type Column,
 } from '@hy2scale/ui';
+import BulkActionBar from '@/components/BulkActionBar';
 import * as api from '@/api';
 import type { CertInfo } from '@/api';
 
@@ -152,57 +153,68 @@ export default function TLSPage() {
     ...certs.filter((c) => c.is_ca && c.has_key).map((c) => ({ value: c.id, label: c.name || c.id })),
   ];
 
+  const selection = useSelection(certs.map((c) => c.id));
+
+  const bulkDelete = useCallback(async () => {
+    const ok = await confirm({
+      title: t('app.bulkDelete'), message: t('tls.deleteConfirm', { id: `${selection.count} certs` }),
+      danger: true, confirmText: t('app.delete'), cancelText: t('app.cancel'),
+    });
+    if (!ok) return;
+    try {
+      await Promise.all([...selection.selected].map((id) => api.deleteCert(id)));
+      toast.success(`${t('app.bulkDelete')}: ${selection.count}`);
+      selection.clear();
+      queryClient.invalidateQueries({ queryKey: ['certs'] });
+    } catch (e: any) { toast.error(String(e.message || e)); }
+  }, [selection, confirm, queryClient, toast, t]);
+
+  const certColumns: Column<CertInfo>[] = [
+    {
+      key: 'name', title: t('tls.name'), render: (cert) => (
+        <>
+          <b>{cert.name || cert.id}</b>
+          <span className="peer-addr-sub">{cert.id}</span>
+          {isExpired(cert.expires) && <> <Badge variant="muted">{t('tls.expired')}</Badge></>}
+        </>
+      ),
+    },
+    { key: 'subject', title: t('tls.subject'), render: (cert) => cert.subject },
+    { key: 'issuer', title: t('tls.issuer'), render: (cert) => <>{cert.issuer}{cert.is_ca && <> <Badge variant="blue">CA</Badge></>}</> },
+    { key: 'expires', title: t('tls.expires'), render: (cert) => <span className="mono">{cert.expires}</span> },
+    { key: 'key', title: t('tls.hasKey'), render: (cert) => cert.has_key ? <Badge variant="green">{t('app.yes')}</Badge> : <Badge variant="muted">{t('app.no')}</Badge> },
+    {
+      key: 'actions', title: '', width: '40px', render: (cert) => (
+        <button className="hy-row-edit" onClick={(e) => handleEdit(cert, e)} title={t('app.edit')}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </button>
+      ),
+    },
+  ];
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <Card
         title={t('tls.title')}
         count={certs.length}
-        actions={<Button size="sm" variant="primary" onClick={openNew}>{t('tls.new')}</Button>}
+        actions={
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <BulkActionBar count={selection.count} onClear={selection.clear}>
+              <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>
+            </BulkActionBar>
+            <Button size="sm" variant="primary" onClick={openNew}>{t('tls.new')}</Button>
+          </div>
+        }
         noPadding
       >
-        {certs.length === 0 ? (
-          <div className="hy-empty" dangerouslySetInnerHTML={{ __html: t('tls.noCerts') }} />
-        ) : (
-          <div className="hy-table-wrap">
-            <table className="hy-table">
-              <thead>
-                <tr>
-                  <th>{t('tls.name')}</th>
-                  <th>{t('tls.subject')}</th>
-                  <th>{t('tls.issuer')}</th>
-                  <th>{t('tls.expires')}</th>
-                  <th>{t('tls.hasKey')}</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {certs.map((cert) => (
-                  <tr key={cert.id} style={isExpired(cert.expires) ? { opacity: 0.45 } : undefined}>
-                    <td>
-                      <b>{cert.name || cert.id}</b>
-                      <span className="peer-addr-sub">{cert.id}</span>
-                      {isExpired(cert.expires) && <> <Badge variant="muted">{t('tls.expired')}</Badge></>}
-                    </td>
-                    <td>{cert.subject}</td>
-                    <td>{cert.issuer}{cert.is_ca && <> <Badge variant="blue">CA</Badge></>}</td>
-                    <td><span className="mono">{cert.expires}</span></td>
-                    <td>{cert.has_key ? <Badge variant="green">{t('app.yes')}</Badge> : <Badge variant="muted">{t('app.no')}</Badge>}</td>
-                    <td className="col-actions">
-                      <div className="act-group">
-                        <button className="act-btn edit" onClick={(e) => handleEdit(cert, e)}>
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                        </button>
-                        <button className="act-btn danger" onClick={() => handleDelete(cert)}>
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <Table
+          columns={certColumns}
+          data={certs}
+          rowKey={(c) => c.id}
+          rowClassName={(c) => isExpired(c.expires) ? 'disabled-row' : undefined}
+          emptyText={t('tls.noCerts')}
+          selection={selection}
+        />
       </Card>
 
       {/* Cert Modal — matches old frontend: 2 tabs + generate button + CA select */}

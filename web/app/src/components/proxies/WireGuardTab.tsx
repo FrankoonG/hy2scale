@@ -2,11 +2,12 @@ import { useState, useEffect, useCallback, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Card, Button, Input, Toggle, FormGroup, FormGrid, Badge, Modal,
-  CopyButton, useToast, useConfirm,
+  Card, Button, Input, Toggle, Table, FormGroup, FormGrid, Badge, Modal,
+  CopyButton, useToast, useConfirm, useSelection, type Column,
 } from '@hy2scale/ui';
 import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
 import { ExitViaCell } from '@/components/ExitViaCell';
+import BulkActionBar from '@/components/BulkActionBar';
 import * as api from '@/api';
 import type { WireGuardPeer } from '@/api';
 
@@ -195,6 +196,41 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
   }
 
   const peers = wg?.peers || [];
+  const peerSelection = useSelection(peers.map((p) => p.name));
+
+  const bulkDeletePeers = useCallback(async () => {
+    const ok = await confirm({
+      title: t('app.bulkDelete'), message: t('wg.deleteConfirm', { name: `${peerSelection.count} peers` }),
+      danger: true, confirmText: t('app.delete'), cancelText: t('app.cancel'),
+    });
+    if (!ok) return;
+    try {
+      await Promise.all([...peerSelection.selected].map((name) => api.deleteWGPeer(name)));
+      toast.success(`${t('app.bulkDelete')}: ${peerSelection.count}`);
+      peerSelection.clear();
+      queryClient.invalidateQueries({ queryKey: ['wireguard'] });
+    } catch (e: any) { toast.error(String(e.message || e)); }
+  }, [peerSelection, confirm, queryClient, toast, t]);
+
+  const peerColumns: Column<WireGuardPeer>[] = [
+    {
+      key: 'name', title: t('wg.peerName'), width: '120px', render: (p) => (
+        <a href="#" onClick={(e) => { e.preventDefault(); showPeerDetail(p.name, e); }} style={{ fontWeight: 600, color: 'var(--primary)', textDecoration: 'none' }}>
+          {p.name}
+        </a>
+      ),
+    },
+    { key: 'exit', title: t('wg.peerExitVia'), render: (p) => <ExitViaCell exitVia={p.exit_via || ''} exitPaths={p.exit_paths} exitMode={p.exit_mode} /> },
+    { key: 'ips', title: t('wg.peerAllowedIPs'), width: '130px', render: (p) => <span className="mono" style={{ fontSize: 12 }}>{p.allowed_ips}</span> },
+    { key: 'ka', title: t('wg.ka'), width: '50px', render: (p) => <>{p.keepalive || '—'}</> },
+    {
+      key: 'actions', title: '', width: '40px', render: (p) => (
+        <button className="hy-row-edit" onClick={(e) => openEditPeer(p, e)} title={t('app.edit')}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </button>
+      ),
+    },
+  ];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
@@ -244,50 +280,23 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
       <Card
         title={t('wg.peers')}
         count={peers.length}
-        actions={<Button size="sm" variant="primary" onClick={openAddPeer}>{t('wg.addPeer')}</Button>}
+        actions={
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <BulkActionBar count={peerSelection.count} onClear={peerSelection.clear}>
+              <Button size="sm" variant="danger" onClick={bulkDeletePeers}>{t('app.bulkDelete')}</Button>
+            </BulkActionBar>
+            <Button size="sm" variant="primary" onClick={openAddPeer}>{t('wg.addPeer')}</Button>
+          </div>
+        }
         noPadding
       >
-        {peers.length === 0 ? (
-          <div className="hy-empty" dangerouslySetInnerHTML={{ __html: t('wg.noPeers') }} />
-        ) : (
-          <div className="hy-table-wrap">
-            <table className="hy-table">
-              <thead>
-                <tr>
-                  <th style={{ width: 120 }}>{t('wg.peerName')}</th>
-                  <th style={{ minWidth: 180 }}>{t('wg.peerExitVia')}</th>
-                  <th style={{ width: 130 }}>{t('wg.peerAllowedIPs')}</th>
-                  <th style={{ width: 50 }}>{t('wg.ka')}</th>
-                  <th style={{ width: 150 }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {peers.map((p) => (
-                  <tr key={p.name}>
-                    <td>
-                      <a href="#" onClick={(e) => { e.preventDefault(); showPeerDetail(p.name, e); }} style={{ fontWeight: 600, color: 'var(--primary)', textDecoration: 'none' }}>
-                        {p.name}
-                      </a>
-                    </td>
-                    <td><ExitViaCell exitVia={p.exit_via || ''} exitPaths={p.exit_paths} exitMode={p.exit_mode} /></td>
-                    <td><span className="mono" style={{ fontSize: 12 }}>{p.allowed_ips}</span></td>
-                    <td>{p.keepalive || '—'}</td>
-                    <td className="col-actions">
-                      <div className="act-group">
-                        <button className="act-btn edit" onClick={(e) => openEditPeer(p, e)}>
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                        </button>
-                        <button className="act-btn danger" onClick={() => handleDeletePeer(p.name)}>
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <Table
+          columns={peerColumns}
+          data={peers}
+          rowKey={(p) => p.name}
+          emptyText={t('wg.noPeers')}
+          selection={peerSelection}
+        />
       </Card>
 
       {/* Add/Edit Peer Modal */}

@@ -2,8 +2,8 @@ import { useState, useCallback, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  StatsGrid, Card, Button, Badge, Toggle, Tooltip,
-  TreeTable, TreeCell, useToast, useConfirm,
+  StatsGrid, Card, Button, Badge, Tooltip,
+  TreeTable, TreeCell, useToast, useConfirm, useSelection,
   type TreeNode, type TreeColumn,
 } from '@hy2scale/ui';
 import type { TopologyNode } from '@/api';
@@ -13,6 +13,7 @@ import { fmtBytes, fmtRate } from '@/hooks/useFormat';
 import { getBasePath } from '@/api/client';
 import NodeModal from '@/components/NodeModal';
 import EditSelfModal from '@/components/EditSelfModal';
+import BulkActionBar from '@/components/BulkActionBar';
 import ImportExportButton from '@/components/ImportExportButton';
 
 export default function NodesPage() {
@@ -164,24 +165,6 @@ export default function NodesPage() {
 
   const columns: TreeColumn<TopologyNode>[] = [
     {
-      key: 'toggle', title: t('nodes.on') || 'ON', width: '40px',
-      render: (n, meta) => {
-        if (n.native) return null;
-        if (n.is_self) {
-          return <Toggle checked={!n.disabled} onChange={() => handleToggle(n, '__self__')} />;
-        }
-        if (meta.depth === 0 && n.direction === 'outbound') {
-          return <Toggle checked={!n.disabled} onChange={() => handleToggle(n, meta.nodeKey)} />;
-        }
-        if (meta.depth === 0 && n.direction === 'inbound') return null;
-        // Sub-rows: enable/disable toggle
-        if (meta.depth > 0) {
-          return <Toggle checked={!n.disabled} onChange={() => handleToggle(n, meta.nodeKey)} />;
-        }
-        return null;
-      },
-    },
-    {
       key: 'status', title: t('nodes.status'), width: '75px', className: 'col-status',
       render: (n, meta) => {
         return latencyCell(n, meta.nodeKey);
@@ -250,40 +233,69 @@ export default function NodesPage() {
       ),
     },
     {
-      key: 'nested', title: t('nodes.nested'), width: '70px', className: 'col-nested',
+      key: 'actions', title: '', width: '40px',
       render: (n, meta) => {
-        if (n.is_self) return <Toggle checked disabled />;
-        if (n.native) return <Toggle checked={false} disabled />;
-        if (meta.depth === 0 && n.direction === 'inbound') return null;
-        // All peers and sub-rows: interactive nested toggle
-        return <Toggle checked={n.nested} onChange={() => handleNestedToggle(n, meta.nodeKey)} />;
+        if (n.is_self) {
+          return <button className="hy-row-edit" onClick={(e) => openEditSelf(e as any)} title={t('app.edit')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>;
+        }
+        if (meta.depth === 0 && !n.native) {
+          return <button className="hy-row-edit" onClick={(e) => openEdit(n.name, e as any)} title={t('app.edit')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>;
+        }
+        return null;
       },
-    },
-    {
-      key: 'actions', title: '', width: '150px', className: 'col-actions',
-      render: (n, meta) => (
-        <div className="act-group">
-          {n.is_self ? (
-            <button className="act-btn edit" onClick={(e) => openEditSelf(e as any)}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-              {t('app.edit')}
-            </button>
-          ) : meta.depth === 0 && !n.native ? (
-            <>
-              <button className="act-btn edit" onClick={(e) => openEdit(n.name, e as any)}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-              </button>
-              <button className="act-btn danger" onClick={() => handleDelete(n.name)}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
-              </button>
-            </>
-          ) : null}
-        </div>
-      ),
     },
   ];
 
   const treeNodes = buildTreeNodes(topology);
+
+  // Collect selectable keys (exclude self, native)
+  const selectableKeys: string[] = [];
+  const collectKeys = (nodes: TreeNode<TopologyNode>[]) => {
+    for (const n of nodes) {
+      if (!n.data.is_self && !n.data.native) selectableKeys.push(n.key);
+      if (n.children) collectKeys(n.children);
+    }
+  };
+  collectKeys(treeNodes);
+  const selection = useSelection(selectableKeys);
+
+  const bulkToggleNodes = useCallback(async (disabled: boolean) => {
+    try {
+      await Promise.all([...selection.selected].map((key) => {
+        const name = key.includes('/') ? key.split('/').pop()! : key;
+        return api.disableClient(name, disabled);
+      }));
+      toast.success(`${!disabled ? t('app.bulkEnable') : t('app.bulkDisable')}: ${selection.count}`);
+      selection.clear();
+      queryClient.invalidateQueries({ queryKey: ['topology'] });
+    } catch (e: any) { toast.error(String(e.message || e)); }
+  }, [selection, queryClient, toast, t]);
+
+  const bulkNested = useCallback(async (nested: boolean) => {
+    try {
+      await Promise.all([...selection.selected].map((key) => api.setNested(key, nested)));
+      toast.success(`${nested ? t('nodes.bulkEnableNested') : t('nodes.bulkDisableNested')}: ${selection.count}`);
+      selection.clear();
+      queryClient.invalidateQueries({ queryKey: ['topology'] });
+    } catch (e: any) { toast.error(String(e.message || e)); }
+  }, [selection, queryClient, toast, t]);
+
+  const bulkDeleteNodes = useCallback(async () => {
+    const ok = await confirm({
+      title: t('app.bulkDelete'), message: t('nodes.deleteConfirm', { name: `${selection.count} nodes` }),
+      danger: true, confirmText: t('app.delete'), cancelText: t('app.cancel'),
+    });
+    if (!ok) return;
+    try {
+      await Promise.all([...selection.selected].map((key) => {
+        const name = key.includes('/') ? key.split('/').pop()! : key;
+        return api.deleteClient(name);
+      }));
+      toast.success(`${t('app.bulkDelete')}: ${selection.count}`);
+      selection.clear();
+      queryClient.invalidateQueries({ queryKey: ['topology'] });
+    } catch (e: any) { toast.error(String(e.message || e)); }
+  }, [selection, confirm, queryClient, toast, t]);
 
   return (
     <div>
@@ -320,7 +332,14 @@ export default function NodesPage() {
         title={t('nodes.title')}
         count={topology.length}
         actions={
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <BulkActionBar count={selection.count} onClear={selection.clear}>
+              <Button size="sm" onClick={() => bulkToggleNodes(false)}>{t('app.bulkEnable')}</Button>
+              <Button size="sm" onClick={() => bulkToggleNodes(true)}>{t('app.bulkDisable')}</Button>
+              <Button size="sm" onClick={() => bulkNested(true)}>{t('nodes.bulkEnableNested')}</Button>
+              <Button size="sm" onClick={() => bulkNested(false)}>{t('nodes.bulkDisableNested')}</Button>
+              <Button size="sm" variant="danger" onClick={bulkDeleteNodes}>{t('app.bulkDelete')}</Button>
+            </BulkActionBar>
             <ImportExportButton target="nodes" />
             <Button size="sm" variant="primary" onClick={openAdd}>{t('nodes.addNode')}</Button>
           </div>
@@ -331,6 +350,8 @@ export default function NodesPage() {
           columns={columns}
           nodes={treeNodes}
           emptyText={t('nodes.noConnections')}
+          selection={selection}
+          isSelectable={(node) => !node.data.is_self && !node.data.native}
         />
       </Card>
 
