@@ -368,7 +368,7 @@
   "app.bulkEnable": "启用",
   "app.bulkDisable": "禁用",
   "app.bulkDelete": "删除",
-  "nodes.bulkEnableNested": "启用嵌套",
-  "nodes.bulkDisableNested": "禁用嵌套",
+  "nodes.bulkEnableNested": "嵌套",
+  "nodes.bulkDisableNested": "取消嵌套",
   "users.bulkResetTraffic": "重置流量"
 }

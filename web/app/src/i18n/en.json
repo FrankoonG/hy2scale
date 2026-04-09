@@ -368,7 +368,7 @@
   "app.bulkEnable": "Enable",
   "app.bulkDisable": "Disable",
   "app.bulkDelete": "Delete",
-  "nodes.bulkEnableNested": "Enable Nested",
-  "nodes.bulkDisableNested": "Disable Nested",
+  "nodes.bulkEnableNested": "Nest",
+  "nodes.bulkDisableNested": "Unnest",
   "users.bulkResetTraffic": "Reset Traffic"
 }

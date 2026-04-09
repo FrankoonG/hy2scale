@@ -171,9 +171,17 @@ export default function RulesPage() {
         actions={
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <BulkActionBar count={selection.count} onClear={selection.clear}>
-              <Button size="sm" onClick={() => bulkToggle(true)}>{t('app.bulkEnable')}</Button>
-              <Button size="sm" onClick={() => bulkToggle(false)}>{t('app.bulkDisable')}</Button>
-              <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>
+              {(() => {
+                const sel = [...selection.selected];
+                const items = sel.map((id) => rules.find((r) => r.id === id)).filter(Boolean);
+                const hasDisabled = items.some((r) => !r!.enabled);
+                const hasEnabled = items.some((r) => r!.enabled);
+                return <>
+                  {hasDisabled && <Button size="sm" onClick={() => bulkToggle(true)}>{t('app.bulkEnable')}</Button>}
+                  {hasEnabled && <Button size="sm" onClick={() => bulkToggle(false)}>{t('app.bulkDisable')}</Button>}
+                  <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>
+                </>;
+              })()}
             </BulkActionBar>
             <ImportExportButton target="rules" />
             <Button size="sm" variant="primary" onClick={openAdd}>{t('rules.newRule')}</Button>

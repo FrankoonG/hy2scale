@@ -132,10 +132,18 @@ export default function UsersPage() {
         actions={
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <BulkActionBar count={selection.count} onClear={selection.clear}>
-              <Button size="sm" onClick={() => bulkToggle(true)}>{t('app.bulkEnable')}</Button>
-              <Button size="sm" onClick={() => bulkToggle(false)}>{t('app.bulkDisable')}</Button>
-              <Button size="sm" onClick={bulkReset}>{t('users.bulkResetTraffic')}</Button>
-              <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>
+              {(() => {
+                const sel = [...selection.selected];
+                const items = sel.map((id) => users.find((u) => u.id === id)).filter(Boolean);
+                const hasDisabled = items.some((u) => !u!.enabled);
+                const hasEnabled = items.some((u) => u!.enabled);
+                return <>
+                  {hasDisabled && <Button size="sm" onClick={() => bulkToggle(true)}>{t('app.bulkEnable')}</Button>}
+                  {hasEnabled && <Button size="sm" onClick={() => bulkToggle(false)}>{t('app.bulkDisable')}</Button>}
+                  <Button size="sm" onClick={bulkReset}>{t('users.bulkResetTraffic')}</Button>
+                  <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>
+                </>;
+              })()}
             </BulkActionBar>
             <ImportExportButton target="users" />
             <Button size="sm" variant="primary" onClick={openAdd}>{t('users.addUser')}</Button>
