@@ -362,5 +362,13 @@
   "tls.generated": "Certificate generated",
   "tls.editTitle": "Edit Certificate",
   "tls.optional": "optional",
-  "wg.privKeyHint": "stored for config download"
+  "wg.privKeyHint": "stored for config download",
+  "app.selected": "{{count}} selected",
+  "app.clearSelection": "Clear",
+  "app.bulkEnable": "Enable",
+  "app.bulkDisable": "Disable",
+  "app.bulkDelete": "Delete",
+  "nodes.bulkEnableNested": "Enable Nested",
+  "nodes.bulkDisableNested": "Disable Nested",
+  "users.bulkResetTraffic": "Reset Traffic"
 }
