@@ -36,6 +36,7 @@ type topoSubPeer struct {
 	Via       string         `json:"via"`
 	LatencyMs int            `json:"latency_ms"`
 	Nested    bool           `json:"nested"`
+	Disabled  bool           `json:"disabled,omitempty"`
 	Native    bool           `json:"native,omitempty"`
 	Version   string         `json:"version,omitempty"`
 	TxRate    uint64         `json:"tx_rate"`
@@ -135,6 +136,7 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("GET /api/topology", s.getTopology)
 	authed.HandleFunc("GET /api/peers/{name}/peers", s.getNestedPeers)
 	authed.HandleFunc("PUT /api/peers/{name}/nested", s.setNested)
+	authed.HandleFunc("PUT /api/peers/{name}/disable", s.setPeerDisabled)
 	authed.HandleFunc("GET /api/clients", s.getClients)
 	authed.HandleFunc("GET /api/clients/{name}", s.getClient)
 	authed.HandleFunc("POST /api/clients", s.addClient)
@@ -688,8 +690,13 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				LatencyMs: latencyCache[p.Name],
 				Version:   p.Version,
 			}
-			if pc, ok := cfg.Peers[p.Name]; ok && pc.Nested {
-				child.Nested = true // explicitly enabled
+			if pc, ok := cfg.Peers[p.Name]; ok {
+				if pc.Nested {
+					child.Nested = true // explicitly enabled
+				}
+				if pc.Disabled {
+					child.Disabled = true
+				}
 			}
 			selfChildren = append(selfChildren, child)
 		}
@@ -992,6 +999,7 @@ func filterChildrenByNestedConfig(children []topoSubPeer, parentName string, cfg
 		qualifiedKey := parentName + "/" + c.Name
 		pc, hasPC := cfg.Peers[qualifiedKey]
 		c.Nested = hasPC && pc.Nested
+		c.Disabled = hasPC && pc.Disabled
 		if c.Nested && len(c.Children) > 0 {
 			c.Children = filterChildrenByNestedConfig(c.Children, qualifiedKey, cfg)
 		} else {
@@ -1110,6 +1118,22 @@ func (s *Server) getNestedPeers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, peers)
+}
+
+func (s *Server) setPeerDisabled(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var body struct {
+		Disabled bool `json:"disabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if err := s.app.SetPeerDisabled(name, body.Disabled); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 func (s *Server) setNested(w http.ResponseWriter, r *http.Request) {

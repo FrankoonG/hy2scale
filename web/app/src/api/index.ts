@@ -37,6 +37,8 @@ export const disableClient = (name: string, disabled: boolean) =>
 // Nested
 export const setNested = (name: string, enabled: boolean) =>
   api(`/peers/${encodeURIComponent(name)}/nested`, { method: 'PUT', body: JSON.stringify({ enabled }) });
+export const setPeerDisabled = (name: string, disabled: boolean) =>
+  api(`/peers/${encodeURIComponent(name)}/disable`, { method: 'PUT', body: JSON.stringify({ disabled }) });
 
 // Users
 export const getUsers = () => api<UserConfig[]>('/users');
