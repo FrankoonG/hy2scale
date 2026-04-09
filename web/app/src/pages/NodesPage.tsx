@@ -138,7 +138,7 @@ export default function NodesPage() {
       key: qp,
       data: c,
       expanded: true,
-      className: `sub-row${syncingNodes.has(qp) ? ' syncing' : ''}${c.disabled || !c.nested ? ' disabled-row' : ''}`,
+      className: `sub-row${syncingNodes.has(qp) ? ' syncing' : ''}${c.disabled ? ' disabled-row' : ''}`,
       children: c.children
         ? [...c.children].sort((a, b) => a.name.localeCompare(b.name)).map((cc) => buildChildNode(cc, qp))
         : undefined,
@@ -261,10 +261,16 @@ export default function NodesPage() {
 
   const bulkToggleNodes = useCallback(async (disabled: boolean) => {
     try {
-      // Only root-level outbound nodes have real client connections that can be disabled
-      const rootKeys = [...selection.selected].filter((k) => !k.includes('/'));
-      await Promise.all(rootKeys.map((name) => api.disableClient(name, disabled)));
-      toast.success(`${!disabled ? t('app.bulkEnable') : t('app.bulkDisable')}: ${rootKeys.length}`);
+      const keys = [...selection.selected];
+      await Promise.all(keys.map((key) => {
+        if (key.includes('/')) {
+          // Sub-row: use setPeerDisabled (qualified path) — keeps connection but blocks routing
+          return api.setPeerDisabled(key, disabled);
+        }
+        // Root-level outbound: use disableClient (stops connection)
+        return api.disableClient(key, disabled);
+      }));
+      toast.success(`${!disabled ? t('app.bulkEnable') : t('app.bulkDisable')}: ${keys.length}`);
       queryClient.invalidateQueries({ queryKey: ['topology'] });
     } catch (e: any) { toast.error(String(e.message || e)); }
   }, [selection, queryClient, toast, t]);
@@ -343,10 +349,11 @@ export default function NodesPage() {
                 };
                 const items = sel.map(findData).filter(Boolean) as TopologyNode[];
                 const rootKeys = sel.filter((k) => !k.includes('/'));
-                // Enable/Disable only applies to root-level outbound nodes (real client connections)
-                // Sub-rows are remote topology — they can only be Nest/Unnest (visibility), not disabled
-                const hasDisabled = rootKeys.some((k) => { const n = findData(k); return n?.disabled; });
-                const hasEnabled = rootKeys.some((k) => { const n = findData(k); return n && !n.disabled; });
+                // Enable/Disable applies to all nodes:
+                // - Root nodes: disableClient (stops QUIC connection)
+                // - Sub-rows: setPeerDisabled (keeps connection, blocks as exit hop)
+                const hasDisabled = items.some((n) => n.disabled);
+                const hasEnabled = items.some((n) => !n.disabled);
                 const hasNested = items.some((n) => n.nested);
                 const hasUnnested = items.some((n) => !n.nested);
                 const hasRoot = rootKeys.length > 0;

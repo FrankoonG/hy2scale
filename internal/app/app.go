@@ -72,7 +72,8 @@ func (c ClientEntry) PrimaryAddr() string {
 }
 
 type PeerConfig struct {
-	Nested bool `yaml:"nested" json:"nested"`
+	Nested   bool `yaml:"nested" json:"nested"`
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 }
 
 type ServerConfig struct {
@@ -792,6 +793,23 @@ func (a *App) SetNested(peer string, enabled bool) error {
 	})
 }
 
+// SetPeerDisabled marks a peer (or qualified peer path) as disabled,
+// preventing it from being used as an exit hop without dropping the connection.
+func (a *App) SetPeerDisabled(peer string, disabled bool) error {
+	// Strip self prefix to match how SetNested handles it
+	if parts := strings.SplitN(peer, "/", 2); len(parts) == 2 && parts[0] == a.node.Name() {
+		peer = parts[1]
+	}
+	return a.store.Update(func(c *Config) {
+		if c.Peers == nil {
+			c.Peers = make(map[string]PeerConfig)
+		}
+		pc := c.Peers[peer]
+		pc.Disabled = disabled
+		c.Peers[peer] = pc
+	})
+}
+
 // --- Internal ---
 
 // RestartServer is the public wrapper for restartServer.
@@ -1399,12 +1417,8 @@ func ValidateExitMode(exitVia, exitMode string) error {
 
 func (a *App) dialExitWithMode(ctx context.Context, exitVia, exitMode, addr string) (net.Conn, error) {
 	// Reject traffic through disabled nodes
-	if exitVia != "" {
-		for _, hop := range strings.Split(exitVia, "/") {
-			if a.isNodeDisabled(hop) {
-				return nil, fmt.Errorf("exit node %q is disabled", hop)
-			}
-		}
+	if exitVia != "" && a.isExitPathDisabled(exitVia) {
+		return nil, fmt.Errorf("exit path %q is disabled", exitVia)
 	}
 	if exitMode != "" && exitVia != "" && !strings.Contains(exitVia, "/") {
 		var conn net.Conn
@@ -1439,17 +1453,10 @@ func (a *App) dialExitWithPaths(ctx context.Context, exitVia string, exitPaths [
 	case "aggregate", "speed":
 		return a.dialExitWithMode(ctx, exitVia, exitMode, addr)
 	}
-	// Filter out disabled paths
+	// Filter out disabled paths (checks both individual hops and qualified path prefixes)
 	var active []string
 	for _, p := range paths {
-		skip := false
-		for _, hop := range strings.Split(p, "/") {
-			if a.isNodeDisabled(hop) {
-				skip = true
-				break
-			}
-		}
-		if !skip {
+		if !a.isExitPathDisabled(p) {
 			active = append(active, p)
 		}
 	}
@@ -1532,6 +1539,31 @@ func (a *App) isNodeDisabled(name string) bool {
 	cfg := a.store.Get()
 	for _, cl := range cfg.Clients {
 		if cl.Name == name && cl.Disabled {
+			return true
+		}
+	}
+	// Also check Peers map for non-root nodes (e.g. inbound nested children)
+	if pc, ok := cfg.Peers[name]; ok && pc.Disabled {
+		return true
+	}
+	return false
+}
+
+// isExitPathDisabled checks if any hop along an exit path is disabled.
+// It checks both individual hop names and qualified path prefixes.
+func (a *App) isExitPathDisabled(exitVia string) bool {
+	cfg := a.store.Get()
+	parts := strings.Split(exitVia, "/")
+	// Check each progressively-longer prefix as a qualified path
+	for i := 1; i <= len(parts); i++ {
+		prefix := strings.Join(parts[:i], "/")
+		if pc, ok := cfg.Peers[prefix]; ok && pc.Disabled {
+			return true
+		}
+	}
+	// Also check individual hop names against Clients
+	for _, hop := range parts {
+		if a.isNodeDisabled(hop) {
 			return true
 		}
 	}
