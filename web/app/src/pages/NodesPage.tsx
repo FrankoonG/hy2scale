@@ -138,7 +138,7 @@ export default function NodesPage() {
       key: qp,
       data: c,
       expanded: true,
-      className: `sub-row${syncingNodes.has(qp) ? ' syncing' : ''}${c.disabled ? ' disabled-row' : ''}`,
+      className: `sub-row${syncingNodes.has(qp) ? ' syncing' : ''}${c.disabled || !c.nested ? ' disabled-row' : ''}`,
       children: c.children
         ? [...c.children].sort((a, b) => a.name.localeCompare(b.name)).map((cc) => buildChildNode(cc, qp))
         : undefined,
