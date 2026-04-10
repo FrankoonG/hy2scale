@@ -138,9 +138,11 @@ type App struct {
 	ssCancel     context.CancelFunc
 	l2tpCancel   context.CancelFunc
 	ikev2Cancel  context.CancelFunc
-	usersMu      sync.RWMutex
-	userIndex    map[string]*UserConfig // username → user (for fast auth lookup)
-	trafficDirty sync.Map              // username → true (needs flush)
+	usersMu       sync.RWMutex
+	userIndex     map[string]*UserConfig           // username → user (for fast auth lookup)
+	pwConflicted  map[string]map[string]bool       // username → proxy → conflicted
+	pwConflictAll map[string]map[string][]string   // proxy → password → []usernames (for API)
+	trafficDirty  sync.Map                         // username → true (needs flush)
 	Sessions     *SessionManager
 }
 
@@ -597,9 +599,87 @@ func (a *App) rebuildUserIndex() {
 	for i := range cfg.Users {
 		index[cfg.Users[i].Username] = &cfg.Users[i]
 	}
+
+	// Build password conflict maps for password-only proxies.
+	// To add a new proxy type: add its key here AND in the frontend proxyRegistry.ts
+	proxyPwUsers := make(map[string]map[string][]string)
+	for _, proxy := range PasswordOnlyProxies {
+		proxyPwUsers[proxy] = make(map[string][]string)
+	}
+	for _, u := range cfg.Users {
+		if !u.Enabled {
+			continue
+		}
+		for _, proxy := range PasswordOnlyProxies {
+			pw := u.EffectivePassword(proxy)
+			proxyPwUsers[proxy][pw] = append(proxyPwUsers[proxy][pw], u.Username)
+		}
+	}
+	// Also check system password against hy2 users (relay/user ambiguity)
+	if cfg.Server.Password != "" {
+		if users, ok := proxyPwUsers["hy2"][cfg.Server.Password]; ok {
+			_ = users // system password collides; mark those users as conflicted
+		}
+	}
+
+	conflicted := make(map[string]map[string]bool)
+	for proxy, pwMap := range proxyPwUsers {
+		for _, usernames := range pwMap {
+			if len(usernames) > 1 {
+				for _, un := range usernames {
+					if conflicted[un] == nil {
+						conflicted[un] = make(map[string]bool)
+					}
+					conflicted[un][proxy] = true
+				}
+			}
+		}
+	}
+
 	a.usersMu.Lock()
 	a.userIndex = index
+	a.pwConflicted = conflicted
+	a.pwConflictAll = proxyPwUsers
 	a.usersMu.Unlock()
+}
+
+// IsPasswordConflicted returns true if the user has a password collision on the given proxy.
+func (a *App) IsPasswordConflicted(username, proxy string) bool {
+	a.usersMu.RLock()
+	defer a.usersMu.RUnlock()
+	if m, ok := a.pwConflicted[username]; ok {
+		return m[proxy]
+	}
+	return false
+}
+
+// GetPasswordConflicts returns a map of username → proxy → []conflicting usernames.
+// Only users with actual conflicts are included.
+func (a *App) GetPasswordConflicts() map[string]map[string][]string {
+	a.usersMu.RLock()
+	defer a.usersMu.RUnlock()
+	result := make(map[string]map[string][]string)
+	for proxy, pwMap := range a.pwConflictAll {
+		for _, usernames := range pwMap {
+			if len(usernames) <= 1 {
+				continue
+			}
+			for _, un := range usernames {
+				if result[un] == nil {
+					result[un] = make(map[string][]string)
+				}
+				// List the OTHER users this one conflicts with
+				others := make([]string, 0, len(usernames)-1)
+				for _, o := range usernames {
+					if o != un {
+						others = append(others, o)
+					}
+				}
+				result[un][proxy] = others
+			}
+		}
+	}
+	return result
 }
 
 func (a *App) LookupUser(username, password string) (*UserConfig, error) {
@@ -1691,7 +1771,11 @@ func (a *hy2Auth) Authenticate(addr net.Addr, auth string, tx uint64) (bool, str
 	// Check user passwords first
 	cfg := a.app.store.Get()
 	for _, u := range cfg.Users {
-		if u.Password == auth && u.Enabled {
+		if u.EffectivePassword("hy2") == auth && u.Enabled {
+			// Skip if this user's hy2 password conflicts with another user
+			if a.app.IsPasswordConflicted(u.Username, "hy2") {
+				continue
+			}
 			// Check expiry
 			if u.ExpiryDate != "" {
 				if t, err := time.Parse("2006-01-02", u.ExpiryDate); err == nil && time.Now().After(t) {

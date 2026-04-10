@@ -3,10 +3,10 @@ import type {
   NodeConfig, Stats, TopologyNode, ClientEntry,
   UserConfig, Session, ProxyConfig, SSConfig, L2TPConfig,
   IKEv2Config, WireGuardConfig, WireGuardPeer,
-  RoutingRule, TunModeConfig, CertInfo, UISettings, PortConflict,
+  RoutingRule, TunModeConfig, CertInfo, UISettings, PortConflict, PasswordConflicts,
 } from './types';
 
-export type { NodeConfig, Stats, TopologyNode, ClientEntry, UserConfig, Session, ProxyConfig, SSConfig, L2TPConfig, IKEv2Config, WireGuardConfig, WireGuardPeer, RoutingRule, TunModeConfig, CertInfo, UISettings, PortConflict };
+export type { NodeConfig, Stats, TopologyNode, ClientEntry, UserConfig, Session, ProxyConfig, SSConfig, L2TPConfig, IKEv2Config, WireGuardConfig, WireGuardPeer, RoutingRule, TunModeConfig, CertInfo, UISettings, PortConflict, PasswordConflicts };
 
 // Auth
 export const login = (username: string, password: string) =>
@@ -42,6 +42,7 @@ export const setPeerDisabled = (name: string, disabled: boolean) =>
 
 // Users
 export const getUsers = () => api<UserConfig[]>('/users');
+export const getUserConflicts = () => api<PasswordConflicts>('/users/conflicts');
 export const createUser = (data: Partial<UserConfig>) =>
   api('/users', { method: 'POST', body: JSON.stringify(data) });
 export const updateUser = (id: string, data: Partial<UserConfig>) =>

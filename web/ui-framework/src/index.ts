@@ -65,6 +65,8 @@ export { Chip } from './components/Chip';
 export { CopyButton } from './components/CopyButton';
 
 export { GripIcon } from './components/GripIcon';
+export { AlertBadge } from './components/AlertBadge';
+export type { AlertBadgeProps } from './components/AlertBadge';
 
 // Hooks
 export { useSelection } from './hooks/useSelection';

@@ -11,18 +11,34 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// PasswordOnlyProxies lists proxy types that authenticate by password alone
+// (no username). These need per-proxy password support and conflict detection.
+// To add a new proxy: add its key here AND in web/app/src/config/proxyRegistry.ts
+var PasswordOnlyProxies = []string{"hy2", "ss"}
+
 // UserConfig defines a client user with auth and exit routing.
 type UserConfig struct {
-	ID           string `yaml:"id" json:"id"`
-	Username     string `yaml:"username" json:"username"`
-	Password     string `yaml:"password" json:"password"`
-	ExitVia      string   `yaml:"exit_via" json:"exit_via"`
-	ExitPaths    []string `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
-	ExitMode     string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"` // ""|"quality"|"aggregate"
-	TrafficLimit int64  `yaml:"traffic_limit" json:"traffic_limit"`             // bytes, 0=unlimited
-	TrafficUsed  int64  `yaml:"traffic_used" json:"traffic_used"`
-	ExpiryDate   string `yaml:"expiry_date,omitempty" json:"expiry_date"`
-	Enabled      bool   `yaml:"enabled" json:"enabled"`
+	ID             string            `yaml:"id" json:"id"`
+	Username       string            `yaml:"username" json:"username"`
+	Password       string            `yaml:"password" json:"password"`
+	ProxyPasswords map[string]string `yaml:"proxy_passwords,omitempty" json:"proxy_passwords,omitempty"` // proxy-specific overrides (e.g. "hy2", "ss")
+	ExitVia        string            `yaml:"exit_via" json:"exit_via"`
+	ExitPaths      []string          `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
+	ExitMode       string            `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"` // ""|"quality"|"aggregate"
+	TrafficLimit   int64             `yaml:"traffic_limit" json:"traffic_limit"`             // bytes, 0=unlimited
+	TrafficUsed    int64             `yaml:"traffic_used" json:"traffic_used"`
+	ExpiryDate     string            `yaml:"expiry_date,omitempty" json:"expiry_date"`
+	Enabled        bool              `yaml:"enabled" json:"enabled"`
+}
+
+// EffectivePassword returns the proxy-specific password if set, else the main password.
+func (u *UserConfig) EffectivePassword(proxy string) string {
+	if u.ProxyPasswords != nil {
+		if p, ok := u.ProxyPasswords[proxy]; ok && p != "" {
+			return p
+		}
+	}
+	return u.Password
 }
 
 // ProxyConfig defines a protocol listener.

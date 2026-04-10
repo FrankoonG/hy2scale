@@ -1,12 +1,13 @@
 import { useState, useCallback, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Card, Button, Badge, useToast, useConfirm, useSelection } from '@hy2scale/ui';
-import type { UserConfig, Session } from '@/api';
+import { Card, Button, Badge, AlertBadge, useToast, useConfirm, useSelection } from '@hy2scale/ui';
+import type { UserConfig, Session, PasswordConflicts } from '@/api';
 import * as api from '@/api';
 import { fmtBytes } from '@/hooks/useFormat';
 import { ExitViaCell } from '@/components/ExitViaCell';
 import UserModal from '@/components/UserModal';
+import UserDetailModal from '@/components/UserDetailModal';
 import ImportExportButton from '@/components/ImportExportButton';
 import BulkActionBar from '@/components/BulkActionBar';
 
@@ -19,8 +20,12 @@ export default function UsersPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [clickPos, setClickPos] = useState<{ x: number; y: number } | undefined>();
+  const [detailUser, setDetailUser] = useState<UserConfig | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailPos, setDetailPos] = useState<{ x: number; y: number } | undefined>();
 
   const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: api.getUsers, refetchInterval: 5000 });
+  const { data: conflicts = {} } = useQuery<PasswordConflicts>({ queryKey: ['userConflicts'], queryFn: api.getUserConflicts, refetchInterval: 5000 });
   const { data: sessions = [] } = useQuery({ queryKey: ['sessions'], queryFn: api.getSessions, refetchInterval: 3000 });
 
   const openAdd = (e: MouseEvent) => {
@@ -33,6 +38,12 @@ export default function UsersPage() {
     setClickPos({ x: e.clientX, y: e.clientY });
     setEditingId(id);
     setModalOpen(true);
+  };
+
+  const openDetail = (u: UserConfig, e: MouseEvent) => {
+    setDetailPos({ x: e.clientX, y: e.clientY });
+    setDetailUser(u);
+    setDetailOpen(true);
   };
 
   const handleToggle = useCallback(async (u: UserConfig) => {
@@ -182,7 +193,21 @@ export default function UsersPage() {
                       <td className="col-check">
                         <input type="checkbox" checked={isSelected} onChange={() => selection.toggle(u.id)} />
                       </td>
-                      <td><b>{u.username}</b></td>
+                      <td>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          {conflicts[u.username] && (
+                            <AlertBadge tooltip={
+                              <div style={{ fontSize: 12 }}>
+                                <div style={{ fontWeight: 600, marginBottom: 4 }}>{t('users.conflictWarning')}</div>
+                                {Object.entries(conflicts[u.username]).map(([proxy, others]) => (
+                                  <div key={proxy}>{proxy}: {others.join(', ')}</div>
+                                ))}
+                              </div>
+                            } />
+                          )}
+                          <a className="peer-link peer-name-cell" style={{ cursor: 'pointer' }} onClick={(e) => openDetail(u, e)}>{u.username}</a>
+                        </span>
+                      </td>
                       <td><ExitViaCell exitVia={u.exit_via} exitPaths={u.exit_paths} exitMode={u.exit_mode} /></td>
                       <td style={{ textAlign: 'right' }}>
                         <span style={{ fontSize: 12 }}>{usedGB} / {limitGB}</span>
@@ -250,6 +275,13 @@ export default function UsersPage() {
         onClose={() => setModalOpen(false)}
         editingId={editingId}
         animateFrom={clickPos}
+      />
+
+      <UserDetailModal
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        user={detailUser}
+        animateFrom={detailPos}
       />
     </div>
   );
