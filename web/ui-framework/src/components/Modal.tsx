@@ -18,6 +18,35 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
   if (open && animateFrom) originRef.current = animateFrom;
   const from = originRef.current;
 
+  // Workaround: block pointer events during modal open/close animation to prevent
+  // tooltips from triggering when elements pass under the cursor during scale animation.
+  //
+  // AnimatePresence captures the render tree at exit time, so React prop changes
+  // (like pointer-events via state) don't propagate to the exiting component.
+  // Two mechanisms are needed:
+  //   - Open: timer-based (500ms > animation duration 470ms) — starts non-interactive,
+  //     becomes interactive after animation completes.
+  //   - Close: direct DOM manipulation via ref — bypasses AnimatePresence capture,
+  //     immediately disables pointer events on the real DOM element.
+  //
+  // framer-motion's onAnimationStart/onAnimationComplete callbacks were tried but proved
+  // unreliable for this use case due to timing issues with AnimatePresence exit rendering.
+  const [interactive, setInteractive] = useState(false);
+  const overlayRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (open) {
+      setInteractive(false);
+      const timer = setTimeout(() => setInteractive(true), 500);
+      return () => clearTimeout(timer);
+    } else {
+      setInteractive(false);
+      if (overlayRef.current) {
+        overlayRef.current.style.pointerEvents = 'none';
+      }
+    }
+  }, [open]);
+
   // Track mousedown origin to prevent close when dragging text outside the modal
   const mouseDownOnOverlay = useRef(false);
 
@@ -42,7 +71,9 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
     <AnimatePresence>
       {open && (
         <motion.div
+          ref={overlayRef}
           className="hy-modal-overlay"
+          style={{ pointerEvents: interactive ? 'auto' : 'none' }}
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
