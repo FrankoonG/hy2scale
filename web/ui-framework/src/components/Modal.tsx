@@ -18,6 +18,9 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
   if (open && animateFrom) originRef.current = animateFrom;
   const from = originRef.current;
 
+  // Track mousedown origin to prevent close when dragging text outside the modal
+  const mouseDownOnOverlay = useRef(false);
+
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -44,7 +47,8 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}
-          onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+          onMouseDown={(e) => { mouseDownOnOverlay.current = e.target === e.currentTarget; }}
+          onClick={(e) => { if (e.target === e.currentTarget && mouseDownOnOverlay.current) onClose(); mouseDownOnOverlay.current = false; }}
         >
           <motion.div
             className={`hy-modal${wide ? ' wide' : ''}`}

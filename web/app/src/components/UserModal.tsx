@@ -98,7 +98,7 @@ export default function UserModal({ open, onClose, editingId, animateFrom }: Pro
             <Input value={username} onChange={(e) => setUsername(e.target.value)} />
           </FormGroup>
           <FormGroup label={t('users.password')} required>
-            <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} />
+            <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} onGenerate={setPassword} />
           </FormGroup>
         </FormGrid>
 

@@ -165,7 +165,7 @@ export default function SettingsPage() {
                   <Input value={newUser} onChange={(e) => setNewUser(e.target.value)} />
                 </FormGroup>
                 <FormGroup label={t('settings.newPassword')}>
-                  <PasswordInput value={newPw} onChange={(e) => setNewPw(e.target.value)} />
+                  <PasswordInput value={newPw} onChange={(e) => setNewPw(e.target.value)} onGenerate={(pw) => { setNewPw(pw); setConfirmPw(pw); }} />
                 </FormGroup>
                 <FormGroup label={t('settings.confirmPassword')}>
                   <PasswordInput value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} />

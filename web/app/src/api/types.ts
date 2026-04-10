@@ -209,10 +209,10 @@ export interface CertInfo {
   name: string;
   subject: string;
   issuer: string;
-  expires: string;
-  has_key: boolean;
+  not_after: string;
   is_ca?: boolean;
-  fingerprint?: string;
+  key_file?: string;
+  cert_file?: string;
 }
 
 // ===== Settings =====

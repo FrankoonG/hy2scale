@@ -95,19 +95,15 @@ export default function TLSPage() {
     setGenerating(true);
     try {
       if (caId) {
-        // CA-signed
         await api.signCert({ ca_id: caId, id: certId, name: certName, cn: cn || certId, days: 7300 });
       } else {
-        // Self-signed
         await api.generateCert({ id: certId, name: certName, domains: [certId], days: 3650 });
       }
-      // Fetch generated PEM
+      // Fetch generated PEM to fill textareas — don't refresh cert list yet
       const pem = await api.getCertPem(certId);
       setCertPem(pem.cert || '');
       setKeyPem(pem.key || '');
       setCertTab('paste');
-      toast.success(t('tls.generated'));
-      queryClient.invalidateQueries({ queryKey: ['certs'] });
     } catch (e: any) { toast.error(String(e.message || e)); }
     finally { setGenerating(false); }
   };
@@ -150,7 +146,7 @@ export default function TLSPage() {
 
   const caOptions = [
     { value: '', label: t('tls.noneSelfSigned') },
-    ...certs.filter((c) => c.is_ca && c.has_key).map((c) => ({ value: c.id, label: c.name || c.id })),
+    ...certs.filter((c) => c.is_ca && !!c.key_file).map((c) => ({ value: c.id, label: c.name || c.id })),
   ];
 
   const selection = useSelection(certs.map((c) => c.id));
@@ -174,14 +170,14 @@ export default function TLSPage() {
         <>
           <b>{cert.name || cert.id}</b>
           <span className="peer-addr-sub">{cert.id}</span>
-          {isExpired(cert.expires) && <> <Badge variant="muted">{t('tls.expired')}</Badge></>}
+          {isExpired(cert.not_after) && <> <Badge variant="muted">{t('tls.expired')}</Badge></>}
         </>
       ),
     },
     { key: 'subject', title: t('tls.subject'), render: (cert) => cert.subject },
     { key: 'issuer', title: t('tls.issuer'), render: (cert) => <>{cert.issuer}{cert.is_ca && <> <Badge variant="blue">CA</Badge></>}</> },
-    { key: 'expires', title: t('tls.expires'), render: (cert) => <span className="mono">{cert.expires}</span> },
-    { key: 'key', title: t('tls.hasKey'), render: (cert) => cert.has_key ? <Badge variant="green">{t('app.yes')}</Badge> : <Badge variant="muted">{t('app.no')}</Badge> },
+    { key: 'expires', title: t('tls.expires'), render: (cert) => <span className="mono">{cert.not_after}</span> },
+    { key: 'key', title: t('tls.hasKey'), render: (cert) => cert.key_file ? <Badge variant="green">{t('app.yes')}</Badge> : <Badge variant="muted">{t('app.no')}</Badge> },
     {
       key: 'actions', title: '', width: '40px', render: (cert) => (
         <button className="hy-row-edit" onClick={(e) => handleEdit(cert, e)} title={t('app.edit')}>
@@ -210,7 +206,7 @@ export default function TLSPage() {
           columns={certColumns}
           data={certs}
           rowKey={(c) => c.id}
-          rowClassName={(c) => isExpired(c.expires) ? 'disabled-row' : undefined}
+          rowClassName={(c) => isExpired(c.not_after) ? 'disabled-row' : undefined}
           emptyText={t('tls.noCerts')}
           selection={selection}
         />
