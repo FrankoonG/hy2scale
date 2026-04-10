@@ -198,25 +198,43 @@ export default function NodesPage() {
 
         // Tree expand/collapse triangle: shown for non-self, non-native nodes
         // ▶ = nested false (collapsed), ▼ = nested true (expanded)
-        // Clicking toggles nested state
+        // Clicking toggles nested state. Sits to the left of the whole stacked
+        // (name + address) block, vertically centered via the tree-cell flex.
+        // Self/native rows render a non-interactive disabled chevron (forced
+        // down state) so the column stays visually consistent with other rows.
         const canExpand = !n.is_self && !n.native;
-        const triangle = canExpand ? (
+        const chevronSvg = (rotated: boolean) => (
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2.5}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ transform: rotated ? 'rotate(90deg)' : 'rotate(0deg)' }}
+          >
+            <path d="M9 6l6 6-6 6" />
+          </svg>
+        );
+        const triangleSlot = canExpand ? (
           <button
             type="button"
             className="hy-tree-toggle"
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleNestedToggle(n, meta.nodeKey); }}
             aria-label={n.nested ? 'Collapse' : 'Expand'}
           >
-            <svg viewBox="0 0 24 24" fill="currentColor" style={{ transform: n.nested ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform .15s' }}>
-              <path d="M8 5l8 7-8 7V5z" />
-            </svg>
+            {chevronSvg(!!n.nested)}
           </button>
-        ) : null;
+        ) : (
+          <span className="hy-tree-toggle hy-tree-toggle-disabled" aria-hidden="true">
+            {chevronSvg(true)}
+          </span>
+        );
 
         return (
           <TreeCell meta={meta}>
+            {triangleSlot}
             <span className="sub-name-wrap">
-              {triangle}
               {nameEl}
               {versionBadge}
               {nativeBadge && <> {nativeBadge}</>}

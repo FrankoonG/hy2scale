@@ -137,9 +137,11 @@
 .latency-sync{color:var(--orange);font-weight:500;font-family:var(--font)}
 
 /* Tree expand/collapse triangle */
-.hy-tree-toggle{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;margin-right:4px;border:none;background:transparent;cursor:pointer;color:var(--text-muted);border-radius:3px;flex-shrink:0}
-.hy-tree-toggle:hover{color:var(--primary);background:var(--primary-light)}
-.hy-tree-toggle svg{width:10px;height:10px;display:block}
+.hy-tree-toggle{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;margin-right:8px;border:none;background:transparent;cursor:pointer;color:var(--text-muted);border-radius:6px;flex-shrink:0;align-self:center}
+.hy-tree-toggle:not(.hy-tree-toggle-disabled):hover{color:var(--primary);background:var(--primary-light)}
+.hy-tree-toggle svg{width:18px;height:18px;display:block;transition:transform .15s ease}
+.hy-tree-toggle-spacer{pointer-events:none;cursor:default}
+.hy-tree-toggle-disabled{pointer-events:none;cursor:default;opacity:.35;color:var(--text-muted);background:transparent}
 
 /* Peer name */
 .peer-name-cell{font-weight:600}
@@ -207,9 +209,13 @@ a.peer-link:hover{text-decoration:underline}
 /* ====== Password ====== */
 .hy-pw-wrap{position:relative;display:flex;width:100%}
 .hy-pw-wrap .hy-input{flex:1;padding-right:34px}
-.hy-pw-eye{position:absolute;right:1px;top:1px;bottom:1px;width:32px;border:none;background:transparent;cursor:pointer;color:var(--text-muted);display:flex;align-items:center;justify-content:center;border-radius:0 var(--radius-sm) var(--radius-sm) 0;padding:0;font-size:14px}
-.hy-pw-eye:hover{color:var(--primary);background:var(--primary-light)}
+.hy-pw-wrap--gen .hy-input{padding-right:66px}
+.hy-pw-btn{position:absolute;top:1px;bottom:1px;width:32px;border:none;background:transparent;cursor:pointer;color:var(--text-muted);display:flex;align-items:center;justify-content:center;padding:0;font-size:14px}
+.hy-pw-btn:hover{color:var(--primary);background:var(--primary-light)}
+.hy-pw-eye{right:1px;border-radius:0 var(--radius-sm) var(--radius-sm) 0}
 .hy-pw-eye.visible{color:var(--primary)}
+.hy-pw-gen{right:33px;border-radius:0}
+.hy-pw-gen:hover{color:var(--primary)}
 
 /* ====== Select ====== */
 .hy-select-wrap{position:relative;width:100%}
@@ -221,7 +227,7 @@ a.peer-link:hover{text-decoration:underline}
 .hy-select-label.placeholder{color:var(--text-muted)}
 .hy-select-arrow{width:14px;height:14px;flex-shrink:0;color:var(--text-muted);margin-left:8px;transition:transform .2s}
 .hy-select.open .hy-select-arrow{transform:rotate(180deg)}
-.hy-select-wrap .hy-dropdown{max-height:240px;overflow-y:auto}
+.hy-select-dropdown{max-height:240px;overflow-y:auto;z-index:10000}
 .hy-dropdown-item.active{color:var(--primary);font-weight:600;background:var(--primary-light)}
 
 /* ====== Buttons ====== */
@@ -275,7 +281,7 @@ a.peer-link:hover{text-decoration:underline}
 /* ====== Autocomplete ====== */
 .hy-autocomplete{position:relative;width:100%}
 .hy-autocomplete .hy-input{width:100%;box-sizing:border-box}
-.hy-autocomplete-list{position:absolute;top:100%;left:0;right:0;z-index:200;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);max-height:180px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,.15)}
+.hy-autocomplete-list{z-index:10000;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);max-height:180px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,.15)}
 .hy-autocomplete-item{padding:7px 10px;font-size:13px;cursor:pointer;font-family:var(--mono)}
 .hy-autocomplete-item:hover,.hy-autocomplete-item.highlighted{background:var(--primary-light);color:var(--primary)}
 
