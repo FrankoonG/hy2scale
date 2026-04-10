@@ -315,6 +315,7 @@ a.peer-link:hover{text-decoration:underline}
 
 /* ====== Tooltip ====== */
 .hy-tooltip-wrap{position:relative;display:inline-flex}
+.hy-tooltip-wrap:has(> .hy-link-box){display:flex;width:100%}
 .hy-tooltip{position:fixed;z-index:99999;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:var(--mono);font-size:12px;box-shadow:0 4px 16px rgba(0,0,0,.12);pointer-events:none;white-space:pre;line-height:1.8;max-width:300px;margin-top:2px}
 
 /* ====== Spinner ====== */
@@ -371,6 +372,12 @@ a.peer-link:hover{text-decoration:underline}
 /* ====== Limited overlay ====== */
 .hy-limited-overlay{position:relative;pointer-events:none;opacity:.5}
 .hy-limited-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.8);z-index:10;font-size:13px;color:var(--text-secondary);padding:20px;text-align:center}
+
+/* ====== Link box (copyable URI) ====== */
+.hy-link-box{font-family:var(--mono);font-size:12px;padding:8px 12px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;box-sizing:border-box;transition:border-color .15s}
+.hy-link-box:hover{border-color:var(--primary);color:var(--primary)}
+/* QR code wrapper — forced white bg, immune to Dark Reader */
+.hy-qr-wrap{background:#fff !important;color-scheme:only light;padding:12px;border-radius:8px;display:inline-block;line-height:0}
 
 /* ====== Node badge ====== */
 .node-badge{font-family:var(--mono);font-size:11px;background:var(--primary-light);color:var(--primary);padding:3px 10px;border-radius:20px;font-weight:600}

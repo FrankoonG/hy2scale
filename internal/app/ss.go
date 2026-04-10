@@ -83,8 +83,12 @@ func (a *App) handleSS(conn net.Conn, method string) {
 		if !u.Enabled {
 			continue
 		}
+		// Skip if this user's SS password conflicts with another user
+		if a.IsPasswordConflicted(u.Username, "ss") {
+			continue
+		}
 		// Try this user's password as the key
-		key := evpBytesToKey(u.Password, keySize(method))
+		key := evpBytesToKey(u.EffectivePassword("ss"), keySize(method))
 		aead, err := newAEAD(method, key)
 		if err != nil {
 			continue

@@ -80,6 +80,7 @@ export interface UserConfig {
   id: string;
   username: string;
   password: string;
+  proxy_passwords?: Record<string, string>;
   exit_via: string;
   exit_paths?: string[];
   exit_mode?: '' | 'quality' | 'aggregate';
@@ -88,6 +89,9 @@ export interface UserConfig {
   expiry_date?: string;
   enabled: boolean;
 }
+
+/** Password conflict info: username → proxy → list of conflicting usernames */
+export type PasswordConflicts = Record<string, Record<string, string[]>>;
 
 // ===== Sessions =====
 export interface Session {

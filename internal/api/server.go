@@ -191,6 +191,7 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("PUT /api/users/{id}", s.updateUserAPI)
 	authed.HandleFunc("DELETE /api/users/{id}", s.removeUserAPI)
 	authed.HandleFunc("PUT /api/users/{id}/toggle", s.toggleUserAPI)
+	authed.HandleFunc("GET /api/users/conflicts", s.getUserConflicts)
 	authed.HandleFunc("PUT /api/users/{id}/reset-traffic", s.resetUserTrafficAPI)
 
 	authed.HandleFunc("PUT /api/settings/password", s.changePassword)
@@ -1716,6 +1717,10 @@ func (s *Server) kickSession(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getUsers(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
 	writeJSON(w, cfg.Users)
+}
+
+func (s *Server) getUserConflicts(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, s.app.GetPasswordConflicts())
 }
 
 func (s *Server) addUserAPI(w http.ResponseWriter, r *http.Request) {
