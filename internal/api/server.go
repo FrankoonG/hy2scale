@@ -1738,7 +1738,7 @@ func (s *Server) addUserAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "username and password required", 400)
 		return
 	}
-	if err := app.ValidateExitMode(u.ExitVia, u.ExitMode); err != nil {
+	if err := app.ValidateExitMode(u.ExitPaths, u.ExitMode); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
@@ -1767,7 +1767,7 @@ func (s *Server) updateUserAPI(w http.ResponseWriter, r *http.Request) {
 	} else if u.ExitVia != "" {
 		u.ExitPaths = []string{u.ExitVia}
 	}
-	if err := app.ValidateExitMode(u.ExitVia, u.ExitMode); err != nil {
+	if err := app.ValidateExitMode(u.ExitPaths, u.ExitMode); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
@@ -1842,7 +1842,7 @@ func (s *Server) addRule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "type must be 'ip' or 'domain'", 400)
 		return
 	}
-	if err := app.ValidateExitMode(rule.ExitVia, rule.ExitMode); err != nil {
+	if err := app.ValidateExitMode(rule.ExitPaths, rule.ExitMode); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
@@ -1863,7 +1863,7 @@ func (s *Server) updateRule(w http.ResponseWriter, r *http.Request) {
 	} else if rule.ExitVia != "" {
 		rule.ExitPaths = []string{rule.ExitVia}
 	}
-	if err := app.ValidateExitMode(rule.ExitVia, rule.ExitMode); err != nil {
+	if err := app.ValidateExitMode(rule.ExitPaths, rule.ExitMode); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}

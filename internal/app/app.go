@@ -1489,9 +1489,26 @@ func rewriteLocalAddr(addr string) string {
 // dialExit routes traffic through an exit path, stripping the local node name prefix.
 // dialExitWithMode routes traffic with the specified exit mode.
 // mode: "" = direct, "quality" = adaptive failover, "aggregate" = load balance
-// ValidateExitMode checks exit_mode compatibility. Mode only applies to
-// single-hop exits at dial time; path-based exits silently ignore the mode.
-func ValidateExitMode(exitVia, exitMode string) error {
+// ValidateExitMode checks exit_mode compatibility.
+// Aggregate mode requires all paths to reach the same final exit node.
+func ValidateExitMode(exitPaths []string, exitMode string) error {
+	if exitMode != "aggregate" && exitMode != "speed" {
+		return nil
+	}
+	if len(exitPaths) <= 1 {
+		return nil // single path: aggregate uses multi-addr on the same node, always valid
+	}
+	// All paths must end at the same node (last hop)
+	var target string
+	for _, p := range exitPaths {
+		parts := strings.Split(p, "/")
+		last := parts[len(parts)-1]
+		if target == "" {
+			target = last
+		} else if last != target {
+			return fmt.Errorf("aggregate mode requires all paths to reach the same exit node, but got %q and %q", target, last)
+		}
+	}
 	return nil
 }
 
