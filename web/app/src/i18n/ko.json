@@ -346,6 +346,7 @@
   "import.importNodes": "노드 가져오기",
   "import.importUsers": "사용자 가져오기",
   "import.importRules": "규칙 가져오기",
+  "import.importWg-peers": "WireGuard 피어 가져오기",
   "import.overwrite": "중복 항목 덮어쓰기",
   "import.overwriteHint": "체크하면 동일한 키를 가진 기존 항목이 대체됩니다. 체크하지 않으면 중복은 건너뜁니다.",
   "import.selectFile": ".xlsx 파일 선택",

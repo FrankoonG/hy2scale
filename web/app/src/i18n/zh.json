@@ -346,6 +346,7 @@
   "import.importNodes": "导入节点",
   "import.importUsers": "导入用户",
   "import.importRules": "导入规则",
+  "import.importWg-peers": "导入 WireGuard 对等节点",
   "import.overwrite": "覆盖重复项",
   "import.overwriteHint": "勾选时，具有相同键的现有项目将被替换。未勾选时，重复项将被跳过。",
   "import.selectFile": "选择 .xlsx 文件",

@@ -346,6 +346,7 @@
   "import.importNodes": "Import Nodes",
   "import.importUsers": "Import Users",
   "import.importRules": "Import Rules",
+  "import.importWg-peers": "Import WireGuard Peers",
   "import.overwrite": "Overwrite duplicates",
   "import.overwriteHint": "When checked, existing items with the same key will be replaced. When unchecked, duplicates are skipped.",
   "import.selectFile": "Select .xlsx file",
