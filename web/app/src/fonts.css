@@ -1,6 +1,6 @@
-/* Noto Sans — variable font, self-hosted from Google Fonts.
- * Single woff2 per family covers all weights 400-700.
- * Latin subset (~67KB total); CJK falls back to system fonts.
+/* Noto Sans — variable font, self-hosted.
+ * Single woff2 covers all weights 400-700.
+ * Used for both --font and --mono (unified visual style).
  */
 @font-face {
   font-family: 'Noto Sans';
@@ -8,13 +8,4 @@
   font-weight: 400 700;
   font-display: swap;
   src: url('/fonts/noto-sans.woff2') format('woff2');
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-@font-face {
-  font-family: 'Noto Sans Mono';
-  font-style: normal;
-  font-weight: 400 700;
-  font-display: swap;
-  src: url('/fonts/noto-sans-mono.woff2') format('woff2');
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
