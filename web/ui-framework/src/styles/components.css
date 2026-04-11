@@ -290,8 +290,8 @@ a.peer-link:hover{text-decoration:underline}
 .exit-mode-opt{display:flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;font-size:12px;color:var(--text-secondary);transition:all .15s}
 .exit-mode-opt:has(input:checked){border-color:var(--primary);background:var(--primary-light);color:var(--primary);font-weight:500}
 .exit-mode-opt input[type="radio"]{display:none}
-.exit-mode-disabled .exit-mode-opt{opacity:0.4;cursor:not-allowed;pointer-events:none}
-.exit-mode-disabled .exit-mode-opt:has(input:checked){opacity:1;border-color:var(--primary);background:var(--primary-light);color:var(--primary);font-weight:500}
+.exit-mode-opt:has(input:disabled){opacity:0.4;cursor:not-allowed;pointer-events:none}
+.exit-mode-opt:has(input:disabled):has(input:checked){opacity:1}
 
 /* ====== Login ====== */
 .hy-login-wrap{display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg)}

@@ -51,13 +51,17 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
   const emitChange = useCallback((newItems: PathItem[], newMode?: string) => {
     const paths = newItems.map((it) => it.value);
     let m = (newMode ?? mode) as ExitPathValue['mode'];
+    const filled = paths.filter(Boolean);
+    // Reset to direct if no filled paths or single path without multi-addr
+    if (m && filled.length <= 1) {
+      // Keep mode only if single target has multi-addr (checked at render time)
+      // For safety, reset here — render will re-enable if applicable
+      if (filled.length === 0) m = '';
+    }
     // Auto-downgrade aggregate→quality if paths target different nodes
-    if (m === 'aggregate') {
-      const filled = paths.filter(Boolean);
-      if (filled.length > 1) {
-        const targets = new Set(filled.map((p) => p.split('/').pop()));
-        if (targets.size > 1) m = 'quality';
-      }
+    if (m === 'aggregate' && filled.length > 1) {
+      const targets = new Set(filled.map((p) => p.split('/').pop()));
+      if (targets.size > 1) m = 'quality';
     }
     onChange({ paths, mode: m });
   }, [onChange, mode]);
@@ -128,7 +132,7 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
   return (
     <FormGroup label={label || t('users.exitVia')}>
       {/* Mode selection */}
-      <div className={clsx('exit-mode-options', singleOnly && !hasMultiple && 'exit-mode-disabled')}>
+      <div className="exit-mode-options">
         <label className="exit-mode-opt">
           <input type="radio" name="exitMode" checked={mode === '' || !mode} onChange={() => setMode('')} disabled={hasMultiple} />
           {t('exit.modeNone')}

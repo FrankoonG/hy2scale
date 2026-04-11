@@ -1489,27 +1489,41 @@ func rewriteLocalAddr(addr string) string {
 // dialExit routes traffic through an exit path, stripping the local node name prefix.
 // dialExitWithMode routes traffic with the specified exit mode.
 // mode: "" = direct, "quality" = adaptive failover, "aggregate" = load balance
-// ValidateExitMode checks exit_mode compatibility.
-// Aggregate mode requires all paths to reach the same final exit node.
-func ValidateExitMode(exitPaths []string, exitMode string) error {
-	if exitMode != "aggregate" && exitMode != "speed" {
-		return nil
+// SanitizeExitMode checks and sanitizes exit_mode.
+// - Clears mode if no meaningful exit paths exist
+// - Aggregate mode requires all paths to reach the same final exit node
+// Returns the (possibly corrected) mode and any validation error.
+func SanitizeExitMode(exitPaths []string, exitMode string) (string, error) {
+	if exitMode == "" {
+		return "", nil
 	}
-	if len(exitPaths) <= 1 {
-		return nil // single path: aggregate uses multi-addr on the same node, always valid
-	}
-	// All paths must end at the same node (last hop)
-	var target string
+	// Filter empty paths
+	var filled []string
 	for _, p := range exitPaths {
-		parts := strings.Split(p, "/")
-		last := parts[len(parts)-1]
-		if target == "" {
-			target = last
-		} else if last != target {
-			return fmt.Errorf("aggregate mode requires all paths to reach the same exit node, but got %q and %q", target, last)
+		if p != "" {
+			filled = append(filled, p)
 		}
 	}
-	return nil
+	// No paths → reset mode to direct
+	if len(filled) == 0 {
+		return "", nil
+	}
+	// Aggregate: all paths must end at the same node
+	if exitMode == "aggregate" || exitMode == "speed" {
+		if len(filled) > 1 {
+			var target string
+			for _, p := range filled {
+				parts := strings.Split(p, "/")
+				last := parts[len(parts)-1]
+				if target == "" {
+					target = last
+				} else if last != target {
+					return "", fmt.Errorf("aggregate mode requires all paths to reach the same exit node, but got %q and %q", target, last)
+				}
+			}
+		}
+	}
+	return exitMode, nil
 }
 
 func (a *App) dialExitWithMode(ctx context.Context, exitVia, exitMode, addr string) (net.Conn, error) {
