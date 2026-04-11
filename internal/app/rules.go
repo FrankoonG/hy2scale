@@ -93,7 +93,7 @@ func (a *App) StartRuleEngine() {
 	// Start UDP+TCP proxy — add bypass rules in both OUTPUT and PREROUTING
 	for _, chain := range []string{"OUTPUT", "PREROUTING"} {
 		for _, proto := range []string{"tcp", "udp"} {
-			iptRun("iptables-legacy", "-t", "nat", "-I", chain, "-m", "mark", "--mark",
+			iptRun(iptVariant(), "-t", "nat", "-I", chain, "-m", "mark", "--mark",
 				fmt.Sprintf("0x%x", ruleBypassMark), "-p", proto, "-j", "RETURN")
 		}
 	}
@@ -113,7 +113,7 @@ func (a *App) StartRuleEngine() {
 		for _, ip := range ips {
 			for _, chain := range []string{"OUTPUT", "PREROUTING"} {
 				for _, proto := range []string{"tcp", "udp"} {
-					iptRun("iptables-legacy", "-t", "nat", "-I", chain,
+					iptRun(iptVariant(), "-t", "nat", "-I", chain,
 						"-d", ip, "-p", proto, "--dport", port, "-j", "RETURN")
 				}
 			}
@@ -303,7 +303,7 @@ func (e *ruleEngine) applyIPRule(r RoutingRule) {
 						"-m", "iprange", "--dst-range", target,
 						"-p", proto, "-j", "DNAT",
 						"--to-destination", dst}
-					iptRun("iptables-legacy", args...)
+					iptRun(iptVariant(), args...)
 					iptArgs = append(iptArgs, strings.Join(args, " "))
 				}
 			} else {
@@ -316,7 +316,7 @@ func (e *ruleEngine) applyIPRule(r RoutingRule) {
 						"-d", target,
 						"-p", proto, "-j", "DNAT",
 						"--to-destination", dst}
-					iptRun("iptables-legacy", args...)
+					iptRun(iptVariant(), args...)
 					iptArgs = append(iptArgs, strings.Join(args, " "))
 				}
 			}
@@ -424,7 +424,7 @@ func (e *ruleEngine) applyDomainRule(r RoutingRule) {
 							"-d", ip,
 							"-p", proto, "-j", "DNAT",
 							"--to-destination", dst}
-						iptRun("iptables-legacy", args...)
+						iptRun(iptVariant(), args...)
 						ruleArgs = append(ruleArgs, strings.Join(args, " "))
 					}
 				}
@@ -476,7 +476,7 @@ func (e *ruleEngine) removeIPTRulesLocked(id string) {
 				break
 			}
 		}
-		cmd := iptExec("iptables-legacy", parts...)
+		cmd := iptExec(iptVariant(), parts...)
 		cmd.Run()
 	}
 	// Remove TUN targets
@@ -579,14 +579,19 @@ func (e *ruleEngine) handleConn(parentCtx context.Context, conn net.Conn) {
 	}
 
 	log.Printf("[rules] %s → exit %s mode=%s", origDst, exitVia, exitMode)
-	// Dial destination directly with SO_MARK bypass (like native hy2 server).
-	// The exit node's network is reached via routing (e.g. WG tunnel).
-	remote, err := dialTCPMarked(origDst, ruleBypassMark)
+	// Route through hy2 relay network (exit node dials the actual destination)
+	remote, err := e.app.dialExitWithPaths(ctx, exitVia, []string{exitVia}, exitMode, origDst)
 	if err != nil {
-		log.Printf("[rules] dial %s error: %v", origDst, err)
-		return
+		// Fallback: direct dial with SO_MARK bypass (for TUN/routing mode)
+		remote, err = dialTCPMarked(origDst, ruleBypassMark)
+		if err != nil {
+			log.Printf("[rules] dial %s error: %v", origDst, err)
+			return
+		}
+		log.Printf("[rules] %s connected (direct fallback) local=%s remote=%s", origDst, remote.LocalAddr(), remote.RemoteAddr())
+	} else {
+		log.Printf("[rules] %s connected via %s", origDst, exitVia)
 	}
-	log.Printf("[rules] %s connected (direct) local=%s remote=%s", origDst, remote.LocalAddr(), remote.RemoteAddr())
 	defer remote.Close()
 	done := make(chan struct{})
 	go func() {
