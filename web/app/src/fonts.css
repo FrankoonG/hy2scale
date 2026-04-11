@@ -1,12 +1,12 @@
-/* Noto Sans — self-hosted, no Google Fonts / CDN dependency.
- * Latin subset only (~77KB total); CJK characters fall back to system fonts
+/* Noto Sans — self-hosted from Google Fonts, no CDN dependency.
+ * Latin subset (~270KB total); CJK characters fall back to system fonts
  * (Noto Sans CJK / PingFang / Microsoft YaHei / Malgun Gothic etc.)
  */
-@font-face{font-family:'Noto Sans';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/noto-sans-latin-400.woff2') format('woff2')}
-@font-face{font-family:'Noto Sans';font-style:normal;font-weight:500;font-display:swap;src:url('/fonts/noto-sans-latin-500.woff2') format('woff2')}
-@font-face{font-family:'Noto Sans';font-style:normal;font-weight:600;font-display:swap;src:url('/fonts/noto-sans-latin-600.woff2') format('woff2')}
-@font-face{font-family:'Noto Sans';font-style:normal;font-weight:700;font-display:swap;src:url('/fonts/noto-sans-latin-700.woff2') format('woff2')}
-@font-face{font-family:'Noto Sans Mono';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/noto-sans-mono-latin-400.woff2') format('woff2')}
-@font-face{font-family:'Noto Sans Mono';font-style:normal;font-weight:500;font-display:swap;src:url('/fonts/noto-sans-mono-latin-500.woff2') format('woff2')}
-@font-face{font-family:'Noto Sans Mono';font-style:normal;font-weight:600;font-display:swap;src:url('/fonts/noto-sans-mono-latin-600.woff2') format('woff2')}
-@font-face{font-family:'Noto Sans Mono';font-style:normal;font-weight:700;font-display:swap;src:url('/fonts/noto-sans-mono-latin-700.woff2') format('woff2')}
+@font-face{font-family:'Noto Sans';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/noto-sans-400.woff2') format('woff2')}
+@font-face{font-family:'Noto Sans';font-style:normal;font-weight:500;font-display:swap;src:url('/fonts/noto-sans-500.woff2') format('woff2')}
+@font-face{font-family:'Noto Sans';font-style:normal;font-weight:600;font-display:swap;src:url('/fonts/noto-sans-600.woff2') format('woff2')}
+@font-face{font-family:'Noto Sans';font-style:normal;font-weight:700;font-display:swap;src:url('/fonts/noto-sans-700.woff2') format('woff2')}
+@font-face{font-family:'Noto Sans Mono';font-style:normal;font-weight:400;font-display:swap;src:url('/fonts/noto-sans-mono-400.woff2') format('woff2')}
+@font-face{font-family:'Noto Sans Mono';font-style:normal;font-weight:500;font-display:swap;src:url('/fonts/noto-sans-mono-500.woff2') format('woff2')}
+@font-face{font-family:'Noto Sans Mono';font-style:normal;font-weight:600;font-display:swap;src:url('/fonts/noto-sans-mono-600.woff2') format('woff2')}
+@font-face{font-family:'Noto Sans Mono';font-style:normal;font-weight:700;font-display:swap;src:url('/fonts/noto-sans-mono-700.woff2') format('woff2')}
