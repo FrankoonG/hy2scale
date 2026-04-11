@@ -1,6 +1,8 @@
 /* hy2scale design tokens — exact match of old style.css :root */
 
 *{margin:0;padding:0;box-sizing:border-box}
+/* Force form elements to inherit font — browsers default buttons/inputs to Arial/system */
+button,input,select,textarea{font-family:inherit}
 :root{
   --bg:#f5f6fa;--surface:#fff;--surface-hover:#f8f9fc;
   --border:#e4e7ed;--border-light:#eef0f5;
