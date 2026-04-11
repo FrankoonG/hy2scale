@@ -162,7 +162,12 @@ func (a *ikuaiAdapter) FixIPTables() bool {
 }
 
 func (a *ikuaiAdapter) IPTExec(prog string, args []string) *exec.Cmd {
-	if !a.ready || prog != "iptables-legacy" {
+	if !a.ready {
+		return nil
+	}
+	// Intercept both "iptables" and "iptables-legacy" — on iKuai, the container's
+	// iptables binary is broken regardless of variant, we always use the host bundle
+	if prog != "iptables-legacy" && prog != "iptables" {
 		return nil
 	}
 	shellCmd := "LD_LIBRARY_PATH=" + a.ldPath + " " + a.iptBin + " iptables"
