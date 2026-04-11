@@ -8,6 +8,7 @@ import {
 import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
 import { ExitViaCell } from '@/components/ExitViaCell';
 import BulkActionBar from '@/components/BulkActionBar';
+import ImportExportButton from '@/components/ImportExportButton';
 import * as api from '@/api';
 import type { WireGuardPeer } from '@/api';
 
@@ -284,6 +285,7 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
             <BulkActionBar count={peerSelection.count} onClear={peerSelection.clear}>
               <Button size="sm" variant="danger" onClick={bulkDeletePeers}>{t('app.bulkDelete')}</Button>
             </BulkActionBar>
+            <ImportExportButton target="wg-peers" />
             <Button size="sm" variant="primary" onClick={openAddPeer}>{t('wg.addPeer')}</Button>
           </div>
         }

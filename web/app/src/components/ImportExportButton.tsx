@@ -1,11 +1,11 @@
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { Button, Modal, Toggle, useToast } from '@hy2scale/ui';
 import * as XLSX from 'xlsx';
 import * as api from '@/api';
 
-type Target = 'nodes' | 'users' | 'rules';
+type Target = 'nodes' | 'users' | 'rules' | 'wg-peers';
 
 interface Props {
   target: Target;
@@ -18,6 +18,7 @@ export default function ImportExportButton({ target }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [importOpen, setImportOpen] = useState(false);
+  const [clickPos, setClickPos] = useState<{ x: number; y: number } | undefined>();
   const [overwrite, setOverwrite] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [result, setResult] = useState('');
@@ -62,6 +63,17 @@ export default function ImportExportButton({ target }: Props) {
             exit_mode: r.exit_mode || '', enabled: r.enabled ? 'yes' : 'no',
           }));
           filename = 'rules.xlsx';
+          break;
+        }
+        case 'wg-peers': {
+          const wg = await api.getWireGuard();
+          headers = ['name', 'public_key', 'allowed_ips', 'exit_via', 'keepalive'];
+          data = (wg.peers || []).map((p) => ({
+            name: p.name, public_key: p.public_key,
+            allowed_ips: p.allowed_ips, exit_via: p.exit_via || '',
+            keepalive: p.keepalive || 0,
+          }));
+          filename = 'wg-peers.xlsx';
           break;
         }
       }
@@ -150,6 +162,22 @@ export default function ImportExportButton({ target }: Props) {
               }
               break;
             }
+            case 'wg-peers': {
+              const data = {
+                name: row.name, public_key: row.public_key,
+                allowed_ips: row.allowed_ips || '0.0.0.0/0',
+                exit_via: row.exit_via || undefined,
+                keepalive: Number(row.keepalive) || 0,
+              };
+              if (overwrite) {
+                try { await api.updateWGPeer(data.name, data as any); added++; }
+                catch { await api.createWGPeer(data as any); added++; }
+              } else {
+                try { await api.createWGPeer(data as any); added++; }
+                catch { skipped++; }
+              }
+              break;
+            }
           }
         } catch {
           errors++;
@@ -157,7 +185,7 @@ export default function ImportExportButton({ target }: Props) {
       }
 
       setResult(t('import.result', { added, skipped, errors }));
-      queryClient.invalidateQueries({ queryKey: [target === 'nodes' ? 'topology' : target] });
+      queryClient.invalidateQueries({ queryKey: [target === 'nodes' ? 'topology' : target === 'wg-peers' ? 'wireguard' : target] });
     } catch (e: any) {
       toast.error(t('import.failed') + ': ' + String(e.message || e));
     } finally {
@@ -168,12 +196,13 @@ export default function ImportExportButton({ target }: Props) {
   return (
     <>
       <Button size="sm" variant="ghost" onClick={handleExport}>{t('import.export')}</Button>
-      <Button size="sm" variant="ghost" onClick={() => setImportOpen(true)}>{t('import.import')}</Button>
+      <Button size="sm" variant="ghost" onClick={(e: MouseEvent) => { setClickPos({ x: e.clientX, y: e.clientY }); setImportOpen(true); }}>{t('import.import')}</Button>
 
       <Modal
         open={importOpen}
         onClose={() => { setImportOpen(false); setResult(''); }}
         title={t(`import.import${target.charAt(0).toUpperCase() + target.slice(1)}` as any)}
+        animateFrom={clickPos}
         footer={
           <Button onClick={() => { setImportOpen(false); setResult(''); }}>{t('app.close')}</Button>
         }
