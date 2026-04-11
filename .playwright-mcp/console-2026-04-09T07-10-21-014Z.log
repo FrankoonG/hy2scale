@@ -1,0 +1,6 @@
+[     217ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://10.130.32.30:15565/scale/login:0
+[  667636ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://10.130.32.30:15565/scale/api/stats:0
+[  667636ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://10.130.32.30:15565/scale/api/topology:0
+[  668651ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://10.130.32.30:15565/scale/api/stats:0
+[  668656ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://10.130.32.30:15565/scale/api/topology:0
+[  668758ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://10.130.32.30:15565/scale/login:0

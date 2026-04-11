@@ -1,0 +1,98 @@
+- generic [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - generic [ref=e5]:
+        - generic [ref=e7]: HY2 SCALE
+        - generic [ref=e8]: v1.3.0
+      - navigation [ref=e9]:
+        - button "Nodes" [ref=e10] [cursor=pointer]:
+          - img [ref=e11]
+          - text: Nodes
+        - button "Users" [ref=e16] [cursor=pointer]:
+          - img [ref=e17]
+          - text: Users
+        - button "Proxies" [ref=e21] [cursor=pointer]:
+          - img [ref=e22]
+          - text: Proxies
+        - button "Rules" [ref=e25] [cursor=pointer]:
+          - img [ref=e26]
+          - text: Rules
+        - button "TLS" [ref=e28] [cursor=pointer]:
+          - img [ref=e29]
+          - text: TLS
+        - button "Settings" [ref=e32] [cursor=pointer]:
+          - img [ref=e33]
+          - text: Settings
+      - button "Logout" [ref=e38] [cursor=pointer]:
+        - img [ref=e39]
+        - text: Logout
+    - generic [ref=e42]:
+      - generic [ref=e43]:
+        - heading "TLS" [level=1] [ref=e45]
+        - generic [ref=e46]:
+          - generic [ref=e47]: 75a0fe01
+          - button "English" [ref=e50] [cursor=pointer]:
+            - generic [ref=e51]: English
+            - img [ref=e52]
+      - generic [ref=e57]:
+        - generic [ref=e58]:
+          - generic [ref=e59]: Certificates
+          - generic [ref=e60]: "1"
+          - button "New" [ref=e62] [cursor=pointer]
+        - table [ref=e65]:
+          - rowgroup [ref=e66]:
+            - row "Display Name Subject Issuer Expires Key" [ref=e67]:
+              - columnheader "Display Name" [ref=e68]
+              - columnheader "Subject" [ref=e69]
+              - columnheader "Issuer" [ref=e70]
+              - columnheader "Expires" [ref=e71]
+              - columnheader "Key" [ref=e72]
+              - columnheader [ref=e73]
+          - rowgroup [ref=e74]:
+            - row "Default default default default no" [ref=e75]:
+              - cell "Default default" [ref=e76]:
+                - text: Default
+                - generic [ref=e77]: default
+              - cell "default" [ref=e78]
+              - cell "default" [ref=e79]
+              - cell [ref=e80]
+              - cell "no" [ref=e81]:
+                - generic [ref=e82]: "no"
+              - cell [ref=e83]:
+                - generic [ref=e84]:
+                  - button [active] [ref=e85] [cursor=pointer]:
+                    - img [ref=e86]
+                  - button [ref=e89] [cursor=pointer]:
+                    - img [ref=e90]
+  - generic [ref=e93]:
+    - generic [ref=e94]:
+      - heading "Edit Certificate" [level=2] [ref=e95]
+      - button "✕" [ref=e96] [cursor=pointer]
+    - generic [ref=e99]:
+      - generic [ref=e100]:
+        - generic [ref=e101]:
+          - generic [ref=e102]:
+            - text: ID
+            - generic [ref=e103]: "*"
+          - textbox "e.g. my-cert" [disabled] [ref=e104]: default
+        - generic [ref=e105]:
+          - generic [ref=e106]: Display Name
+          - textbox "optional" [ref=e107]: Default
+      - generic [ref=e108]:
+        - generic [ref=e109]:
+          - button "Manual Input" [ref=e110] [cursor=pointer]
+          - button "File Path" [ref=e111] [cursor=pointer]
+        - button "Generate self-signed certificate" [ref=e112] [cursor=pointer]:
+          - img [ref=e113]
+      - generic [ref=e117]:
+        - generic [ref=e118]:
+          - generic [ref=e119]:
+            - text: Certificate (PEM)
+            - generic [ref=e120]: "*"
+          - textbox "-----BEGIN CERTIFICATE-----" [ref=e121]: "-----BEGIN CERTIFICATE----- MIIBXzCCAQSgAwIBAgIRALcVrBFJpqIR60ko9g07BYMwCgYIKoZIzj0EAwIwEjEQ MA4GA1UEAxMHZGVmYXVsdDAeFw0yNjA0MDcxMjI5MDhaFw0zNjA0MDQxMjI5MDha MBIxEDAOBgNVBAMTB2RlZmF1bHQwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARV HVw0yJ9Nzg1GdmnklF6xhlYsUJh7SWqsj5PqfUfMs5fjxwMAm0akzGStm44Ed0C3 syW1SWClBdh+f4ncogbVozswOTAOBgNVHQ8BAf8EBAMCB4AwEwYDVR0lBAwwCgYI KwYBBQUHAwEwEgYDVR0RBAswCYIHZGVmYXVsdDAKBggqhkjOPQQDAgNJADBGAiEA jAzWl5SXIALeeNwfritAC+4HsJs8EiEE69AAd0gd+F0CIQDWfFwhs4tMUfGGgDkx nN+DuBs/1WfBgpDofImamULYgQ== -----END CERTIFICATE-----"
+        - generic [ref=e122]:
+          - generic [ref=e123]: Private Key (PEM)
+          - textbox "-----BEGIN EC PRIVATE KEY-----" [ref=e124]: "-----BEGIN EC PRIVATE KEY----- MHcCAQEEIOdEyN4T2AYXuUL9a+YnIAuJmv6TPjZwjKZ34lar8VaEoAoGCCqGSM49 AwEHoUQDQgAEVR1cNMifTc4NRnZp5JResYZWLFCYe0lqrI+T6n1HzLOX48cDAJtG pMxkrZuOBHdAt7MltUlgpQXYfn+J3KIG1Q== -----END EC PRIVATE KEY-----"
+    - generic [ref=e125]:
+      - button "Cancel" [ref=e126] [cursor=pointer]
+      - button "Save" [ref=e127] [cursor=pointer]

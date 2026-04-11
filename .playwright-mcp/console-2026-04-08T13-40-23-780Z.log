@@ -1,0 +1,18 @@
+[     208ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://10.130.32.30:15565/scale/login:0
+[  197587ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://10.130.32.30:15565/scale/api/stats:0
+[  197591ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://10.130.32.30:15565/scale/api/topology:0
+[  197707ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://10.130.32.30:15565/scale/login:0
+[  209976ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://10.130.32.30:15565/scale/login:0
+[  636276ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://10.130.32.30:15565/scale/api/stats:0
+[  636276ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://10.130.32.30:15565/scale/api/topology:0
+[  637289ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://10.130.32.30:15565/scale/api/stats:0
+[  637294ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://10.130.32.30:15565/scale/api/topology:0
+[  637407ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://10.130.32.30:15565/scale/login:0
+[  655270ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://10.130.32.30:15565/scale/login:0
+[  661547ms] [VERBOSE] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) @ http://10.130.32.30:15565/scale/users:0
+[  693507ms] [VERBOSE] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) @ http://10.130.32.30:15565/scale/users:0
+[54282043ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://10.130.32.30:15565/scale/api/users:0
+[54282187ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://10.130.32.30:15565/scale/api/topology:0
+[54283089ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://10.130.32.30:15565/scale/api/users:0
+[54284240ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://10.130.32.30:15565/scale/api/topology:0
+[54284360ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://10.130.32.30:15565/scale/login:0

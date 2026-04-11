@@ -1,0 +1,464 @@
+ _   ___   ______   _____ _____ ___  _     _____
+| | | \ \ / /___ \ / ____/ ____/ _ \| |   |  ___|
+| |_| |\ V /  __) | (___| |  | |_| | |   | |_
+|  _  | | |  |__ < \___ \| |  |  _  | |   |  _|
+| | | | | |  ___) |____) | |__| | | | |___| |___
+|_| |_| |_| |____/|_____/\____/_| |_|_____|_____|
+  v1.2.3
+2026/04/03 06:14:43 [2400] starting node id=2400 (exit=true)
+2026/04/03 06:14:43 API/UI on 0.0.0.0:5565/scale
+2026/04/03 06:14:43 [runtime] mode: compat (NET_ADMIN OK, iptables unavailable)
+2026/04/03 06:14:43 [2400] nested discovery enabled for "cn-shandong"
+2026/04/03 06:14:43 [2400] nested discovery enabled for "tz-cm-temp"
+2026/04/03 06:14:43 [2400] hy2 server on 0.0.0.0:5565,44000-45000
+2026/04/03 06:14:43 [l2tp] iptables unavailable, using TUN capture mode (compat)
+2026/04/03 06:14:43 [tun-capture] creating kernel TUN hy2cap0 with gvisor netstack (MTU=1300)
+2026/04/03 06:14:43 [tun-capture] route: from 192.168.25.1/24 → dev hy2cap0 (table 100)
+2026/04/03 06:14:43 [tun-capture] TUN capture mode active (compat)
+2026/04/03 06:14:43 [tun-capture] set FORWARD ACCEPT failed: setsockopt SET_REPLACE: invalid argument (forwarding may not work)
+2026/04/03 06:14:43 [ipsec] starting strongswan...
+Starting strongSwan 5.8.4 IPsec [starter]...
+00[DMN] Starting IKE charon daemon (strongSwan 5.8.4, Linux 5.10.194, x86_64)
+charon (36) started after 20 ms
+2026/04/03 06:14:43 [ipsec] strongswan ready
+2026/04/03 06:14:43 [l2tp] server on :1701 pool=192.168.25.1/24
+2026/04/03 06:14:43 [ikev2] auto-signing server cert: CN=2400 (CA=ikuai)
+00[LIB] created TUN device: ipsec0
+00[CFG] loading ca certificates from '/etc/ipsec.d/cacerts'
+00[CFG] loading aa certificates from '/etc/ipsec.d/aacerts'
+00[CFG] loading ocsp signer certificates from '/etc/ipsec.d/ocspcerts'
+00[CFG] loading attribute certificates from '/etc/ipsec.d/acerts'
+00[CFG] loading crls from '/etc/ipsec.d/crls'
+00[CFG] loading secrets from '/etc/ipsec.secrets'
+00[CFG]   loaded IKE secret for %any %any
+00[LIB] loaded plugins: charon aes des rc2 sha2 sha1 md4 md5 random nonce x509 revocation constraints pubkey pkcs1 pkcs7 pkcs8 pkcs12 pgp dnskey sshkey pem openssl fips-prf curve25519 xcbc cmac hmac drbg attr kernel-libipsec kernel-netlink resolve socket-default farp stroke vici updown eap-identity eap-mschapv2 xauth-generic dhcp unity counters
+00[JOB] spawning 16 worker threads
+11[CFG] received stroke: add connection 'l2tp-psk'
+11[CFG] added configuration 'l2tp-psk'
+13[KNL] 192.168.26.1 appeared on lo
+12[CFG] rereading secrets
+12[CFG] loading secrets from '/etc/ipsec.secrets'
+12[CFG]   loaded IKE secret for %any %any
+2026/04/03 06:14:44 [ikev2] mode: compat (iptables unavailable → xfrm interface + AF_PACKET bridge + gvisor netstack)
+2026/04/03 06:14:44 [tun-capture] route: from 192.168.26.1/24 → dev hy2cap0 (table 100)
+2026/04/03 06:14:44 [ikev2] swanctl config written with if_id for xfrm interface mode
+Updating strongSwan IPsec configuration...
+loaded certificate from '/etc/swanctl/x509/ikev2-server.cert.pem'
+12[CFG]   loaded EAP secret for in-au
+12[CFG]   loaded EAP secret for in-jp
+10[CFG] loaded certificate 'C=IK, ST=beijing, L=beijing, O=ikuai, OU=ikuai, CN=2400'
+09[CFG] loaded certificate 'C=IK, ST=beijing, L=beijing, O=ikuai, OU=ikuai, CN=ikuaitest.com'
+08[CFG] loaded RSA private key
+13[CFG] received stroke: add connection 'ikev2-mschapv2'
+13[CFG] adding virtual IP address pool 192.168.26.2-192.168.26.254
+13[CFG]   loaded certificate "C=IK, ST=beijing, L=beijing, O=ikuai, OU=ikuai, CN=2400" from 'ikev2-server.cert.pem'
+13[CFG]   id '%any' not confirmed by certificate, defaulting to 'C=IK, ST=beijing, L=beijing, O=ikuai, OU=ikuai, CN=2400'
+13[CFG] added configuration 'ikev2-mschapv2'
+08[CFG] rereading secrets
+08[CFG] loading secrets from '/etc/ipsec.secrets'
+08[CFG]   loaded IKE secret for %any %any
+08[CFG]   loaded EAP secret for in-au
+08[CFG]   loaded EAP secret for in-jp
+09[CFG] loaded certificate 'C=IK, ST=beijing, L=beijing, O=ikuai, OU=ikuai, CN=2400'
+15[CFG] loaded certificate 'C=IK, ST=beijing, L=beijing, O=ikuai, OU=ikuai, CN=ikuaitest.com'
+opening directory '/etc/swanctl/x509ocsp' failed: No such file or directory
+opening directory '/etc/swanctl/x509aa' failed: No such file or directory
+opening directory '/etc/swanctl/x509ac' failed: No such file or directory
+opening directory '/etc/swanctl/x509crl' failed: No such file or directory
+opening directory '/etc/swanctl/pubkey' failed: No such file or directory
+opening directory '/etc/swanctl/rsa' failed: No such file or directory
+opening directory '/etc/swanctl/ecdsa' failed: No such file or directory
+opening directory '/etc/swanctl/bliss' failed: No such file or directory
+opening directory '/etc/swanctl/pkcs8' failed: No such file or directory
+opening directory '/etc/swanctl/pkcs12' failed: No such file or directory
+no authorities found, 0 unloaded
+loaded certificate from '/etc/swanctl/x509ca/ca.pem'
+loaded private key from '/etc/swanctl/private/ikev2-server.key.pem'
+loaded eap secret 'eap-user0'
+loaded eap secret 'eap-user1'
+loaded pool 'ikev2pool'
+successfully loaded 1 pools, 0 unloaded
+loaded connection 'ikev2-mschapv2'
+successfully loaded 1 connections, 0 unloaded
+2026/04/03 06:14:45 [ikev2] server mode=mschapv2 pool=192.168.26.1/24
+2026/04/03 06:14:45 [2400] connecting to cn-shandong (cn.foacraft.com:5565)
+2026/04/03 06:14:45 [xfrm-bridge] started AF_PACKET bridge on ipsec0 (idx=13)
+2026/04/03 06:14:45 [ikev2] ipsec0 AF_PACKET bridge active (kernel-libipsec userspace ESP)
+2026/04/03 06:14:45 [2400] connected to cn-shandong (cn.foacraft.com:5565)
+xl2tpd[90]: Not looking for kernel SAref support.
+xl2tpd[90]: Using l2tp kernel support.
+xl2tpd[90]: xl2tpd version xl2tpd-1.3.18 started on 4a2c9a300134 PID:90
+xl2tpd[90]: Written by Mark Spencer, Copyright (C) 1998, Adtran, Inc.
+xl2tpd[90]: Forked by Scott Balmos and David Stipp, (C) 2001
+xl2tpd[90]: Inherited by Jeff McAdams, (C) 2002
+xl2tpd[90]: Forked again by Xelerance (www.xelerance.com) (C) 2006-2016
+xl2tpd[90]: Listening on IP address 0.0.0.0, port 1701
+11[CFG] loaded ANY private key
+10[CFG] loaded EAP shared key with id 'eap-user0' for: 'in-au'
+11[CFG] loaded EAP shared key with id 'eap-user1' for: 'in-jp'
+10[CFG] added vici pool ikev2pool: 192.168.26.2, 253 entries
+15[CFG] added vici connection: ikev2-mschapv2
+12[NET] received packet: from 192.168.10.1[500] to 192.168.10.4[500] (718 bytes)
+12[ENC] parsed IKE_SA_INIT request 0 [ SA KE No N(NATD_S_IP) N(NATD_D_IP) N(FRAG_SUP) N(HASH_ALG) N(REDIR_SUP) ]
+12[IKE] 192.168.10.1 is initiating an IKE_SA
+12[CFG] selected proposal: IKE:AES_CBC_256/HMAC_SHA2_256_128/PRF_HMAC_SHA2_256/MODP_2048
+12[IKE] faking NAT situation to enforce UDP encapsulation
+12[IKE] DH group MODP_3072 unacceptable, requesting MODP_2048
+12[ENC] generating IKE_SA_INIT response 0 [ N(INVAL_KE) ]
+12[NET] sending packet: from 192.168.10.4[500] to 192.168.10.1[500] (38 bytes)
+13[NET] received packet: from 192.168.10.1[500] to 192.168.10.4[500] (590 bytes)
+13[ENC] parsed IKE_SA_INIT request 0 [ SA KE No N(NATD_S_IP) N(NATD_D_IP) N(FRAG_SUP) N(HASH_ALG) N(REDIR_SUP) ]
+13[IKE] 192.168.10.1 is initiating an IKE_SA
+13[CFG] selected proposal: IKE:AES_CBC_256/HMAC_SHA2_256_128/PRF_HMAC_SHA2_256/MODP_2048
+13[IKE] faking NAT situation to enforce UDP encapsulation
+13[IKE] sending cert request for "C=IK, ST=beijing, L=beijing, O=ikuai, OU=ikuai, CN=ikuaitest.com"
+13[ENC] generating IKE_SA_INIT response 0 [ SA KE No N(NATD_S_IP) N(NATD_D_IP) CERTREQ N(FRAG_SUP) N(HASH_ALG) N(CHDLESS_SUP) N(MULT_AUTH) ]
+13[NET] sending packet: from 192.168.10.4[500] to 192.168.10.1[500] (497 bytes)
+11[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (384 bytes)
+11[ENC] parsed IKE_AUTH request 1 [ IDi CPRQ(ADDR) SA TSi TSr N(MOBIKE_SUP) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_6_ADDR) N(MULT_AUTH) N(EAP_ONLY) N(MSG_ID_SYN_SUP) ]
+11[CFG] looking for peer configs matching 192.168.10.4[%any]...192.168.10.1[ik]
+11[CFG] selected peer config 'ikev2-mschapv2'
+11[IKE] initiating EAP_IDENTITY method (id 0x00)
+11[IKE] peer supports MOBIKE
+11[IKE] authentication of 'C=IK, ST=beijing, L=beijing, O=ikuai, OU=ikuai, CN=2400' (myself) with RSA_EMSA_PKCS1_SHA2_256 successful
+11[IKE] sending end entity cert "C=IK, ST=beijing, L=beijing, O=ikuai, OU=ikuai, CN=2400"
+11[ENC] generating IKE_AUTH response 1 [ IDr CERT AUTH EAP/REQ/ID ]
+11[ENC] splitting IKE message (1680 bytes) into 2 fragments
+11[ENC] generating IKE_AUTH response 1 [ EF(1/2) ]
+11[ENC] generating IKE_AUTH response 1 [ EF(2/2) ]
+11[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (1236 bytes)
+11[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (516 bytes)
+09[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (80 bytes)
+09[ENC] parsed IKE_AUTH request 2 [ EAP/RES/ID ]
+09[IKE] received EAP identity 'in-au'
+09[IKE] initiating EAP_MSCHAPV2 method (id 0xE2)
+09[ENC] generating IKE_AUTH response 2 [ EAP/REQ/MSCHAPV2 ]
+09[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (112 bytes)
+08[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (144 bytes)
+08[ENC] parsed IKE_AUTH request 3 [ EAP/RES/MSCHAPV2 ]
+08[ENC] generating IKE_AUTH response 3 [ EAP/REQ/MSCHAPV2 ]
+08[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (144 bytes)
+10[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (80 bytes)
+10[ENC] parsed IKE_AUTH request 4 [ EAP/RES/MSCHAPV2 ]
+10[IKE] EAP method EAP_MSCHAPV2 succeeded, MSK established
+10[ENC] generating IKE_AUTH response 4 [ EAP/SUCC ]
+10[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+15[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (112 bytes)
+15[ENC] parsed IKE_AUTH request 5 [ AUTH ]
+15[IKE] authentication of 'ik' with EAP successful
+15[IKE] authentication of 'C=IK, ST=beijing, L=beijing, O=ikuai, OU=ikuai, CN=2400' (myself) with EAP
+15[IKE] IKE_SA ikev2-mschapv2[2] established between 192.168.10.4[C=IK, ST=beijing, L=beijing, O=ikuai, OU=ikuai, CN=2400]...192.168.10.1[ik]
+15[IKE] peer requested virtual IP %any
+15[CFG] assigning new lease to 'in-au'
+2026/04/03 06:33:50 [vpn] session: 192.168.26.2 → ik
+2026/04/03 06:33:50 [vpn] session: 192.168.26.2 → in-au
+2026/04/03 06:33:50 [ikev2] EAP identity resolved: 192.168.26.2 → in-au (IKE: ik)
+15[IKE] assigning virtual IP 192.168.26.2 to peer 'in-au'
+15[CFG] selected proposal: ESP:AES_CBC_256/HMAC_SHA2_256_128/NO_EXT_SEQ
+15[IKE] CHILD_SA ikev2-mschapv2{1} established with SPIs 63844244_i c01d1f5c_o and TS 0.0.0.0/0 === 192.168.26.2/32
+15[CHD] updown: ok
+15[ENC] generating IKE_AUTH response 5 [ AUTH CPRP(ADDR DNS DNS) SA TSi TSr N(MOBIKE_SUP) N(ADD_4_ADDR) ]
+15[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (256 bytes)
+12[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+12[ENC] parsed INFORMATIONAL request 6 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+12[ENC] generating INFORMATIONAL response 6 [ ]
+12[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+08[NET] received packet: from 192.168.10.1[500] to 192.168.10.4[500] (718 bytes)
+08[ENC] parsed IKE_SA_INIT request 0 [ SA KE No N(NATD_S_IP) N(NATD_D_IP) N(FRAG_SUP) N(HASH_ALG) N(REDIR_SUP) ]
+08[IKE] 192.168.10.1 is initiating an IKE_SA
+08[CFG] selected proposal: IKE:AES_CBC_256/HMAC_SHA2_256_128/PRF_HMAC_SHA2_256/MODP_2048
+08[IKE] faking NAT situation to enforce UDP encapsulation
+08[IKE] DH group MODP_3072 unacceptable, requesting MODP_2048
+08[ENC] generating IKE_SA_INIT response 0 [ N(INVAL_KE) ]
+08[NET] sending packet: from 192.168.10.4[500] to 192.168.10.1[500] (38 bytes)
+14[NET] received packet: from 192.168.10.1[500] to 192.168.10.4[500] (590 bytes)
+14[ENC] parsed IKE_SA_INIT request 0 [ SA KE No N(NATD_S_IP) N(NATD_D_IP) N(FRAG_SUP) N(HASH_ALG) N(REDIR_SUP) ]
+14[IKE] 192.168.10.1 is initiating an IKE_SA
+14[CFG] selected proposal: IKE:AES_CBC_256/HMAC_SHA2_256_128/PRF_HMAC_SHA2_256/MODP_2048
+14[IKE] faking NAT situation to enforce UDP encapsulation
+14[IKE] sending cert request for "C=IK, ST=beijing, L=beijing, O=ikuai, OU=ikuai, CN=ikuaitest.com"
+14[ENC] generating IKE_SA_INIT response 0 [ SA KE No N(NATD_S_IP) N(NATD_D_IP) CERTREQ N(FRAG_SUP) N(HASH_ALG) N(CHDLESS_SUP) N(MULT_AUTH) ]
+14[NET] sending packet: from 192.168.10.4[500] to 192.168.10.1[500] (497 bytes)
+15[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (384 bytes)
+15[ENC] parsed IKE_AUTH request 1 [ IDi CPRQ(ADDR) SA TSi TSr N(MOBIKE_SUP) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_6_ADDR) N(MULT_AUTH) N(EAP_ONLY) N(MSG_ID_SYN_SUP) ]
+15[CFG] looking for peer configs matching 192.168.10.4[%any]...192.168.10.1[in-jp]
+15[CFG] selected peer config 'ikev2-mschapv2'
+15[IKE] initiating EAP_IDENTITY method (id 0x00)
+15[IKE] peer supports MOBIKE
+15[IKE] authentication of 'C=IK, ST=beijing, L=beijing, O=ikuai, OU=ikuai, CN=2400' (myself) with RSA_EMSA_PKCS1_SHA2_256 successful
+15[IKE] sending end entity cert "C=IK, ST=beijing, L=beijing, O=ikuai, OU=ikuai, CN=2400"
+15[ENC] generating IKE_AUTH response 1 [ IDr CERT AUTH EAP/REQ/ID ]
+15[ENC] splitting IKE message (1680 bytes) into 2 fragments
+15[ENC] generating IKE_AUTH response 1 [ EF(1/2) ]
+15[ENC] generating IKE_AUTH response 1 [ EF(2/2) ]
+15[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (1236 bytes)
+15[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (516 bytes)
+12[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (80 bytes)
+12[ENC] parsed IKE_AUTH request 2 [ EAP/RES/ID ]
+12[IKE] received EAP identity 'in-jp'
+12[IKE] initiating EAP_MSCHAPV2 method (id 0xFE)
+12[ENC] generating IKE_AUTH response 2 [ EAP/REQ/MSCHAPV2 ]
+12[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (112 bytes)
+13[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (144 bytes)
+13[ENC] parsed IKE_AUTH request 3 [ EAP/RES/MSCHAPV2 ]
+13[ENC] generating IKE_AUTH response 3 [ EAP/REQ/MSCHAPV2 ]
+13[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (144 bytes)
+11[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (80 bytes)
+11[ENC] parsed IKE_AUTH request 4 [ EAP/RES/MSCHAPV2 ]
+11[IKE] EAP method EAP_MSCHAPV2 succeeded, MSK established
+11[ENC] generating IKE_AUTH response 4 [ EAP/SUCC ]
+11[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+2026/04/03 06:33:51 [vpn] session: 192.168.26.3 → in-jp
+09[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (112 bytes)
+09[ENC] parsed IKE_AUTH request 5 [ AUTH ]
+09[IKE] authentication of 'in-jp' with EAP successful
+09[IKE] authentication of 'C=IK, ST=beijing, L=beijing, O=ikuai, OU=ikuai, CN=2400' (myself) with EAP
+09[IKE] IKE_SA ikev2-mschapv2[4] established between 192.168.10.4[C=IK, ST=beijing, L=beijing, O=ikuai, OU=ikuai, CN=2400]...192.168.10.1[in-jp]
+09[IKE] peer requested virtual IP %any
+09[CFG] assigning new lease to 'in-jp'
+09[IKE] assigning virtual IP 192.168.26.3 to peer 'in-jp'
+09[CFG] selected proposal: ESP:AES_CBC_256/HMAC_SHA2_256_128/NO_EXT_SEQ
+09[IKE] CHILD_SA ikev2-mschapv2{2} established with SPIs aba948bf_i c1fe3e9b_o and TS 0.0.0.0/0 === 192.168.26.3/32
+09[CHD] updown: ok
+09[ENC] generating IKE_AUTH response 5 [ AUTH CPRP(ADDR DNS DNS) SA TSi TSr N(MOBIKE_SUP) N(ADD_4_ADDR) ]
+09[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (256 bytes)
+08[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+08[ENC] parsed INFORMATIONAL request 7 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+08[ENC] generating INFORMATIONAL response 7 [ ]
+08[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+14[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+14[ENC] parsed INFORMATIONAL request 6 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+14[ENC] generating INFORMATIONAL response 6 [ ]
+14[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+14[CFG] rereading secrets
+14[CFG] loading secrets from '/etc/ipsec.secrets'
+14[CFG]   loaded IKE secret for %any %any
+14[CFG]   loaded EAP secret for in-au
+14[CFG]   loaded EAP secret for in-jp
+10[CFG] loaded certificate 'C=IK, ST=beijing, L=beijing, O=ikuai, OU=ikuai, CN=2400'
+15[CFG] loaded certificate 'C=IK, ST=beijing, L=beijing, O=ikuai, OU=ikuai, CN=ikuaitest.com'
+2026/04/03 20:14:46 [relay] cn-shandong: 3 consecutive ping failures, disconnecting for reconnect
+2026/04/03 20:14:46 [2400] cn-shandong: relay: peer cn-shandong: health check triggered disconnect
+2026/04/03 20:14:51 [2400] connecting to cn-shandong (cn.foacraft.com:5565)
+2026/04/03 20:14:52 [2400] connected to cn-shandong (cn.foacraft.com:5565)
+2026/04/04 15:14:32 [relay] cn-shandong: 3 consecutive ping failures, disconnecting for reconnect
+2026/04/04 15:14:32 [2400] cn-shandong: relay: peer cn-shandong: health check triggered disconnect
+2026/04/04 15:14:37 [2400] connecting to cn-shandong (cn.foacraft.com:5565)
+2026/04/04 15:14:41 [2400] connected to cn-shandong (cn.foacraft.com:5565)
+2026/04/05 09:14:02 [relay] cn-shandong: 3 consecutive ping failures, disconnecting for reconnect
+2026/04/05 09:14:02 [2400] cn-shandong: relay: peer cn-shandong: health check triggered disconnect
+2026/04/05 09:14:07 [2400] connecting to cn-shandong (cn.foacraft.com:5565)
+2026/04/05 09:14:11 [2400] connected to cn-shandong (cn.foacraft.com:5565)
+2026/04/05 18:51:31 [relay] cn-shandong: 3 consecutive ping failures, disconnecting for reconnect
+2026/04/05 18:51:31 [2400] cn-shandong: relay: peer cn-shandong: health check triggered disconnect
+2026/04/05 18:51:36 [2400] connecting to cn-shandong (cn.foacraft.com:5565)
+2026/04/05 18:51:46 [2400] cn-shandong: invalid address "cn.foacraft.com:5565": lookup cn.foacraft.com on 127.0.0.11:53: read udp 127.0.0.1:39063->127.0.0.11:53: i/o timeout
+2026/04/05 18:51:51 [2400] connecting to cn-shandong (cn.foacraft.com:5565)
+2026/04/05 18:52:01 [2400] cn-shandong: invalid address "cn.foacraft.com:5565": lookup cn.foacraft.com on 127.0.0.11:53: read udp 127.0.0.1:51437->127.0.0.11:53: i/o timeout
+2026/04/05 18:52:06 [2400] connecting to cn-shandong (cn.foacraft.com:5565)
+2026/04/05 18:52:15 [2400] cn-shandong: invalid address "cn.foacraft.com:5565": lookup cn.foacraft.com on 127.0.0.11:53: server misbehaving
+2026/04/05 18:52:20 [2400] connecting to cn-shandong (cn.foacraft.com:5565)
+08[CFG] loaded RSA private key
+14[CFG] loaded EAP shared key with id 'eap-user0' for: 'in-au'
+10[CFG] loaded EAP shared key with id 'eap-user1' for: 'in-jp'
+15[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+14[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+15[ENC] parsed INFORMATIONAL request 8 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+14[ENC] parsed INFORMATIONAL request 7 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+15[ENC] generating INFORMATIONAL response 8 [ ]
+14[ENC] generating INFORMATIONAL response 7 [ ]
+15[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+14[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+12[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+12[ENC] parsed INFORMATIONAL request 9 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+12[ENC] generating INFORMATIONAL response 9 [ ]
+12[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+08[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+08[ENC] parsed INFORMATIONAL request 8 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+08[ENC] generating INFORMATIONAL response 8 [ ]
+08[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+13[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+13[ENC] parsed INFORMATIONAL request 10 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+13[ENC] generating INFORMATIONAL response 10 [ ]
+13[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+10[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+10[ENC] parsed INFORMATIONAL request 9 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+10[ENC] generating INFORMATIONAL response 9 [ ]
+10[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+09[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+09[ENC] parsed INFORMATIONAL request 11 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+09[ENC] generating INFORMATIONAL response 11 [ ]
+09[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+11[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+11[ENC] parsed INFORMATIONAL request 10 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+11[ENC] generating INFORMATIONAL response 10 [ ]
+11[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+15[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+15[ENC] parsed INFORMATIONAL request 12 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+15[ENC] generating INFORMATIONAL response 12 [ ]
+15[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+14[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+14[ENC] parsed INFORMATIONAL request 11 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+14[ENC] generating INFORMATIONAL response 11 [ ]
+14[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+12[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+12[ENC] parsed INFORMATIONAL request 13 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+12[ENC] generating INFORMATIONAL response 13 [ ]
+12[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+08[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+08[ENC] parsed INFORMATIONAL request 12 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+2026/04/05 18:52:30 [2400] cn-shandong: invalid address "cn.foacraft.com:5565": lookup cn.foacraft.com on 127.0.0.11:53: read udp 127.0.0.1:34338->127.0.0.11:53: i/o timeout
+2026/04/05 18:52:35 [2400] connecting to cn-shandong (cn.foacraft.com:5565)
+2026/04/05 18:52:40 [2400] connected to cn-shandong (cn.foacraft.com:5565)
+08[ENC] generating INFORMATIONAL response 12 [ ]
+08[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+13[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+13[ENC] parsed INFORMATIONAL request 14 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+13[ENC] generating INFORMATIONAL response 14 [ ]
+13[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+10[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+10[ENC] parsed INFORMATIONAL request 13 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+10[ENC] generating INFORMATIONAL response 13 [ ]
+10[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+09[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+09[ENC] parsed INFORMATIONAL request 15 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+09[ENC] generating INFORMATIONAL response 15 [ ]
+09[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+11[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+11[ENC] parsed INFORMATIONAL request 14 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+11[ENC] generating INFORMATIONAL response 14 [ ]
+11[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+15[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+15[ENC] parsed INFORMATIONAL request 16 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+15[ENC] generating INFORMATIONAL response 16 [ ]
+15[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+14[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+14[ENC] parsed INFORMATIONAL request 15 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+14[ENC] generating INFORMATIONAL response 15 [ ]
+14[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+12[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+08[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+12[ENC] parsed INFORMATIONAL request 17 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+08[ENC] parsed INFORMATIONAL request 16 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+12[ENC] generating INFORMATIONAL response 17 [ ]
+08[ENC] generating INFORMATIONAL response 16 [ ]
+12[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+08[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+13[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+13[ENC] parsed INFORMATIONAL request 18 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+13[ENC] generating INFORMATIONAL response 18 [ ]
+13[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+10[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+10[ENC] parsed INFORMATIONAL request 17 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+10[ENC] generating INFORMATIONAL response 17 [ ]
+10[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+09[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+09[ENC] parsed INFORMATIONAL request 19 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+09[ENC] generating INFORMATIONAL response 19 [ ]
+09[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+11[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+11[ENC] parsed INFORMATIONAL request 18 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+11[ENC] generating INFORMATIONAL response 18 [ ]
+11[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+15[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+15[ENC] parsed INFORMATIONAL request 20 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+15[ENC] generating INFORMATIONAL response 20 [ ]
+15[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+14[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+14[ENC] parsed INFORMATIONAL request 19 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+14[ENC] generating INFORMATIONAL response 19 [ ]
+14[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+12[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+12[ENC] parsed INFORMATIONAL request 21 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+12[ENC] generating INFORMATIONAL response 21 [ ]
+12[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+08[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+08[ENC] parsed INFORMATIONAL request 20 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+08[ENC] generating INFORMATIONAL response 20 [ ]
+08[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+10[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+13[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+10[ENC] parsed INFORMATIONAL request 21 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+13[ENC] parsed INFORMATIONAL request 22 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+13[ENC] generating INFORMATIONAL response 22 [ ]
+13[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+10[ENC] generating INFORMATIONAL response 21 [ ]
+10[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+11[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+11[ENC] parsed INFORMATIONAL request 23 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+11[ENC] generating INFORMATIONAL response 23 [ ]
+11[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+15[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+15[ENC] parsed INFORMATIONAL request 22 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+15[ENC] generating INFORMATIONAL response 22 [ ]
+15[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+12[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+14[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+12[ENC] parsed INFORMATIONAL request 23 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+12[ENC] generating INFORMATIONAL response 23 [ ]
+14[ENC] parsed INFORMATIONAL request 24 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+14[ENC] generating INFORMATIONAL response 24 [ ]
+12[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+14[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+08[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+08[ENC] parsed INFORMATIONAL request 25 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+08[ENC] generating INFORMATIONAL response 25 [ ]
+08[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+13[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+13[ENC] parsed INFORMATIONAL request 24 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+13[ENC] generating INFORMATIONAL response 24 [ ]
+13[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+10[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+10[ENC] parsed INFORMATIONAL request 26 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+10[ENC] generating INFORMATIONAL response 26 [ ]
+10[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+09[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+09[ENC] parsed INFORMATIONAL request 25 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+09[ENC] generating INFORMATIONAL response 25 [ ]
+09[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+15[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+15[ENC] parsed INFORMATIONAL request 27 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+15[ENC] generating INFORMATIONAL response 27 [ ]
+15[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+12[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+12[ENC] parsed INFORMATIONAL request 26 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+12[ENC] generating INFORMATIONAL response 26 [ ]
+12[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+08[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+08[ENC] parsed INFORMATIONAL request 28 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+08[ENC] generating INFORMATIONAL response 28 [ ]
+08[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+13[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+13[ENC] parsed INFORMATIONAL request 27 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+13[ENC] generating INFORMATIONAL response 27 [ ]
+13[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+10[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+10[ENC] parsed INFORMATIONAL request 29 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+10[ENC] generating INFORMATIONAL response 29 [ ]
+10[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+09[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+09[ENC] parsed INFORMATIONAL request 28 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+09[ENC] generating INFORMATIONAL response 28 [ ]
+09[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+11[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+11[ENC] parsed INFORMATIONAL request 30 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+11[ENC] generating INFORMATIONAL response 30 [ ]
+11[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+11[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+11[ENC] parsed INFORMATIONAL request 29 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+11[ENC] generating INFORMATIONAL response 29 [ ]
+11[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+12[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+12[ENC] parsed INFORMATIONAL request 31 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+12[ENC] generating INFORMATIONAL response 31 [ ]
+12[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+14[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+14[ENC] parsed INFORMATIONAL request 30 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+14[ENC] generating INFORMATIONAL response 30 [ ]
+14[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+08[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+08[ENC] parsed INFORMATIONAL request 32 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]
+08[ENC] generating INFORMATIONAL response 32 [ ]
+08[NET] sending packet: from 192.168.10.4[4500] to 192.168.10.1[4500] (80 bytes)
+13[NET] received packet: from 192.168.10.1[4500] to 192.168.10.4[4500] (176 bytes)
+13[ENC] parsed INFORMATIONAL request 31 [ N(ADD_4_ADDR) N(ADD_6_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) N(ADD_4_ADDR) ]

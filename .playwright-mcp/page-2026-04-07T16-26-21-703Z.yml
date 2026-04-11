@@ -1,0 +1,59 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e7]: HY2 SCALE
+      - generic [ref=e8]: v1.3.0
+    - navigation [ref=e9]:
+      - button "Nodes" [ref=e10] [cursor=pointer]:
+        - img [ref=e11]
+        - text: Nodes
+      - button "Users" [ref=e16] [cursor=pointer]:
+        - img [ref=e17]
+        - text: Users
+      - button "Proxies" [active] [ref=e21] [cursor=pointer]:
+        - img [ref=e22]
+        - text: Proxies
+      - button "Rules" [ref=e25] [cursor=pointer]:
+        - img [ref=e26]
+        - text: Rules
+      - button "TLS" [ref=e28] [cursor=pointer]:
+        - img [ref=e29]
+        - text: TLS
+      - button "Settings" [ref=e32] [cursor=pointer]:
+        - img [ref=e33]
+        - text: Settings
+    - button "Logout" [ref=e38] [cursor=pointer]:
+      - img [ref=e39]
+      - text: Logout
+  - generic [ref=e42]:
+    - generic [ref=e43]:
+      - heading "Proxies" [level=1] [ref=e280]
+      - generic [ref=e46]:
+        - generic [ref=e47]: 75a0fe01
+        - button "English" [ref=e50] [cursor=pointer]:
+          - generic [ref=e51]: English
+          - img [ref=e52]
+    - generic [ref=e282]:
+      - generic [ref=e284]:
+        - button "Hysteria 2" [ref=e285] [cursor=pointer]
+        - button "SOCKS5" [ref=e286] [cursor=pointer]
+        - button "Shadowsocks" [ref=e287] [cursor=pointer]
+        - button "L2TP" [ref=e288] [cursor=pointer]
+        - button "IKEv2/IPsec" [ref=e289] [cursor=pointer]
+        - button "WireGuard" [ref=e290] [cursor=pointer]
+      - generic [ref=e293]:
+        - generic [ref=e295]: Hysteria 2 Server
+        - generic [ref=e297]:
+          - generic [ref=e298]:
+            - generic [ref=e299]:
+              - generic [ref=e300]: Server Port
+              - textbox [disabled] [ref=e301]: "5565"
+            - generic [ref=e302]:
+              - generic [ref=e303]: Server Status
+              - textbox [disabled] [ref=e304]: Enabled
+          - generic [ref=e305]: Server listen address and status are configured in the Nodes page (Edit Self). The settings above are read-only.
+          - generic [ref=e306]:
+            - generic [ref=e307]: Allow User Auth
+            - generic [ref=e308] [cursor=pointer]:
+              - checkbox
+            - generic [ref=e310]: When enabled, hy2 clients can authenticate with their username/password. Each user's traffic is routed through their assigned exit node. When disabled, only the system password is accepted (no per-user routing).

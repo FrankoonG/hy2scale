@@ -1,0 +1,245 @@
+- generic [ref=e87]:
+  - complementary [ref=e88]:
+    - generic [ref=e89]:
+      - generic [ref=e91]: HY2 SCALE
+      - generic [ref=e92]: v1.3.0
+    - navigation [ref=e93]:
+      - button "Nodes" [ref=e94] [cursor=pointer]:
+        - img [ref=e95]
+        - text: Nodes
+      - button "Users" [ref=e100] [cursor=pointer]:
+        - img [ref=e101]
+        - text: Users
+      - button "Proxies" [ref=e105] [cursor=pointer]:
+        - img [ref=e106]
+        - text: Proxies
+      - button "Rules" [ref=e109] [cursor=pointer]:
+        - img [ref=e110]
+        - text: Rules
+      - button "TLS" [ref=e112] [cursor=pointer]:
+        - img [ref=e113]
+        - text: TLS
+      - button "Settings" [ref=e116] [cursor=pointer]:
+        - img [ref=e117]
+        - text: Settings
+    - button "Logout" [ref=e122] [cursor=pointer]:
+      - img [ref=e123]
+      - text: Logout
+  - generic [ref=e126]:
+    - generic [ref=e127]:
+      - heading "Nodes" [level=1] [ref=e129]
+      - generic [ref=e130]:
+        - generic [ref=e131]: 75a0fe01
+        - button "English" [ref=e134] [cursor=pointer]:
+          - generic [ref=e135]: English
+          - img [ref=e136]
+    - generic [ref=e140]:
+      - generic [ref=e141]:
+        - generic [ref=e142]:
+          - generic [ref=e143]: Total Traffic
+          - generic [ref=e144]: 0 B / 657 B
+          - generic [ref=e145]: upload / download
+        - generic [ref=e146]:
+          - generic [ref=e147]: Realtime Speed
+          - generic [ref=e148]: 0 B/s / 219 B/s
+          - generic [ref=e149]: upload / download
+        - generic [ref=e150]:
+          - generic [ref=e151]: Connections
+          - generic [ref=e152]: "0"
+          - generic [ref=e153]: active streams
+        - generic [ref=e154]:
+          - generic [ref=e155]: Exit Clients
+          - generic [ref=e156]: "1"
+          - generic [ref=e157]: using this node as exit
+      - generic [ref=e158]:
+        - generic [ref=e159]:
+          - generic [ref=e160]: Network Topology
+          - generic [ref=e161]: "3"
+          - generic [ref=e163]:
+            - button "Export" [ref=e164] [cursor=pointer]
+            - button "Import" [ref=e165] [cursor=pointer]
+            - button "+ Add Node" [ref=e166] [cursor=pointer]
+        - table [ref=e169]:
+          - rowgroup [ref=e170]:
+            - row "ON Status Dir Node Traffic Nested" [ref=e171]:
+              - columnheader "ON" [ref=e172]
+              - columnheader "Status" [ref=e173]
+              - columnheader "Dir" [ref=e174]
+              - columnheader "Node" [ref=e175]
+              - columnheader "Traffic" [ref=e176]
+              - columnheader "Nested" [ref=e177]
+              - columnheader [ref=e178]
+          - rowgroup [ref=e179]:
+            - row "∞ LOCAL 75a0fe01 0.0.0.0:5565 0 B/s / 0 B/s Edit" [ref=e180]:
+              - cell [ref=e181]:
+                - generic [ref=e182] [cursor=pointer]:
+                  - checkbox [checked]
+              - cell "∞" [ref=e184]
+              - cell "LOCAL" [ref=e185]:
+                - generic [ref=e186]: LOCAL
+              - cell "75a0fe01 0.0.0.0:5565" [ref=e187]:
+                - generic [ref=e189]:
+                  - text: 75a0fe01
+                  - generic [ref=e190]: 0.0.0.0:5565
+              - cell "0 B/s / 0 B/s" [ref=e191]
+              - cell [ref=e192]:
+                - generic [ref=e193] [cursor=pointer]:
+                  - checkbox [checked] [disabled]
+              - cell "Edit" [ref=e195]:
+                - button "Edit" [ref=e197] [cursor=pointer]:
+                  - img [ref=e198]
+                  - text: Edit
+            - row "30ms IN ffd14726 via 75a0fe01 0 B/s / 219 B/s" [ref=e201]:
+              - cell [ref=e202]:
+                - generic [ref=e203] [cursor=pointer]:
+                  - checkbox [checked]
+              - cell "30ms" [ref=e205]:
+                - generic [ref=e206]: 30ms
+              - cell "IN" [ref=e207]:
+                - generic [ref=e208]: IN
+              - cell "ffd14726 via 75a0fe01" [ref=e209]:
+                - generic [ref=e211]:
+                  - link "ffd14726" [ref=e212] [cursor=pointer]:
+                    - /url: /scale/remote/ffd14726/scale/
+                  - generic [ref=e213]: via 75a0fe01
+              - cell "0 B/s / 219 B/s" [ref=e214]
+              - cell [ref=e215]:
+                - generic [ref=e216] [cursor=pointer]:
+                  - checkbox [checked]
+              - cell [ref=e218]
+            - row "110ms IN 9c65a44d via ffd14726 0 B/s / 0 B/s" [ref=e219]:
+              - cell [ref=e220]:
+                - generic [ref=e221] [cursor=pointer]:
+                  - checkbox [checked]
+              - cell "110ms" [ref=e223]:
+                - generic [ref=e224]: 110ms
+              - cell "IN" [ref=e225]:
+                - generic [ref=e226]: IN
+              - cell "9c65a44d via ffd14726" [ref=e227]:
+                - generic [ref=e229]:
+                  - link "9c65a44d" [ref=e230] [cursor=pointer]:
+                    - /url: /scale/remote/9c65a44d/scale/
+                  - generic [ref=e231]: via ffd14726
+              - cell "0 B/s / 0 B/s" [ref=e232]
+              - cell [ref=e233]:
+                - generic [ref=e234] [cursor=pointer]:
+                  - checkbox
+              - cell [ref=e236]
+            - row "50ms OUT 9c65a44d 10.99.0.30:5565 0 B/s / 0 B/s" [ref=e237]:
+              - cell [ref=e238]:
+                - generic [ref=e239] [cursor=pointer]:
+                  - checkbox [checked]
+              - cell "50ms" [ref=e241]:
+                - generic [ref=e242]: 50ms
+              - cell "OUT" [ref=e243]:
+                - generic [ref=e244]: OUT
+              - cell "9c65a44d 10.99.0.30:5565" [ref=e245]:
+                - generic [ref=e247]:
+                  - link "9c65a44d" [ref=e248] [cursor=pointer]:
+                    - /url: /scale/remote/9c65a44d/scale/
+                  - generic [ref=e249]: 10.99.0.30:5565
+              - cell "0 B/s / 0 B/s" [ref=e250]
+              - cell [ref=e251]:
+                - generic [ref=e252] [cursor=pointer]:
+                  - checkbox [checked]
+              - cell [ref=e254]:
+                - generic [ref=e255]:
+                  - button [ref=e256] [cursor=pointer]:
+                    - img [ref=e257]
+                  - button [ref=e260] [cursor=pointer]:
+                    - img [ref=e261]
+            - row "130ms OUT ffd14726 via 9c65a44d 0 B/s / 0 B/s" [ref=e263]:
+              - cell [ref=e264]:
+                - generic [ref=e265] [cursor=pointer]:
+                  - checkbox [checked]
+              - cell "130ms" [ref=e267]:
+                - generic [ref=e268]: 130ms
+              - cell "OUT" [ref=e269]:
+                - generic [ref=e270]: OUT
+              - cell "ffd14726 via 9c65a44d" [ref=e271]:
+                - generic [ref=e273]:
+                  - link "ffd14726" [ref=e274] [cursor=pointer]:
+                    - /url: /scale/remote/ffd14726/scale/
+                  - generic [ref=e275]: via 9c65a44d
+              - cell "0 B/s / 0 B/s" [ref=e276]
+              - cell [ref=e277]:
+                - generic [ref=e278] [cursor=pointer]:
+                  - checkbox [checked]
+              - cell [ref=e280]
+            - row "160ms IN 9c65a44d via ffd14726 0 B/s / 0 B/s" [ref=e281]:
+              - cell [ref=e282]:
+                - generic [ref=e283] [cursor=pointer]:
+                  - checkbox [checked]
+              - cell "160ms" [ref=e285]:
+                - generic [ref=e286]: 160ms
+              - cell "IN" [ref=e287]:
+                - generic [ref=e288]: IN
+              - cell "9c65a44d via ffd14726" [ref=e289]:
+                - generic [ref=e291]:
+                  - link "9c65a44d" [ref=e292] [cursor=pointer]:
+                    - /url: /scale/remote/9c65a44d/scale/
+                  - generic [ref=e293]: via ffd14726
+              - cell "0 B/s / 0 B/s" [ref=e294]
+              - cell [ref=e295]:
+                - generic [ref=e296] [cursor=pointer]:
+                  - checkbox
+              - cell [ref=e298]
+            - row "6ms OUT eeff2f4a 10.99.0.20:5565 0 B/s / 0 B/s" [ref=e299]:
+              - cell [ref=e300]:
+                - generic [ref=e301] [cursor=pointer]:
+                  - checkbox [checked]
+              - cell "6ms" [ref=e303]:
+                - generic [ref=e304]: 6ms
+              - cell "OUT" [ref=e305]:
+                - generic [ref=e306]: OUT
+              - cell "eeff2f4a 10.99.0.20:5565" [ref=e307]:
+                - generic [ref=e309]:
+                  - link "eeff2f4a" [ref=e310] [cursor=pointer]:
+                    - /url: /scale/remote/eeff2f4a/scale/
+                  - generic [ref=e311]: 10.99.0.20:5565
+              - cell "0 B/s / 0 B/s" [ref=e312]
+              - cell [ref=e313]:
+                - generic [ref=e314] [cursor=pointer]:
+                  - checkbox [checked]
+              - cell [ref=e316]:
+                - generic [ref=e317]:
+                  - button [ref=e318] [cursor=pointer]:
+                    - img [ref=e319]
+                  - button [ref=e322] [cursor=pointer]:
+                    - img [ref=e323]
+            - row "11ms OUT 0fb04e6f via eeff2f4a 0 B/s / 0 B/s" [ref=e325]:
+              - cell [ref=e326]:
+                - generic [ref=e327] [cursor=pointer]:
+                  - checkbox [checked]
+              - cell "11ms" [ref=e329]:
+                - generic [ref=e330]: 11ms
+              - cell "OUT" [ref=e331]:
+                - generic [ref=e332]: OUT
+              - cell "0fb04e6f via eeff2f4a" [ref=e333]:
+                - generic [ref=e335]:
+                  - link "0fb04e6f" [ref=e336] [cursor=pointer]:
+                    - /url: /scale/remote/0fb04e6f/scale/
+                  - generic [ref=e337]: via eeff2f4a
+              - cell "0 B/s / 0 B/s" [ref=e338]
+              - cell [ref=e339]:
+                - generic [ref=e340] [cursor=pointer]:
+                  - checkbox [checked]
+              - cell [ref=e342]
+            - row "10ms IN eeff2f4a via 0fb04e6f 0 B/s / 0 B/s" [ref=e343]:
+              - cell [ref=e344]:
+                - generic [ref=e345] [cursor=pointer]:
+                  - checkbox [checked]
+              - cell "10ms" [ref=e347]:
+                - generic [ref=e348]: 10ms
+              - cell "IN" [ref=e349]:
+                - generic [ref=e350]: IN
+              - cell "eeff2f4a via 0fb04e6f" [ref=e351]:
+                - generic [ref=e353]:
+                  - link "eeff2f4a" [ref=e354] [cursor=pointer]:
+                    - /url: /scale/remote/eeff2f4a/scale/
+                  - generic [ref=e355]: via 0fb04e6f
+              - cell "0 B/s / 0 B/s" [ref=e356]
+              - cell [ref=e357]:
+                - generic [ref=e358] [cursor=pointer]:
+                  - checkbox
+              - cell [ref=e360]

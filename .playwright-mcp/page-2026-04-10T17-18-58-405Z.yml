@@ -1,0 +1,46 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e8]: HY2 SCALE
+    - navigation [ref=e9]:
+      - button "Nodes" [ref=e10] [cursor=pointer]:
+        - img [ref=e11]
+        - text: Nodes
+      - button "Users" [ref=e16] [cursor=pointer]:
+        - img [ref=e17]
+        - text: Users
+      - button "Proxies" [ref=e21] [cursor=pointer]:
+        - img [ref=e22]
+        - text: Proxies
+      - button "Rules" [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - text: Rules
+      - button "TLS" [ref=e27] [cursor=pointer]:
+        - img [ref=e28]
+        - text: TLS
+      - button "Settings" [ref=e31] [cursor=pointer]:
+        - img [ref=e32]
+        - text: Settings
+    - button "Logout" [ref=e37] [cursor=pointer]:
+      - img [ref=e38]
+      - text: Logout
+  - generic [ref=e41]:
+    - generic [ref=e42]:
+      - heading "Users" [level=1] [ref=e44]
+      - button "English" [ref=e48] [cursor=pointer]:
+        - generic [ref=e49]: English
+        - img [ref=e50]
+    - generic [ref=e54]:
+      - generic [ref=e55]:
+        - generic [ref=e56]:
+          - generic [ref=e57]: Users
+          - generic [ref=e58]: "0"
+          - generic [ref=e60]:
+            - button "Export" [ref=e61] [cursor=pointer]
+            - button "Import" [ref=e62] [cursor=pointer]
+            - button "+ Add User" [ref=e63] [cursor=pointer]
+        - generic [ref=e65]: No users. Click + Add User to create one.
+      - generic [ref=e66]:
+        - generic [ref=e67]:
+          - generic [ref=e68]: Active Devices
+          - generic [ref=e69]: "0"
+        - generic [ref=e71]: No active connections

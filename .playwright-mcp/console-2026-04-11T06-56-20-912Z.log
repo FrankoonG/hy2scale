@@ -1,0 +1,3 @@
+[     174ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://localhost:15565/scale/login:0
+[  682533ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://localhost:15565/scale/api/stats:0
+[  682642ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://localhost:15565/scale/login:0

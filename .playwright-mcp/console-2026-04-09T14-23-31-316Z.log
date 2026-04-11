@@ -1,0 +1,2 @@
+[     188ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://localhost:5566/scale/login:0
+[  579612ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:5566/scale/api/stats:0

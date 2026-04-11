@@ -1,0 +1,192 @@
+- generic [ref=e1]:
+  - generic [ref=e27]:
+    - complementary [ref=e28]:
+      - generic [ref=e31]:
+        - generic [ref=e32]: HY2 SCALE
+        - generic [ref=e33]: v1.3.0
+      - navigation [ref=e34]:
+        - button "Nodes" [ref=e35] [cursor=pointer]:
+          - img [ref=e36]
+          - text: Nodes
+        - button "Users" [ref=e41] [cursor=pointer]:
+          - img [ref=e42]
+          - text: Users
+        - button "Proxies" [ref=e46] [cursor=pointer]:
+          - img [ref=e47]
+          - text: Proxies
+        - button "Rules" [ref=e49] [cursor=pointer]:
+          - img [ref=e50]
+          - text: Rules
+        - button "TLS" [ref=e52] [cursor=pointer]:
+          - img [ref=e53]
+          - text: TLS
+        - button "Settings" [ref=e56] [cursor=pointer]:
+          - img [ref=e57]
+          - text: Settings
+      - button "Logout" [ref=e62] [cursor=pointer]:
+        - img [ref=e63]
+        - text: Logout
+    - generic [ref=e66]:
+      - generic [ref=e67]:
+        - heading "Users" [level=1] [ref=e263]
+        - generic [ref=e70]:
+          - generic [ref=e71]: 75a0fe01
+          - button "English" [ref=e74] [cursor=pointer]:
+            - generic [ref=e75]: English
+            - img [ref=e76]
+      - generic [ref=e265]:
+        - generic [ref=e266]:
+          - generic [ref=e267]:
+            - generic [ref=e268]: Users
+            - generic [ref=e269]: "4"
+            - generic [ref=e271]:
+              - button "Export" [ref=e272] [cursor=pointer]
+              - button "Import" [ref=e273] [cursor=pointer]
+              - button "+ Add User" [ref=e274] [cursor=pointer]
+          - table [ref=e277]:
+            - rowgroup [ref=e278]:
+              - row "Username Exit Via Traffic Expiry" [ref=e279]:
+                - columnheader [ref=e280]:
+                  - checkbox [ref=e281] [cursor=pointer]
+                - columnheader "Username" [ref=e282]
+                - columnheader "Exit Via" [ref=e283]
+                - columnheader "Traffic" [ref=e284]
+                - columnheader "Expiry" [ref=e285]
+                - columnheader [ref=e286]
+            - rowgroup [ref=e287]:
+              - row "quality eeff2f4a Q +1 0.00 GB / ∞ 2026-04-30" [ref=e288]:
+                - cell [ref=e289]:
+                  - checkbox [ref=e290] [cursor=pointer]
+                - cell "quality" [ref=e291]:
+                  - text: quality
+                  - img [ref=e293]
+                - cell "eeff2f4a Q +1" [ref=e295]:
+                  - generic [ref=e296]:
+                    - generic [ref=e298]: eeff2f4a
+                    - generic [ref=e299]: Q
+                    - generic [ref=e301]: "+1"
+                - cell "0.00 GB / ∞" [ref=e302]:
+                  - generic [ref=e303]: 0.00 GB / ∞
+                - cell "2026-04-30" [ref=e304]
+                - cell [ref=e305]:
+                  - button "Edit" [active] [ref=e306] [cursor=pointer]:
+                    - img [ref=e307]
+              - row "nested-quality eeff2f4a/0fb04e6f Q +1 0.00 GB / ∞ —" [ref=e310]:
+                - cell [ref=e311]:
+                  - checkbox [ref=e312] [cursor=pointer]
+                - cell "nested-quality" [ref=e313]:
+                  - text: nested-quality
+                  - img [ref=e315]
+                - cell "eeff2f4a/0fb04e6f Q +1" [ref=e317]:
+                  - generic [ref=e318]:
+                    - generic [ref=e319]:
+                      - generic [ref=e320]: eeff2f4a
+                      - generic [ref=e321]: /0fb04e6f
+                    - generic [ref=e322]: Q
+                    - generic [ref=e324]: "+1"
+                - cell "0.00 GB / ∞" [ref=e325]:
+                  - generic [ref=e326]: 0.00 GB / ∞
+                - cell "—" [ref=e327]
+                - cell [ref=e328]:
+                  - button "Edit" [ref=e329] [cursor=pointer]:
+                    - img [ref=e330]
+              - row "aggregate eeff2f4a/0fb04e6f Q 0.00 GB / ∞ —" [ref=e333]:
+                - cell [ref=e334]:
+                  - checkbox [ref=e335] [cursor=pointer]
+                - cell "aggregate" [ref=e336]:
+                  - text: aggregate
+                  - img [ref=e338]
+                - cell "eeff2f4a/0fb04e6f Q" [ref=e340]:
+                  - generic [ref=e341]:
+                    - generic [ref=e342]:
+                      - generic [ref=e343]: eeff2f4a
+                      - generic [ref=e344]: /0fb04e6f
+                    - generic [ref=e345]: Q
+                - cell "0.00 GB / ∞" [ref=e346]:
+                  - generic [ref=e347]: 0.00 GB / ∞
+                - cell "—" [ref=e348]
+                - cell [ref=e349]:
+                  - button "Edit" [ref=e350] [cursor=pointer]:
+                    - img [ref=e351]
+              - row "direct 9c65a44d/ffd14726 0.00 GB / ∞ —" [ref=e354]:
+                - cell [ref=e355]:
+                  - checkbox [ref=e356] [cursor=pointer]
+                - cell "direct" [ref=e357]:
+                  - text: direct
+                  - img [ref=e359]
+                - cell "9c65a44d/ffd14726" [ref=e361]:
+                  - generic [ref=e363]:
+                    - generic [ref=e364]: 9c65a44d
+                    - generic [ref=e365]: /ffd14726
+                - cell "0.00 GB / ∞" [ref=e366]:
+                  - generic [ref=e367]: 0.00 GB / ∞
+                - cell "—" [ref=e368]
+                - cell [ref=e369]:
+                  - button "Edit" [ref=e370] [cursor=pointer]:
+                    - img [ref=e371]
+        - generic [ref=e374]:
+          - generic [ref=e375]:
+            - generic [ref=e376]: Active Devices
+            - generic [ref=e377]: "0"
+          - generic [ref=e379]: No active connections
+  - generic [ref=e381]:
+    - generic [ref=e382]:
+      - 'heading "Edit: quality" [level=2] [ref=e383]'
+      - button "✕" [ref=e384] [cursor=pointer]
+    - generic [ref=e387]:
+      - generic [ref=e389]:
+        - button "General" [ref=e390] [cursor=pointer]
+        - button "Proxy Passwords" [ref=e391] [cursor=pointer]
+      - generic [ref=e394]:
+        - generic [ref=e395]:
+          - generic [ref=e396]:
+            - generic [ref=e397]:
+              - text: Username
+              - generic [ref=e398]: "*"
+            - textbox [ref=e399]: quality
+          - generic [ref=e400]:
+            - generic [ref=e401]:
+              - text: Password
+              - generic [ref=e402]: "*"
+            - generic [ref=e403]:
+              - textbox [ref=e404]: testpass
+              - button "Generate" [ref=e405] [cursor=pointer]:
+                - img [ref=e406]
+              - button [ref=e412] [cursor=pointer]:
+                - img [ref=e413]
+        - generic [ref=e416]:
+          - generic [ref=e417]: Exit Via
+          - generic [ref=e418]:
+            - generic [ref=e419] [cursor=pointer]: Direct
+            - generic [ref=e420] [cursor=pointer]: Quality
+            - generic [ref=e421] [cursor=pointer]: Aggregate
+          - list [ref=e422]:
+            - listitem [ref=e423]:
+              - img [ref=e425]
+              - generic [ref=e433]:
+                - textbox "e.g. au/fast-test (empty = direct)" [ref=e434]: eeff2f4a
+                - button "✕" [ref=e435] [cursor=pointer]
+              - button "×" [ref=e436] [cursor=pointer]
+            - listitem [ref=e437]:
+              - img [ref=e439]
+              - generic [ref=e447]:
+                - textbox "e.g. au/fast-test (empty = direct)" [ref=e448]: 9c65a44d
+                - button "✕" [ref=e449] [cursor=pointer]
+              - button "×" [ref=e450] [cursor=pointer]
+          - generic [ref=e451] [cursor=pointer]: + Add exit path
+        - generic [ref=e452]:
+          - generic [ref=e453]:
+            - generic [ref=e454]: Traffic Limit (GB, 0=unlimited)
+            - generic [ref=e455]:
+              - spinbutton [ref=e456]
+              - generic [ref=e457]: GB
+          - generic [ref=e458]:
+            - generic [ref=e459]: Expiry Date
+            - textbox [ref=e460]: 2026-04-30
+        - generic [ref=e461]:
+          - generic [ref=e462]: Enabled
+          - generic [ref=e463] [cursor=pointer]:
+            - checkbox [checked]
+    - generic [ref=e465]:
+      - button "Cancel" [ref=e466] [cursor=pointer]
+      - button "Save" [ref=e467] [cursor=pointer]

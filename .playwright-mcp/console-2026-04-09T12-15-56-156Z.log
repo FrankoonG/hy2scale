@@ -1,0 +1,4 @@
+[  822845ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://10.130.32.30:15565/scale/api/users:0
+[  822849ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://10.130.32.30:15565/scale/api/topology:0
+[  822852ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://10.130.32.30:15565/scale/api/sessions:0
+[  822954ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://10.130.32.30:15565/scale/login:0

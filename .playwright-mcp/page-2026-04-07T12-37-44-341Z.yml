@@ -1,0 +1,95 @@
+- generic [ref=e27]:
+  - complementary [ref=e28]:
+    - generic [ref=e29]:
+      - generic [ref=e31]: HY2 SCALE
+      - generic [ref=e32]: v1.3.0
+    - navigation [ref=e33]:
+      - button "Nodes" [ref=e34] [cursor=pointer]:
+        - img [ref=e35]
+        - text: Nodes
+      - button "Users" [ref=e40] [cursor=pointer]:
+        - img [ref=e41]
+        - text: Users
+      - button "Proxies" [ref=e45] [cursor=pointer]:
+        - img [ref=e46]
+        - text: Proxies
+      - button "Rules" [ref=e49] [cursor=pointer]:
+        - img [ref=e50]
+        - text: Rules
+      - button "TLS" [ref=e52] [cursor=pointer]:
+        - img [ref=e53]
+        - text: TLS
+      - button "Settings" [ref=e56] [cursor=pointer]:
+        - img [ref=e57]
+        - text: Settings
+    - button "Logout" [ref=e62] [cursor=pointer]:
+      - img [ref=e63]
+      - text: Logout
+  - generic [ref=e66]:
+    - generic [ref=e67]:
+      - heading "Proxies" [level=1] [ref=e282]
+      - generic [ref=e70]:
+        - generic [ref=e71]: 75a0fe01
+        - button "English" [ref=e74] [cursor=pointer]:
+          - generic [ref=e75]: English
+          - img [ref=e76]
+    - generic [ref=e284]:
+      - generic [ref=e286]:
+        - button "Hysteria 2" [ref=e287] [cursor=pointer]
+        - button "SOCKS5" [ref=e288] [cursor=pointer]
+        - button "Shadowsocks" [ref=e289] [cursor=pointer]
+        - button "L2TP" [ref=e290] [cursor=pointer]
+        - button "IKEv2/IPsec" [ref=e291] [cursor=pointer]
+        - button "WireGuard" [active] [ref=e292] [cursor=pointer]
+      - generic [ref=e314]:
+        - generic [ref=e315]:
+          - generic [ref=e317]: WireGuard Server
+          - generic [ref=e319]:
+            - generic [ref=e320]:
+              - generic [ref=e321]:
+                - generic [ref=e322]: Listen Port
+                - spinbutton [ref=e323]
+              - generic [ref=e324]:
+                - generic [ref=e325]: Enabled
+                - generic [ref=e327] [cursor=pointer]:
+                  - checkbox
+            - generic [ref=e329]:
+              - generic [ref=e330]: Address (CIDR)
+              - textbox "10.0.0.1/24" [ref=e331]
+            - generic [ref=e332]:
+              - generic [ref=e333]: Private Key
+              - generic [ref=e334]:
+                - textbox [ref=e335]
+                - button "Generate key pair" [ref=e336] [cursor=pointer]:
+                  - img [ref=e337]
+            - generic [ref=e339]:
+              - generic [ref=e340]: MTU
+              - spinbutton [ref=e341]: "1420"
+            - button "Save" [ref=e342] [cursor=pointer]
+        - generic [ref=e343]:
+          - generic [ref=e344]:
+            - generic [ref=e345]: Peers
+            - generic [ref=e346]: "1"
+            - button "+ Add Peer" [ref=e348] [cursor=pointer]
+          - table [ref=e351]:
+            - rowgroup [ref=e352]:
+              - row "Name Exit Via Allowed IPs KA" [ref=e353]:
+                - columnheader "Name" [ref=e354]
+                - columnheader "Exit Via" [ref=e355]
+                - columnheader "Allowed IPs" [ref=e356]
+                - columnheader "KA" [ref=e357]
+                - columnheader [ref=e358]
+            - rowgroup [ref=e359]:
+              - row "asd — 0.0.0.0/0 25" [ref=e360]:
+                - cell "asd" [ref=e361]:
+                  - link "asd" [ref=e362] [cursor=pointer]:
+                    - /url: "#"
+                - cell "—" [ref=e363]
+                - cell "0.0.0.0/0" [ref=e364]
+                - cell "25" [ref=e365]
+                - cell [ref=e366]:
+                  - generic [ref=e367]:
+                    - button [ref=e368] [cursor=pointer]:
+                      - img [ref=e369]
+                    - button [ref=e372] [cursor=pointer]:
+                      - img [ref=e373]

@@ -1,0 +1,85 @@
+- generic [ref=e27]:
+  - complementary [ref=e28]:
+    - generic [ref=e31]:
+      - generic [ref=e32]: HY2 SCALE
+      - generic [ref=e33]: v1.3.0 Limited
+    - navigation [ref=e34]:
+      - button "Nodes" [ref=e35] [cursor=pointer]:
+        - img [ref=e36]
+        - text: Nodes
+      - button "Users" [ref=e41] [cursor=pointer]:
+        - img [ref=e42]
+        - text: Users
+      - button "Proxies" [ref=e46] [cursor=pointer]:
+        - img [ref=e47]
+        - text: Proxies
+      - button "Rules" [ref=e50] [cursor=pointer]:
+        - img [ref=e51]
+        - text: Rules
+      - button "TLS" [ref=e53] [cursor=pointer]:
+        - img [ref=e54]
+        - text: TLS
+      - button "Settings" [ref=e57] [cursor=pointer]:
+        - img [ref=e58]
+        - text: Settings
+    - button "Logout" [ref=e63] [cursor=pointer]:
+      - img [ref=e64]
+      - text: Logout
+  - generic [ref=e67]:
+    - generic [ref=e68]:
+      - heading "Nodes" [level=1] [ref=e70]
+      - generic [ref=e71]:
+        - generic [ref=e72]: de212bff
+        - button "English" [ref=e75] [cursor=pointer]:
+          - generic [ref=e76]: English
+          - img [ref=e77]
+    - generic [ref=e81]:
+      - generic [ref=e82]:
+        - generic [ref=e83]:
+          - generic [ref=e84]: Total Traffic
+          - generic [ref=e85]: 0 B / 0 B
+          - generic [ref=e86]: upload / download
+        - generic [ref=e87]:
+          - generic [ref=e88]: Realtime Speed
+          - generic [ref=e89]: 0 B/s / 0 B/s
+          - generic [ref=e90]: upload / download
+        - generic [ref=e91]:
+          - generic [ref=e92]: Connections
+          - generic [ref=e93]: "0"
+          - generic [ref=e94]: active streams
+        - generic [ref=e95]:
+          - generic [ref=e96]: Exit Clients
+          - generic [ref=e97]: "0"
+          - generic [ref=e98]: using this node as exit
+      - generic [ref=e99]:
+        - generic [ref=e100]:
+          - generic [ref=e101]: Network Topology
+          - generic [ref=e102]: "1"
+          - generic [ref=e104]:
+            - button "Export" [ref=e105] [cursor=pointer]
+            - button "Import" [ref=e106] [cursor=pointer]
+            - button "+ Add Node" [ref=e107] [cursor=pointer]
+        - table [ref=e110]:
+          - rowgroup [ref=e111]:
+            - row "Status Dir Node Traffic" [ref=e112]:
+              - columnheader [ref=e113]:
+                - checkbox [ref=e114] [cursor=pointer]
+              - columnheader "Status" [ref=e115]
+              - columnheader "Dir" [ref=e116]
+              - columnheader "Node" [ref=e117]
+              - columnheader "Traffic" [ref=e118]
+              - columnheader [ref=e119]
+          - rowgroup [ref=e120]:
+            - row "∞ LOCAL de212bff 0.0.0.0:5565 0 B/s / 0 B/s" [ref=e121]:
+              - cell [ref=e122]
+              - cell "∞" [ref=e123]
+              - cell "LOCAL" [ref=e124]:
+                - generic [ref=e125]: LOCAL
+              - cell "de212bff 0.0.0.0:5565" [ref=e126]:
+                - generic [ref=e128]:
+                  - text: de212bff
+                  - generic [ref=e129]: 0.0.0.0:5565
+              - cell "0 B/s / 0 B/s" [ref=e130]
+              - cell [ref=e131]:
+                - button "Edit" [ref=e132] [cursor=pointer]:
+                  - img [ref=e133]

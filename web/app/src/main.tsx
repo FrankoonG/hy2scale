@@ -3,7 +3,6 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider, ConfirmProvider, setImperativeToast, useToast } from '@hy2scale/ui';
-import './fonts.css';
 import '@hy2scale/ui/css';
 import { setTokenGetter } from '@/api/client';
 import { getToken } from '@/hooks/useAuth';

@@ -1,0 +1,9 @@
+[     195ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://localhost:15565/scale/login:0
+[   70070ms] [VERBOSE] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) @ http://localhost:15565/scale/users:0
+[   87534ms] [VERBOSE] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) %o @ http://localhost:15565/scale/users:0
+[   87535ms] [VERBOSE] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) %o @ http://localhost:15565/scale/users:0
+[  244383ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:15565/scale/api/topology:0
+[  244564ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:15565/scale/api/users/conflicts:0
+[  244564ms] [ERROR] Failed to load resource: net::ERR_EMPTY_RESPONSE @ http://localhost:15565/scale/api/users:0
+[  244903ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://localhost:15565/scale/api/sessions:0
+[  245019ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ http://localhost:15565/scale/login:0

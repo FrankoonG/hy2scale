@@ -1,0 +1,58 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e7]: HY2 SCALE
+    - navigation [ref=e8]:
+      - button "Nodes" [ref=e9] [cursor=pointer]:
+        - img [ref=e10]
+        - text: Nodes
+      - button "Users" [ref=e15] [cursor=pointer]:
+        - img [ref=e16]
+        - text: Users
+      - button "Proxies" [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - text: Proxies
+      - button "Rules" [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - text: Rules
+      - button "TLS" [ref=e27] [cursor=pointer]:
+        - img [ref=e28]
+        - text: TLS
+      - button "Settings" [ref=e31] [cursor=pointer]:
+        - img [ref=e32]
+        - text: Settings
+    - button "Logout" [ref=e37] [cursor=pointer]:
+      - img [ref=e38]
+      - text: Logout
+  - generic [ref=e41]:
+    - generic [ref=e42]:
+      - heading "Nodes" [level=1] [ref=e44]
+      - button "English" [ref=e48] [cursor=pointer]:
+        - generic [ref=e49]: English
+        - img [ref=e50]
+    - generic [ref=e54]:
+      - generic [ref=e55]:
+        - generic [ref=e56]:
+          - generic [ref=e57]: Total Traffic
+          - generic [ref=e58]: —
+          - generic [ref=e59]: upload / download
+        - generic [ref=e60]:
+          - generic [ref=e61]: Realtime Speed
+          - generic [ref=e62]: —
+          - generic [ref=e63]: upload / download
+        - generic [ref=e64]:
+          - generic [ref=e65]: Connections
+          - generic [ref=e66]: —
+          - generic [ref=e67]: active streams
+        - generic [ref=e68]:
+          - generic [ref=e69]: Exit Clients
+          - generic [ref=e70]: —
+          - generic [ref=e71]: using this node as exit
+      - generic [ref=e72]:
+        - generic [ref=e73]:
+          - generic [ref=e74]: Network Topology
+          - generic [ref=e75]: "0"
+          - generic [ref=e77]:
+            - button "Export" [ref=e78] [cursor=pointer]
+            - button "Import" [ref=e79] [cursor=pointer]
+            - button "+ Add Node" [ref=e80] [cursor=pointer]
+        - generic [ref=e82]: No connections. Click + Add Node to connect.

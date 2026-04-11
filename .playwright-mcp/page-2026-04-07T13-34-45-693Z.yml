@@ -1,0 +1,37 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e7]: HY2 SCALE
+    - navigation [ref=e8]:
+      - button "Nodes" [ref=e9] [cursor=pointer]:
+        - img [ref=e10]
+        - text: Nodes
+      - button "Users" [ref=e15] [cursor=pointer]:
+        - img [ref=e16]
+        - text: Users
+      - button "Proxies" [ref=e20] [cursor=pointer]:
+        - img [ref=e21]
+        - text: Proxies
+      - button "Rules" [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - text: Rules
+      - button "TLS" [ref=e27] [cursor=pointer]:
+        - img [ref=e28]
+        - text: TLS
+      - button "Settings" [ref=e31] [cursor=pointer]:
+        - img [ref=e32]
+        - text: Settings
+    - button "Logout" [ref=e37] [cursor=pointer]:
+      - img [ref=e38]
+      - text: Logout
+  - generic [ref=e41]:
+    - generic [ref=e42]:
+      - heading "TLS" [level=1] [ref=e44]
+      - button "English" [ref=e48] [cursor=pointer]:
+        - generic [ref=e49]: English
+        - img [ref=e50]
+    - generic [ref=e55]:
+      - generic [ref=e56]:
+        - generic [ref=e57]: Certificates
+        - generic [ref=e58]: "0"
+        - button "New" [ref=e60] [cursor=pointer]
+      - generic [ref=e62]: No certificates. Click New to create or import one.

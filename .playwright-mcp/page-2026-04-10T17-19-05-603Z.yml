@@ -1,0 +1,134 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e7]:
+      - generic [ref=e8]: HY2 SCALE
+      - generic [ref=e72]: v1.3.0
+    - navigation [ref=e9]:
+      - button "Nodes" [ref=e10] [cursor=pointer]:
+        - img [ref=e11]
+        - text: Nodes
+      - button "Users" [ref=e16] [cursor=pointer]:
+        - img [ref=e17]
+        - text: Users
+      - button "Proxies" [ref=e21] [cursor=pointer]:
+        - img [ref=e22]
+        - text: Proxies
+      - button "Rules" [ref=e24] [cursor=pointer]:
+        - img [ref=e25]
+        - text: Rules
+      - button "TLS" [ref=e27] [cursor=pointer]:
+        - img [ref=e28]
+        - text: TLS
+      - button "Settings" [ref=e31] [cursor=pointer]:
+        - img [ref=e32]
+        - text: Settings
+    - button "Logout" [ref=e37] [cursor=pointer]:
+      - img [ref=e38]
+      - text: Logout
+  - generic [ref=e41]:
+    - generic [ref=e42]:
+      - heading "Users" [level=1] [ref=e44]
+      - generic [ref=e45]:
+        - generic [ref=e73]: 75a0fe01
+        - button "English" [ref=e48] [cursor=pointer]:
+          - generic [ref=e49]: English
+          - img [ref=e50]
+    - generic [ref=e54]:
+      - generic [ref=e55]:
+        - generic [ref=e56]:
+          - generic [ref=e57]: Users
+          - generic [ref=e58]: "4"
+          - generic [ref=e60]:
+            - button "Export" [ref=e61] [cursor=pointer]
+            - button "Import" [ref=e62] [cursor=pointer]
+            - button "+ Add User" [ref=e63] [cursor=pointer]
+        - table [ref=e74]:
+          - rowgroup [ref=e75]:
+            - row "Username Exit Via Traffic Expiry" [ref=e76]:
+              - columnheader [ref=e77]:
+                - checkbox [ref=e78] [cursor=pointer]
+              - columnheader "Username" [ref=e79]
+              - columnheader "Exit Via" [ref=e80]
+              - columnheader "Traffic" [ref=e81]
+              - columnheader "Expiry" [ref=e82]
+              - columnheader [ref=e83]
+          - rowgroup [ref=e84]:
+            - row "quality eeff2f4a Q +1 0.00 GB / ∞ 2026-04-30" [ref=e85]:
+              - cell [ref=e86]:
+                - checkbox [ref=e87] [cursor=pointer]
+              - cell "quality" [ref=e88]:
+                - generic [ref=e89]:
+                  - img [ref=e91]
+                  - generic [ref=e93]: quality
+              - cell "eeff2f4a Q +1" [ref=e94]:
+                - generic [ref=e95]:
+                  - generic [ref=e97]: eeff2f4a
+                  - generic [ref=e98]: Q
+                  - generic [ref=e100]: "+1"
+              - cell "0.00 GB / ∞" [ref=e101]:
+                - generic [ref=e102]: 0.00 GB / ∞
+              - cell "2026-04-30" [ref=e103]
+              - cell [ref=e104]:
+                - button "Edit" [ref=e105] [cursor=pointer]:
+                  - img [ref=e106]
+            - row "nested-quality eeff2f4a/0fb04e6f Q +1 0.00 GB / ∞ —" [ref=e109]:
+              - cell [ref=e110]:
+                - checkbox [ref=e111] [cursor=pointer]
+              - cell "nested-quality" [ref=e112]:
+                - generic [ref=e113]:
+                  - img [ref=e115]
+                  - generic [ref=e117]: nested-quality
+              - cell "eeff2f4a/0fb04e6f Q +1" [ref=e118]:
+                - generic [ref=e119]:
+                  - generic [ref=e120]:
+                    - generic [ref=e121]: eeff2f4a
+                    - generic [ref=e122]: /0fb04e6f
+                  - generic [ref=e123]: Q
+                  - generic [ref=e125]: "+1"
+              - cell "0.00 GB / ∞" [ref=e126]:
+                - generic [ref=e127]: 0.00 GB / ∞
+              - cell "—" [ref=e128]
+              - cell [ref=e129]:
+                - button "Edit" [ref=e130] [cursor=pointer]:
+                  - img [ref=e131]
+            - row "aggregate eeff2f4a/0fb04e6f Q 0.00 GB / ∞ —" [ref=e134]:
+              - cell [ref=e135]:
+                - checkbox [ref=e136] [cursor=pointer]
+              - cell "aggregate" [ref=e137]:
+                - generic [ref=e138]:
+                  - img [ref=e140]
+                  - generic [ref=e142]: aggregate
+              - cell "eeff2f4a/0fb04e6f Q" [ref=e143]:
+                - generic [ref=e144]:
+                  - generic [ref=e145]:
+                    - generic [ref=e146]: eeff2f4a
+                    - generic [ref=e147]: /0fb04e6f
+                  - generic [ref=e148]: Q
+              - cell "0.00 GB / ∞" [ref=e149]:
+                - generic [ref=e150]: 0.00 GB / ∞
+              - cell "—" [ref=e151]
+              - cell [ref=e152]:
+                - button "Edit" [ref=e153] [cursor=pointer]:
+                  - img [ref=e154]
+            - row "direct 9c65a44d/ffd14726 0.00 GB / ∞ —" [ref=e157]:
+              - cell [ref=e158]:
+                - checkbox [ref=e159] [cursor=pointer]
+              - cell "direct" [ref=e160]:
+                - generic [ref=e161]:
+                  - img [ref=e163]
+                  - generic [ref=e165]: direct
+              - cell "9c65a44d/ffd14726" [ref=e166]:
+                - generic [ref=e168]:
+                  - generic [ref=e169]: 9c65a44d
+                  - generic [ref=e170]: /ffd14726
+              - cell "0.00 GB / ∞" [ref=e171]:
+                - generic [ref=e172]: 0.00 GB / ∞
+              - cell "—" [ref=e173]
+              - cell [ref=e174]:
+                - button "Edit" [ref=e175] [cursor=pointer]:
+                  - img [ref=e176]
+      - generic [ref=e66]:
+        - generic [ref=e67]:
+          - generic [ref=e68]: Active Devices
+          - generic [ref=e69]: "0"
+        - generic [ref=e71]: No active connections

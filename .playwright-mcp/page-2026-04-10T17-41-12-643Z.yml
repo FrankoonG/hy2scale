@@ -1,0 +1,18 @@
+- generic [ref=e3]:
+  - button "English" [ref=e7] [cursor=pointer]:
+    - generic [ref=e8]: English
+    - img [ref=e9]
+  - generic [ref=e11]:
+    - img "logo" [ref=e13]
+    - generic [ref=e14]: HY2 SCALE
+    - generic [ref=e15]: Sign in to manage your mesh network
+    - generic [ref=e16]:
+      - textbox "Username" [active] [ref=e17]
+      - generic [ref=e18]:
+        - textbox "Password" [ref=e19]
+        - button [ref=e20] [cursor=pointer]:
+          - img [ref=e21]
+      - generic [ref=e24] [cursor=pointer]:
+        - checkbox "Remember me" [ref=e25]
+        - text: Remember me
+      - button "Sign in" [ref=e26] [cursor=pointer]

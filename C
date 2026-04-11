@@ -1,0 +1,4 @@
+  File "<string>", line 16
+    script = '''#!/bin/bash
+             ^
+SyntaxError: unterminated triple-quoted string literal (detected at line 36)

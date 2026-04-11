@@ -1,0 +1,65 @@
+- generic [ref=e27]:
+  - complementary [ref=e28]:
+    - generic [ref=e29]:
+      - generic [ref=e31]: HY2 SCALE
+      - generic [ref=e32]: v1.3.0
+    - navigation [ref=e33]:
+      - button "Nodes" [ref=e34] [cursor=pointer]:
+        - img [ref=e35]
+        - text: Nodes
+      - button "Users" [ref=e40] [cursor=pointer]:
+        - img [ref=e41]
+        - text: Users
+      - button "Proxies" [ref=e45] [cursor=pointer]:
+        - img [ref=e46]
+        - text: Proxies
+      - button "Rules" [ref=e49] [cursor=pointer]:
+        - img [ref=e50]
+        - text: Rules
+      - button "TLS" [active] [ref=e52] [cursor=pointer]:
+        - img [ref=e53]
+        - text: TLS
+      - button "Settings" [ref=e56] [cursor=pointer]:
+        - img [ref=e57]
+        - text: Settings
+    - button "Logout" [ref=e62] [cursor=pointer]:
+      - img [ref=e63]
+      - text: Logout
+  - generic [ref=e66]:
+    - generic [ref=e67]:
+      - heading "TLS" [level=1] [ref=e301]
+      - generic [ref=e70]:
+        - generic [ref=e71]: 75a0fe01
+        - button "English" [ref=e74] [cursor=pointer]:
+          - generic [ref=e75]: English
+          - img [ref=e76]
+    - generic [ref=e304]:
+      - generic [ref=e305]:
+        - generic [ref=e306]: Certificates
+        - generic [ref=e307]: "1"
+        - button "New" [ref=e309] [cursor=pointer]
+      - table [ref=e312]:
+        - rowgroup [ref=e313]:
+          - row "Display Name Subject Issuer Expires Key" [ref=e314]:
+            - columnheader "Display Name" [ref=e315]
+            - columnheader "Subject" [ref=e316]
+            - columnheader "Issuer" [ref=e317]
+            - columnheader "Expires" [ref=e318]
+            - columnheader "Key" [ref=e319]
+            - columnheader [ref=e320]
+        - rowgroup [ref=e321]:
+          - row "Default default 75a0fe01 75a0fe01 no" [ref=e322]:
+            - cell "Default default" [ref=e323]:
+              - text: Default
+              - generic [ref=e324]: default
+            - cell "75a0fe01" [ref=e325]
+            - cell "75a0fe01" [ref=e326]
+            - cell [ref=e327]
+            - cell "no" [ref=e328]:
+              - generic [ref=e329]: "no"
+            - cell [ref=e330]:
+              - generic [ref=e331]:
+                - button [ref=e332] [cursor=pointer]:
+                  - img [ref=e333]
+                - button [ref=e336] [cursor=pointer]:
+                  - img [ref=e337]
