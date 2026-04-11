@@ -53,8 +53,9 @@ export function ExitViaCell({ exitVia, exitPaths, exitMode }: ExitViaCellProps) 
           content={
             <div>
               {paths.map((p, i) => (
-                <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 12 }}>
-                  {i === 0 ? 'primary: ' : `fallback ${i}: `}{p}
+                <div key={i} style={{ fontSize: 12 }}>
+                  <span style={{ color: 'var(--text-muted)' }}>{i === 0 ? 'primary: ' : `fallback ${i}: `}</span>
+                  {renderPath(p)}
                 </div>
               ))}
             </div>

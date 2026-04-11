@@ -209,10 +209,8 @@ export default function ImportExportButton({ target }: Props) {
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div
-            style={{
-              border: '2px dashed var(--border)', borderRadius: 'var(--radius)',
-              padding: 30, textAlign: 'center', cursor: 'pointer', color: 'var(--text-muted)',
-            }}
+            className="addr-add-row"
+            style={{ padding: 30 }}
             onClick={() => fileRef.current?.click()}
             onDrop={(e) => {
               e.preventDefault();
