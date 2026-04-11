@@ -308,6 +308,8 @@
   "rules.deleteConfirm": "Delete this rule?",
   "rules.targetsRequired": "At least one target required",
   "rules.exitRequired": "Exit Via is required",
+  "rules.advanced": "Advanced",
+  "rules.add": "Add",
   "rules.advancedMode": "Advanced",
   "rules.tunMode": "TUN Mode",
   "rules.tunDesc": "TUN mode forwards raw IP packets through the relay, preserving end-to-end TCP/UDP sessions. Required for protocols like Moonlight that bind encryption to TCP sessions.",

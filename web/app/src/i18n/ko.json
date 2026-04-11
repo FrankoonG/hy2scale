@@ -308,6 +308,8 @@
   "rules.deleteConfirm": "이 규칙을 삭제하시겠습니까?",
   "rules.targetsRequired": "최소 하나의 대상이 필요합니다",
   "rules.exitRequired": "출구 경로는 필수입니다",
+  "rules.advanced": "고급",
+  "rules.add": "추가",
   "rules.advancedMode": "고급",
   "rules.tunMode": "TUN 모드",
   "rules.tunDesc": "TUN 모드는 릴레이를 통해 원시 IP 패킷을 전달하여 종단 간 TCP/UDP 세션을 유지합니다. Moonlight과 같은 암호화된 RTSP를 사용하는 프로토콜에 필요합니다.",

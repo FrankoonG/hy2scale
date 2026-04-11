@@ -2,7 +2,7 @@ import { useState, useCallback, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Card, Button, Table, Toggle, Badge, Modal, Input, Select, Textarea,
+  Card, Button, Table, Toggle, Badge, Modal, Input, Textarea, Tabs, TabPanel,
   FormGroup, useToast, useConfirm, useSelection, type Column,
 } from '@hy2scale/ui';
 import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
@@ -24,7 +24,13 @@ export default function RulesPage() {
   const rules = data?.rules || [];
   const available = data?.available !== false;
 
-  const selection = useSelection(rules.map((r) => r.id));
+  const [tab, setTab] = useState('ip');
+
+  const ipRules = rules.filter((r) => r.type === 'ip');
+  const domainRules = rules.filter((r) => r.type === 'domain');
+  const currentRules = tab === 'ip' ? ipRules : domainRules;
+
+  const selection = useSelection(currentRules.map((r) => r.id));
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -32,7 +38,6 @@ export default function RulesPage() {
 
   // Rule form
   const [name, setName] = useState('');
-  const [ruleType, setRuleType] = useState<'ip' | 'domain'>('ip');
   const [targets, setTargets] = useState('');
   const [exitPath, setExitPath] = useState<ExitPathValue>({ paths: [''], mode: '' });
   const [ruleEnabled, setRuleEnabled] = useState(true);
@@ -41,14 +46,14 @@ export default function RulesPage() {
   const openAdd = (e: MouseEvent) => {
     setClickPos({ x: e.clientX, y: e.clientY });
     setEditId(null);
-    setName(''); setRuleType('ip'); setTargets(''); setExitPath({ paths: [''], mode: '' }); setRuleEnabled(true);
+    setName(''); setTargets(''); setExitPath({ paths: [''], mode: '' }); setRuleEnabled(true);
     setModalOpen(true);
   };
 
   const openEdit = (r: RoutingRule, e: MouseEvent) => {
     setClickPos({ x: e.clientX, y: e.clientY });
     setEditId(r.id);
-    setName(r.name); setRuleType(r.type); setTargets(r.targets.join('\n'));
+    setName(r.name); setTargets(r.targets.join('\n'));
     setExitPath(apiToExitPath(r.exit_via, r.exit_paths, r.exit_mode)); setRuleEnabled(r.enabled);
     setModalOpen(true);
   };
@@ -57,11 +62,10 @@ export default function RulesPage() {
     const targetList = targets.split('\n').map((l) => l.trim()).filter(Boolean);
     if (targetList.length === 0) { toast.error(t('rules.targetsRequired')); return; }
     const exitData = exitPathToApi(exitPath);
-    if (!exitData.exit_via) { toast.error(t('rules.exitRequired')); return; }
 
     setSaving(true);
     try {
-      const ruleData = { name, type: ruleType, targets: targetList, ...exitData, enabled: ruleEnabled };
+      const ruleData = { name, type: tab as 'ip' | 'domain', targets: targetList, ...exitData, enabled: ruleEnabled };
       if (editId) {
         await api.updateRule(editId, ruleData);
       } else {
@@ -105,14 +109,6 @@ export default function RulesPage() {
     } catch (e: any) { toast.error(String(e.message || e)); }
   };
 
-  const handleTunMode = async (mode: 'mixed' | 'full') => {
-    try {
-      await api.updateTunMode({ mode });
-      toast.success(t('rules.tunModeChanged'));
-      queryClient.invalidateQueries({ queryKey: ['tunMode'] });
-    } catch (e: any) { toast.error(String(e.message || e)); }
-  };
-
   if (!available) {
     return (
       <Card title={t('rules.title')}>
@@ -122,8 +118,7 @@ export default function RulesPage() {
   }
 
   const columns: Column<RoutingRule>[] = [
-    { key: 'name', title: t('rules.name'), render: (r) => <strong>{r.name}</strong> },
-    { key: 'type', title: '', width: '70px', render: (r) => <Badge variant={r.type === 'ip' ? 'blue' : 'orange'}>{r.type === 'ip' ? 'IP' : 'Domain'}</Badge> },
+    { key: 'name', title: t('rules.name'), render: (r) => <strong>{r.name || '—'}</strong> },
     { key: 'targets', title: t('rules.targets'), render: (r) => <span className="mono" style={{ fontSize: 11 }}>{r.targets.slice(0, 3).join(', ')}{r.targets.length > 3 ? ` +${r.targets.length - 3}` : ''}</span> },
     { key: 'exit', title: t('rules.exitVia'), render: (r) => <ExitViaCell exitVia={r.exit_via} exitPaths={r.exit_paths} exitMode={r.exit_mode} /> },
     {
@@ -135,69 +130,68 @@ export default function RulesPage() {
     },
   ];
 
+  const tabTitle = tab === 'ip' ? t('rules.ipRules') : t('rules.domainRules');
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {/* TUN Mode Section */}
-      <Card title={t('rules.tunMode')}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('rules.tunDesc')}</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <Toggle checked={tunMode?.enabled || false} onChange={handleTunToggle} />
-            <Badge variant={tunMode?.enabled ? (tunMode.status === 'active' ? 'green' : 'orange') : 'muted'}>
-              {tunMode?.enabled ? (tunMode.status === 'active' ? t('rules.tunActive') : t('rules.tunStarting')) : t('rules.tunInactive')}
-            </Badge>
-          </div>
-          {tunMode?.enabled && (
-            <div style={{ display: 'flex', gap: 12, fontSize: 12 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-                <input type="radio" checked={tunMode.mode === 'mixed'} onChange={() => handleTunMode('mixed')} />
-                {t('rules.tunModeMixed')}
-              </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-                <input type="radio" checked={tunMode.mode === 'full'} onChange={() => handleTunMode('full')} />
-                {t('rules.tunModeFull')}
-              </label>
+    <div>
+      <Tabs
+        items={[
+          { key: 'ip', label: t('rules.ipRules') },
+          { key: 'domain', label: t('rules.domainRules') },
+          { key: 'advanced', label: t('rules.advanced') },
+        ]}
+        activeKey={tab}
+        onChange={setTab}
+      />
+
+      <TabPanel activeKey={tab} keys={['ip', 'domain', 'advanced']}>
+        {tab === 'advanced' ? (
+          <Card title={t('rules.tunMode')}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('rules.tunDesc')}</div>
+              <FormGroup label={t('rules.tunEnabled')}>
+                <Toggle checked={tunMode?.enabled || false} onChange={handleTunToggle} />
+              </FormGroup>
             </div>
-          )}
-        </div>
-      </Card>
+          </Card>
+        ) : (
+          <Card
+            title={tabTitle}
+            count={currentRules.length}
+            actions={
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <BulkActionBar count={selection.count} onClear={selection.clear}>
+                  {(() => {
+                    const sel = [...selection.selected];
+                    const items = sel.map((id) => currentRules.find((r) => r.id === id)).filter(Boolean);
+                    const hasDisabled = items.some((r) => !r!.enabled);
+                    const hasEnabled = items.some((r) => r!.enabled);
+                    return <>
+                      {hasDisabled && <Button size="sm" onClick={() => bulkToggle(true)}>{t('app.bulkEnable')}</Button>}
+                      {hasEnabled && <Button size="sm" onClick={() => bulkToggle(false)}>{t('app.bulkDisable')}</Button>}
+                      <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>
+                    </>;
+                  })()}
+                </BulkActionBar>
+                <ImportExportButton target="rules" />
+                <Button size="sm" variant="primary" onClick={openAdd}>{t('rules.newRule')}</Button>
+              </div>
+            }
+            noPadding
+          >
+            <Table
+              columns={columns}
+              data={currentRules}
+              rowKey={(r) => r.id}
+              rowClassName={(r) => !r.enabled ? 'disabled-row' : undefined}
+              emptyText={t('rules.noRules')}
+              selection={selection}
+            />
+          </Card>
+        )}
+      </TabPanel>
 
-      {/* Rules Table */}
-      <Card
-        title={t('rules.title')}
-        count={rules.length}
-        actions={
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <BulkActionBar count={selection.count} onClear={selection.clear}>
-              {(() => {
-                const sel = [...selection.selected];
-                const items = sel.map((id) => rules.find((r) => r.id === id)).filter(Boolean);
-                const hasDisabled = items.some((r) => !r!.enabled);
-                const hasEnabled = items.some((r) => r!.enabled);
-                return <>
-                  {hasDisabled && <Button size="sm" onClick={() => bulkToggle(true)}>{t('app.bulkEnable')}</Button>}
-                  {hasEnabled && <Button size="sm" onClick={() => bulkToggle(false)}>{t('app.bulkDisable')}</Button>}
-                  <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>
-                </>;
-              })()}
-            </BulkActionBar>
-            <ImportExportButton target="rules" />
-            <Button size="sm" variant="primary" onClick={openAdd}>{t('rules.newRule')}</Button>
-          </div>
-        }
-        noPadding
-      >
-        <Table
-          columns={columns}
-          data={rules}
-          rowKey={(r) => r.id}
-          rowClassName={(r) => !r.enabled ? 'disabled-row' : undefined}
-          emptyText={t('rules.noRules')}
-          selection={selection}
-        />
-      </Card>
-
-      {/* Rule Modal */}
+      {/* Rule Modal — type determined by active tab */}
       <Modal
         open={modalOpen} onClose={() => setModalOpen(false)}
         title={editId ? t('app.edit') : t('rules.newRule')}
@@ -205,37 +199,26 @@ export default function RulesPage() {
         footer={
           <>
             <Button onClick={() => setModalOpen(false)}>{t('app.cancel')}</Button>
-            <Button variant="primary" onClick={handleSave} loading={saving}>{t('app.save')}</Button>
+            <Button variant="primary" onClick={handleSave} loading={saving}>
+              {editId ? t('app.save') : t('rules.add')}
+            </Button>
           </>
         }
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <FormGroup label={t('rules.name')}>
-            <Input value={name} onChange={(e) => setName(e.target.value)} />
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('tls.optional')} />
           </FormGroup>
-          <FormGroup label="Type">
-            <Select
-              value={ruleType}
-              onChange={(e) => setRuleType(e.target.value as any)}
-              options={[
-                { value: 'ip', label: t('rules.ipRules') },
-                { value: 'domain', label: t('rules.domainRules') },
-              ]}
-            />
-          </FormGroup>
-          <FormGroup label={ruleType === 'ip' ? t('rules.ipTargets') : t('rules.domainTargets')} required>
+          <FormGroup label={tab === 'ip' ? t('rules.ipTargets') : t('rules.domainTargets')} required>
             <Textarea
               value={targets}
               onChange={(e) => setTargets(e.target.value)}
               rows={5}
               monospace
-              placeholder={ruleType === 'ip' ? '1.2.3.0/24\n5.6.7.8' : 'example.com\n*.test.com'}
+              placeholder={tab === 'ip' ? '1.1.1.1\n10.0.0.0/8\n192.168.1.1-192.168.1.254' : 'google.com\n*.github.com'}
             />
           </FormGroup>
           <ExitPathList value={exitPath} onChange={setExitPath} label={t('rules.exitVia')} />
-          <FormGroup label={t('app.enabled')}>
-            <Toggle checked={ruleEnabled} onChange={(e) => setRuleEnabled(e.target.checked)} />
-          </FormGroup>
         </div>
       </Modal>
     </div>

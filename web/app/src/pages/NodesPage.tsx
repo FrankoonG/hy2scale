@@ -245,10 +245,19 @@ export default function NodesPage() {
                   {n.addr}
                   {n.ip_statuses && n.ip_statuses.length > 0 && (
                     <> <Tooltip content={
-                      n.ip_statuses.map((s) => {
-                        const lat = s.latency_ms && s.latency_ms > 0 ? `${s.latency_ms}ms` : s.latency_ms === -1 ? 'timeout' : s.status;
-                        return `${s.addr} — ${lat}`;
-                      }).join('\n')
+                      <div>
+                        {n.ip_statuses.map((s, i) => {
+                          const isGood = s.latency_ms && s.latency_ms > 0;
+                          const isBad = s.latency_ms === -1;
+                          const lat = isGood ? `${s.latency_ms}ms` : isBad ? 'timeout' : s.status;
+                          const color = isGood ? 'var(--green)' : isBad ? 'var(--red)' : 'var(--text-muted)';
+                          return (
+                            <div key={i} style={{ fontSize: 12 }}>
+                              {s.addr} — <span style={{ color, fontWeight: 600 }}>{lat}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
                     }>
                       <Badge variant="muted">+{n.ip_statuses.length - 1}</Badge>
                     </Tooltip></>
