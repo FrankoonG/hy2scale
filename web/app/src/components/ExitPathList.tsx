@@ -50,7 +50,16 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
 
   const emitChange = useCallback((newItems: PathItem[], newMode?: string) => {
     const paths = newItems.map((it) => it.value);
-    onChange({ paths, mode: (newMode ?? mode) as ExitPathValue['mode'] });
+    let m = (newMode ?? mode) as ExitPathValue['mode'];
+    // Auto-downgrade aggregate→quality if paths target different nodes
+    if (m === 'aggregate') {
+      const filled = paths.filter(Boolean);
+      if (filled.length > 1) {
+        const targets = new Set(filled.map((p) => p.split('/').pop()));
+        if (targets.size > 1) m = 'quality';
+      }
+    }
+    onChange({ paths, mode: m });
   }, [onChange, mode]);
 
   const updateItem = useCallback((id: number, val: string) => {
@@ -109,6 +118,13 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
   }
   const singleOnly = !hasMultiple && !targetHasMultiAddr && filledItems.length <= 1;
 
+  // Aggregate requires all paths to reach the same final exit node
+  let aggregateDisabled = singleOnly;
+  if (hasMultiple && !aggregateDisabled) {
+    const targets = new Set(filledItems.map((it) => it.value.split('/').pop()));
+    if (targets.size > 1) aggregateDisabled = true;
+  }
+
   return (
     <FormGroup label={label || t('users.exitVia')}>
       {/* Mode selection */}
@@ -122,7 +138,7 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
           {t('exit.modeStability')}
         </label>
         <label className="exit-mode-opt">
-          <input type="radio" name="exitMode" checked={mode === 'aggregate'} onChange={() => setMode('aggregate')} disabled={singleOnly} />
+          <input type="radio" name="exitMode" checked={mode === 'aggregate'} onChange={() => setMode('aggregate')} disabled={aggregateDisabled} />
           {t('exit.modeSpeed')}
         </label>
       </div>
