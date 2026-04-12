@@ -110,13 +110,11 @@ export default function RulesPage() {
     } catch (e: any) { toast.error(String(e.message || e)); }
   };
 
-  if (!available) {
-    return (
-      <Card title={t('rules.title')}>
-        <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>{t('rules.unavailable')}</div>
-      </Card>
-    );
-  }
+  const unavailableBanner = !available ? (
+    <div style={{ background: 'var(--red-bg)', color: 'var(--red)', padding: '8px 14px', borderRadius: 'var(--radius-sm)', fontSize: 13, fontWeight: 500, marginBottom: 12 }}>
+      {t('rules.unavailable')}
+    </div>
+  ) : null;
 
   const columns: Column<RoutingRule>[] = [
     { key: 'name', title: t('rules.name'), render: (r) => <strong>{r.name || '—'}</strong> },
@@ -146,6 +144,7 @@ export default function RulesPage() {
       />
 
       <TabPanel activeKey={tab} keys={['ip', 'domain', 'advanced']}>
+        {unavailableBanner}
         {tab === 'advanced' ? (
           <Card title={t('rules.tunMode')}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>

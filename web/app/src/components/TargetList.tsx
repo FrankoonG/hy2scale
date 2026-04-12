@@ -38,22 +38,25 @@ export function TargetList({ type, value, onChange, label }: TargetListProps) {
   const { t } = useTranslation();
   const validate = type === 'ip' ? validateIP : validateDomain;
 
+  // Items are fully internal state. Only synced from props on mount or
+  // when an EXTERNAL value change is detected (e.g., modal opens with new data).
   const [items, setItems] = useState<TargetItem[]>(() =>
     (value.length > 0 ? value : ['']).map((v) => ({ id: nextId++, value: v }))
   );
+  const lastEmitted = useRef<string>(JSON.stringify(value));
 
-  const prevValueRef = useRef(value);
-  if (value !== prevValueRef.current) {
+  // Sync from parent only if the value changed externally (not from our own emit)
+  const valueJSON = JSON.stringify(value);
+  if (valueJSON !== lastEmitted.current) {
+    lastEmitted.current = valueJSON;
     const ext = value.length > 0 ? value : [''];
-    const cur = items.map((it) => it.value);
-    if (JSON.stringify(ext) !== JSON.stringify(cur)) {
-      setItems(ext.map((v) => ({ id: nextId++, value: v })));
-    }
-    prevValueRef.current = value;
+    setItems(ext.map((v) => ({ id: nextId++, value: v })));
   }
 
   const emit = useCallback((newItems: TargetItem[]) => {
-    onChange(newItems.map((it) => it.value).filter(Boolean));
+    const vals = newItems.map((it) => it.value);
+    lastEmitted.current = JSON.stringify(vals);
+    onChange(vals);
   }, [onChange]);
 
   const updateItem = useCallback((id: number, val: string) => {
