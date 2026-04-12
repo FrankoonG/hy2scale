@@ -473,8 +473,7 @@ func init() {
 func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
 	capOK, _ := app.CheckCapability()
-	// limited = no NET_ADMIN OR kernel can't run VPN services (Docker Desktop/WSL)
-	limited := !capOK || (!app.CheckIKEv2Capability())
+	limited := !capOK
 	writeJSON(w, map[string]any{
 		"node_id":       cfg.NodeID,
 		"name":          cfg.Name,
