@@ -373,6 +373,9 @@ a.peer-link:hover{text-decoration:underline}
 .hy-limited-overlay{position:relative;pointer-events:none;opacity:.5}
 .hy-limited-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.8);z-index:10;font-size:13px;color:var(--text-secondary);padding:20px;text-align:center}
 
+/* ====== Warning banner ====== */
+.hy-warn-banner{background:var(--red-bg);color:var(--red);padding:8px 14px;border-radius:var(--radius-sm);font-size:13px;font-weight:500;margin-bottom:12px}
+
 /* ====== Link box (copyable URI) ====== */
 .hy-link-box{font-family:var(--mono);font-size:12px;padding:8px 12px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;box-sizing:border-box;transition:border-color .15s}
 .hy-link-box:hover{border-color:var(--primary);color:var(--primary)}

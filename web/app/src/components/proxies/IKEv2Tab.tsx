@@ -70,7 +70,7 @@ export default function IKEv2Tab({ limited }: { limited?: boolean }) {
   return (
     <>
       {isLimited && (
-        <div style={{ background: 'var(--red-bg)', color: 'var(--red)', padding: '8px 14px', borderRadius: 'var(--radius-sm)', fontSize: 13, fontWeight: 500, marginBottom: 12 }}>
+        <div className="hy-warn-banner">
           {ikev2?.host_network === false ? t('ikev2.warnHostNetwork') : t('ikev2.warnText')}
         </div>
       )}
