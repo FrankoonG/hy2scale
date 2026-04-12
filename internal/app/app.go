@@ -751,9 +751,15 @@ func (a *App) AddUser(u UserConfig) error {
 }
 
 func (a *App) UpdateUser(id string, u UserConfig) error {
+	var oldPassword string
+	var oldProxyPw map[string]string
+	var oldUsername string
 	err := a.store.Update(func(c *Config) {
 		for i, existing := range c.Users {
 			if existing.ID == id {
+				oldPassword = existing.Password
+				oldProxyPw = existing.ProxyPasswords
+				oldUsername = existing.Username
 				u.TrafficUsed = existing.TrafficUsed
 				c.Users[i] = u
 				return
@@ -763,6 +769,12 @@ func (a *App) UpdateUser(id string, u UserConfig) error {
 	if err == nil {
 		a.rebuildUserIndex()
 		a.syncVPNSecrets()
+		// If credentials changed, disconnect all active sessions for this user
+		if oldPassword != u.Password || fmt.Sprint(oldProxyPw) != fmt.Sprint(u.ProxyPasswords) || (oldUsername != u.Username && oldUsername != "") {
+			if n := a.Sessions.KickUser(oldUsername); n > 0 {
+				log.Printf("[users] credentials changed for %s, kicked %d sessions", u.Username, n)
+			}
+		}
 	}
 	return err
 }
