@@ -257,13 +257,15 @@ func CheckL2TPCapability() (bool, string) {
 			return false, "/dev/ppp not found and mknod failed (missing device or privileges)"
 		}
 	}
-	// Verify kernel actually supports PPP — opening /dev/ppp returns ENOENT on
-	// Docker Desktop/WSL where the device node exists but the driver doesn't.
-	f, err := os.OpenFile("/dev/ppp", os.O_RDWR, 0)
-	if err != nil {
-		return false, "kernel PPP module not available (Docker Desktop/WSL not supported)"
+	// Check if kernel L2TP module is available — xl2tpd needs l2tp_ppp.
+	// On Docker Desktop LinuxKit, this module is missing.
+	if _, err := os.Stat("/proc/net/pppol2tp"); err != nil {
+		// Module not loaded, try loading
+		exec.Command("modprobe", "l2tp_ppp").Run()
+		if _, err := os.Stat("/proc/net/pppol2tp"); err != nil {
+			return false, "L2TP kernel module not available (l2tp_ppp missing)"
+		}
 	}
-	f.Close()
 	return true, ""
 }
 
