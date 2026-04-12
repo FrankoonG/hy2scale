@@ -147,7 +147,7 @@ export default function RulesPage() {
         {unavailableBanner}
         {tab === 'advanced' ? (
           <Card title={t('rules.tunMode')}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, ...(!available ? { opacity: 0.4, pointerEvents: 'none' as const } : {}) }}>
               <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('rules.tunDesc')}</div>
               <FormGroup label={t('rules.tunEnabled')}>
                 <Toggle checked={tunMode?.enabled || false} onChange={handleTunToggle} />
