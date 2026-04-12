@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, Button, Input, Toggle, Select, FormGroup, useToast } from '@hy2scale/ui';
 import * as api from '@/api';
 
-export default function Socks5Tab() {
+export default function HttpTab() {
   const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -12,7 +12,7 @@ export default function Socks5Tab() {
   const { data: proxies = [] } = useQuery({ queryKey: ['proxies'], queryFn: api.getProxies });
   const { data: certs = [] } = useQuery({ queryKey: ['certs'], queryFn: api.getCerts });
 
-  const socks5 = proxies.find((p) => p.protocol === 'socks5');
+  const http = proxies.find((p) => p.protocol === 'http');
 
   const [enabled, setEnabled] = useState(false);
   const [listen, setListen] = useState('');
@@ -20,23 +20,23 @@ export default function Socks5Tab() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (socks5) {
-      setEnabled(socks5.enabled);
-      setListen(socks5.listen || '');
-      setTlsCert(socks5.tls_cert || '');
+    if (http) {
+      setEnabled(http.enabled);
+      setListen(http.listen || '');
+      setTlsCert(http.tls_cert || '');
     }
-  }, [socks5]);
+  }, [http]);
 
   const handleSave = async () => {
     setLoading(true);
     try {
-      const data = { protocol: 'socks5' as const, listen, enabled, tls_cert: tlsCert || undefined };
-      if (socks5) {
-        await api.updateProxy(socks5.id, { ...socks5, ...data });
+      const data = { protocol: 'http' as const, listen, enabled, tls_cert: tlsCert || undefined };
+      if (http) {
+        await api.updateProxy(http.id, { ...http, ...data });
       } else {
         await api.createProxy(data);
       }
-      toast.success(t('socks5.saved'));
+      toast.success(t('http.saved'));
       queryClient.invalidateQueries({ queryKey: ['proxies'] });
     } catch (e: any) {
       toast.error(String(e.message || e));
@@ -51,18 +51,18 @@ export default function Socks5Tab() {
   ];
 
   return (
-    <Card title={t('socks5.title')}>
+    <Card title={t('http.title')}>
       <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
         <FormGroup label={t('app.enabled')}>
           <Toggle checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         </FormGroup>
-        <FormGroup label={t('socks5.port')} required>
-          <Input value={listen} onChange={(e) => setListen(e.target.value)} placeholder=":1080" />
+        <FormGroup label={t('http.port')} required>
+          <Input value={listen} onChange={(e) => setListen(e.target.value)} placeholder=":8080" />
         </FormGroup>
         <FormGroup label={t('proxies.tlsCert')}>
           <Select value={tlsCert} onChange={(e) => setTlsCert(e.target.value)} options={tlsOptions} />
         </FormGroup>
-        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('socks5.desc')}</div>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('http.desc')}</div>
         <Button variant="primary" onClick={handleSave} loading={loading} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
       </div>
     </Card>

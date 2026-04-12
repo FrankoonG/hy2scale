@@ -111,6 +111,7 @@ export interface ProxyConfig {
   protocol: string;
   listen: string;
   enabled: boolean;
+  tls_cert?: string;
   exit_via?: string;
   exit_paths?: string[];
   exit_mode?: '' | 'quality' | 'aggregate';
