@@ -2,10 +2,11 @@ import { useState, useCallback, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Card, Button, Table, Toggle, Badge, Modal, Input, Textarea, Tabs, TabPanel,
+  Card, Button, Table, Toggle, Badge, Modal, Input, Tabs, TabPanel,
   FormGroup, useToast, useConfirm, useSelection, type Column,
 } from '@hy2scale/ui';
 import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
+import { TargetList } from '@/components/TargetList';
 import { ExitViaCell } from '@/components/ExitViaCell';
 import ImportExportButton from '@/components/ImportExportButton';
 import BulkActionBar from '@/components/BulkActionBar';
@@ -38,7 +39,7 @@ export default function RulesPage() {
 
   // Rule form
   const [name, setName] = useState('');
-  const [targets, setTargets] = useState('');
+  const [targets, setTargets] = useState<string[]>([]);
   const [exitPath, setExitPath] = useState<ExitPathValue>({ paths: [''], mode: '' });
   const [ruleEnabled, setRuleEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -46,20 +47,20 @@ export default function RulesPage() {
   const openAdd = (e: MouseEvent) => {
     setClickPos({ x: e.clientX, y: e.clientY });
     setEditId(null);
-    setName(''); setTargets(''); setExitPath({ paths: [''], mode: '' }); setRuleEnabled(true);
+    setName(''); setTargets([]); setExitPath({ paths: [''], mode: '' }); setRuleEnabled(true);
     setModalOpen(true);
   };
 
   const openEdit = (r: RoutingRule, e: MouseEvent) => {
     setClickPos({ x: e.clientX, y: e.clientY });
     setEditId(r.id);
-    setName(r.name); setTargets(r.targets.join('\n'));
+    setName(r.name); setTargets([...r.targets]);
     setExitPath(apiToExitPath(r.exit_via, r.exit_paths, r.exit_mode)); setRuleEnabled(r.enabled);
     setModalOpen(true);
   };
 
   const handleSave = async () => {
-    const targetList = targets.split('\n').map((l) => l.trim()).filter(Boolean);
+    const targetList = targets.filter(Boolean);
     if (targetList.length === 0) { toast.error(t('rules.targetsRequired')); return; }
     const exitData = exitPathToApi(exitPath);
 
@@ -209,15 +210,7 @@ export default function RulesPage() {
           <FormGroup label={t('rules.name')}>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('tls.optional')} />
           </FormGroup>
-          <FormGroup label={tab === 'ip' ? t('rules.ipTargets') : t('rules.domainTargets')} required>
-            <Textarea
-              value={targets}
-              onChange={(e) => setTargets(e.target.value)}
-              rows={5}
-              monospace
-              placeholder={tab === 'ip' ? '1.1.1.1\n10.0.0.0/8\n192.168.1.1-192.168.1.254' : 'google.com\n*.github.com'}
-            />
-          </FormGroup>
+          <TargetList type={tab as 'ip' | 'domain'} value={targets} onChange={setTargets} />
           <ExitPathList value={exitPath} onChange={setExitPath} label={t('rules.exitVia')} />
         </div>
       </Modal>
