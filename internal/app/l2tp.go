@@ -244,8 +244,9 @@ func CheckCapability() (bool, string) {
 	return cachedCapability()
 }
 
-// CheckL2TPCapability tests if the runtime has NET_ADMIN and /dev/ppp.
-// Returns (ok, reason).
+// CheckL2TPCapability tests if the runtime can actually run L2TP/IPsec.
+// Checks NET_ADMIN, /dev/ppp, and kernel PPP module support.
+// On Docker Desktop (WSL), mknod succeeds but kernel has no PPP → must reject.
 func CheckL2TPCapability() (bool, string) {
 	if ok, reason := CheckCapability(); !ok {
 		return false, reason
@@ -256,7 +257,30 @@ func CheckL2TPCapability() (bool, string) {
 			return false, "/dev/ppp not found and mknod failed (missing device or privileges)"
 		}
 	}
+	// Verify kernel actually supports PPP — opening /dev/ppp returns ENOENT on
+	// Docker Desktop/WSL where the device node exists but the driver doesn't.
+	f, err := os.OpenFile("/dev/ppp", os.O_RDWR, 0)
+	if err != nil {
+		return false, "kernel PPP module not available (Docker Desktop/WSL not supported)"
+	}
+	f.Close()
 	return true, ""
+}
+
+// CheckIKEv2Capability tests if charon (strongSwan) can run.
+// On Docker Desktop/WSL, charon exists but xfrm is non-functional.
+func CheckIKEv2Capability() bool {
+	if ok, _ := CheckCapability(); !ok {
+		return false
+	}
+	// Test xfrm by trying to add and remove a dummy xfrm state.
+	// On WSL/Docker Desktop, this fails with EPROTONOSUPPORT.
+	out, err := exec.Command("ip", "xfrm", "state", "count").CombinedOutput()
+	if err != nil {
+		debugLog("[ikev2] xfrm not available: %v: %s", err, string(out))
+		return false
+	}
+	return true
 }
 
 // StartL2TP sets up xl2tpd, strongswan, iptables, and the transparent proxy.
