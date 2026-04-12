@@ -473,7 +473,8 @@ func init() {
 func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
 	capOK, _ := app.CheckCapability()
-	limited := !capOK // NET_ADMIN+NET_RAW → L2TP/IKEv2 available
+	// limited = no NET_ADMIN OR kernel can't run VPN services (Docker Desktop/WSL)
+	limited := !capOK || (!app.CheckIKEv2Capability())
 	writeJSON(w, map[string]any{
 		"node_id":       cfg.NodeID,
 		"name":          cfg.Name,
@@ -1423,8 +1424,7 @@ func (s *Server) updateL2TPConfig(w http.ResponseWriter, r *http.Request) {
 // --- IKEv2 ---
 
 func (s *Server) getIKEv2Config(w http.ResponseWriter, r *http.Request) {
-	capOK, _ := app.CheckCapability()
-	capable := capOK
+	capable := app.CheckIKEv2Capability()
 	hostNet := app.CheckHostNetwork()
 	cfg := s.app.Store().Get()
 	result := map[string]any{
