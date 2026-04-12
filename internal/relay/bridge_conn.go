@@ -34,13 +34,19 @@ func (n *Node) DialTCPBridged(peerName, addr string) (net.Conn, string, error) {
 		return nil, "", fmt.Errorf("relay: peer %q is inbound (no client)", peerName)
 	}
 
+	bridge := n.bridges.Create(peerName, addr, nil)
+
+	// Encode bridge ID in address so exit node can track it
+	taggedAddr := addr + "#bridge=" + bridge.id
 	cl := p.pickClient()
-	stream, err := cl.TCP(addr)
+	stream, err := cl.TCP(taggedAddr)
 	if err != nil {
+		n.bridges.Remove(bridge.id)
 		return nil, "", err
 	}
-
-	bridge := n.bridges.create(peerName, addr, stream)
+	bridge.mu.Lock()
+	bridge.relayStream = stream
+	bridge.mu.Unlock()
 
 	bc := &bridgedConn{
 		bridge:   bridge,
@@ -133,7 +139,7 @@ func (c *bridgedConn) tryRebind() bool {
 			c.stream = c.node.wrapConn(c.peerName, newStream)
 			c.bridge.mu.Lock()
 			c.bridge.relayStream = newStream
-			c.bridge.state.Store(int32(bridgeActive))
+			c.bridge.state.Store(int32(BridgeActive))
 			c.bridge.mu.Unlock()
 			c.mu.Unlock()
 			log.Printf("[bridge] %s rebound on requester side (peer %s)", c.bridge.id, c.peerName)

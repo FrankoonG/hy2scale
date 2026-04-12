@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -241,4 +242,53 @@ func isStreamError(errVal any) bool {
 	}
 	// Any other error is likely a stream issue
 	return true
+}
+
+// HandleBridgeAddr processes a bridge-tagged address from the exit node.
+// Returns (targetAddr, bridgeID, isBridged).
+func ParseBridgeAddr(addr string) (string, string, bool) {
+	idx := strings.Index(addr, "#bridge=")
+	if idx < 0 {
+		return addr, "", false
+	}
+	return addr[:idx], addr[idx+8:], true
+}
+
+// TryRebind attempts to rebind a suspended bridge. Returns a net.Conn pipe
+// if successful (caller should return this as the TCP connection), or nil.
+func (m *bridgeManager) TryRebind(bridgeID string) net.Conn {
+	b := m.lookup(bridgeID)
+	if b == nil || bridgeState(b.state.Load()) != bridgeSuspended {
+		return nil
+	}
+	c1, c2 := net.Pipe()
+	if m.rebind(bridgeID, c1) {
+		return c2
+	}
+	c1.Close()
+	c2.Close()
+	return nil
+}
+
+// CreateWithID creates a bridge with a specific ID (from the requester).
+// Returns a net.Conn pipe — the caller uses one end for the hy2 server,
+// and the bridge uses the other end internally.
+func (m *bridgeManager) CreateWithID(bridgeID, addr string, targetConn net.Conn) net.Conn {
+	ctx, cancel := context.WithCancel(context.Background())
+	b := &streamBridge{
+		id:       bridgeID,
+		addr:     addr,
+		rebindCh: make(chan net.Conn, 1),
+		ctx:      ctx,
+		cancel:   cancel,
+	}
+	m.mu.Lock()
+	m.bridges[bridgeID] = b
+	m.mu.Unlock()
+
+	c1, c2 := net.Pipe()
+	b.relayStream = c1
+	b.state.Store(int32(bridgeActive))
+	go b.RunRelay(targetConn, m)
+	return c2
 }
