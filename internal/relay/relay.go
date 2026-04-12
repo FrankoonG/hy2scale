@@ -1133,11 +1133,26 @@ func (n *Node) IsNestedEnabled(peerName string) bool {
 }
 
 // DisconnectPeer forcibly disconnects a peer (both inbound and outbound).
+// Closes the QUIC client to kill all active streams through this peer,
+// ensuring no connections hang in a black hole after reconnection.
 func (n *Node) DisconnectPeer(name string) {
 	n.mu.Lock()
 	p, ok := n.peers[name]
-	if ok && p.cancel != nil {
-		p.cancel()
+	if ok {
+		if p.cancel != nil {
+			p.cancel()
+		}
+		// Close QUIC client(s) to force-terminate all active streams.
+		// Without this, streams on the dead QUIC connection hang forever
+		// because quic-go's Read() doesn't return on Close().
+		if p.client != nil {
+			p.client.Close()
+		}
+		for _, c := range p.extraConns {
+			if c != nil {
+				c.Close()
+			}
+		}
 	}
 	delete(n.peers, name)
 	n.mu.Unlock()

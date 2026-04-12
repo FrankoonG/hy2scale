@@ -1673,20 +1673,26 @@ var localExitGateway = sync.OnceValue(func() string {
 	return ""
 })
 
-// rewriteLocalAddr replaces the host IP with the Docker gateway when available.
-// This ensures services on the host don't see connections from their own IP.
+// rewriteLocalAddr replaces loopback destinations with the Docker gateway.
+// Only rewrites 127.0.0.0/8 addresses — public IPs and hostnames pass through unchanged.
+// This fixes Docker NAT hairpin (container accessing host services via localhost)
+// without breaking relay exit traffic to the internet.
 func rewriteLocalAddr(addr string) string {
 	gw := localExitGateway()
 	if gw == "" {
 		return addr
 	}
-	_, port, err := net.SplitHostPort(addr)
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return addr
 	}
-	rewritten := net.JoinHostPort(gw, port)
-	log.Printf("[exit] rewriting local exit %s → %s", addr, rewritten)
-	return rewritten
+	ip := net.ParseIP(host)
+	if ip != nil && ip.IsLoopback() {
+		rewritten := net.JoinHostPort(gw, port)
+		log.Printf("[exit] rewriting loopback %s → %s", addr, rewritten)
+		return rewritten
+	}
+	return addr
 }
 
 // dialExit routes traffic through an exit path, stripping the local node name prefix.
