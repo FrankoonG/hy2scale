@@ -1744,7 +1744,7 @@ func (a *App) dialExitWithMode(ctx context.Context, exitVia, exitMode, addr stri
 			conn, err = a.dialBond(ctx, exitVia, addr)
 		}
 		if conn != nil {
-			return wrapIdleTimeout(conn), err
+			return wrapIdleTimeoutCtx(ctx, conn), err
 		}
 		if err != nil {
 			return nil, err
@@ -1908,13 +1908,13 @@ func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, err
 		if err != nil {
 			return nil, err
 		}
-		return wrapIdleTimeout(conn), nil
+		return wrapIdleTimeoutCtx(ctx, conn), nil
 	}
 	conn, err := a.node.DialVia(ctx, parts, addr)
 	if err != nil {
 		return nil, err
 	}
-	return wrapIdleTimeout(conn), nil
+	return wrapIdleTimeoutCtx(ctx, conn), nil
 }
 
 // dialExitUDP opens a UDP connection through the specified exit node.
