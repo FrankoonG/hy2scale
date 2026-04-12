@@ -44,9 +44,10 @@ func (u *UserConfig) EffectivePassword(proxy string) string {
 // ProxyConfig defines a protocol listener.
 type ProxyConfig struct {
 	ID       string `yaml:"id" json:"id"`
-	Protocol string `yaml:"protocol" json:"protocol"` // "socks5"
+	Protocol string `yaml:"protocol" json:"protocol"` // "socks5", "http"
 	Listen   string `yaml:"listen" json:"listen"`
 	Enabled  bool   `yaml:"enabled" json:"enabled"`
+	TLSCert  string `yaml:"tls_cert,omitempty" json:"tls_cert,omitempty"` // TLS cert ID (enables TLS wrapping)
 	ExitVia   string   `yaml:"exit_via,omitempty" json:"exit_via,omitempty"`
 	ExitPaths []string `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
 	ExitMode  string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"`

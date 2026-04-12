@@ -86,6 +86,22 @@ export const PROXY_REGISTRY: ProxyRegistryEntry[] = [
     buildUrl: ({ host, port, username, password }) =>
       `socks5://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`,
   },
+  {
+    key: 'http',
+    label: 'HTTP',
+    authType: 'username_password',
+    category: 'l7',
+    defaultPort: '8080',
+    getPort: (ctx) => {
+      const hp = ctx.proxies.find((p) => p.protocol === 'http' && p.listen);
+      return hp?.listen?.replace(/.*:/, '') || '8080';
+    },
+    buildUrl: ({ host, port, username, password }, ctx) => {
+      const hp = ctx.proxies.find((p) => p.protocol === 'http' && p.listen);
+      const scheme = hp?.tls_cert ? 'https' : 'http';
+      return `${scheme}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`;
+    },
+  },
 ];
 
 /** Proxy types that support per-proxy password overrides (password-only auth). */

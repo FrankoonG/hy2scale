@@ -1,12 +1,14 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -538,8 +540,23 @@ func (a *App) StartProxy(pc ProxyConfig) {
 		cancel()
 		return
 	}
+	// TLS wrapping if cert specified
+	if pc.TLSCert != "" {
+		tlsCfg, tlsErr := a.tls.TLSConfig(pc.TLSCert)
+		if tlsErr != nil {
+			log.Printf("[%s] proxy %s: TLS cert %q: %v", a.node.Name(), pc.ID, pc.TLSCert, tlsErr)
+			ln.Close()
+			cancel()
+			return
+		}
+		ln = tls.NewListener(ln, tlsCfg)
+	}
 	a.proxyHandles[pc.ID] = &proxyHandle{listener: ln, cancel: cancel}
-	log.Printf("[%s] %s proxy %s on %s (exit_via=%q)", a.node.Name(), pc.Protocol, pc.ID, pc.Listen, pc.ExitVia)
+	tlsLabel := ""
+	if pc.TLSCert != "" {
+		tlsLabel = "+tls"
+	}
+	log.Printf("[%s] %s%s proxy %s on %s (exit_via=%q)", a.node.Name(), pc.Protocol, tlsLabel, pc.ID, pc.Listen, pc.ExitVia)
 	go a.serveProxy(ctx, ln, pc)
 }
 
@@ -1284,7 +1301,12 @@ func (a *App) serveProxy(ctx context.Context, ln net.Listener, pc ProxyConfig) {
 		if err != nil {
 			return
 		}
-		go a.handleSOCKS5(c, &pc)
+		switch pc.Protocol {
+		case "http":
+			go a.handleHTTP(c, &pc)
+		default:
+			go a.handleSOCKS5(c, &pc)
+		}
 	}
 }
 
@@ -1408,6 +1430,175 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 	n2, _ := copyCtx(ctx, conn, remote)
 	atomic.AddInt64(&down, n2)
 	cancel() // unblock the other direction
+	<-done
+	a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))
+	if username != "" {
+		a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))
+	}
+}
+
+// handleHTTP implements an HTTP CONNECT proxy (RFC 7231 §4.3.6).
+// Also supports plain HTTP forwarding for non-CONNECT requests.
+func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
+	defer conn.Close()
+	br := bufio.NewReader(conn)
+
+	// Read the HTTP request line
+	reqLine, err := br.ReadString('\n')
+	if err != nil {
+		return
+	}
+	parts := strings.SplitN(strings.TrimSpace(reqLine), " ", 3)
+	if len(parts) < 3 {
+		conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+		return
+	}
+	method, target := parts[0], parts[1]
+
+	// Read headers (we need Host and Proxy-Authorization)
+	headers := make(map[string]string)
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil || strings.TrimSpace(line) == "" {
+			break
+		}
+		if idx := strings.IndexByte(line, ':'); idx > 0 {
+			headers[strings.ToLower(strings.TrimSpace(line[:idx]))] = strings.TrimSpace(line[idx+1:])
+		}
+	}
+
+	// Auth: check Proxy-Authorization if users configured
+	cfg := a.store.Get()
+	hasUsers := len(cfg.Users) > 0
+	var user *UserConfig
+	username := ""
+	if hasUsers {
+		authHeader := headers["proxy-authorization"]
+		if authHeader == "" {
+			conn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"proxy\"\r\n\r\n"))
+			return
+		}
+		// Parse Basic auth: "Basic base64(user:pass)"
+		if !strings.HasPrefix(authHeader, "Basic ") {
+			conn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"proxy\"\r\n\r\n"))
+			return
+		}
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(authHeader, "Basic "))
+		if err != nil {
+			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+			return
+		}
+		creds := strings.SplitN(string(decoded), ":", 2)
+		if len(creds) != 2 {
+			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+			return
+		}
+		u, err := a.LookupUser(creds[0], creds[1])
+		if err != nil {
+			conn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"proxy\"\r\n\r\n"))
+			return
+		}
+		user = u
+		username = u.Username
+	}
+
+	// Resolve exit routing: proxy config overrides user config
+	exitVia := ""
+	exitMode := ""
+	var exitPaths []string
+	if user != nil {
+		exitVia = user.ExitVia
+		exitMode = user.ExitMode
+		exitPaths = user.ExitPaths
+	}
+	if pc != nil && pc.ExitVia != "" {
+		exitVia = pc.ExitVia
+		exitMode = pc.ExitMode
+		exitPaths = pc.ExitPaths
+	}
+
+	var addr string
+	if method == "CONNECT" {
+		// CONNECT method: tunnel mode
+		addr = target
+		if !strings.Contains(addr, ":") {
+			addr += ":443"
+		}
+	} else {
+		// Plain HTTP: extract host from URL or Host header
+		host := headers["host"]
+		if host == "" {
+			// Try extracting from absolute URL
+			if strings.HasPrefix(target, "http://") {
+				u := strings.TrimPrefix(target, "http://")
+				if idx := strings.IndexByte(u, '/'); idx > 0 {
+					host = u[:idx]
+				} else {
+					host = u
+				}
+			}
+		}
+		if host == "" {
+			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+			return
+		}
+		if !strings.Contains(host, ":") {
+			host += ":80"
+		}
+		addr = host
+	}
+
+	// Dial remote
+	var remote net.Conn
+	if exitVia == "" {
+		remote, err = net.DialTimeout("tcp", addr, 10*time.Second)
+	} else {
+		remote, err = a.dialExitWithPaths(context.Background(), exitVia, exitPaths, exitMode, addr)
+	}
+	if err != nil {
+		conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+		return
+	}
+	defer remote.Close()
+
+	if method == "CONNECT" {
+		conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+	} else {
+		// Forward the original request to the remote
+		fmt.Fprintf(remote, "%s %s %s\r\n", method, target, parts[2])
+		for k, v := range headers {
+			if k != "proxy-authorization" && k != "proxy-connection" {
+				fmt.Fprintf(remote, "%s: %s\r\n", k, v)
+			}
+		}
+		fmt.Fprintf(remote, "\r\n")
+		// Forward any remaining buffered data
+		if br.Buffered() > 0 {
+			buffered := make([]byte, br.Buffered())
+			br.Read(buffered)
+			remote.Write(buffered)
+		}
+	}
+
+	// Session tracking
+	remoteIP := ""
+	if ta, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+		remoteIP = ta.IP.String()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	sid := a.Sessions.Connect(username, remoteIP, "http", cancel)
+
+	var up, down int64
+	done := make(chan struct{})
+	go func() {
+		n, _ := copyCtx(ctx, remote, conn)
+		atomic.AddInt64(&up, n)
+		remote.Close()
+		done <- struct{}{}
+	}()
+	n, _ := copyCtx(ctx, conn, remote)
+	atomic.AddInt64(&down, n)
+	cancel()
 	<-done
 	a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))
 	if username != "" {
