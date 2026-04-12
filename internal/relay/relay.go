@@ -79,7 +79,8 @@ func IsRelayStream(addr string) bool {
 		addr == streamLatencyReport ||
 		strings.HasPrefix(addr, streamViaPrefix) ||
 		strings.HasPrefix(addr, streamDataPrefix) ||
-		strings.HasPrefix(addr, streamIPTunPrefix)
+		strings.HasPrefix(addr, streamIPTunPrefix) ||
+		strings.HasPrefix(addr, bridgeRebindAddr)
 }
 
 // isLocalRelayStream returns true if addr is a relay stream that can be handled
@@ -263,6 +264,9 @@ type Node struct {
 
 	// IP tunnel handler for TUN-based raw packet forwarding
 	ipTunHandler func(peerName string, stream net.Conn)
+
+	// Stream bridge manager for connection persistence across QUIC reconnects
+	bridges *bridgeManager
 }
 
 // PeerRates returns per-peer traffic rates.
@@ -534,6 +538,7 @@ func NewNode(name string, exitNode bool) *Node {
 		latencies:     make(map[string]int),
 		addrLatencies: make(map[string]map[string]int),
 		peersOfCache: make(map[string][]PeerInfo),
+		bridges:   newBridgeManager(),
 	}
 }
 
@@ -739,6 +744,18 @@ func (n *Node) HandleStream(ctx context.Context, reqAddr string, stream net.Conn
 		if strings.HasPrefix(reqAddr, streamDataPrefix) {
 			id := strings.TrimSuffix(reqAddr[len(streamDataPrefix):], streamDataSuffix)
 			n.deliverDataStream(id, stream)
+			return
+		}
+		// Stream rebind: reconnect a suspended bridge to a new QUIC stream
+		if strings.HasPrefix(reqAddr, bridgeRebindAddr) {
+			bridgeID := strings.TrimSuffix(reqAddr[len(bridgeRebindAddr):], ":0")
+			if n.bridges.rebind(bridgeID, stream) {
+				log.Printf("[bridge] rebind accepted: %s", bridgeID)
+			} else {
+				log.Printf("[bridge] rebind rejected: %s (not found or not suspended)", bridgeID)
+				stream.Close()
+			}
+			return
 		}
 	}
 }
@@ -942,16 +959,12 @@ func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclie
 
 	n.conns.Add(1)
 	defer n.conns.Add(-1)
-	n.mu.RLock()
-	p := n.peers[peerName]
-	n.mu.RUnlock()
-	var ptx, prx *atomic.Uint64
-	if p != nil {
-		ptx = &p.txBytes
-		prx = &p.rxBytes
-	}
-	go func() { n.copyCount(stream, target, &n.rxBytes, prx); stream.Close() }()
-	n.copyCount(target, stream, &n.txBytes, ptx)
+
+	// Create a bridge to enable stream rebinding.
+	// If the QUIC stream dies (peer reconnects), the TCP connection to the
+	// destination stays alive and waits for a rebind from the requester.
+	bridge := n.bridges.create(peerName, addr, stream)
+	bridge.RunRelay(target, n.bridges)
 }
 
 // dialUDPAndStream handles a remote UDP dial request.

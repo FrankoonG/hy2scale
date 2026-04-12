@@ -1910,12 +1910,18 @@ func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, err
 				return a.dialExit(ctx, pick, addr)
 			}
 		}
-		peerCtx := a.node.PeerCtx(parts[0])
-		conn, err := a.node.DialTCP(ctx, parts[0], addr)
+		// Use bridged connection for single-hop: survives QUIC reconnects
+		conn, _, err := a.node.DialTCPBridged(parts[0], addr)
 		if err != nil {
-			return nil, err
+			// Fallback to non-bridged (e.g. inbound peer)
+			conn, err = a.node.DialTCP(ctx, parts[0], addr)
+			if err != nil {
+				return nil, err
+			}
+			peerCtx := a.node.PeerCtx(parts[0])
+			return wrapIdleTimeoutCtx(peerCtx, conn), nil
 		}
-		return wrapIdleTimeoutCtx(peerCtx, conn), nil
+		return conn, nil
 	}
 	peerCtx := a.node.PeerCtx(parts[0])
 	conn, err := a.node.DialVia(ctx, parts, addr)
