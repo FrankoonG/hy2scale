@@ -60,17 +60,7 @@ export default function IKEv2Tab({ limited }: { limited?: boolean }) {
     }
   };
 
-  if (limited || (ikev2 && !ikev2.capable)) {
-    return (
-      <Card title={t('ikev2.title')}>
-        <div className="hy-limited-overlay">
-          <div className="hy-limited-msg">
-            {ikev2?.host_network === false ? t('ikev2.warnHostNetwork') : t('ikev2.warnText')}
-          </div>
-        </div>
-      </Card>
-    );
-  }
+  const isLimited = limited || (ikev2 && !ikev2.capable);
 
   const certOptions = [
     { value: '', label: t('ikev2.selectCert') },
@@ -78,8 +68,14 @@ export default function IKEv2Tab({ limited }: { limited?: boolean }) {
   ];
 
   return (
+    <>
+      {isLimited && (
+        <div style={{ background: 'var(--red-bg)', color: 'var(--red)', padding: '8px 14px', borderRadius: 'var(--radius-sm)', fontSize: 13, fontWeight: 500, marginBottom: 12 }}>
+          {ikev2?.host_network === false ? t('ikev2.warnHostNetwork') : t('ikev2.warnText')}
+        </div>
+      )}
     <Card title={t('ikev2.title')}>
-      <div style={{ maxWidth: 450, display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ maxWidth: 450, display: 'flex', flexDirection: 'column', gap: 14, ...(isLimited ? { opacity: 0.4, pointerEvents: 'none' as const } : {}) }}>
         <FormGrid>
           <FormGroup label={t('ikev2.mode')}>
             <Select
@@ -128,5 +124,6 @@ export default function IKEv2Tab({ limited }: { limited?: boolean }) {
         <Button variant="primary" onClick={handleSave} loading={loading} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
       </div>
     </Card>
+    </>
   );
 }

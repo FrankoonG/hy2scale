@@ -45,21 +45,17 @@ export default function L2TPTab({ limited }: { limited?: boolean }) {
     }
   };
 
-  if (limited || (l2tp && !l2tp.capable)) {
-    return (
-      <Card title={t('l2tp.title')}>
-        <div className="hy-limited-overlay">
-          <div className="hy-limited-msg">
-            {l2tp?.host_network === false ? t('l2tp.warnHostNetwork') : t('l2tp.warnText')}
-          </div>
-        </div>
-      </Card>
-    );
-  }
+  const isLimited = limited || (l2tp && !l2tp.capable);
 
   return (
+    <>
+      {isLimited && (
+        <div style={{ background: 'var(--red-bg)', color: 'var(--red)', padding: '8px 14px', borderRadius: 'var(--radius-sm)', fontSize: 13, fontWeight: 500, marginBottom: 12 }}>
+          {l2tp?.host_network === false ? t('l2tp.warnHostNetwork') : t('l2tp.warnText')}
+        </div>
+      )}
     <Card title={t('l2tp.title')}>
-      <div style={{ maxWidth: 500, display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ maxWidth: 500, display: 'flex', flexDirection: 'column', gap: 14, ...(isLimited ? { opacity: 0.4, pointerEvents: 'none' as const } : {}) }}>
         <FormGroup label={t('app.enabled')}>
           <Toggle checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         </FormGroup>
@@ -81,5 +77,6 @@ export default function L2TPTab({ limited }: { limited?: boolean }) {
         <Button variant="primary" onClick={handleSave} loading={loading} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
       </div>
     </Card>
+    </>
   );
 }
