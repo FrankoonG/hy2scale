@@ -158,6 +158,7 @@ type peer struct {
 	txBytes   atomic.Uint64
 	rxBytes   atomic.Uint64
 	failCount atomic.Int32 // consecutive ping failures
+	ctx       context.Context    // canceled when peer disconnects
 	cancel    context.CancelFunc
 
 	// Multi-IP: additional outbound QUIC connections
@@ -551,6 +552,7 @@ func (n *Node) AttachNative(ctx context.Context, peerName string, client hyclien
 		info:    PeerInfo{Name: peerName, Direction: "outbound", Native: true},
 		client:  client,
 		waiting: make(map[string]chan net.Conn),
+		ctx:     childCtx,
 		cancel:  cancel,
 	}
 	n.mu.Lock()
@@ -627,6 +629,7 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version},
 		client:  client,
 		waiting: make(map[string]chan net.Conn),
+		ctx:     childCtx,
 		cancel:  childCancel,
 	}
 	n.mu.Lock()
@@ -780,6 +783,7 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 			Version:   remoteMeta.Version,
 		},
 		waiting: make(map[string]chan net.Conn),
+		ctx:     peerCtx,
 		cancel:  peerCancel,
 	}
 
@@ -1494,6 +1498,18 @@ func (w *hyUDPConnWrapper) RemoteAddr() net.Addr               { return nil }
 func (w *hyUDPConnWrapper) SetDeadline(t time.Time) error      { return nil }
 func (w *hyUDPConnWrapper) SetReadDeadline(t time.Time) error  { return nil }
 func (w *hyUDPConnWrapper) SetWriteDeadline(t time.Time) error { return nil }
+
+// PeerCtx returns the context for a peer, canceled when the peer disconnects.
+// Used by idle timeout to detect dead relay streams immediately.
+func (n *Node) PeerCtx(peerName string) context.Context {
+	n.mu.RLock()
+	p, ok := n.peers[peerName]
+	n.mu.RUnlock()
+	if !ok || p.ctx == nil {
+		return context.Background()
+	}
+	return p.ctx
+}
 
 func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.Conn, error) {
 	n.mu.RLock()

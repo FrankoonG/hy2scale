@@ -1904,17 +1904,19 @@ func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, err
 				return a.dialExit(ctx, pick, addr)
 			}
 		}
+		peerCtx := a.node.PeerCtx(parts[0])
 		conn, err := a.node.DialTCP(ctx, parts[0], addr)
 		if err != nil {
 			return nil, err
 		}
-		return wrapIdleTimeoutCtx(ctx, conn), nil
+		return wrapIdleTimeoutCtx(peerCtx, conn), nil
 	}
+	peerCtx := a.node.PeerCtx(parts[0])
 	conn, err := a.node.DialVia(ctx, parts, addr)
 	if err != nil {
 		return nil, err
 	}
-	return wrapIdleTimeoutCtx(ctx, conn), nil
+	return wrapIdleTimeoutCtx(peerCtx, conn), nil
 }
 
 // dialExitUDP opens a UDP connection through the specified exit node.
