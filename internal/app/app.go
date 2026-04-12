@@ -1991,12 +1991,28 @@ func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
 		}()
 		return c2, nil
 	}
-	// For native hy2 client users: their traffic is handled by hy2 server directly
-	// Route through their exit_via if they authenticated as a user
-	// Note: hy2 server doesn't pass user info to Outbound, so we can't do per-user
-	// routing here. Native hy2 client users exit directly (local network).
-	// Per-user exit routing works through SOCKS5/SS where we control the full flow.
-	return net.DialTimeout("tcp", rewriteLocalAddr(reqAddr), 10*time.Second)
+	// Parse bridge tag for stream rebind support: "addr#bridge=sb_X"
+	actualAddr, bridgeID, isBridged := relay.ParseBridgeAddr(reqAddr)
+
+	// Check if this is a rebind to an existing bridge
+	if isBridged {
+		if rebindConn := o.node.Bridges().TryRebind(bridgeID); rebindConn != nil {
+			log.Printf("[exit] rebind accepted: %s", bridgeID)
+			return rebindConn, nil
+		}
+	}
+
+	conn, err := net.DialTimeout("tcp", rewriteLocalAddr(actualAddr), 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+
+	// If bridge ID provided, wrap in a bridge for future rebinding
+	if isBridged {
+		return o.node.Bridges().CreateWithID(bridgeID, actualAddr, conn), nil
+	}
+
+	return conn, nil
 }
 
 func (o *nodeOutbound) UDP(addr string) (hyserver.UDPConn, error) {

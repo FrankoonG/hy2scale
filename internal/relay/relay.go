@@ -749,7 +749,7 @@ func (n *Node) HandleStream(ctx context.Context, reqAddr string, stream net.Conn
 		// Stream rebind: reconnect a suspended bridge to a new QUIC stream
 		if strings.HasPrefix(reqAddr, bridgeRebindAddr) {
 			bridgeID := strings.TrimSuffix(reqAddr[len(bridgeRebindAddr):], ":0")
-			if n.bridges.rebind(bridgeID, stream) {
+			if n.bridges.Rebind(bridgeID, stream) {
 				log.Printf("[bridge] rebind accepted: %s", bridgeID)
 			} else {
 				log.Printf("[bridge] rebind rejected: %s (not found or not suspended)", bridgeID)
@@ -963,7 +963,7 @@ func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclie
 	// Create a bridge to enable stream rebinding.
 	// If the QUIC stream dies (peer reconnects), the TCP connection to the
 	// destination stays alive and waits for a rebind from the requester.
-	bridge := n.bridges.create(peerName, addr, stream)
+	bridge := n.bridges.Create(peerName, addr, stream)
 	bridge.RunRelay(target, n.bridges)
 }
 
@@ -1529,6 +1529,9 @@ func (w *hyUDPConnWrapper) SetWriteDeadline(t time.Time) error { return nil }
 
 // PeerCtx returns the context for a peer, canceled when the peer disconnects.
 // Used by idle timeout to detect dead relay streams immediately.
+// Bridges returns the bridge manager for stream rebinding.
+func (n *Node) Bridges() *bridgeManager { return n.bridges }
+
 func (n *Node) PeerCtx(peerName string) context.Context {
 	n.mu.RLock()
 	p, ok := n.peers[peerName]
