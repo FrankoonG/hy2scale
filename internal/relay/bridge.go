@@ -3,7 +3,6 @@ package relay
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"strings"
@@ -13,9 +12,9 @@ import (
 )
 
 const (
-	bridgeTimeout    = 30 * time.Second // max wait for rebind before giving up
-	bridgeBufSize    = 4 * 1024 * 1024  // 4MB per direction
-	bridgeRebindAddr = "_relay_rebind_"
+	bridgeTimeout      = 90 * time.Second // max wait for rebind before giving up (must exceed QUIC idle timeout)
+	bridgeCongestionTO = 8 * time.Second // if no Read response for this long while Writing, stream is congested → proactive rebind
+	bridgeRebindAddr   = "_relay_rebind_"
 )
 
 // bridgeState represents the lifecycle of a stream bridge.
@@ -62,11 +61,11 @@ func newBridgeManager() *bridgeManager {
 }
 
 func (m *bridgeManager) nextID() string {
-	return fmt.Sprintf("sb_%d", m.seq.Add(1))
+	return fmt.Sprintf("sb_%x_%d", time.Now().UnixNano()&0xFFFF, m.seq.Add(1))
 }
 
-// create registers a new bridge for an active connection.
-func (m *bridgeManager) create(peerName, addr string, relayStream net.Conn) *streamBridge {
+// Create registers a new bridge for an active connection.
+func (m *bridgeManager) Create(peerName, addr string, relayStream net.Conn) *streamBridge {
 	id := m.nextID()
 	ctx, cancel := context.WithCancel(context.Background())
 	b := &streamBridge{
@@ -84,24 +83,24 @@ func (m *bridgeManager) create(peerName, addr string, relayStream net.Conn) *str
 	return b
 }
 
-// lookup finds a suspended bridge for rebinding.
-func (m *bridgeManager) lookup(id string) *streamBridge {
+// Lookup finds a suspended bridge for rebinding.
+func (m *bridgeManager) Lookup(id string) *streamBridge {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.bridges[id]
 }
 
-// remove cleans up a dead bridge.
-func (m *bridgeManager) remove(id string) {
+// Remove cleans up a dead bridge.
+func (m *bridgeManager) Remove(id string) {
 	m.mu.Lock()
 	delete(m.bridges, id)
 	m.mu.Unlock()
 }
 
-// rebind delivers a new stream to a suspended bridge.
+// Rebind delivers a new stream to a suspended bridge.
 // Returns true if the bridge was found and rebind succeeded.
-func (m *bridgeManager) rebind(id string, newStream net.Conn) bool {
-	b := m.lookup(id)
+func (m *bridgeManager) Rebind(id string, newStream net.Conn) bool {
+	b := m.Lookup(id)
 	if b == nil {
 		return false
 	}
@@ -162,7 +161,7 @@ func (b *streamBridge) die() {
 func (b *streamBridge) RunRelay(appConn net.Conn, mgr *bridgeManager) {
 	defer func() {
 		b.die()
-		mgr.remove(b.id)
+		mgr.Remove(b.id)
 		appConn.Close()
 		if b.relayStream != nil {
 			b.relayStream.Close()
@@ -175,37 +174,64 @@ func (b *streamBridge) RunRelay(appConn net.Conn, mgr *bridgeManager) {
 			return
 		}
 
-		// Bidirectional copy with early termination detection
-		done := make(chan struct{})
-		var copyErr atomic.Value
+		// errSource distinguishes stream-side vs app-side failures.
+		type errSource struct {
+			streamSide bool // true = relay stream error (recoverable)
+		}
+		errCh := make(chan errSource, 2)
 
-		// relay → app
+		// relay → app: read from stream, write to appConn.
+		// If stream.Read fails → stream died. If appConn.Write fails → app died.
 		go func() {
-			_, err := io.Copy(appConn, stream)
-			if err != nil {
-				copyErr.Store(err)
+			buf := make([]byte, 32*1024)
+			for {
+				nr, readErr := stream.Read(buf)
+				if nr > 0 {
+					if _, writeErr := appConn.Write(buf[:nr]); writeErr != nil {
+						errCh <- errSource{streamSide: false}
+						return
+					}
+				}
+				if readErr != nil {
+					errCh <- errSource{streamSide: true}
+					return
+				}
 			}
-			close(done)
 		}()
 
-		// app → relay
-		_, err := io.Copy(stream, appConn)
-		if err != nil {
-			copyErr.Store(err)
-		}
+		// app → relay: read from appConn, write to stream.
+		// If appConn.Read fails → app died. If stream.Write fails → stream died.
+		go func() {
+			buf := make([]byte, 32*1024)
+			for {
+				nr, readErr := appConn.Read(buf)
+				if nr > 0 {
+					if _, writeErr := stream.Write(buf[:nr]); writeErr != nil {
+						errCh <- errSource{streamSide: true}
+						return
+					}
+				}
+				if readErr != nil {
+					errCh <- errSource{streamSide: false}
+					return
+				}
+			}
+		}()
 
-		// Wait for the other direction to finish
+		// Wait for the first error
+		first := <-errCh
+
+		// Close stream to unblock goroutines, set short deadline on appConn
+		stream.Close()
+		appConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 		select {
-		case <-done:
-		case <-time.After(3 * time.Second):
-			stream.Close() // force close to unblock the other direction
-			<-done
+		case <-errCh: // drain second goroutine
+		case <-time.After(5 * time.Second):
 		}
+		appConn.SetReadDeadline(time.Time{})
 
-		// Check if this is a recoverable error (stream died, not app died)
-		// If app connection is also dead, no point in rebinding
-		if !isStreamError(copyErr.Load()) {
-			return // app-side error, clean exit
+		if !first.streamSide {
+			return // app-side close, no point rebinding
 		}
 
 		// Stream died — try to rebind
@@ -213,35 +239,11 @@ func (b *streamBridge) RunRelay(appConn net.Conn, mgr *bridgeManager) {
 
 		newStream := b.waitRebind()
 		if newStream == nil {
-			// Timeout or canceled — give up
 			return
 		}
 
 		// Rebind succeeded — loop back to relay with new stream
-		stream.Close()
 	}
-}
-
-// isStreamError checks if the error looks like a relay stream failure
-// (as opposed to the application side closing normally).
-func isStreamError(errVal any) bool {
-	if errVal == nil {
-		return false // clean close, no error
-	}
-	err, ok := errVal.(error)
-	if !ok {
-		return false
-	}
-	// net.ErrClosed from idleTimeoutConn or QUIC stream death
-	if err == net.ErrClosed {
-		return true
-	}
-	// io.EOF is normal close, not a stream error
-	if err == io.EOF {
-		return false
-	}
-	// Any other error is likely a stream issue
-	return true
 }
 
 // HandleBridgeAddr processes a bridge-tagged address from the exit node.
@@ -257,12 +259,12 @@ func ParseBridgeAddr(addr string) (string, string, bool) {
 // TryRebind attempts to rebind a suspended bridge. Returns a net.Conn pipe
 // if successful (caller should return this as the TCP connection), or nil.
 func (m *bridgeManager) TryRebind(bridgeID string) net.Conn {
-	b := m.lookup(bridgeID)
+	b := m.Lookup(bridgeID)
 	if b == nil || bridgeState(b.state.Load()) != bridgeSuspended {
 		return nil
 	}
 	c1, c2 := net.Pipe()
-	if m.rebind(bridgeID, c1) {
+	if m.Rebind(bridgeID, c1) {
 		return c2
 	}
 	c1.Close()

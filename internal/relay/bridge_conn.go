@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,9 +17,17 @@ type bridgedConn struct {
 	node     *Node
 	peerName string
 
-	mu     sync.Mutex
-	stream net.Conn
-	closed bool
+	mu         sync.Mutex
+	stream     net.Conn
+	closed     bool
+	rebinding  bool          // true while tryRebind is in progress
+	rebindDone chan struct{} // closed when rebind completes (success or failure)
+	lastRead   atomic.Int64  // unix nanos of last successful Read
+	lastWrite  atomic.Int64  // unix nanos of last successful Write
+
+	// For multi-hop via: re-open via chain on rebind instead of using _relay_rebind_
+	viaPath       []string
+	viaTargetAddr string
 }
 
 // DialTCPBridged is like DialTCP but returns a connection that survives
@@ -66,16 +75,32 @@ func (c *bridgedConn) Read(b []byte) (int, error) {
 			return 0, net.ErrClosed
 		}
 
-		n, err := s.Read(b)
-		if err == nil || n > 0 {
-			return n, err
+		// Use a channel so we can detect bridge state changes
+		type readResult struct {
+			n   int
+			err error
 		}
+		ch := make(chan readResult, 1)
+		go func() {
+			n, err := s.Read(b)
+			ch <- readResult{n, err}
+		}()
 
-		// Stream died — try rebind
-		if !c.tryRebind() {
-			return 0, err
+		select {
+		case r := <-ch:
+			if r.err == nil || r.n > 0 {
+				c.lastRead.Store(time.Now().UnixNano())
+				return r.n, r.err
+			}
+			if !c.tryRebind() {
+				return 0, r.err
+			}
+			// Rebind succeeded — retry with new stream
+		case <-c.bridge.ctx.Done():
+			// Bridge killed — force close stream to unblock the goroutine
+			s.Close()
+			return 0, net.ErrClosed
 		}
-		// Rebind succeeded — retry read with new stream
 	}
 }
 
@@ -88,59 +113,128 @@ func (c *bridgedConn) Write(b []byte) (int, error) {
 			return 0, net.ErrClosed
 		}
 
-		n, err := s.Write(b)
-		if err == nil {
-			return n, err
+		// Check for sustained congestion (direct connections only, not multi-hop via).
+		// Multi-hop paths have naturally higher latency; proactive rebind would be disruptive.
+		if len(c.viaPath) == 0 {
+			lastR := c.lastRead.Load()
+			if lastR > 0 && c.lastWrite.Load() > lastR {
+				stall := time.Since(time.Unix(0, lastR))
+				if stall > bridgeCongestionTO {
+					log.Printf("[bridge] %s congested (no read for %v), proactive rebind", c.bridge.id, stall.Round(time.Second))
+					s.Close()
+					if !c.tryRebind() {
+						return 0, net.ErrClosed
+					}
+					continue
+				}
+			}
 		}
 
-		// Stream died — try rebind
-		if !c.tryRebind() {
-			return 0, err
+		type writeResult struct {
+			n   int
+			err error
 		}
-		// Rebind succeeded — retry write with new stream
+		ch := make(chan writeResult, 1)
+		go func() {
+			n, err := s.Write(b)
+			ch <- writeResult{n, err}
+		}()
+
+		select {
+		case r := <-ch:
+			if r.err == nil {
+				c.lastWrite.Store(time.Now().UnixNano())
+				return r.n, r.err
+			}
+			if !c.tryRebind() {
+				return 0, r.err
+			}
+		case <-c.bridge.ctx.Done():
+			s.Close()
+			return 0, net.ErrClosed
+		}
 	}
 }
 
 func (c *bridgedConn) tryRebind() bool {
+	c.mu.Lock()
+	if c.rebinding {
+		done := c.rebindDone
+		c.mu.Unlock()
+		<-done
+		return bridgeState(c.bridge.state.Load()) == bridgeActive
+	}
+	c.rebinding = true
+	c.rebindDone = make(chan struct{})
+	c.mu.Unlock()
+
+	defer func() {
+		c.mu.Lock()
+		c.rebinding = false
+		close(c.rebindDone)
+		c.mu.Unlock()
+	}()
+
 	c.bridge.suspend()
 
-	// Wait for peer to reconnect (up to 30s)
 	deadline := time.After(bridgeTimeout)
-	ticker := time.NewTicker(2 * time.Second)
+	// Poll aggressively at first (500ms), then slow to 2s
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+	attempts := 0
 
 	for {
 		select {
 		case <-deadline:
 			c.bridge.die()
-			c.node.bridges.remove(c.bridge.id)
+			c.node.bridges.Remove(c.bridge.id)
 			return false
 		case <-c.bridge.ctx.Done():
 			return false
 		case <-ticker.C:
-			// Try to open a rebind stream to the peer
+			attempts++
+			// Slow down after initial burst
+			if attempts == 6 {
+				ticker.Reset(2 * time.Second)
+			}
 			c.node.mu.RLock()
 			p, ok := c.node.peers[c.peerName]
 			c.node.mu.RUnlock()
 			if !ok || p.client == nil {
-				continue // peer not reconnected yet
-			}
-
-			cl := p.pickClient()
-			rebindAddr := bridgeRebindAddr + c.bridge.id + ":0"
-			newStream, err := cl.TCP(rebindAddr)
-			if err != nil {
-				log.Printf("[bridge] rebind dial failed for %s: %v", c.bridge.id, err)
 				continue
 			}
 
-			// Rebind succeeded
+			cl := p.pickClient()
+			var rebindAddr string
+			if len(c.viaPath) > 1 {
+				// Multi-hop via: re-open via chain with bridge tag for rebind
+				remaining := ""
+				for i := 1; i < len(c.viaPath); i++ {
+					if i > 1 {
+						remaining += "/"
+					}
+					remaining += c.viaPath[i]
+				}
+				taggedAddr := c.viaTargetAddr + "#bridge=" + c.bridge.id
+				rebindAddr = streamViaPrefix + remaining + "_" + taggedAddr + ":0"
+			} else {
+				rebindAddr = bridgeRebindAddr + c.bridge.id + ":0"
+			}
+			newStream, err := cl.TCP(rebindAddr)
+			if err != nil {
+				continue
+			}
+
 			c.mu.Lock()
 			c.stream = c.node.wrapConn(c.peerName, newStream)
 			c.bridge.mu.Lock()
 			c.bridge.relayStream = newStream
-			c.bridge.state.Store(int32(BridgeActive))
+			c.bridge.state.Store(int32(bridgeActive))
 			c.bridge.mu.Unlock()
+			// Reset congestion tracking so proactive rebind doesn't fire immediately
+			now := time.Now().UnixNano()
+			c.lastRead.Store(now)
+			c.lastWrite.Store(0)
 			c.mu.Unlock()
 			log.Printf("[bridge] %s rebound on requester side (peer %s)", c.bridge.id, c.peerName)
 			return true
@@ -151,7 +245,7 @@ func (c *bridgedConn) tryRebind() bool {
 func (c *bridgedConn) Close() error {
 	c.closed = true
 	c.bridge.die()
-	c.node.bridges.remove(c.bridge.id)
+	c.node.bridges.Remove(c.bridge.id)
 	c.mu.Lock()
 	s := c.stream
 	c.mu.Unlock()
