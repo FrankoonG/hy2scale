@@ -223,8 +223,19 @@ func (p *peer) ConnCount() int {
 	return 1 + len(p.extraConns)
 }
 
-// AddConn adds an extra QUIC connection for a secondary IP address.
+// AddConn adds or replaces an extra QUIC connection for a secondary IP address.
 func (p *peer) AddConn(client hyclient.Client, addr, status string) {
+	// Replace existing entry with same addr
+	for i, a := range p.connAddrs {
+		if a == addr {
+			if p.extraConns[i] != nil {
+				p.extraConns[i].Close()
+			}
+			p.extraConns[i] = client
+			p.connStatuses[i] = status
+			return
+		}
+	}
 	p.extraConns = append(p.extraConns, client)
 	p.connAddrs = append(p.connAddrs, addr)
 	p.connStatuses = append(p.connStatuses, status)

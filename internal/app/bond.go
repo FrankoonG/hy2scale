@@ -67,8 +67,9 @@ type bondSession struct {
 	// Dynamic buffer limit
 	bufferLimit int // max bytes in reorder buffer
 
-	closed   atomic.Bool
-	closeCh  chan struct{}
+	closed      atomic.Bool
+	closeCh     chan struct{}
+	teardownCnt atomic.Int32 // number of paths that received teardown
 }
 
 // bondPath represents one path in the bond.
@@ -359,6 +360,9 @@ func (sess *bondSession) runPathReader(bp *bondPath) {
 			return
 		}
 
+		// Set read deadline: if no data for 8s on this path, assume it's dead.
+		// This is much faster than QUIC's 30s idle timeout.
+		conn.SetReadDeadline(time.Now().Add(8 * time.Second))
 		if _, err := io.ReadFull(conn, hdr[:]); err != nil {
 			if sess.closed.Load() {
 				return
@@ -381,14 +385,25 @@ func (sess *bondSession) runPathReader(bp *bondPath) {
 		length := binary.BigEndian.Uint16(hdr[8:10])
 
 		if seq == bondTeardownSeq {
-			log.Printf("[bond] %d: path %s got teardown (delivered %d seqs)", sess.id, bp.name, sess.reorderNext-1)
+			cnt := sess.teardownCnt.Add(1)
+			log.Printf("[bond] %d: path %s teardown (%d/%d paths done, delivered %d seqs)",
+				sess.id, bp.name, cnt, len(sess.paths), sess.reorderNext-1)
 			bp.mu.Lock()
 			bp.healthy = false
 			bp.tornDown = true
 			bp.mu.Unlock()
-			select {
-			case sess.reorderCh <- struct{}{}:
-			default:
+			if int(cnt) >= len(sess.paths) {
+				log.Printf("[bond] %d: all teardowns received, closing", sess.id)
+				sess.close()
+			} else {
+				// Wait for remaining teardowns, then force close
+				go func() {
+					time.Sleep(15 * time.Second)
+					if !sess.closed.Load() {
+						log.Printf("[bond] %d: teardown timeout, force closing", sess.id)
+						sess.close()
+					}
+				}()
 			}
 			return
 		}
@@ -399,10 +414,14 @@ func (sess *bondSession) runPathReader(bp *bondPath) {
 
 		data := make([]byte, length)
 		if _, err := io.ReadFull(conn, data); err != nil {
-			debugLog("[bond] %d: path %s read data error: %v", sess.id, bp.name, err)
+			log.Printf("[bond] %d: path %s read data error: %v", sess.id, bp.name, err)
 			bp.mu.Lock()
 			bp.healthy = false
+			if bp.conn != nil {
+				bp.conn.Close()
+			}
 			bp.mu.Unlock()
+			sess.skipReorderGaps()
 			return
 		}
 
@@ -452,8 +471,8 @@ func (sess *bondSession) runDeliverer(dst net.Conn) {
 
 		if !delivered {
 			if bufSize > 0 {
-				// If a path is dead, skip gaps aggressively (no waiting)
-				if sess.hasDeadPaths() {
+				// Only skip aggressively for abnormally dead paths (not teardown)
+				if sess.hasAbnormalDeadPaths() {
 					sess.skipReorderGaps()
 					continue
 				}
@@ -479,11 +498,6 @@ func (sess *bondSession) runDeliverer(dst net.Conn) {
 			}
 			timeout := 100 * time.Millisecond
 			if bufSize == 0 {
-				hp := sess.hasHealthyPaths()
-				if !hp && sess.reorderNext > 1 {
-					log.Printf("[bond] %d: all paths done, closing (delivered %d seqs)", sess.id, sess.reorderNext-1)
-					sess.close()
-				}
 				timeout = 5 * time.Second
 			}
 			select {
@@ -574,6 +588,21 @@ func (sess *bondSession) hasHealthyPaths() bool {
 		h := bp.healthy
 		bp.mu.Unlock()
 		if h {
+			return true
+		}
+	}
+	return false
+}
+
+// hasAbnormalDeadPaths returns true if any path died abnormally (not from teardown).
+func (sess *bondSession) hasAbnormalDeadPaths() bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	for _, bp := range sess.paths {
+		bp.mu.Lock()
+		dead := !bp.healthy && !bp.tornDown
+		bp.mu.Unlock()
+		if dead {
 			return true
 		}
 	}
@@ -716,6 +745,9 @@ func (sess *bondSession) runHealthMonitor(a *App) {
 
 // tryReopenPath attempts to reconnect a failed path.
 func (sess *bondSession) tryReopenPath(a *App, bp *bondPath) {
+	if sess.closed.Load() {
+		return
+	}
 	bondAddr := fmt.Sprintf("_bond_%d_%s", sess.id, sess.addr)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
