@@ -1118,10 +1118,27 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 		a.node.AddPeerConn(peerName, c, extraAddr, status)
 		log.Printf("[%s] extra IP %s for %s: %s", a.node.Name(), extraAddr, peerName, status)
 
-		// Block until context cancelled or connection dies
-		<-ctx.Done()
-		c.Close()
-		return
+		// Monitor connection health — reconnect if it dies
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				c.Close()
+				return
+			case <-ticker.C:
+				// Probe: try opening a lightweight stream
+				probe, err := c.TCP("_relay_latency_:0")
+				if err != nil {
+					log.Printf("[%s] extra IP %s for %s: connection lost, reconnecting", a.node.Name(), extraAddr, peerName)
+					c.Close()
+					break // break select, continue outer for loop to reconnect
+				}
+				probe.Close()
+				continue // probe successful, keep monitoring
+			}
+			break // connection lost, reconnect
+		}
 	}
 }
 
