@@ -1910,25 +1910,53 @@ func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, err
 				return a.dialExit(ctx, pick, addr)
 			}
 		}
-		// Use bridged connection for single-hop: survives QUIC reconnects
-		conn, _, err := a.node.DialTCPBridged(parts[0], addr)
-		if err != nil {
+		// Use bridged connection for single-hop: survives QUIC reconnects.
+		// Retry with backoff if peer is temporarily disconnected (up to 30s).
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			conn, _, err := a.node.DialTCPBridged(parts[0], addr)
+			if err == nil {
+				return conn, nil
+			}
 			// Fallback to non-bridged (e.g. inbound peer)
 			conn, err = a.node.DialTCP(ctx, parts[0], addr)
-			if err != nil {
+			if err == nil {
+				peerCtx := a.node.PeerCtx(parts[0])
+				return wrapIdleTimeoutCtx(peerCtx, conn), nil
+			}
+			// If past deadline or context canceled, give up
+			if time.Now().After(deadline) {
 				return nil, err
 			}
-			peerCtx := a.node.PeerCtx(parts[0])
-			return wrapIdleTimeoutCtx(peerCtx, conn), nil
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
 		}
-		return conn, nil
 	}
-	peerCtx := a.node.PeerCtx(parts[0])
-	conn, err := a.node.DialVia(ctx, parts, addr)
-	if err != nil {
-		return nil, err
+	// Multi-hop: use bridged via connection for first-hop resilience, with retry
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		conn, _, err := a.node.DialViaBridged(ctx, parts, addr)
+		if err == nil {
+			return conn, nil
+		}
+		// Fallback to non-bridged
+		conn2, err2 := a.node.DialVia(ctx, parts, addr)
+		if err2 == nil {
+			peerCtx := a.node.PeerCtx(parts[0])
+			return wrapIdleTimeoutCtx(peerCtx, conn2), nil
+		}
+		if time.Now().After(deadline) {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
 	}
-	return wrapIdleTimeoutCtx(peerCtx, conn), nil
 }
 
 // dialExitUDP opens a UDP connection through the specified exit node.

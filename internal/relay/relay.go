@@ -638,8 +638,19 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 		cancel:  childCancel,
 	}
 	n.mu.Lock()
+	oldPeer, hadOld := n.peers[actualName]
 	n.peers[actualName] = p
 	n.mu.Unlock()
+	// Close old QUIC client to force-terminate stale streams (e.g. bridged connections).
+	// Without this, bridgedConn streams hang on Read/Write after QUIC session death.
+	if hadOld {
+		if oldPeer.cancel != nil {
+			oldPeer.cancel()
+		}
+		if oldPeer.client != nil {
+			oldPeer.client.Close()
+		}
+	}
 	defer func() {
 		childCancel()
 		n.mu.Lock()
@@ -817,6 +828,10 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 		<-peerCtx.Done()
 		return
 	}
+	// Cancel old peer context to clean up stale connections
+	if exists && existing.cancel != nil {
+		existing.cancel()
+	}
 	n.peers[name] = p
 	n.mu.Unlock()
 
@@ -858,22 +873,54 @@ func (n *Node) handleListPeers(stream net.Conn) {
 }
 
 func (n *Node) handleVia(ctx context.Context, peerName, targetAddr string, stream net.Conn) {
+	// Parse bridge tag from target address for rebind support
+	actualAddr, bridgeID, isBridged := ParseBridgeAddr(targetAddr)
+
+	// Check if this is a rebind to an existing via bridge
+	if isBridged {
+		log.Printf("[via] checking rebind %s for peer %s", bridgeID, peerName)
+		if rebindConn := n.bridges.TryRebind(bridgeID); rebindConn != nil {
+			log.Printf("[via] rebind accepted: %s (peer %s)", bridgeID, peerName)
+			defer rebindConn.Close()
+			defer stream.Close()
+			go func() { io.Copy(rebindConn, stream); rebindConn.Close() }()
+			io.Copy(stream, rebindConn)
+			return
+		}
+		log.Printf("[via] rebind failed: %s (not found or not suspended)", bridgeID)
+	}
+
+	// New connection: dial the next hop
 	var exitConn net.Conn
 	var err error
 	if parts := strings.Split(peerName, "/"); len(parts) > 1 {
-		exitConn, err = n.DialVia(ctx, parts, targetAddr)
+		exitConn, err = n.DialVia(ctx, parts, actualAddr)
 	} else {
-		exitConn, err = n.DialTCP(ctx, peerName, targetAddr)
+		exitConn, _, err = n.DialTCPBridged(peerName, actualAddr)
+		if err != nil {
+			exitConn, err = n.DialTCP(ctx, peerName, actualAddr)
+		}
 	}
 	if err != nil {
 		stream.Close()
 		return
 	}
-	defer exitConn.Close()
-	defer stream.Close()
-	// exitConn is already a countedConn from DialTCP/DialVia, so just use plain io.Copy
-	go func() { io.Copy(exitConn, stream); exitConn.Close() }()
-	io.Copy(stream, exitConn)
+
+	if isBridged {
+		// Create a bridge so the exit connection survives incoming stream death.
+		// When the incoming via stream dies (prev-hop QUIC failure), the bridge
+		// suspends and waits for a rebind from the previous hop.
+		pipeConn := n.bridges.CreateWithID(bridgeID, actualAddr, exitConn)
+		defer pipeConn.Close()
+		defer stream.Close()
+		go func() { io.Copy(pipeConn, stream); pipeConn.Close() }()
+		io.Copy(stream, pipeConn)
+	} else {
+		defer exitConn.Close()
+		defer stream.Close()
+		go func() { io.Copy(exitConn, stream); exitConn.Close() }()
+		io.Copy(stream, exitConn)
+	}
 }
 
 func (n *Node) deliverDataStream(id string, stream net.Conn) {
@@ -1642,6 +1689,53 @@ func (n *Node) DialIPTun(ctx context.Context, peerName string) (net.Conn, error)
 		p.writeMu.Unlock()
 		return nil, ctx.Err()
 	}
+}
+
+// DialViaBridged dials addr through a chain of peers with bridge support.
+// Returns a bridgedConn that survives first-hop QUIC reconnects.
+func (n *Node) DialViaBridged(ctx context.Context, path []string, addr string) (net.Conn, string, error) {
+	if len(path) < 2 {
+		return nil, "", fmt.Errorf("relay: DialViaBridged requires multi-hop path")
+	}
+	firstPeer := path[0]
+	remaining := strings.Join(path[1:], "/")
+	// Tag the target address with bridge ID so the exit node creates a bridge
+	bridge := n.bridges.Create(firstPeer, addr, nil)
+	taggedAddr := addr + "#bridge=" + bridge.id
+	viaAddr := streamViaPrefix + remaining + "_" + taggedAddr + ":0"
+
+	n.mu.RLock()
+	p, ok := n.peers[firstPeer]
+	n.mu.RUnlock()
+	if !ok {
+		n.bridges.Remove(bridge.id)
+		return nil, "", fmt.Errorf("relay: peer %q not connected", firstPeer)
+	}
+	if p.client == nil {
+		n.bridges.Remove(bridge.id)
+		return nil, "", fmt.Errorf("relay: peer %q is inbound (no client)", firstPeer)
+	}
+
+	cl := p.pickClient()
+	stream, err := cl.TCP(viaAddr)
+	if err != nil {
+		n.bridges.Remove(bridge.id)
+		return nil, "", err
+	}
+	bridge.mu.Lock()
+	bridge.relayStream = stream
+	bridge.mu.Unlock()
+
+	bc := &bridgedConn{
+		bridge:   bridge,
+		node:     n,
+		peerName: firstPeer,
+		stream:   n.wrapConn(firstPeer, stream),
+	}
+	// Store the via address template for rebind
+	bc.viaPath = path
+	bc.viaTargetAddr = addr
+	return bc, bridge.id, nil
 }
 
 // DialVia dials addr through a chain of peers.
