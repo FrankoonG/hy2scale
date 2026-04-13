@@ -73,14 +73,15 @@ type bondSession struct {
 
 // bondPath represents one path in the bond.
 type bondPath struct {
-	name    string   // path string (e.g. "au" or "jp/au")
-	conn    net.Conn // relay stream
-	index   int
-	weight  float64  // 0.0–1.0, proportional send allocation
-	rttMs   float64  // estimated RTT
-	healthy bool
-	txBytes int64
-	mu      sync.Mutex
+	name     string   // path string (e.g. "au" or "jp/au")
+	conn     net.Conn // relay stream
+	index    int
+	weight   float64  // 0.0–1.0, proportional send allocation
+	rttMs    float64  // estimated RTT
+	healthy  bool
+	tornDown bool // true after receiving teardown — don't reopen
+	txBytes  int64
+	mu       sync.Mutex
 }
 
 var bondIDCounter atomic.Uint32
@@ -380,10 +381,11 @@ func (sess *bondSession) runPathReader(bp *bondPath) {
 		length := binary.BigEndian.Uint16(hdr[8:10])
 
 		if seq == bondTeardownSeq {
+			log.Printf("[bond] %d: path %s got teardown (delivered %d seqs)", sess.id, bp.name, sess.reorderNext-1)
 			bp.mu.Lock()
 			bp.healthy = false
+			bp.tornDown = true
 			bp.mu.Unlock()
-			// Signal deliverer to check for teardown completion
 			select {
 			case sess.reorderCh <- struct{}{}:
 			default:
@@ -694,12 +696,13 @@ func (sess *bondSession) runHealthMonitor(a *App) {
 			// Send weight hints to receiver (via path 0, which is always connected)
 			sess.sendWeightHints()
 
-			// Try to reopen dead paths
+			// Try to reopen dead paths (skip torn-down ones)
 			for _, bp := range sess.paths {
 				bp.mu.Lock()
 				dead := !bp.healthy
+				td := bp.tornDown
 				bp.mu.Unlock()
-				if dead {
+				if dead && !td {
 					sess.tryReopenPath(a, bp)
 				}
 			}

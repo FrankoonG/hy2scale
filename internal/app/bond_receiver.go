@@ -201,6 +201,7 @@ func (recv *bondReceiver) readPath(pathIndex int, conn net.Conn) {
 		default:
 		}
 
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 		if _, err := io.ReadFull(conn, hdr[:]); err != nil {
 			if recv.isClosed() {
 				return
