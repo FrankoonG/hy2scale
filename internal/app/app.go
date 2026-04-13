@@ -1274,6 +1274,24 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 
 	// Try hy2scale relay protocol first
 	err = a.node.AttachTo(ctx, cl.Name, c, func(remoteID string) {
+		// Check for name conflict: another client with different addr has the same ID
+		if remoteID != "" {
+			cfg := a.store.Get()
+			for _, other := range cfg.Clients {
+				if other.Addr != cl.Addr && other.Name == remoteID {
+					log.Printf("[%s] NAME CONFLICT: %s (%s) and %s both claim ID %q",
+						a.node.Name(), cl.Addr, cl.Name, other.Addr, remoteID)
+					a.node.SetPeerConflict(remoteID, true)
+					return // don't rename, leave as conflicting
+				}
+			}
+			// Also conflict if remoteID == our own node ID
+			if remoteID == a.node.Name() {
+				log.Printf("[%s] NAME CONFLICT: peer %s claims our own ID %q", a.node.Name(), cl.Addr, remoteID)
+				a.node.SetPeerConflict(remoteID, true)
+				return
+			}
+		}
 		if remoteID != "" && remoteID != cl.Name {
 			log.Printf("[%s] peer %s actual ID: %s", a.node.Name(), cl.Addr, remoteID)
 			oldName := cl.Name

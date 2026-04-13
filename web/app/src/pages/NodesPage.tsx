@@ -151,6 +151,7 @@ export default function NodesPage() {
       return <span className="latency latency-sync">{t('nodes.syncing')}</span>;
     }
     if (n.incompatible) return <span className="latency latency-bad">{t('nodes.incompatible')}</span>;
+    if (n.conflict) return <span className="latency latency-bad">{t('nodes.conflict')}</span>;
     if (n.disabled) return <span className="latency latency-off">{t('nodes.offline')}</span>;
     if (n.is_self) return <span className="latency latency-good">∞</span>;
     if (n.latency_ms === -1) return <span className="latency latency-off">{t('nodes.offline')}</span>;
@@ -203,7 +204,7 @@ export default function NodesPage() {
         // (name + address) block, vertically centered via the tree-cell flex.
         // Self/native rows render a non-interactive disabled chevron (forced
         // down state) so the column stays visually consistent with other rows.
-        const canExpand = !n.is_self && !n.native && !n.incompatible;
+        const canExpand = !n.is_self && !n.native && !n.incompatible && !n.conflict;
         const chevronSvg = (rotated: boolean) => (
           <svg
             viewBox="0 0 24 24"

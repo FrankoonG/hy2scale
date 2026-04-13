@@ -105,6 +105,7 @@ type PeerInfo struct {
 	LatencyMs    int    `json:"latency_ms"`
 	Version      string `json:"version,omitempty"`
 	Incompatible bool   `json:"incompatible,omitempty"`
+	Conflict     bool   `json:"conflict,omitempty"` // true if multiple peers share this name
 }
 
 // NodeVersion is the version string sent during peer registration.
@@ -1026,7 +1027,7 @@ func (n *Node) deliverDataStream(id string, stream net.Conn) {
 func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclient.Client, id, addr string) {
 	// Block requests from incompatible peers
 	n.mu.RLock()
-	if p, ok := n.peers[peerName]; ok && p.info.Incompatible {
+	if p, ok := n.peers[peerName]; ok && isPeerBlocked(p) {
 		n.mu.RUnlock()
 		return
 	}
@@ -1214,7 +1215,7 @@ func (n *Node) PeersOfRaw(peerName string) ([]byte, error) {
 func (n *Node) PeersOf(peerName string) ([]PeerInfo, error) {
 	// Return empty for incompatible peers (no nested discovery)
 	n.mu.RLock()
-	if p, ok := n.peers[peerName]; ok && p.info.Incompatible {
+	if p, ok := n.peers[peerName]; ok && isPeerBlocked(p) {
 		n.mu.RUnlock()
 		return nil, nil
 	}
@@ -1657,6 +1658,20 @@ func (w *hyUDPConnWrapper) SetWriteDeadline(t time.Time) error { return nil }
 // Bridges returns the bridge manager for stream rebinding.
 func (n *Node) Bridges() *bridgeManager { return n.bridges }
 
+// isPeerBlocked checks if a peer should be blocked from relay (incompatible or conflict).
+func isPeerBlocked(p *peer) bool {
+	return p.info.Incompatible || p.info.Conflict
+}
+
+// SetPeerConflict marks a peer as having a name conflict.
+func (n *Node) SetPeerConflict(name string, conflict bool) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if p, ok := n.peers[name]; ok {
+		p.info.Conflict = conflict
+	}
+}
+
 func (n *Node) PeerCtx(peerName string) context.Context {
 	n.mu.RLock()
 	p, ok := n.peers[peerName]
@@ -1676,8 +1691,8 @@ func (n *Node) DialTCPIdx(ctx context.Context, peerName string, addr string, cli
 	if !ok {
 		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
 	}
-	if p.info.Incompatible {
-		return nil, fmt.Errorf("relay: peer %q version %s is incompatible", peerName, p.info.Version)
+	if isPeerBlocked(p) {
+		return nil, fmt.Errorf("relay: peer %q is blocked (incompatible or conflict)", peerName)
 	}
 	if p.client != nil {
 		var cl hyclient.Client
@@ -1702,8 +1717,8 @@ func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.C
 	if !ok {
 		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
 	}
-	if p.info.Incompatible {
-		return nil, fmt.Errorf("relay: peer %q version %s is incompatible", peerName, p.info.Version)
+	if isPeerBlocked(p) {
+		return nil, fmt.Errorf("relay: peer %q is blocked (incompatible or conflict)", peerName)
 	}
 
 	// Outbound peer: use round-robin across available QUIC connections

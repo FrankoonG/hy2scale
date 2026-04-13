@@ -67,6 +67,7 @@
   "nodes.syncing": "syncing",
   "nodes.offline": "offline",
   "nodes.incompatible": "incompatible",
+  "nodes.conflict": "conflict",
   "nodes.initStreamWindow": "Init Stream Window",
   "nodes.maxStreamWindow": "Max Stream Window",
   "nodes.initConnWindow": "Init Conn Window",
