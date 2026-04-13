@@ -402,17 +402,41 @@ func (recv *bondReceiver) doReturnWrite(target net.Conn) {
 				recv.pathTxBytes[pathIdx] += int64(n)
 				recv.mu.Unlock()
 
+				// Set write deadline to detect dead paths quickly
+				bp.SetWriteDeadline(time.Now().Add(5 * time.Second))
 				var hdr [bondFrameHeaderSize]byte
 				binary.BigEndian.PutUint32(hdr[0:4], recv.id)
 				binary.BigEndian.PutUint32(hdr[4:8], seq)
 				binary.BigEndian.PutUint16(hdr[8:10], uint16(len(chunk)))
 
 				if _, werr := bp.Write(hdr[:]); werr != nil {
-					debugLog("[bond-rx] %d: return write header error: %v", recv.id, werr)
+					log.Printf("[bond-rx] %d: path %d dead, redistributing", recv.id, pathIdx)
+					recv.mu.Lock()
+					delete(recv.paths, pathIdx)
+					recv.mu.Unlock()
+					// Retry this chunk on another path
+					_, bp2 := recv.selectReturnPathIdx(int(seq))
+					if bp2 != nil {
+						bp2.Write(hdr[:])
+						bp2.Write(chunk)
+					}
 					continue
 				}
 				if _, werr := bp.Write(chunk); werr != nil {
-					debugLog("[bond-rx] %d: return write data error: %v", recv.id, werr)
+					log.Printf("[bond-rx] %d: path %d dead, redistributing", recv.id, pathIdx)
+					recv.mu.Lock()
+					delete(recv.paths, pathIdx)
+					recv.mu.Unlock()
+					// Header already sent on dead path, need fresh frame on new path
+					_, bp2 := recv.selectReturnPathIdx(int(seq))
+					if bp2 != nil {
+						var hdr2 [bondFrameHeaderSize]byte
+						binary.BigEndian.PutUint32(hdr2[0:4], recv.id)
+						binary.BigEndian.PutUint32(hdr2[4:8], seq)
+						binary.BigEndian.PutUint16(hdr2[8:10], uint16(len(chunk)))
+						bp2.Write(hdr2[:])
+						bp2.Write(chunk)
+					}
 					continue
 				}
 			}

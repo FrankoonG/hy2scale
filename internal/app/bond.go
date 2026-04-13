@@ -199,7 +199,9 @@ func (a *App) dialBond(ctx context.Context, target, addr string) (net.Conn, erro
 
 	// Start readers: read from each path, feed into reorder buffer
 	for _, bp := range opened {
-		go sess.runPathReader(bp)
+		if bp.healthy && bp.conn != nil {
+			go sess.runPathReader(bp)
+		}
 	}
 
 	// Start deliverer: delivers reordered data to bondConn
@@ -344,22 +346,31 @@ func (sess *bondSession) selectPath(seq int) *bondPath {
 
 // runPathReader reads framed chunks from a single path and feeds into reorder buffer.
 func (sess *bondSession) runPathReader(bp *bondPath) {
+	bp.mu.Lock()
+	conn := bp.conn
+	bp.mu.Unlock()
+	if conn == nil {
+		return
+	}
 	var hdr [bondFrameHeaderSize]byte
 	for {
 		if sess.closed.Load() {
 			return
 		}
 
-		if _, err := io.ReadFull(bp.conn, hdr[:]); err != nil {
+		if _, err := io.ReadFull(conn, hdr[:]); err != nil {
 			if sess.closed.Load() {
 				return
 			}
-			log.Printf("[bond] %d: path %s read header error: %v", sess.id, bp.name, err)
+			log.Printf("[bond] %d: path %s read error: %v", sess.id, bp.name, err)
 			bp.mu.Lock()
 			bp.healthy = false
+			// Close the connection to signal the remote receiver
+			if bp.conn != nil {
+				bp.conn.Close()
+			}
 			bp.mu.Unlock()
 			sess.updateWeights()
-			// Skip pending reorder gaps — dead path's chunks will never arrive
 			sess.skipReorderGaps()
 			return
 		}
@@ -397,7 +408,7 @@ func (sess *bondSession) runPathReader(bp *bondPath) {
 		}
 
 		data := make([]byte, length)
-		if _, err := io.ReadFull(bp.conn, data); err != nil {
+		if _, err := io.ReadFull(conn, data); err != nil {
 			debugLog("[bond] %d: path %s read data error: %v", sess.id, bp.name, err)
 			bp.mu.Lock()
 			bp.healthy = false
@@ -451,12 +462,15 @@ func (sess *bondSession) runDeliverer(dst net.Conn) {
 
 		if !delivered {
 			if bufSize > 0 {
-				// Spin waiting for the next expected seq. Scale spin time
-				// with buffer depth: more buffered data → more out-of-order,
-				// need longer wait for the slower path.
-				spinIters := 50 + bufSize*20 // 5ms base + 2ms per buffered chunk
+				// If a path is dead, skip gaps aggressively (no waiting)
+				if sess.hasDeadPaths() {
+					sess.skipReorderGaps()
+					continue
+				}
+				// Spin waiting for the next expected seq
+				spinIters := 50 + bufSize*20
 				if spinIters > 500 {
-					spinIters = 500 // cap at 50ms
+					spinIters = 500
 				}
 				spun := false
 				for i := 0; i < spinIters; i++ {
@@ -516,7 +530,6 @@ func (sess *bondSession) skipReorderGaps() {
 		if _, ok := sess.reorderBuf[sess.reorderNext]; ok {
 			break
 		}
-		// Find the lowest buffered seq ahead of reorderNext
 		var minSeq uint32
 		found := false
 		for s := range sess.reorderBuf {
@@ -533,12 +546,29 @@ func (sess *bondSession) skipReorderGaps() {
 	}
 	sess.reorderMu.Unlock()
 	if skipped > 0 {
-		log.Printf("[bond] %d: skipped %d missing seqs after path death", sess.id, skipped)
+		if skipped > 3 {
+			log.Printf("[bond] %d: skipped %d missing seqs", sess.id, skipped)
+		}
 		select {
 		case sess.reorderCh <- struct{}{}:
 		default:
 		}
 	}
+}
+
+// hasDeadPaths returns true if any bond path is unhealthy.
+func (sess *bondSession) hasDeadPaths() bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	for _, bp := range sess.paths {
+		bp.mu.Lock()
+		h := bp.healthy
+		bp.mu.Unlock()
+		if !h {
+			return true
+		}
+	}
+	return false
 }
 
 // updateWeights recalculates path weights based on RTT.
