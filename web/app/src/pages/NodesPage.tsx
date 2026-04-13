@@ -150,6 +150,7 @@ export default function NodesPage() {
     if (qualifiedPath && syncingNodes.has(qualifiedPath)) {
       return <span className="latency latency-sync">{t('nodes.syncing')}</span>;
     }
+    if (n.incompatible) return <span className="latency latency-bad">{t('nodes.incompatible')}</span>;
     if (n.disabled) return <span className="latency latency-off">{t('nodes.offline')}</span>;
     if (n.is_self) return <span className="latency latency-good">∞</span>;
     if (n.latency_ms === -1) return <span className="latency latency-off">{t('nodes.offline')}</span>;
@@ -189,8 +190,8 @@ export default function NodesPage() {
         );
 
         const versionBadge = n.version && n.version !== node?.version ? (
-          <span className={`version-badge${n.compat ? ' compat' : ''}`} style={{ marginLeft: 6 }}>
-            v{n.version}
+          <span className={`version-badge${n.incompatible ? ' incompatible' : n.compat ? ' compat' : ''}`} style={{ marginLeft: 6 }}>
+            v{n.version}{n.incompatible ? ' ✗' : ''}
           </span>
         ) : null;
 
@@ -202,7 +203,7 @@ export default function NodesPage() {
         // (name + address) block, vertically centered via the tree-cell flex.
         // Self/native rows render a non-interactive disabled chevron (forced
         // down state) so the column stays visually consistent with other rows.
-        const canExpand = !n.is_self && !n.native;
+        const canExpand = !n.is_self && !n.native && !n.incompatible;
         const chevronSvg = (rotated: boolean) => (
           <svg
             viewBox="0 0 24 24"

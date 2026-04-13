@@ -98,17 +98,31 @@ func isLocalRelayStream(addr string) bool {
 
 // PeerInfo describes a connected peer.
 type PeerInfo struct {
-	Name      string `json:"name"`
-	ExitNode  bool   `json:"exit_node"`
-	Direction string `json:"direction"`
-	Native    bool   `json:"native"`
-	LatencyMs int    `json:"latency_ms"` // self-reported latency to this peer
-	Version   string `json:"version,omitempty"`
+	Name         string `json:"name"`
+	ExitNode     bool   `json:"exit_node"`
+	Direction    string `json:"direction"`
+	Native       bool   `json:"native"`
+	LatencyMs    int    `json:"latency_ms"`
+	Version      string `json:"version,omitempty"`
+	Incompatible bool   `json:"incompatible,omitempty"`
 }
 
 // NodeVersion is the version string sent during peer registration.
 // Set by the app package at init time.
 var NodeVersion = "1.0.0"
+
+// MinCompatVersion is the minimum peer version we can work with.
+// Peers below this version are marked incompatible: relay blocked, nested disabled.
+const MinCompatVersion = "1.3.0"
+
+// isCompatible checks if a peer version meets minimum requirements.
+func isCompatible(version string) bool {
+	if version == "" || version == "1.0.0" {
+		return false // old peers that don't send version
+	}
+	// Simple semver major.minor comparison
+	return version >= MinCompatVersion
+}
 
 // peerMeta is extensible metadata exchanged after basic handshake.
 // New fields can be added freely — old peers ignore unknown fields.
@@ -663,9 +677,13 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	writeString(s2cCtrl, n.name)
 
 	// Register peer with remote's actual name
+	compat := isCompatible(remoteMeta.Version)
+	if !compat {
+		log.Printf("[%s] peer %s version %s is incompatible (min %s)", n.name, actualName, remoteMeta.Version, MinCompatVersion)
+	}
 	childCtx, childCancel := context.WithCancel(ctx)
 	p := &peer{
-		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version},
+		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version, Incompatible: !compat},
 		client:  client,
 		waiting: make(map[string]chan net.Conn),
 		ctx:     childCtx,
@@ -842,13 +860,18 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 		return
 	}
 
+	compat := isCompatible(remoteMeta.Version)
+	if !compat {
+		log.Printf("[%s] inbound peer %s version %s is incompatible (min %s)", n.name, name, remoteMeta.Version, MinCompatVersion)
+	}
 	peerCtx, peerCancel := context.WithCancel(ctx)
 	p := &peer{
 		info: PeerInfo{
-			Name:      name,
-			ExitNode:  flags[0]&0x01 != 0,
-			Direction: "inbound",
-			Version:   remoteMeta.Version,
+			Name:         name,
+			ExitNode:     flags[0]&0x01 != 0,
+			Direction:    "inbound",
+			Version:      remoteMeta.Version,
+			Incompatible: !compat,
 		},
 		waiting: make(map[string]chan net.Conn),
 		ctx:     peerCtx,
@@ -1001,6 +1024,14 @@ func (n *Node) deliverDataStream(id string, stream net.Conn) {
 }
 
 func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclient.Client, id, addr string) {
+	// Block requests from incompatible peers
+	n.mu.RLock()
+	if p, ok := n.peers[peerName]; ok && p.info.Incompatible {
+		n.mu.RUnlock()
+		return
+	}
+	n.mu.RUnlock()
+
 	// UDP dial request: addr starts with "udp:"
 	if strings.HasPrefix(addr, "udp:") {
 		n.dialUDPAndStream(ctx, peerName, client, id, addr[4:])
@@ -1181,6 +1212,13 @@ func (n *Node) PeersOfRaw(peerName string) ([]byte, error) {
 
 // PeersOf returns a peer's peers (flat list). Used by the prober for cache.
 func (n *Node) PeersOf(peerName string) ([]PeerInfo, error) {
+	// Return empty for incompatible peers (no nested discovery)
+	n.mu.RLock()
+	if p, ok := n.peers[peerName]; ok && p.info.Incompatible {
+		n.mu.RUnlock()
+		return nil, nil
+	}
+	n.mu.RUnlock()
 	data, err := n.PeersOfRaw(peerName)
 	if err != nil {
 		return nil, err
@@ -1638,6 +1676,9 @@ func (n *Node) DialTCPIdx(ctx context.Context, peerName string, addr string, cli
 	if !ok {
 		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
 	}
+	if p.info.Incompatible {
+		return nil, fmt.Errorf("relay: peer %q version %s is incompatible", peerName, p.info.Version)
+	}
 	if p.client != nil {
 		var cl hyclient.Client
 		if clientIdx >= 0 {
@@ -1660,6 +1701,9 @@ func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.C
 	n.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
+	}
+	if p.info.Incompatible {
+		return nil, fmt.Errorf("relay: peer %q version %s is incompatible", peerName, p.info.Version)
 	}
 
 	// Outbound peer: use round-robin across available QUIC connections
@@ -1775,6 +1819,10 @@ func (n *Node) DialViaBridged(ctx context.Context, path []string, addr string) (
 	if !ok {
 		n.bridges.Remove(bridge.id)
 		return nil, "", fmt.Errorf("relay: peer %q not connected", firstPeer)
+	}
+	if p.info.Incompatible {
+		n.bridges.Remove(bridge.id)
+		return nil, "", fmt.Errorf("relay: peer %q version %s is incompatible", firstPeer, p.info.Version)
 	}
 	if p.client == nil {
 		n.bridges.Remove(bridge.id)

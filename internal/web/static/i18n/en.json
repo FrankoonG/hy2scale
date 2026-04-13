@@ -66,6 +66,7 @@
   "nodes.noHy2Server": "no hy2 server",
   "nodes.syncing": "syncing",
   "nodes.offline": "offline",
+  "nodes.incompatible": "incompatible",
   "nodes.initStreamWindow": "Init Stream Window",
   "nodes.maxStreamWindow": "Max Stream Window",
   "nodes.initConnWindow": "Init Conn Window",
