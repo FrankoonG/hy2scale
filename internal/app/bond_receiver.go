@@ -443,7 +443,7 @@ func (recv *bondReceiver) doReturnWrite(target net.Conn) {
 		}
 		if err != nil {
 			log.Printf("[bond-rx] %d: return writer done, distribution: %v", recv.id, pathBytes)
-			// Send teardown to all paths so client knows the stream is done
+			// Send teardown on all paths — will be delivered in-order after all data
 			recv.mu.Lock()
 			for _, p := range recv.paths {
 				var td [bondFrameHeaderSize]byte
