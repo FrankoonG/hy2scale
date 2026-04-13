@@ -380,25 +380,13 @@ func (sess *bondSession) runPathReader(bp *bondPath) {
 		length := binary.BigEndian.Uint16(hdr[8:10])
 
 		if seq == bondTeardownSeq {
-			debugLog("[bond] %d: path %s received teardown", sess.id, bp.name)
 			bp.mu.Lock()
 			bp.healthy = false
 			bp.mu.Unlock()
-			// Check if all paths got teardown → close session
-			sess.mu.Lock()
-			allDone := true
-			for _, p := range sess.paths {
-				p.mu.Lock()
-				h := p.healthy
-				p.mu.Unlock()
-				if h {
-					allDone = false
-					break
-				}
-			}
-			sess.mu.Unlock()
-			if allDone {
-				sess.close()
+			// Signal deliverer to check for teardown completion
+			select {
+			case sess.reorderCh <- struct{}{}:
+			default:
 			}
 			return
 		}
@@ -489,6 +477,10 @@ func (sess *bondSession) runDeliverer(dst net.Conn) {
 			}
 			timeout := 100 * time.Millisecond
 			if bufSize == 0 {
+				// Check if all paths got teardown — if so, all data delivered
+				if sess.hasDeadPaths() && !sess.hasHealthyPaths() && sess.reorderNext > 1 {
+					sess.close()
+				}
 				timeout = 5 * time.Second
 			}
 			select {
@@ -498,6 +490,20 @@ func (sess *bondSession) runDeliverer(dst net.Conn) {
 					sess.skipReorderGaps()
 				}
 			case <-sess.closeCh:
+				// Final flush: deliver any remaining contiguous data
+				sess.reorderMu.Lock()
+				for {
+					data, ok := sess.reorderBuf[sess.reorderNext]
+					if !ok {
+						break
+					}
+					delete(sess.reorderBuf, sess.reorderNext)
+					sess.reorderNext++
+					sess.reorderMu.Unlock()
+					dst.Write(data)
+					sess.reorderMu.Lock()
+				}
+				sess.reorderMu.Unlock()
 				return
 			}
 		}
@@ -554,6 +560,21 @@ func (sess *bondSession) skipReorderGaps() {
 		default:
 		}
 	}
+}
+
+// hasHealthyPaths returns true if at least one path is healthy.
+func (sess *bondSession) hasHealthyPaths() bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	for _, bp := range sess.paths {
+		bp.mu.Lock()
+		h := bp.healthy
+		bp.mu.Unlock()
+		if h {
+			return true
+		}
+	}
+	return false
 }
 
 // hasDeadPaths returns true if any bond path is unhealthy.
