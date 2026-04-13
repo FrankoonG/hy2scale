@@ -39,8 +39,8 @@ func (n *Node) DialTCPBridged(peerName, addr string) (net.Conn, string, error) {
 	if !ok {
 		return nil, "", fmt.Errorf("relay: peer %q not connected", peerName)
 	}
-	if p.info.Incompatible {
-		return nil, "", fmt.Errorf("relay: peer %q version %s is incompatible", peerName, p.info.Version)
+	if isPeerBlocked(p) {
+		return nil, "", fmt.Errorf("relay: peer %q is blocked (incompatible or conflict)", peerName)
 	}
 	if p.client == nil {
 		return nil, "", fmt.Errorf("relay: peer %q is inbound (no client)", peerName)
