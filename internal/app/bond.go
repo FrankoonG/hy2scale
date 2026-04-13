@@ -141,7 +141,9 @@ func (a *App) dialBond(ctx context.Context, target, addr string) (net.Conn, erro
 
 	var opened []*bondPath
 	for i, p := range paths {
-		conn, err := a.dialPath(ctx, p, bondAddr)
+		// Pin each path to a specific QUIC client index to ensure
+		// duplicate peer paths (multi-IP) use different connections.
+		conn, err := a.dialPathIdx(ctx, p, bondAddr, i)
 		if err != nil {
 			log.Printf("[bond] %s: path %s failed to open: %v", target, p, err)
 			// Add as unhealthy — health monitor will retry later
@@ -368,6 +370,25 @@ func (sess *bondSession) runPathReader(bp *bondPath) {
 
 		if seq == bondTeardownSeq {
 			debugLog("[bond] %d: path %s received teardown", sess.id, bp.name)
+			bp.mu.Lock()
+			bp.healthy = false
+			bp.mu.Unlock()
+			// Check if all paths got teardown → close session
+			sess.mu.Lock()
+			allDone := true
+			for _, p := range sess.paths {
+				p.mu.Lock()
+				h := p.healthy
+				p.mu.Unlock()
+				if h {
+					allDone = false
+					break
+				}
+			}
+			sess.mu.Unlock()
+			if allDone {
+				sess.close()
+			}
 			return
 		}
 
@@ -429,7 +450,30 @@ func (sess *bondSession) runDeliverer(dst net.Conn) {
 		sess.reorderMu.Unlock()
 
 		if !delivered {
-			timeout := 200 * time.Millisecond
+			if bufSize > 0 {
+				// Spin waiting for the next expected seq. Scale spin time
+				// with buffer depth: more buffered data → more out-of-order,
+				// need longer wait for the slower path.
+				spinIters := 50 + bufSize*20 // 5ms base + 2ms per buffered chunk
+				if spinIters > 500 {
+					spinIters = 500 // cap at 50ms
+				}
+				spun := false
+				for i := 0; i < spinIters; i++ {
+					time.Sleep(100 * time.Microsecond)
+					sess.reorderMu.Lock()
+					_, ready := sess.reorderBuf[sess.reorderNext]
+					sess.reorderMu.Unlock()
+					if ready {
+						spun = true
+						break
+					}
+				}
+				if spun {
+					continue
+				}
+			}
+			timeout := 100 * time.Millisecond
 			if bufSize == 0 {
 				timeout = 5 * time.Second
 			}
@@ -621,7 +665,7 @@ func (sess *bondSession) tryReopenPath(a *App, bp *bondPath) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	conn, err := a.dialPath(ctx, bp.name, bondAddr)
+	conn, err := a.dialPathIdx(ctx, bp.name, bondAddr, bp.index)
 	if err != nil {
 		return
 	}

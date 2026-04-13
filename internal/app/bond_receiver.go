@@ -419,6 +419,16 @@ func (recv *bondReceiver) doReturnWrite(target net.Conn) {
 		}
 		if err != nil {
 			log.Printf("[bond-rx] %d: return writer done, distribution: %v", recv.id, pathBytes)
+			// Send teardown to all paths so client knows the stream is done
+			recv.mu.Lock()
+			for _, p := range recv.paths {
+				var td [bondFrameHeaderSize]byte
+				binary.BigEndian.PutUint32(td[0:4], recv.id)
+				binary.BigEndian.PutUint32(td[4:8], bondTeardownSeq)
+				binary.BigEndian.PutUint16(td[8:10], 0)
+				p.Write(td[:])
+			}
+			recv.mu.Unlock()
 			return
 		}
 	}

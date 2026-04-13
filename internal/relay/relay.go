@@ -192,6 +192,29 @@ func (p *peer) pickClient() hyclient.Client {
 	return healthy[idx]
 }
 
+// pickClientIdx returns a specific QUIC client by index.
+// Index 0 = primary, 1+ = extra connections.
+func (p *peer) pickClientIdx(idx int) hyclient.Client {
+	if idx == 0 || len(p.extraConns) == 0 {
+		return p.client
+	}
+	// Build healthy list same as pickClient
+	healthy := []hyclient.Client{p.client}
+	for i, c := range p.extraConns {
+		status := "online"
+		if i < len(p.connStatuses) {
+			status = p.connStatuses[i]
+		}
+		if status == "online" {
+			healthy = append(healthy, c)
+		}
+	}
+	if idx >= len(healthy) {
+		idx = idx % len(healthy)
+	}
+	return healthy[idx]
+}
+
 // ConnCount returns the total number of active QUIC connections for this peer.
 func (p *peer) ConnCount() int {
 	if p.client == nil {
@@ -639,10 +662,16 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	}
 	n.mu.Lock()
 	oldPeer, hadOld := n.peers[actualName]
+	// Carry over extra IP connections from old peer (they have independent QUIC clients)
+	if hadOld && len(oldPeer.extraConns) > 0 {
+		p.extraConns = oldPeer.extraConns
+		p.connAddrs = oldPeer.connAddrs
+		p.connStatuses = oldPeer.connStatuses
+	}
 	n.peers[actualName] = p
 	n.mu.Unlock()
-	// Close old QUIC client to force-terminate stale streams (e.g. bridged connections).
-	// Without this, bridgedConn streams hang on Read/Write after QUIC session death.
+	// Close old PRIMARY QUIC client to force-terminate stale streams.
+	// Extra connections are preserved above.
 	if hadOld {
 		if oldPeer.cancel != nil {
 			oldPeer.cancel()
@@ -1587,6 +1616,31 @@ func (n *Node) PeerCtx(peerName string) context.Context {
 		return context.Background()
 	}
 	return p.ctx
+}
+
+// DialTCPIdx dials TCP through a specific QUIC client index (for bond path pinning).
+// Index -1 means round-robin (same as DialTCP).
+func (n *Node) DialTCPIdx(ctx context.Context, peerName string, addr string, clientIdx int) (net.Conn, error) {
+	n.mu.RLock()
+	p, ok := n.peers[peerName]
+	n.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
+	}
+	if p.client != nil {
+		var cl hyclient.Client
+		if clientIdx >= 0 {
+			cl = p.pickClientIdx(clientIdx)
+		} else {
+			cl = p.pickClient()
+		}
+		conn, err := cl.TCP(addr)
+		if err != nil {
+			return nil, err
+		}
+		return n.wrapConn(peerName, conn), nil
+	}
+	return n.DialTCP(ctx, peerName, addr)
 }
 
 func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.Conn, error) {
