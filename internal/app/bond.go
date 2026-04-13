@@ -93,7 +93,7 @@ func (a *App) dialBond(ctx context.Context, target, addr string) (net.Conn, erro
 		return nil, fmt.Errorf("bond: no paths to %s", target)
 	}
 	if len(paths) == 1 {
-		debugLog("[bond] %s: only 1 path, using direct", target)
+		log.Printf("[bond] %s: only 1 path (%d conn), using direct", target, a.node.PeerConnCount(target))
 		return a.dialPath(ctx, paths[0], addr)
 	}
 
@@ -479,8 +479,9 @@ func (sess *bondSession) runDeliverer(dst net.Conn) {
 			}
 			timeout := 100 * time.Millisecond
 			if bufSize == 0 {
-				// Check if all paths got teardown — if so, all data delivered
-				if sess.hasDeadPaths() && !sess.hasHealthyPaths() && sess.reorderNext > 1 {
+				hp := sess.hasHealthyPaths()
+				if !hp && sess.reorderNext > 1 {
+					log.Printf("[bond] %d: all paths done, closing (delivered %d seqs)", sess.id, sess.reorderNext-1)
 					sess.close()
 				}
 				timeout = 5 * time.Second
@@ -730,6 +731,12 @@ func (sess *bondSession) tryReopenPath(a *App, bp *bondPath) {
 	}
 
 	bp.mu.Lock()
+	if bp.tornDown {
+		// Path was torn down while we were reconnecting — discard
+		bp.mu.Unlock()
+		conn.Close()
+		return
+	}
 	oldConn := bp.conn
 	bp.conn = conn
 	bp.healthy = true
