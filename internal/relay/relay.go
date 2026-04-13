@@ -105,7 +105,7 @@ type PeerInfo struct {
 	LatencyMs    int    `json:"latency_ms"`
 	Version      string `json:"version,omitempty"`
 	Incompatible bool   `json:"incompatible,omitempty"`
-	Conflict     bool   `json:"conflict,omitempty"` // true if multiple peers share this name
+	Conflict     bool   `json:"conflict,omitempty"`
 }
 
 // NodeVersion is the version string sent during peer registration.
@@ -306,6 +306,7 @@ type Node struct {
 	latencies      map[string]int
 	addrLatencies  map[string]map[string]int // peer → addr → ms
 	peersOfCache map[string][]PeerInfo // cached PeersOf results from prober
+	conflicts    map[string]string    // client addr → conflicting name
 
 	// Injected handler: returns rich peer list JSON (with children) for nested discovery.
 	// If nil, falls back to flat n.Peers() JSON.
@@ -668,6 +669,19 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	if onID != nil {
 		onID(actualName)
 	}
+	// Check if onID flagged a conflict — abort registration to avoid overwriting real peer
+	n.mu.RLock()
+	hasConflict := false
+	for _, cname := range n.conflicts {
+		if cname == actualName {
+			hasConflict = true
+			break
+		}
+	}
+	n.mu.RUnlock()
+	if hasConflict {
+		return fmt.Errorf("relay: peer %s has name conflict (claims %q)", peerName, actualName)
+	}
 
 	// Open s2c ctrl for dial requests from remote
 	s2cCtrl, err := client.TCP(streamCtrlS2C)
@@ -1027,7 +1041,7 @@ func (n *Node) deliverDataStream(id string, stream net.Conn) {
 func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclient.Client, id, addr string) {
 	// Block requests from incompatible peers
 	n.mu.RLock()
-	if p, ok := n.peers[peerName]; ok && isPeerBlocked(p) {
+	if p, ok := n.peers[peerName]; ok && n.isPeerBlocked(p) {
 		n.mu.RUnlock()
 		return
 	}
@@ -1150,10 +1164,18 @@ func (n *Node) Peers() []PeerInfo {
 	n.latencyMu.RLock()
 	defer n.latencyMu.RUnlock()
 	result := make([]PeerInfo, 0, len(n.peers))
+	// Build set of conflicting peer names
+	conflictNames := make(map[string]bool)
+	for _, name := range n.conflicts {
+		conflictNames[name] = true
+	}
 	for name, p := range n.peers {
 		info := p.info
 		if ms, ok := n.latencies[name]; ok {
 			info.LatencyMs = ms
+		}
+		if conflictNames[name] {
+			info.Conflict = true
 		}
 		result = append(result, info)
 	}
@@ -1215,7 +1237,7 @@ func (n *Node) PeersOfRaw(peerName string) ([]byte, error) {
 func (n *Node) PeersOf(peerName string) ([]PeerInfo, error) {
 	// Return empty for incompatible peers (no nested discovery)
 	n.mu.RLock()
-	if p, ok := n.peers[peerName]; ok && isPeerBlocked(p) {
+	if p, ok := n.peers[peerName]; ok && n.isPeerBlocked(p) {
 		n.mu.RUnlock()
 		return nil, nil
 	}
@@ -1658,18 +1680,49 @@ func (w *hyUDPConnWrapper) SetWriteDeadline(t time.Time) error { return nil }
 // Bridges returns the bridge manager for stream rebinding.
 func (n *Node) Bridges() *bridgeManager { return n.bridges }
 
-// isPeerBlocked checks if a peer should be blocked from relay (incompatible or conflict).
-func isPeerBlocked(p *peer) bool {
-	return p.info.Incompatible || p.info.Conflict
+// isPeerBlocked checks if a peer should be blocked from relay.
+// Must be called with n.mu held (at least RLock).
+func (n *Node) isPeerBlocked(p *peer) bool {
+	if p.info.Incompatible {
+		return true
+	}
+	// Check name conflict
+	for _, conflictName := range n.conflicts {
+		if conflictName == p.info.Name {
+			return true
+		}
+	}
+	return false
 }
 
-// SetPeerConflict marks a peer as having a name conflict.
-func (n *Node) SetPeerConflict(name string, conflict bool) {
+// SetPeerConflict records a name conflict for a client address.
+// The conflict is tracked separately from the peer entry to avoid
+// marking legitimate peers as conflicting.
+func (n *Node) SetPeerConflict(clientAddr string, conflictName string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if p, ok := n.peers[name]; ok {
-		p.info.Conflict = conflict
+	if n.conflicts == nil {
+		n.conflicts = make(map[string]string)
 	}
+	if conflictName == "" {
+		delete(n.conflicts, clientAddr)
+	} else {
+		n.conflicts[clientAddr] = conflictName
+	}
+}
+
+// PeerConflicts returns a map of client addr → conflicting name.
+func (n *Node) PeerConflicts() map[string]string {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	if len(n.conflicts) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(n.conflicts))
+	for k, v := range n.conflicts {
+		result[k] = v
+	}
+	return result
 }
 
 func (n *Node) PeerCtx(peerName string) context.Context {
@@ -1691,7 +1744,7 @@ func (n *Node) DialTCPIdx(ctx context.Context, peerName string, addr string, cli
 	if !ok {
 		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
 	}
-	if isPeerBlocked(p) {
+	if n.isPeerBlocked(p) {
 		return nil, fmt.Errorf("relay: peer %q is blocked (incompatible or conflict)", peerName)
 	}
 	if p.client != nil {
@@ -1717,7 +1770,7 @@ func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.C
 	if !ok {
 		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
 	}
-	if isPeerBlocked(p) {
+	if n.isPeerBlocked(p) {
 		return nil, fmt.Errorf("relay: peer %q is blocked (incompatible or conflict)", peerName)
 	}
 

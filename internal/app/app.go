@@ -1276,21 +1276,26 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 	err = a.node.AttachTo(ctx, cl.Name, c, func(remoteID string) {
 		// Check for name conflict: another client with different addr has the same ID
 		if remoteID != "" {
+			isConflict := false
 			cfg := a.store.Get()
 			for _, other := range cfg.Clients {
 				if other.Addr != cl.Addr && other.Name == remoteID {
 					log.Printf("[%s] NAME CONFLICT: %s (%s) and %s both claim ID %q",
 						a.node.Name(), cl.Addr, cl.Name, other.Addr, remoteID)
-					a.node.SetPeerConflict(remoteID, true)
-					return // don't rename, leave as conflicting
+					isConflict = true
+					break
 				}
 			}
-			// Also conflict if remoteID == our own node ID
 			if remoteID == a.node.Name() {
 				log.Printf("[%s] NAME CONFLICT: peer %s claims our own ID %q", a.node.Name(), cl.Addr, remoteID)
-				a.node.SetPeerConflict(remoteID, true)
-				return
+				isConflict = true
 			}
+			if isConflict {
+				a.node.SetPeerConflict(cl.Addr, remoteID)
+				return // don't rename
+			}
+			// No conflict — clear any previous conflict for this addr
+			a.node.SetPeerConflict(cl.Addr, "")
 		}
 		if remoteID != "" && remoteID != cl.Name {
 			log.Printf("[%s] peer %s actual ID: %s", a.node.Name(), cl.Addr, remoteID)
