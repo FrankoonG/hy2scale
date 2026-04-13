@@ -66,6 +66,7 @@
   "nodes.noHy2Server": "无 hy2 服务器",
   "nodes.syncing": "同步中",
   "nodes.offline": "离线",
+  "nodes.incompatible": "不兼容",
   "nodes.initStreamWindow": "初始流窗口",
   "nodes.maxStreamWindow": "最大流窗口",
   "nodes.initConnWindow": "初始连接窗口",

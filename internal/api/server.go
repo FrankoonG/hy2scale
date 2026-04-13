@@ -617,6 +617,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	connected := make(map[string]bool)
 	nativeMap := make(map[string]bool)
 	versionMap := make(map[string]string)
+	incompatMap := make(map[string]bool)
 	for _, p := range peers {
 		connected[p.Name] = true
 		if p.Native {
@@ -625,25 +626,29 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		if p.Version != "" {
 			versionMap[p.Name] = p.Version
 		}
+		if p.Incompatible {
+			incompatMap[p.Name] = true
+		}
 	}
 
 	type treeNode struct {
-		Name       string            `json:"name"`
-		Addr       string            `json:"addr,omitempty"`
-		Addrs      []string          `json:"addrs,omitempty"`
-		IPStatuses []relay.IPStatus  `json:"ip_statuses,omitempty"`
-		ExitNode   bool              `json:"exit_node"`
-		Direction string          `json:"direction"`
-		Connected bool            `json:"connected"`
-		Disabled  bool            `json:"disabled"`
-		Nested    bool            `json:"nested"`
-		Native    bool            `json:"native,omitempty"`
-		Version   string          `json:"version,omitempty"`
-		LatencyMs int             `json:"latency_ms"`
-		TxRate    uint64          `json:"tx_rate"`
-		RxRate    uint64          `json:"rx_rate"`
-		IsSelf    bool            `json:"is_self,omitempty"`
-		Children  []topoSubPeer   `json:"children,omitempty"`
+		Name         string            `json:"name"`
+		Addr         string            `json:"addr,omitempty"`
+		Addrs        []string          `json:"addrs,omitempty"`
+		IPStatuses   []relay.IPStatus  `json:"ip_statuses,omitempty"`
+		ExitNode     bool              `json:"exit_node"`
+		Direction    string            `json:"direction"`
+		Connected    bool              `json:"connected"`
+		Disabled     bool              `json:"disabled"`
+		Nested       bool              `json:"nested"`
+		Native       bool              `json:"native,omitempty"`
+		Version      string            `json:"version,omitempty"`
+		Incompatible bool              `json:"incompatible,omitempty"`
+		LatencyMs    int               `json:"latency_ms"`
+		TxRate       uint64            `json:"tx_rate"`
+		RxRate       uint64            `json:"rx_rate"`
+		IsSelf       bool              `json:"is_self,omitempty"`
+		Children     []topoSubPeer     `json:"children,omitempty"`
 	}
 
 	disabledMap := make(map[string]bool)
@@ -774,10 +779,13 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		}
 		tn.Native = nativeMap[name]
 		tn.Version = versionMap[name]
-		if tn.Native {
+		tn.Incompatible = incompatMap[name]
+		if tn.Incompatible {
+			tn.Nested = false // incompatible peers cannot use nested
+		} else if tn.Native {
 			tn.Nested = false
 		} else if pc, ok := cfg.Peers[name]; ok && pc.Nested {
-			tn.Nested = true // explicitly enabled
+			tn.Nested = true
 		}
 		if tn.Connected && tn.Direction == "outbound" {
 			tn.LatencyMs = latencyCache[name]
@@ -790,7 +798,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Load sub-peers from background cache only (never blocks)
-		if tn.Nested && tn.Connected && !tn.Native {
+		if tn.Nested && tn.Connected && !tn.Native && !tn.Incompatible {
 			children := filterSelfFromChildren(s.getCachedSubPeers(name), cfg.NodeID)
 			tn.Children = filterChildrenByNestedConfig(children, name, cfg)
 		}

@@ -52,6 +52,7 @@
 .version-badge{display:inline-block;padding:1px 8px;font-size:10px;font-weight:600;color:#2ecc71;background:rgba(46,204,113,0.08);border:1px solid rgba(46,204,113,0.35);border-radius:10px;line-height:16px}
 .version-badge.limited{color:#e74c3c;background:rgba(231,76,60,0.08);border-color:rgba(231,76,60,0.35)}
 .version-badge.compat{color:#f39c12;background:rgba(243,156,18,0.08);border-color:rgba(243,156,18,0.35)}
+.version-badge.incompatible{color:#e74c3c;background:rgba(231,76,60,0.08);border-color:rgba(231,76,60,0.35)}
 
 /* ====== Stats Grid ====== */
 .hy-stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
