@@ -1284,10 +1284,29 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 						break
 					}
 				}
-				// Migrate Peers config (nested flag etc.) to new name
-				if pc, ok := cfg.Peers[oldName]; ok {
-					cfg.Peers[remoteID] = pc
-					delete(cfg.Peers, oldName)
+				// Rename all references to old peer ID throughout config
+				renamePeerRef := func(s string) string {
+					return strings.ReplaceAll(s, oldName, remoteID)
+				}
+				// Peers config (nested flags, path-based keys)
+				newPeers := make(map[string]PeerConfig)
+				for k, v := range cfg.Peers {
+					newPeers[renamePeerRef(k)] = v
+				}
+				cfg.Peers = newPeers
+				// Proxy exit_via and exit_paths
+				for i := range cfg.Proxies {
+					cfg.Proxies[i].ExitVia = renamePeerRef(cfg.Proxies[i].ExitVia)
+					for j := range cfg.Proxies[i].ExitPaths {
+						cfg.Proxies[i].ExitPaths[j] = renamePeerRef(cfg.Proxies[i].ExitPaths[j])
+					}
+				}
+				// User exit_via and exit_paths
+				for i := range cfg.Users {
+					cfg.Users[i].ExitVia = renamePeerRef(cfg.Users[i].ExitVia)
+					for j := range cfg.Users[i].ExitPaths {
+						cfg.Users[i].ExitPaths[j] = renamePeerRef(cfg.Users[i].ExitPaths[j])
+					}
 				}
 			})
 			// Clean up old name from relay
