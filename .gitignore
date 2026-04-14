@@ -42,6 +42,7 @@ prompts/
 *.png
 *.tar
 *.tar.gz
+!internal/platform/ikuai-iptables/bundle.tar.gz
 *.log
 test_*.py
 debug_*.py
