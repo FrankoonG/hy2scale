@@ -16,6 +16,7 @@ export default function SettingsPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const logout = useAuthStore((s) => s.logout);
+  const forcePasswordChange = useAuthStore((s) => s.forcePasswordChange);
 
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getUISettings });
   const { data: certs = [] } = useQuery({ queryKey: ['certs'], queryFn: api.getCerts });
@@ -161,25 +162,33 @@ export default function SettingsPage() {
       <Tabs
         items={[
           { key: 'system', label: t('settings.system') },
-          { key: 'web', label: t('settings.web') },
-          { key: 'upgrade', label: t('settings.upgrade') },
+          { key: 'web', label: t('settings.web'), disabled: forcePasswordChange },
+          { key: 'upgrade', label: t('settings.upgrade'), disabled: forcePasswordChange },
         ]}
         activeKey={activeTab}
-        onChange={(key) => setActiveTab(key as 'system' | 'web' | 'upgrade')}
+        onChange={(key) => { if (!forcePasswordChange || key === 'system') setActiveTab(key as any); }}
       />
 
       <TabPanel activeKey={activeTab} keys={['system', 'web', 'upgrade']}>
         {activeTab === 'system' ? (
           <>
-            {/* System: DNS */}
-            <Card title={t('settings.system')}>
-              <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
-                <FormGroup label={t('settings.dns')}>
-                  <Input value={dns} onChange={(e) => setDns(e.target.value)} placeholder="8.8.8.8,1.1.1.1" />
-                </FormGroup>
-                <Button variant="primary" onClick={handleSaveDns} loading={savingDns} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
+            {forcePasswordChange && (
+              <div style={{ padding: '12px 16px', background: 'var(--orange-light, #fff3e0)', border: '1px solid var(--orange, #f59e0b)', borderRadius: 'var(--radius-sm)', fontSize: 13, color: 'var(--text)', marginBottom: 4 }}>
+                {t('settings.forcePasswordChange')}
               </div>
-            </Card>
+            )}
+
+            {/* System: DNS — hidden during forced password change */}
+            {!forcePasswordChange && (
+              <Card title={t('settings.system')}>
+                <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <FormGroup label={t('settings.dns')}>
+                    <Input value={dns} onChange={(e) => setDns(e.target.value)} placeholder="8.8.8.8,1.1.1.1" />
+                  </FormGroup>
+                  <Button variant="primary" onClick={handleSaveDns} loading={savingDns} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
+                </div>
+              </Card>
+            )}
 
             {/* Credentials */}
             <Card title={t('settings.changePassword')}>

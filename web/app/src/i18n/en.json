@@ -364,6 +364,7 @@
   "settings.upgradeFailed": "Upgrade failed",
   "settings.archMismatch": "Architecture mismatch",
   "settings.upgradeNotAvailable": "Web upgrade is only available in Docker deployments. To upgrade a bare binary installation, replace the binary file manually and restart the service.",
+  "settings.forcePasswordChange": "You are using the default password. Please change your password before continuing.",
   "nodes.addAddress": "+ Add address",
   "import.title": "Import",
   "import.export": "Export",

@@ -340,7 +340,9 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.sessions[token] = time.Now().Add(s.sessionTimeout())
 	s.mu.Unlock()
-	writeJSON(w, map[string]string{"token": token})
+	// Check if password is still the default (admin)
+	forceChange := body.Password == sha256Hex("admin")
+	writeJSON(w, map[string]any{"token": token, "force_password_change": forceChange})
 }
 
 func (s *Server) sessionTimeout() time.Duration {

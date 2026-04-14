@@ -10,7 +10,7 @@ export type { NodeConfig, Stats, TopologyNode, ClientEntry, UserConfig, Session,
 
 // Auth
 export const login = (username: string, password: string) =>
-  api<{ token: string }>('/login', { method: 'POST', body: JSON.stringify({ username, password }) });
+  api<{ token: string; force_password_change?: boolean }>('/login', { method: 'POST', body: JSON.stringify({ username, password }) });
 
 // Node
 export const getNode = () => api<NodeConfig>('/node');

@@ -364,6 +364,7 @@
   "settings.upgradeFailed": "升级失败",
   "settings.archMismatch": "架构不匹配",
   "settings.upgradeNotAvailable": "网页升级仅在 Docker 部署中可用。若以二进制方式运行，请手动替换二进制文件并重启服务。",
+  "settings.forcePasswordChange": "您正在使用默认密码，请先修改密码后再继续操作。",
   "nodes.addAddress": "+ 添加地址",
   "import.title": "导入",
   "import.export": "导出",
