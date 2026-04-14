@@ -164,6 +164,23 @@ export const uploadRestore = async (file: File) => {
   return res.json();
 };
 
+// Upgrade
+export const getSystemArch = () => api<{ os: string; arch: string; version: string; binary: string; in_docker: boolean }>('/system/arch');
+export const uploadUpgrade = async (file: File) => {
+  const base = (window as any).__BASE__ || '';
+  const token = sessionStorage.getItem('token:' + base);
+  const res = await fetch(`${base}/api/upgrade`, {
+    method: 'POST',
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      'Content-Type': 'application/gzip',
+    },
+    body: file,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+};
+
 // Port Check
 export const checkPorts = (ports: PortConflict[]) =>
   api<{ conflicts: PortConflict[] }>('/check-ports', { method: 'POST', body: JSON.stringify({ ports }) });
