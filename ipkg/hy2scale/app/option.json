@@ -1,0 +1,28 @@
+[
+  {
+    "default": 5565,
+    "min": 1,
+    "max": 65535,
+    "attrname": "APP_PORT_WEB",
+    "label": {
+      "en": "Web/API Port (TCP)",
+      "zh": "管理端口 (TCP)"
+    },
+    "required": true,
+    "scope": "config",
+    "type": "integer"
+  },
+  {
+    "default": 5565,
+    "min": 1,
+    "max": 65535,
+    "attrname": "APP_PORT_HY2",
+    "label": {
+      "en": "Relay Port (UDP)",
+      "zh": "中继端口 (UDP)"
+    },
+    "required": true,
+    "scope": "config",
+    "type": "integer"
+  }
+]

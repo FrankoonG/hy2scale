@@ -1,0 +1,17 @@
+{
+  "name": "hy2scale",
+  "version": "1.2.3",
+  "display_name": "Hy2Scale",
+  "image": "hy2scale:ikuai",
+  "description": "Decentralized relay network with L2TP/IKEv2/WireGuard VPN, rules engine, and TUN IP forwarding",
+  "type": "1",
+  "maintainer": "FrankoonG",
+  "maintainer_url": "https://github.com/FrankoonG/hy2scale",
+  "distributor": "FrankoonG",
+  "distributor_url": "https://github.com/FrankoonG/hy2scale",
+  "requirements": {
+    "memory": "128MB",
+    "storage": "100MB",
+    "os_min_version": "4.0.0"
+  }
+}

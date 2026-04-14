@@ -1,0 +1,18 @@
+v1.2.2
+- Added TUN mode IP packet forwarding (rules advanced mode)
+- Fixed TCP proxy splitting connections breaking ENC-RTSP authentication
+- Fixed rules UDP proxy conntrack return routing
+- Added rules Advanced tab with TUN toggle and mode selector
+- Support TUN/redirect hot switching
+
+v1.2.1
+- Added rules UDP forwarding support
+- Added WireGuard UDP exit routing
+- Fixed idle timeout causing stuck requests
+- Fixed multi-hop UDP relay
+
+v1.2.0
+- Added IP/domain routing rules engine
+- Added WireGuard userspace VPN
+- IKEv2 compat mode (xfrm bridge)
+- L2TP TUN capture mode
