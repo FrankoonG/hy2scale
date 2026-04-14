@@ -22,8 +22,14 @@ const MAX_FORCE = 1.0;            // max from rapid clicks
 
 // Force → parameters
 function rippleMaxRadius(force: number) { return 40 + force * 360; }   // ~40px min – 400px max
-function rippleExpandTime(force: number) { return 0.6 + force * 1.4; } // 0.6s – 2.0s expand duration
-function rippleFadeTime(force: number) { return 1.5 + force * 2.5; }   // 1.5s – 4s fade after expand
+const HALO_RATIO = 0.5;            // halo extends 50% beyond maxR
+function rippleTotalRadius(force: number) { return rippleMaxRadius(force) * (1 + HALO_RATIO); }
+// Single continuous expansion time covering core + halo
+function rippleExpandTime(force: number) { return 0.8 + force * 2.0; } // 0.8s – 2.8s
+// Fade starts when core reaches maxR (which is partway through the easing curve)
+function rippleFadeTime(force: number) { return 1.5 + force * 2.5; }
+// Core reaches maxR at this fraction of the total easing curve
+function rippleCorePhase(force: number) { return rippleMaxRadius(force) / rippleTotalRadius(force); }
 function rippleLife(force: number) { return rippleExpandTime(force) + rippleFadeTime(force); }
 // Ease-out cubic: fast start, gentle deceleration
 function easeOutCubic(t: number) { return 1 - Math.pow(1 - t, 3); }
@@ -125,51 +131,42 @@ export default function LoginBackground() {
       for (const rip of ripples.current) {
         const life = rippleLife(rip.force);
         const maxR = rippleMaxRadius(rip.force);
+        const totalR = rippleTotalRadius(rip.force);
         const expandT = rippleExpandTime(rip.force);
         const fadeT = rippleFadeTime(rip.force);
+        const coreFrac = rippleCorePhase(rip.force); // ~0.667
         const age = (now - rip.time) / 1000;
         if (age > life) continue;
 
         const dist = Math.sqrt((px - rip.x) ** 2 + (py - rip.y) ** 2);
 
-        // Non-linear expansion: ease-out cubic (fast burst → gentle settle)
-        // During expand phase: 0→maxR with easing
-        // During fade phase: continues beyond maxR as halo (also eased)
+        // Single continuous ease-out expansion: 0 → totalR over expandT
+        // Core (maxR) is reached at coreFrac of the curve, halo continues beyond
         const expandProgress = Math.min(age / expandT, 1);
-        const easedProgress = easeOutCubic(expandProgress);
-        const coreR = easedProgress * maxR;
-        const haloExtra = maxR * 0.5;
-        // Halo continues expanding during fade phase with same easing feel
-        let currentR: number;
-        if (age <= expandT) {
-          currentR = coreR;
-        } else {
-          const fadeProgress = Math.min((age - expandT) / fadeT, 1);
-          currentR = maxR + easeOutCubic(fadeProgress) * haloExtra;
-        }
-        const totalR = maxR + haloExtra;
+        const currentR = easeOutCubic(expandProgress) * totalR;
 
-        if (dist > Math.min(currentR, totalR)) continue;
+        if (dist > currentR) continue;
 
-        const discR = Math.min(coreR, maxR); // current disc edge
+        // Determine if this point is in core zone or halo zone
         let spatialFade: number;
-        if (dist <= discR) {
-          // Core zone: inside the main disc
-          const edgeSoft = dist > discR - 20 ? (discR - dist) / 20 : 1;
+        if (dist <= maxR) {
+          // Core zone: full intensity with soft edge at frontier
+          const frontier = Math.min(currentR, maxR);
+          const edgeSoft = dist > frontier - 20 ? Math.max(0, (frontier - dist) / 20) : 1;
           spatialFade = edgeSoft;
-        } else if (age > expandT && dist <= currentR) {
-          // Halo zone: beyond maxR, only during fade phase
-          const haloFrontier = currentR - maxR;
-          const haloPos = haloFrontier > 0 ? (dist - maxR) / haloFrontier : 1;
-          spatialFade = 0.55 * (1 - smoothstep(haloPos));
         } else {
-          continue;
+          // Halo zone: beyond maxR, gradient from ~0.55 → 0
+          const haloPos = (dist - maxR) / (totalR - maxR);
+          spatialFade = 0.55 * (1 - smoothstep(haloPos));
         }
 
-        // Full brightness during expand; uniform fade after expand completes
+        // Fade starts when core reaches maxR (coreFrac of easing = when easedProgress passes coreFrac)
+        // Find the time when easeOutCubic(t/expandT) * totalR = maxR
+        // i.e. easeOutCubic(t/expandT) = coreFrac → solve for coreTime
+        const coreReachTime = expandT * (1 - Math.pow(1 - coreFrac, 1/3));
         let lifeFade = 1;
-        if (age > expandT) {
-          lifeFade = 1 - smoothstep((age - expandT) / fadeT);
+        if (age > coreReachTime) {
+          lifeFade = 1 - smoothstep((age - coreReachTime) / fadeT);
         }
 
         const edgeFade = Math.min(1, age / RIPPLE_FADE_IN);
