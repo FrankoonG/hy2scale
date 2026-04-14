@@ -11,31 +11,24 @@ const HUB_INNER = 6.5;
 const BASE_ALPHA = 0.022;
 const MAX_ALPHA = 0.36;
 
-// Ripple — force controls range and duration
-const RIPPLE_WIDTH = 100;         // ring thickness (px) at force=1
-const RIPPLE_FADE_IN = 0.25;      // leading edge fade-in (s)
-const AUTO_INTERVAL = 2200;       // ms between auto-ripples
-
-// Force ranges
-const MIN_FORCE = 0.12;           // auto-ripple minimum
-const MAX_FORCE = 1.0;            // max from rapid clicks
+const AUTO_INTERVAL = 2200;
+const MIN_FORCE = 0.12;
+const MAX_FORCE = 1.0;
+const COMBO_WINDOW = 600;
 
 // Force → parameters
-function rippleMaxRadius(force: number) { return 40 + force * 360; }   // ~40px min – 400px max
-const HALO_RATIO = 0.5;            // halo extends 50% beyond maxR
+function rippleMaxRadius(force: number) { return 40 + force * 360; }
+const HALO_RATIO = 0.5;
 function rippleTotalRadius(force: number) { return rippleMaxRadius(force) * (1 + HALO_RATIO); }
-// Single continuous expansion time covering core + halo
-function rippleExpandTime(force: number) { return 0.8 + force * 2.0; } // 0.8s – 2.8s
-// Fade starts when core reaches maxR (which is partway through the easing curve)
-function rippleFadeTime(force: number) { return 1.5 + force * 2.5; }
-// Core reaches maxR at this fraction of the total easing curve
+function rippleExpandTime(force: number) { return 0.8 + force * 2.0; }
 function rippleCorePhase(force: number) { return rippleMaxRadius(force) / rippleTotalRadius(force); }
-function rippleLife(force: number) { return rippleExpandTime(force) + rippleFadeTime(force); }
-// Ease-out cubic: fast start, gentle deceleration
 function easeOutCubic(t: number) { return 1 - Math.pow(1 - t, 3); }
 
-// Click combo tracking
-const COMBO_WINDOW = 600;         // ms — clicks within this window stack force
+// Glow decay: per-frame multiplier — controls how fast circles fade after being lit
+// ~0.992 at 60fps → halves in ~1.4s; ~0.996 → halves in ~2.9s
+const GLOW_DECAY = 0.994;
+// How fast glow rises when a ripple paints it (lerp toward target per frame)
+const GLOW_RISE = 0.25;
 
 function hash(x: number, y: number, seed: number) {
   let h = (x * 374761393 + y * 668265263 + seed * 1274126177) | 0;
@@ -44,7 +37,7 @@ function hash(x: number, y: number, seed: number) {
 }
 
 interface Link { a: number; b: number; width: number; }
-interface Circle { x: number; y: number; idx: number; isHub: boolean; }
+interface Circle { x: number; y: number; idx: number; isHub: boolean; glow: number; }
 interface Ripple { x: number; y: number; time: number; force: number; }
 
 export default function LoginBackground() {
@@ -60,6 +53,7 @@ export default function LoginBackground() {
 
     let circles: Circle[] = [];
     let links: Link[] = [];
+    let linkGlows: Float32Array = new Float32Array(0);
 
     function buildGrid() {
       circles = [];
@@ -77,6 +71,7 @@ export default function LoginBackground() {
             y: r * GRID,
             idx: idx++,
             isHub: hash(c, r, 7) < 0.12,
+            glow: 0,
           });
         }
       }
@@ -100,6 +95,7 @@ export default function LoginBackground() {
           links.push({ a: i, b: j, width: w });
         }
       }
+      linkGlows = new Float32Array(links.length);
     }
 
     function resize() {
@@ -112,10 +108,6 @@ export default function LoginBackground() {
       buildGrid();
     }
 
-    function smoothstep(t: number) {
-      return t * t * (3 - 2 * t);
-    }
-
     function clipToCircle(
       fromX: number, fromY: number, toX: number, toY: number, r: number
     ): [number, number] {
@@ -126,55 +118,30 @@ export default function LoginBackground() {
       return [toX - (dx / len) * r, toY - (dy / len) * r];
     }
 
-    function getIntensity(px: number, py: number, now: number): number {
-      let maxI = 0;
-      for (const rip of ripples.current) {
-        const life = rippleLife(rip.force);
-        const maxR = rippleMaxRadius(rip.force);
-        const totalR = rippleTotalRadius(rip.force);
-        const expandT = rippleExpandTime(rip.force);
-        const fadeT = rippleFadeTime(rip.force);
-        const coreFrac = rippleCorePhase(rip.force); // ~0.667
-        const age = (now - rip.time) / 1000;
-        if (age > life) continue;
+    // Calculate the "paint" intensity a ripple wants to apply at a given point RIGHT NOW
+    // This is only used to determine what to paint — not the final displayed value
+    function ripplePaint(rip: Ripple, px: number, py: number, now: number): number {
+      const maxR = rippleMaxRadius(rip.force);
+      const totalR = rippleTotalRadius(rip.force);
+      const expandT = rippleExpandTime(rip.force);
+      const age = (now - rip.time) / 1000;
+      if (age > expandT) return 0; // only paint during expansion, decay handles the rest
 
-        const dist = Math.sqrt((px - rip.x) ** 2 + (py - rip.y) ** 2);
+      const dist = Math.sqrt((px - rip.x) ** 2 + (py - rip.y) ** 2);
+      const currentR = easeOutCubic(Math.min(age / expandT, 1)) * totalR;
+      if (dist > currentR) return 0;
 
-        // Single continuous ease-out expansion: 0 → totalR over expandT
-        // Core (maxR) is reached at coreFrac of the curve, halo continues beyond
-        const expandProgress = Math.min(age / expandT, 1);
-        const currentR = easeOutCubic(expandProgress) * totalR;
-
-        if (dist > currentR) continue;
-
-        // Determine if this point is in core zone or halo zone
-        let spatialFade: number;
-        if (dist <= maxR) {
-          // Core zone: full intensity with soft edge at frontier
-          const frontier = Math.min(currentR, maxR);
-          const edgeSoft = dist > frontier - 20 ? Math.max(0, (frontier - dist) / 20) : 1;
-          spatialFade = edgeSoft;
-        } else {
-          // Halo zone: beyond maxR, gradient from ~0.55 → 0
-          const haloPos = (dist - maxR) / (totalR - maxR);
-          spatialFade = 0.55 * (1 - smoothstep(haloPos));
-        }
-
-        // Fade starts when core reaches maxR (coreFrac of easing = when easedProgress passes coreFrac)
-        // Find the time when easeOutCubic(t/expandT) * totalR = maxR
-        // i.e. easeOutCubic(t/expandT) = coreFrac → solve for coreTime
-        const coreReachTime = expandT * (1 - Math.pow(1 - coreFrac, 1/3));
-        let lifeFade = 1;
-        if (age > coreReachTime) {
-          lifeFade = 1 - smoothstep((age - coreReachTime) / fadeT);
-        }
-
-        const edgeFade = Math.min(1, age / RIPPLE_FADE_IN);
-
-        const intensity = spatialFade * lifeFade * edgeFade * Math.min(1, rip.force + 0.3);
-        maxI += intensity;
+      // Core vs halo intensity
+      let spatial: number;
+      if (dist <= Math.min(currentR, maxR)) {
+        const frontier = Math.min(currentR, maxR);
+        spatial = dist > frontier - 20 ? Math.max(0, (frontier - dist) / 20) : 1;
+      } else {
+        const haloPos = (dist - maxR) / (totalR - maxR);
+        spatial = 0.55 * Math.max(0, 1 - haloPos * haloPos);
       }
-      return Math.min(maxI, 1);
+
+      return spatial * Math.min(1, rip.force + 0.3);
     }
 
     function draw() {
@@ -184,22 +151,58 @@ export default function LoginBackground() {
 
       const now = performance.now();
 
-      // Prune dead ripples
+      // Prune ripples that have finished expanding (decay handles the rest)
       ripples.current = ripples.current.filter(r =>
-        (now - r.time) / 1000 < rippleLife(r.force)
+        (now - r.time) / 1000 < rippleExpandTime(r.force) + 0.1
       );
 
-      // --- Pass 1: connection lines ---
-      ctx.lineCap = 'round';
-      for (const link of links) {
+      // --- Update glow per circle: decay + paint from active ripples ---
+      for (const c of circles) {
+        // Natural decay
+        c.glow *= GLOW_DECAY;
+
+        // Paint from expanding ripples
+        let paint = 0;
+        for (const rip of ripples.current) {
+          paint = Math.max(paint, ripplePaint(rip, c.x, c.y, now));
+        }
+
+        // Smoothly rise toward paint target (only if paint > current glow)
+        if (paint > c.glow) {
+          c.glow += (paint - c.glow) * GLOW_RISE;
+        }
+      }
+
+      // --- Update glow per link ---
+      for (let li = 0; li < links.length; li++) {
+        const link = links[li];
         const ci = circles[link.a];
         const cj = circles[link.b];
+
+        // Decay
+        linkGlows[li] *= GLOW_DECAY;
+
+        // Paint from ripples (use midpoint)
         const midX = (ci.x + cj.x) / 2;
         const midY = (ci.y + cj.y) / 2;
-        const t = getIntensity(midX, midY, now);
-        if (t < 0.01) continue;
+        let paint = 0;
+        for (const rip of ripples.current) {
+          paint = Math.max(paint, ripplePaint(rip, midX, midY, now));
+        }
+        if (paint > linkGlows[li]) {
+          linkGlows[li] += (paint - linkGlows[li]) * GLOW_RISE;
+        }
+      }
 
-        const alpha = t * 0.22;
+      // --- Draw pass 1: lines ---
+      ctx.lineCap = 'round';
+      for (let li = 0; li < links.length; li++) {
+        const g = linkGlows[li];
+        if (g < 0.005) continue;
+        const link = links[li];
+        const ci = circles[link.a];
+        const cj = circles[link.b];
+
         const [x1, y1] = clipToCircle(cj.x, cj.y, ci.x, ci.y, RADIUS);
         const [x2, y2] = clipToCircle(ci.x, ci.y, cj.x, cj.y, RADIUS);
 
@@ -207,22 +210,22 @@ export default function LoginBackground() {
         ctx.moveTo(x1, y1);
         ctx.lineTo(x2, y2);
         ctx.lineWidth = link.width;
-        ctx.strokeStyle = `rgba(${CR},${CG},${CB},${alpha})`;
+        ctx.strokeStyle = `rgba(${CR},${CG},${CB},${g * 0.22})`;
         ctx.stroke();
       }
 
-      // --- Pass 2: circles ---
+      // --- Draw pass 2: circles ---
       for (const c of circles) {
-        const t = getIntensity(c.x, c.y, now);
-        const alpha = BASE_ALPHA + (MAX_ALPHA - BASE_ALPHA) * t;
+        const g = c.glow;
+        const alpha = BASE_ALPHA + (MAX_ALPHA - BASE_ALPHA) * g;
 
         ctx.beginPath();
         ctx.arc(c.x, c.y, RADIUS, 0, Math.PI * 2);
         ctx.fillStyle = `rgba(${CR},${CG},${CB},${alpha})`;
         ctx.fill();
 
-        if (c.isHub && t > 0.12) {
-          const hubAlpha = (t - 0.12) / 0.88 * 0.55;
+        if (c.isHub && g > 0.12) {
+          const hubAlpha = (g - 0.12) / 0.88 * 0.55;
           ctx.beginPath();
           ctx.arc(c.x, c.y, HUB_INNER, 0, Math.PI * 2);
           ctx.fillStyle = `rgba(${HR},${HG},${HB},${hubAlpha})`;
@@ -238,26 +241,22 @@ export default function LoginBackground() {
       if (tag === 'INPUT' || tag === 'BUTTON' || tag === 'LABEL' || tag === 'SELECT' || tag === 'TEXTAREA') return;
 
       const now = performance.now();
-      // Track click times for combo
       clickTimes.current.push(now);
       clickTimes.current = clickTimes.current.filter(t => now - t < COMBO_WINDOW);
 
-      // Force scales with combo count: 1 click = 0.35, 2 = 0.55, 3 = 0.75, 4+ = 1.0
       const combo = clickTimes.current.length;
       const force = Math.min(MAX_FORCE, 0.2 + combo * 0.2);
 
       ripples.current.push({ x: e.clientX, y: e.clientY, time: now, force });
     }
 
-    // Auto-ripples with random force
     const autoTimer = setInterval(() => {
       const x = Math.random() * window.innerWidth;
       const y = Math.random() * window.innerHeight;
-      const force = MIN_FORCE + Math.random() * 0.45; // 0.12 – 0.57
+      const force = MIN_FORCE + Math.random() * 0.45;
       ripples.current.push({ x, y, time: performance.now(), force });
     }, AUTO_INTERVAL);
 
-    // Initial ripple
     setTimeout(() => {
       ripples.current.push({
         x: window.innerWidth * (0.3 + Math.random() * 0.4),
