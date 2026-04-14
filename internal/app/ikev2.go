@@ -88,7 +88,6 @@ pools {
 `, localID, remoteID, ipRange, strings.ReplaceAll(dns, " ", ", "))
 
 	case "mschapv2":
-		// Server identity = localID (matches auto-generated cert CN/SAN)
 		conf = fmt.Sprintf(`connections {
     ikev2-mschapv2 {
         version = 2
@@ -99,7 +98,6 @@ pools {
         local-1 {
             auth = pubkey
             certs = ikev2-server.cert.pem
-            id = %s
         }
         remote-1 {
             auth = eap-mschapv2
@@ -126,7 +124,7 @@ pools {
         dns = %s
     }
 }
-`, localID, ipRange, strings.ReplaceAll(dns, " ", ", "))
+`, ipRange, strings.ReplaceAll(dns, " ", ", "))
 	}
 
 	os.WriteFile("/etc/swanctl/conf.d/ikev2.conf", []byte(conf), 0644)
@@ -375,7 +373,6 @@ conn ikev2-mschapv2
     auto=add
     type=tunnel
     left=%%any
-    leftid=%s
     leftcert=ikev2-server.cert.pem
     leftsendcert=always
     leftsubnet=0.0.0.0/0
@@ -391,7 +388,7 @@ conn ikev2-mschapv2
     dpddelay=300s
     ike=aes256-sha256-modp2048,aes128-sha256-modp2048!
     esp=aes256-sha256,aes128-sha256!
-`, localID, ipRange, dns)
+`, ipRange, dns)
 
 		// Generate EAP secrets
 		a.updateEAPSecrets()
