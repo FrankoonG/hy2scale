@@ -365,6 +365,7 @@
   "settings.upgradeFailed": "업그레이드 실패",
   "settings.archMismatch": "아키텍처 불일치",
   "settings.upgradeNotAvailable": "웹 업그레이드는 Docker 배포에서만 사용할 수 있습니다. 바이너리 설치의 경우 바이너리 파일을 수동으로 교체하고 서비스를 재시작하세요.",
+  "settings.forcePasswordChange": "기본 비밀번호를 사용 중입니다. 계속하기 전에 비밀번호를 변경해 주세요.",
   "import.title": "가져오기",
   "import.export": "내보내기",
   "import.import": "가져오기",

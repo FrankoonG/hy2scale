@@ -36,6 +36,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
   const isMobile = useMediaQuery('(max-width: 768px)');
   const [mobileOpen, setMobileOpen] = useState(false);
 
+  const forcePasswordChange = useAuthStore((s) => s.forcePasswordChange);
   const activePage = navItems.find((n) => location.pathname.startsWith(n.path))?.key || 'nodes';
   const pageTitle = t(`nav.${activePage}` as any);
 
@@ -43,6 +44,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
     key: n.key,
     label: t(`nav.${n.key}` as any),
     icon: n.icon,
+    disabled: forcePasswordChange && n.key !== 'settings',
   }));
 
   // Version badge matching old frontend style (green/orange/red + mode text)
@@ -77,8 +79,8 @@ export default function MainLayout({ children }: { children: ReactNode }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
               <button
                 className="hy-sidebar-item"
-                onClick={() => { logout(); navigate('/login'); }}
-                style={{ width: '100%' }}
+                onClick={() => { if (!forcePasswordChange) { logout(); navigate('/login'); } }}
+                style={{ width: '100%', ...(forcePasswordChange ? { opacity: 0.35, pointerEvents: 'none' as const } : {}) }}
               >
                 {logoutIcon}
                 {t('app.logout')}

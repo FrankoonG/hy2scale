@@ -68,6 +68,7 @@ function AuthenticatedRoutes() {
 
 export default function App() {
   const token = useAuthStore((s) => s.token);
+  const forcePasswordChange = useAuthStore((s) => s.forcePasswordChange);
   const location = useLocation();
 
   if (!token) {
@@ -78,7 +79,12 @@ export default function App() {
   }
 
   if (location.pathname === '/login') {
-    return <Navigate to="/nodes" replace />;
+    return <Navigate to={forcePasswordChange ? '/settings' : '/nodes'} replace />;
+  }
+
+  // Force password change: only allow /settings
+  if (forcePasswordChange && location.pathname !== '/settings') {
+    return <Navigate to="/settings" replace />;
   }
 
   return <AuthenticatedRoutes />;

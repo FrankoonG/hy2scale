@@ -5,6 +5,7 @@ export interface SidebarItem {
   key: string;
   label: string;
   icon: ReactNode;
+  disabled?: boolean;
 }
 
 export interface SidebarProps {
@@ -27,8 +28,9 @@ export function Sidebar({ items, activeKey, onSelect, mobile, onClose, logo, foo
           {items.map((item) => (
             <button
               key={item.key}
-              className={clsx('hy-sidebar-item', activeKey === item.key && 'active')}
-              onClick={() => { onSelect(item.key); onClose?.(); }}
+              className={clsx('hy-sidebar-item', activeKey === item.key && 'active', item.disabled && 'disabled')}
+              onClick={() => { if (!item.disabled) { onSelect(item.key); onClose?.(); } }}
+              style={item.disabled ? { opacity: 0.35, pointerEvents: 'none' } : undefined}
             >
               {item.icon}
               {item.label}

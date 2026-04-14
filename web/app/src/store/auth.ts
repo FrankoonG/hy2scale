@@ -6,29 +6,32 @@ interface AuthState {
   token: string | null;
   loading: boolean;
   error: string | null;
+  forcePasswordChange: boolean;
   login: (username: string, password: string, remember: boolean) => Promise<boolean>;
   loginWithHash: (username: string, passHash: string, remember: boolean) => Promise<boolean>;
   logout: () => void;
   restoreSession: () => boolean;
+  clearForcePasswordChange: () => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
   token: getToken(),
   loading: false,
   error: null,
+  forcePasswordChange: false,
 
   login: async (username, password, remember) => {
     set({ loading: true, error: null });
     try {
       const passHash = await sha256(password);
-      const { token } = await apiLogin(username, passHash);
-      setToken(token);
+      const res = await apiLogin(username, passHash);
+      setToken(res.token);
       if (remember) {
         saveCredentials(username, passHash);
       } else {
         clearCredentials();
       }
-      set({ token, loading: false });
+      set({ token: res.token, loading: false, forcePasswordChange: !!res.force_password_change });
       return true;
     } catch (e: any) {
       set({ loading: false, error: String(e?.message || e) });
@@ -39,10 +42,10 @@ export const useAuthStore = create<AuthState>((set) => ({
   loginWithHash: async (username, passHash, remember) => {
     set({ loading: true, error: null });
     try {
-      const { token } = await apiLogin(username, passHash);
-      setToken(token);
+      const res = await apiLogin(username, passHash);
+      setToken(res.token);
       if (remember) saveCredentials(username, passHash);
-      set({ token, loading: false });
+      set({ token: res.token, loading: false, forcePasswordChange: !!res.force_password_change });
       return true;
     } catch (e: any) {
       clearCredentials();
@@ -53,8 +56,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: () => {
     clearToken();
-    // Don't clear saved credentials — "Remember me" should survive logout
-    set({ token: null });
+    set({ token: null, forcePasswordChange: false });
   },
 
   restoreSession: () => {
@@ -65,6 +67,8 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
     return false;
   },
+
+  clearForcePasswordChange: () => set({ forcePasswordChange: false }),
 }));
 
 // Re-export saved credentials helper for login form
