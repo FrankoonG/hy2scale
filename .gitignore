@@ -34,7 +34,8 @@ docs/
 CLAUDE.md
 .claude/
 .playwright-mcp/
-ipkg/
+ipkg/*.ipkg
+ipkg/hy2scale/docker_image.tar.gz
 prompts/
 
 # Temp files and screenshots

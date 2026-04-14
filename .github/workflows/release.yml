@@ -23,7 +23,8 @@ env:
   BINARY_NAME: hy2scale
 
 jobs:
-  build:
+  # ─── Cross-compile bare binaries ───────────────────────────────
+  build-binary:
     name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
     runs-on: ubuntu-latest
     strategy:
@@ -59,30 +60,99 @@ jobs:
           GOMIPS: ${{ matrix.gomips }}
         run: |
           SUFFIX="${{ matrix.goos }}-${{ matrix.goarch }}"
-          if [ -n "${{ matrix.goarm }}" ]; then
-            SUFFIX="${SUFFIX}v${{ matrix.goarm }}"
-          fi
-          if [ -n "${{ matrix.gomips }}" ]; then
-            SUFFIX="${SUFFIX}-${{ matrix.gomips }}"
-          fi
+          [ -n "${{ matrix.goarm }}" ] && SUFFIX="${SUFFIX}v${{ matrix.goarm }}"
+          [ -n "${{ matrix.gomips }}" ] && SUFFIX="${SUFFIX}-${{ matrix.gomips }}"
 
           OUTPUT="${BINARY_NAME}-${SUFFIX}"
           go build -ldflags="-s -w" -o "${OUTPUT}" ./cmd/node
-
-          # Package as tar.gz
           tar czf "${OUTPUT}.tar.gz" "${OUTPUT}"
-          echo "ASSET=${OUTPUT}.tar.gz" >> $GITHUB_ENV
-          echo "BINARY=${OUTPUT}" >> $GITHUB_ENV
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+          echo "ASSET=${OUTPUT}.tar.gz" >> $GITHUB_ENV
+          echo "ARTIFACT_NAME=${OUTPUT}" >> $GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.BINARY }}
+          name: ${{ env.ARTIFACT_NAME }}
           path: ${{ env.ASSET }}
 
+  # ─── Docker image + iKuai ipkg (amd64) ────────────────────────
+  build-docker:
+    name: Build Docker image + ipkg
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build frontend
+        run: |
+          cd web/ui-framework && npm ci && npm run build
+          cd ../app && npm ci && npm run build
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Ensure platform bundle exists
+        run: |
+          mkdir -p internal/platform/ikuai-iptables
+          [ -f internal/platform/ikuai-iptables/bundle.tar.gz ] || echo "placeholder" | gzip > internal/platform/ikuai-iptables/bundle.tar.gz
+
+      - name: Build Docker image
+        run: |
+          DOCKER_BUILDKIT=0 docker build -t hy2scale:release .
+
+      - name: Export Docker image
+        run: |
+          docker save hy2scale:release | gzip > docker-image-amd64.tar.gz
+          echo "DOCKER_SIZE=$(du -h docker-image-amd64.tar.gz | cut -f1)" >> $GITHUB_ENV
+
+      - name: Build ipkg
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+
+          # Update manifest version
+          sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${VERSION}\"/" ipkg/hy2scale/manifest.json
+
+          # Embed Docker image
+          docker save hy2scale:release | gzip > ipkg/hy2scale/docker_image.tar.gz
+
+          # Package ipkg
+          cd ipkg
+          tar czf "hy2scale-${VERSION}.ipkg" hy2scale/
+
+          # Clean embedded image
+          rm -f hy2scale/docker_image.tar.gz
+
+          echo "IPKG_FILE=ipkg/hy2scale-${VERSION}.ipkg" >> $GITHUB_ENV
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: docker-image-amd64.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ipkg
+          path: ${{ env.IPKG_FILE }}
+
+  # ─── Create GitHub Release ─────────────────────────────────────
   release:
     name: Create Release
-    needs: build
+    needs: [build-binary, build-docker]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -107,12 +177,13 @@ jobs:
         run: |
           mkdir -p release
           find artifacts -name '*.tar.gz' -exec cp {} release/ \;
+          find artifacts -name '*.ipkg' -exec cp {} release/ \;
           ls -la release/
 
       - name: Generate checksums
         working-directory: release
         run: |
-          sha256sum *.tar.gz > checksums-sha256.txt
+          sha256sum * > checksums-sha256.txt
           cat checksums-sha256.txt
 
       - name: Create GitHub Release
@@ -123,7 +194,7 @@ jobs:
           body: |
             ## hy2scale ${{ steps.version.outputs.tag }}
 
-            ### Downloads
+            ### Binary Downloads
 
             | Platform | Architecture | File |
             |----------|-------------|------|
@@ -133,18 +204,23 @@ jobs:
             | Linux | mips64le | `hy2scale-linux-mips64le.tar.gz` |
             | Linux | mipsle | `hy2scale-linux-mipsle-softfloat.tar.gz` |
 
-            ### Docker
+            ### Docker Image
+
+            Offline image (amd64): `docker-image-amd64.tar.gz`
+            ```bash
+            docker load < docker-image-amd64.tar.gz
             ```
-            docker pull frankoong/hy2scale:${{ steps.version.outputs.version }}
-            ```
+
+            ### iKuai Package
+
+            `hy2scale-${{ steps.version.outputs.version }}.ipkg` — install via iKuai web UI (高级应用 → 应用市场 → 本地安装)
 
             ### Verify checksums
             ```
             sha256sum -c checksums-sha256.txt
             ```
           files: |
-            release/*.tar.gz
-            release/checksums-sha256.txt
+            release/*
           draft: false
           prerelease: ${{ contains(steps.version.outputs.tag, '-') }}
         env:
