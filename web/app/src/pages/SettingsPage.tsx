@@ -173,9 +173,7 @@ export default function SettingsPage() {
         {activeTab === 'system' ? (
           <>
             {forcePasswordChange && (
-              <div style={{ padding: '12px 16px', background: 'var(--orange-light, #fff3e0)', border: '1px solid var(--orange, #f59e0b)', borderRadius: 'var(--radius-sm)', fontSize: 13, color: 'var(--text)', marginBottom: 4 }}>
-                {t('settings.forcePasswordChange')}
-              </div>
+              <div className="hy-alert-warn">{t('settings.forcePasswordChange')}</div>
             )}
 
             {/* System: DNS — hidden during forced password change */}
