@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -226,6 +227,17 @@ func (s *TLSStore) Delete(id string) error {
 	os.Remove(filepath.Join(s.dir, id+".name"))
 	os.Remove(filepath.Join(s.dir, id+".ca"))
 	return nil
+}
+
+// TLSConfig returns a *tls.Config for the given cert ID.
+func (s *TLSStore) TLSConfig(id string) (*tls.Config, error) {
+	certFile := filepath.Join(s.dir, id+".crt")
+	keyFile := filepath.Join(s.dir, id+".key")
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, err
+	}
+	return &tls.Config{Certificates: []tls.Certificate{cert}}, nil
 }
 
 // CertPath returns the file path for a cert (for hy2 server config).

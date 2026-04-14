@@ -32,5 +32,23 @@ docs/
 
 # Claude Code project instructions
 CLAUDE.md
+.claude/
+.playwright-mcp/
 ipkg/
 prompts/
+
+# Temp files and screenshots
+*.png
+*.tar
+*.tar.gz
+*.log
+test_*.py
+debug_*.py
+remote_*.py
+rawtest
+pending.md
+DOCKERHUB.md
+
+# Frontend build artifacts
+node_modules/
+web/*/dist/
