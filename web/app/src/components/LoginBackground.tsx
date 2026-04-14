@@ -4,14 +4,20 @@ import { useEffect, useRef } from 'react';
 const CR = 77, CG = 110, CB = 163;       // outer circle: #4D6EA3
 const HR = 16, HG = 37, HB = 69;         // hub inner:    #102545
 
-const GRID = 36;            // tighter grid
-const RADIUS = 11;          // outer circle radius
-const HUB_INNER = 6.5;      // hub inner circle radius
-const INFLUENCE = 280;
-const LINE_INFLUENCE = 220;
+const GRID = 36;
+const RADIUS = 11;
+const HUB_INNER = 6.5;
 
 const BASE_ALPHA = 0.022;
 const MAX_ALPHA = 0.36;
+
+// Ripple settings
+const RIPPLE_SPEED = 180;       // px per second expansion
+const RIPPLE_WIDTH = 140;       // width of the visible ring (px)
+const RIPPLE_LIFE = 3.0;        // seconds before fully gone
+const RIPPLE_FADE_IN = 0.3;     // seconds for leading edge fade-in
+const AUTO_RIPPLE_INTERVAL = 1800; // ms between random ripples
+const LINE_RING = 120;          // line visible within this of the ring center
 
 function hash(x: number, y: number, seed: number) {
   let h = (x * 374761393 + y * 668265263 + seed * 1274126177) | 0;
@@ -19,23 +25,14 @@ function hash(x: number, y: number, seed: number) {
   return ((h & 0x7fffffff) / 0x7fffffff);
 }
 
-interface Link {
-  a: number;
-  b: number;
-  width: number;  // line thickness
-}
-
-interface Circle {
-  x: number;
-  y: number;
-  idx: number;
-  isHub: boolean;
-}
+interface Link { a: number; b: number; width: number; }
+interface Circle { x: number; y: number; idx: number; isHub: boolean; }
+interface Ripple { x: number; y: number; time: number; }
 
 export default function LoginBackground() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const mouse = useRef({ x: -9999, y: -9999 });
   const raf = useRef(0);
+  const ripples = useRef<Ripple[]>([]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -64,8 +61,6 @@ export default function LoginBackground() {
           });
         }
       }
-
-      // Build links with hub-aware probability and thickness
       for (let i = 0; i < circles.length; i++) {
         const ci = circles[i];
         for (let j = i + 1; j < circles.length; j++) {
@@ -74,25 +69,15 @@ export default function LoginBackground() {
           const dy = ci.y - cj.y;
           const d = Math.sqrt(dx * dx + dy * dy);
           if (d > GRID * 1.8) continue;
-
           const r = hash(i, j, 42);
           const eitherHub = ci.isHub || cj.isHub;
           const bothHub = ci.isHub && cj.isHub;
-
-          // Hub nodes produce more connections
           const prob = bothHub ? 0.75 : eitherHub ? 0.50 : 0.22;
           if (r >= prob) continue;
-
-          // Line width: hubs get thicker lines (higher throughput)
           let w: number;
-          if (bothHub) {
-            w = 1.0 + hash(i, j, 99) * 2.8;   // 1.0 – 3.8
-          } else if (eitherHub) {
-            w = 0.8 + hash(i, j, 99) * 2.0;    // 0.8 – 2.8
-          } else {
-            w = 0.5 + hash(i, j, 99) * 1.3;    // 0.5 – 1.8
-          }
-
+          if (bothHub) w = 1.0 + hash(i, j, 99) * 2.8;
+          else if (eitherHub) w = 0.8 + hash(i, j, 99) * 2.0;
+          else w = 0.5 + hash(i, j, 99) * 1.3;
           links.push({ a: i, b: j, width: w });
         }
       }
@@ -112,16 +97,47 @@ export default function LoginBackground() {
       return t * t * (3 - 2 * t);
     }
 
-    // Clip a line segment to exclude the interior of a circle.
-    // Returns the point on the circle boundary (or the original point if outside).
     function clipToCircle(
       fromX: number, fromY: number, toX: number, toY: number, r: number
     ): [number, number] {
       const dx = toX - fromX;
       const dy = toY - fromY;
       const len = Math.sqrt(dx * dx + dy * dy);
-      if (len < r) return [fromX, fromY]; // fully inside, degenerate
+      if (len < r) return [fromX, fromY];
       return [toX - (dx / len) * r, toY - (dy / len) * r];
+    }
+
+    // Calculate visibility intensity (0..1) for a point from all active ripples
+    function getIntensity(px: number, py: number, now: number): number {
+      let maxI = 0;
+      for (const rip of ripples.current) {
+        const age = (now - rip.time) / 1000; // seconds
+        if (age > RIPPLE_LIFE) continue;
+
+        const dist = Math.sqrt((px - rip.x) ** 2 + (py - rip.y) ** 2);
+        const ringCenter = age * RIPPLE_SPEED;
+        const ringInner = ringCenter - RIPPLE_WIDTH / 2;
+        const ringOuter = ringCenter + RIPPLE_WIDTH / 2;
+
+        if (dist < ringInner || dist > ringOuter) continue;
+
+        // Position within ring: 0 = inner edge, 1 = outer edge (leading front)
+        const ringPos = (dist - ringInner) / RIPPLE_WIDTH;
+
+        // Leading edge fades in, trailing edge fades out
+        // Use a bell-like shape: peak at ~0.6 of the ring (closer to leading edge)
+        const bell = Math.sin(ringPos * Math.PI);
+
+        // Global fade-out over lifetime
+        const lifeFade = 1 - smoothstep(age / RIPPLE_LIFE);
+
+        // Leading edge fade-in for the first moments
+        const edgeFade = Math.min(1, age / RIPPLE_FADE_IN);
+
+        const intensity = bell * lifeFade * edgeFade;
+        if (intensity > maxI) maxI = intensity;
+      }
+      return maxI;
     }
 
     function draw() {
@@ -129,23 +145,22 @@ export default function LoginBackground() {
       const h = window.innerHeight;
       ctx.clearRect(0, 0, w, h);
 
-      const mx = mouse.current.x;
-      const my = mouse.current.y;
+      const now = performance.now();
 
-      // --- Pass 1: connection lines (clipped to circle edges, drawn BEHIND) ---
+      // Prune dead ripples
+      ripples.current = ripples.current.filter(r => (now - r.time) / 1000 < RIPPLE_LIFE);
+
+      // --- Pass 1: connection lines ---
       ctx.lineCap = 'round';
       for (const link of links) {
         const ci = circles[link.a];
         const cj = circles[link.b];
         const midX = (ci.x + cj.x) / 2;
         const midY = (ci.y + cj.y) / 2;
-        const dist = Math.sqrt((midX - mx) ** 2 + (midY - my) ** 2);
-        if (dist > LINE_INFLUENCE) continue;
+        const t = getIntensity(midX, midY, now);
+        if (t < 0.01) continue;
 
-        const t = smoothstep(Math.max(0, 1 - dist / LINE_INFLUENCE));
         const alpha = t * 0.22;
-
-        // Clip line to stop at circle boundaries
         const [x1, y1] = clipToCircle(cj.x, cj.y, ci.x, ci.y, RADIUS);
         const [x2, y2] = clipToCircle(ci.x, ci.y, cj.x, cj.y, RADIUS);
 
@@ -157,21 +172,16 @@ export default function LoginBackground() {
         ctx.stroke();
       }
 
-      // --- Pass 2: circles (on top of lines) ---
+      // --- Pass 2: circles ---
       for (const c of circles) {
-        const dx = c.x - mx;
-        const dy = c.y - my;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        const t = smoothstep(Math.max(0, 1 - dist / INFLUENCE));
+        const t = getIntensity(c.x, c.y, now);
         const alpha = BASE_ALPHA + (MAX_ALPHA - BASE_ALPHA) * t;
 
-        // Outer circle
         ctx.beginPath();
         ctx.arc(c.x, c.y, RADIUS, 0, Math.PI * 2);
         ctx.fillStyle = `rgba(${CR},${CG},${CB},${alpha})`;
         ctx.fill();
 
-        // Hub inner circle
         if (c.isHub && t > 0.12) {
           const hubAlpha = (t - 0.12) / 0.88 * 0.55;
           ctx.beginPath();
@@ -184,27 +194,39 @@ export default function LoginBackground() {
       raf.current = requestAnimationFrame(draw);
     }
 
-    function onMove(e: MouseEvent) {
-      mouse.current.x = e.clientX;
-      mouse.current.y = e.clientY;
+    function onClick(e: MouseEvent) {
+      // Only trigger on background area clicks (not on interactive elements like inputs/buttons)
+      const tag = (e.target as HTMLElement).tagName;
+      if (tag === 'INPUT' || tag === 'BUTTON' || tag === 'LABEL' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+      ripples.current.push({ x: e.clientX, y: e.clientY, time: performance.now() });
     }
 
-    function onLeave() {
-      mouse.current.x = -9999;
-      mouse.current.y = -9999;
-    }
+    // Random auto-ripples
+    const autoTimer = setInterval(() => {
+      const x = Math.random() * window.innerWidth;
+      const y = Math.random() * window.innerHeight;
+      ripples.current.push({ x, y, time: performance.now() });
+    }, AUTO_RIPPLE_INTERVAL);
+
+    // Fire an initial ripple near center
+    setTimeout(() => {
+      ripples.current.push({
+        x: window.innerWidth * (0.3 + Math.random() * 0.4),
+        y: window.innerHeight * (0.3 + Math.random() * 0.4),
+        time: performance.now(),
+      });
+    }, 500);
 
     window.addEventListener('resize', resize);
-    window.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseleave', onLeave);
+    window.addEventListener('click', onClick);
     resize();
     raf.current = requestAnimationFrame(draw);
 
     return () => {
       cancelAnimationFrame(raf.current);
+      clearInterval(autoTimer);
       window.removeEventListener('resize', resize);
-      window.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseleave', onLeave);
+      window.removeEventListener('click', onClick);
     };
   }, []);
 
