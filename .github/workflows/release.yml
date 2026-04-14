@@ -1,0 +1,151 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v1.3.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.24"
+  BINARY_NAME: hy2scale
+
+jobs:
+  build:
+    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: linux
+            goarch: arm
+            goarm: "7"
+          - goos: linux
+            goarch: mips64le
+          - goos: linux
+            goarch: mipsle
+            gomips: softfloat
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          GOMIPS: ${{ matrix.gomips }}
+        run: |
+          SUFFIX="${{ matrix.goos }}-${{ matrix.goarch }}"
+          if [ -n "${{ matrix.goarm }}" ]; then
+            SUFFIX="${SUFFIX}v${{ matrix.goarm }}"
+          fi
+          if [ -n "${{ matrix.gomips }}" ]; then
+            SUFFIX="${SUFFIX}-${{ matrix.gomips }}"
+          fi
+
+          OUTPUT="${BINARY_NAME}-${SUFFIX}"
+          go build -ldflags="-s -w" -o "${OUTPUT}" ./cmd/node
+
+          # Package as tar.gz
+          tar czf "${OUTPUT}.tar.gz" "${OUTPUT}"
+          echo "ASSET=${OUTPUT}.tar.gz" >> $GITHUB_ENV
+          echo "BINARY=${OUTPUT}" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BINARY }}
+          path: ${{ env.ASSET }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect release assets
+        run: |
+          mkdir -p release
+          find artifacts -name '*.tar.gz' -exec cp {} release/ \;
+          ls -la release/
+
+      - name: Generate checksums
+        working-directory: release
+        run: |
+          sha256sum *.tar.gz > checksums-sha256.txt
+          cat checksums-sha256.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          body: |
+            ## hy2scale ${{ steps.version.outputs.tag }}
+
+            ### Downloads
+
+            | Platform | Architecture | File |
+            |----------|-------------|------|
+            | Linux | amd64 | `hy2scale-linux-amd64.tar.gz` |
+            | Linux | arm64 | `hy2scale-linux-arm64.tar.gz` |
+            | Linux | armv7 | `hy2scale-linux-armv7.tar.gz` |
+            | Linux | mips64le | `hy2scale-linux-mips64le.tar.gz` |
+            | Linux | mipsle | `hy2scale-linux-mipsle-softfloat.tar.gz` |
+
+            ### Docker
+            ```
+            docker pull frankoong/hy2scale:${{ steps.version.outputs.version }}
+            ```
+
+            ### Verify checksums
+            ```
+            sha256sum -c checksums-sha256.txt
+            ```
+          files: |
+            release/*.tar.gz
+            release/checksums-sha256.txt
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.tag, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
