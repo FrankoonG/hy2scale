@@ -106,11 +106,6 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Ensure platform bundle exists
-        run: |
-          mkdir -p internal/platform/ikuai-iptables
-          [ -f internal/platform/ikuai-iptables/bundle.tar.gz ] || echo "placeholder" | gzip > internal/platform/ikuai-iptables/bundle.tar.gz
-
       - name: Build Docker image
         run: |
           DOCKER_BUILDKIT=0 docker build -t hy2scale:release .
