@@ -117,22 +117,24 @@ jobs:
 
       - name: Build ipkg
         run: |
-          VERSION="${{ steps.ver.outputs.version }}"
+          # ipkg version must be X.Y.Z (no rc/beta suffix) — read from Go source
+          IPKG_VERSION=$(grep 'const Version' internal/api/server.go | sed 's/.*"\(.*\)".*/\1/')
+          echo "ipkg version: ${IPKG_VERSION}"
 
           # Update manifest version
-          sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${VERSION}\"/" ipkg/hy2scale/manifest.json
+          sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${IPKG_VERSION}\"/" ipkg/hy2scale/manifest.json
 
           # Embed Docker image
           docker save hy2scale:release | gzip > ipkg/hy2scale/docker_image.tar.gz
 
           # Package ipkg
           cd ipkg
-          tar czf "hy2scale-${VERSION}.ipkg" hy2scale/
+          tar czf "hy2scale-${IPKG_VERSION}.ipkg" hy2scale/
 
           # Clean embedded image
           rm -f hy2scale/docker_image.tar.gz
 
-          echo "IPKG_FILE=ipkg/hy2scale-${VERSION}.ipkg" >> $GITHUB_ENV
+          echo "IPKG_FILE=ipkg/hy2scale-${IPKG_VERSION}.ipkg" >> $GITHUB_ENV
 
       - uses: actions/upload-artifact@v4
         with:
