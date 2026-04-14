@@ -193,6 +193,7 @@ func (a *App) StopIPForwarding() {
 type ipfwdTarget struct {
 	cidrs   []string
 	exitVia string
+	ruleID  string
 }
 
 // tunReadLoop reads raw IP packets from TUN, determines exit peer, sends through QUIC.
@@ -498,18 +499,38 @@ func (a *App) registerExitIPTunHandler(ctx context.Context) {
 	})
 }
 
-// addTargets adds new CIDR→exit mappings to the TUN forwarding table.
-func (eng *ipfwdEngine) addTargets(cidrs []string, exitVia string) {
+// addTargets adds or replaces CIDR→exit mappings in the TUN forwarding table.
+func (eng *ipfwdEngine) addTargets(ruleID string, cidrs []string, exitVia string) {
 	eng.targetsMu.Lock()
 	defer eng.targetsMu.Unlock()
-	eng.targets = append(eng.targets, ipfwdTarget{cidrs: cidrs, exitVia: exitVia})
+	// Remove any existing target for the same rule (hot update)
+	eng.targets = filterTargets(eng.targets, ruleID)
+	eng.targets = append(eng.targets, ipfwdTarget{cidrs: cidrs, exitVia: exitVia, ruleID: ruleID})
+	// Close stale stream for old exit (forces reconnect to new exit)
+	eng.streamsMu.Lock()
+	for k, s := range eng.streams {
+		if s.closed {
+			delete(eng.streams, k)
+		}
+	}
+	eng.streamsMu.Unlock()
 }
 
-// removeTargetsForRule is a no-op placeholder; targets are rebuilt on rule changes.
-func (eng *ipfwdEngine) removeTargetsForRule(id string) {
-	// Targets are matched by CIDR, not rule ID. The ip rule removal handles routing.
-	// The target list is additive and doesn't need per-rule removal since
-	// packets that no longer match any ip rule won't reach the TUN.
+// removeTargetsForRule removes targets by rule ID.
+func (eng *ipfwdEngine) removeTargetsForRule(ruleID string) {
+	eng.targetsMu.Lock()
+	defer eng.targetsMu.Unlock()
+	eng.targets = filterTargets(eng.targets, ruleID)
+}
+
+func filterTargets(targets []ipfwdTarget, excludeRuleID string) []ipfwdTarget {
+	var kept []ipfwdTarget
+	for _, t := range targets {
+		if t.ruleID != excludeRuleID {
+			kept = append(kept, t)
+		}
+	}
+	return kept
 }
 
 // getMainIP returns the primary outgoing IP (for src hint in routes).
