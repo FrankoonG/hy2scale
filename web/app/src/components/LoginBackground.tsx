@@ -22,8 +22,11 @@ const MIN_FORCE = 0.3;            // auto-ripple minimum
 const MAX_FORCE = 1.0;            // max from rapid clicks
 
 // Force → parameters
-function rippleLife(force: number) { return 2.5 + force * 3.5; }      // 2.5s – 6s
 function rippleMaxRadius(force: number) { return 80 + force * 320; }   // 80px – 400px
+// Expand phase = time for ring to reach maxRadius; fade phase follows
+function rippleExpandTime(force: number) { return rippleMaxRadius(force) / RIPPLE_SPEED; }
+function rippleFadeTime(force: number) { return 1.5 + force * 2.5; }   // 1.5s – 4s fade after expand
+function rippleLife(force: number) { return rippleExpandTime(force) + rippleFadeTime(force); }
 
 // Click combo tracking
 const COMBO_WINDOW = 600;         // ms — clicks within this window stack force
@@ -122,12 +125,14 @@ export default function LoginBackground() {
       for (const rip of ripples.current) {
         const life = rippleLife(rip.force);
         const maxR = rippleMaxRadius(rip.force);
+        const expandT = rippleExpandTime(rip.force);
+        const fadeT = rippleFadeTime(rip.force);
         const age = (now - rip.time) / 1000;
         if (age > life) continue;
 
         const dist = Math.sqrt((px - rip.x) ** 2 + (py - rip.y) ** 2);
 
-        // Ring expands but caps at maxRadius
+        // Ring expands then holds at maxRadius
         const ringCenter = Math.min(age * RIPPLE_SPEED, maxR);
         const width = RIPPLE_WIDTH * rip.force;
         const ringInner = ringCenter - width / 2;
@@ -138,8 +143,13 @@ export default function LoginBackground() {
         const ringPos = (dist - ringInner) / width;
         const bell = Math.sin(ringPos * Math.PI);
 
-        // Slower fade-out: use sqrt curve for more lingering visibility
-        const lifeFade = 1 - smoothstep(Math.pow(age / life, 0.7));
+        // Fade: 0 during expand phase, then smooth fade-out during fade phase
+        let lifeFade = 1;
+        if (age > expandT) {
+          const fadeAge = (age - expandT) / fadeT;
+          lifeFade = 1 - smoothstep(fadeAge);
+        }
+
         const edgeFade = Math.min(1, age / RIPPLE_FADE_IN);
 
         const intensity = bell * lifeFade * edgeFade * Math.min(1, rip.force + 0.3);
