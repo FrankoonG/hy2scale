@@ -172,9 +172,9 @@ export default function LoginBackground() {
         const edgeFade = Math.min(1, age / RIPPLE_FADE_IN);
 
         const intensity = spatialFade * lifeFade * edgeFade * Math.min(1, rip.force + 0.3);
-        if (intensity > maxI) maxI = intensity;
+        maxI += intensity;
       }
-      return maxI;
+      return Math.min(maxI, 1);
     }
 
     function draw() {
