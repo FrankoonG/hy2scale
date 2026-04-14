@@ -5,6 +5,7 @@ import { Button, Input, PasswordInput } from '@hy2scale/ui';
 import { useAuthStore, getSavedCredentials } from '@/store/auth';
 import { sha256 } from '@/hooks/useAuth';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
+import LoginBackground from '@/components/LoginBackground';
 
 export default function LoginPage() {
   const { t } = useTranslation();
@@ -47,10 +48,11 @@ export default function LoginPage() {
 
   return (
     <div className="hy-login-wrap">
-      <div style={{ position: 'absolute', top: 16, right: 16 }}>
+      <LoginBackground />
+      <div style={{ position: 'absolute', top: 16, right: 16, zIndex: 1 }}>
         <LanguageSwitcher />
       </div>
-      <div className="hy-login-box">
+      <div className="hy-login-box" style={{ position: 'relative', zIndex: 1 }}>
         <div className="hy-login-logo">
           <img src="./logo.min.svg" alt="logo" />
         </div>

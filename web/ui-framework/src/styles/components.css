@@ -417,6 +417,7 @@ body.dragging-active,body.dragging-active *{user-select:none!important;-webkit-u
   .hy-main{margin-left:0}
   .hy-content{padding:16px}
   .hy-modal{max-width:95vw;margin:16px}
+  .hy-input,.hy-textarea,.hy-select{font-size:16px}
 }
 
 /* ====== Animations ====== */

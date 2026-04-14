@@ -114,14 +114,11 @@ export function Autocomplete({
             <motion.div
               ref={listRef}
               className="hy-autocomplete-list"
-              style={{ ...dropdownStyle, transformOrigin: pos.flip ? 'bottom left' : 'top left' }}
-              initial={{ opacity: 0, scale: 0.4 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.4 }}
-              transition={{
-                default: { duration: 0.25, ease: [0.16, 1, 0.3, 1] },
-                opacity: { duration: 0.15 },
-              }}
+              style={{ ...dropdownStyle, transformOrigin: pos.flip ? 'bottom' : 'top' }}
+              initial={{ opacity: 0, scaleY: 0.6 }}
+              animate={{ opacity: 1, scaleY: 1 }}
+              exit={{ opacity: 0, scaleY: 0.6 }}
+              transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
             >
               {filtered.map((opt, i) => (
                 <div

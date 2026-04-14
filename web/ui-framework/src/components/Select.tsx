@@ -87,14 +87,11 @@ export function Select({ options, value, onChange, placeholder, disabled, classN
             <motion.div
               ref={dropRef}
               className="hy-dropdown hy-select-dropdown"
-              style={{ ...dropdownStyle, transformOrigin: pos.flip ? 'bottom left' : 'top left' }}
-              initial={{ opacity: 0, scale: 0.4 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.4 }}
-              transition={{
-                default: { duration: 0.25, ease: [0.16, 1, 0.3, 1] },
-                opacity: { duration: 0.15 },
-              }}
+              style={{ ...dropdownStyle, transformOrigin: pos.flip ? 'bottom' : 'top' }}
+              initial={{ opacity: 0, scaleY: 0.6 }}
+              animate={{ opacity: 1, scaleY: 1 }}
+              exit={{ opacity: 0, scaleY: 0.6 }}
+              transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
             >
               {options.map((opt) => (
                 <button
