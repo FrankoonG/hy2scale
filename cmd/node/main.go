@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/FrankoonG/hy2scale/internal/api"
@@ -13,12 +14,40 @@ import (
 )
 
 func main() {
-	apiAddr := flag.String("api", "", "API/UI listen address (default 0.0.0.0:5565)")
+	dataDir := flag.String("data", "", "configuration and data directory")
+	apiAddr := flag.String("api", "", "API/UI listen address (overrides config)")
 	basePath := flag.String("base-path", "", "UI base path (e.g. /scale)")
-	dataDir := flag.String("data", "/data", "persistent data directory")
+	showVersion := flag.Bool("version", false, "print version and exit")
+
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [options]\n\nOptions:\n", filepath.Base(os.Args[0]))
+		flag.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\nIf --data is not provided, uses ./hy2scale as the data directory.\n")
+	}
 	flag.Parse()
 
-	a, err := app.New(*dataDir)
+	if *showVersion {
+		fmt.Printf("hy2scale %s\n", api.Version)
+		return
+	}
+
+	// Resolve data directory: explicit flag > ./hy2scale
+	dir := *dataDir
+	if dir == "" {
+		dir = "hy2scale"
+	}
+	// Ensure absolute path
+	if !filepath.IsAbs(dir) {
+		wd, _ := os.Getwd()
+		dir = filepath.Join(wd, dir)
+	}
+	// Create if not exists
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "cannot create data directory %s: %v\n", dir, err)
+		os.Exit(1)
+	}
+
+	a, err := app.New(dir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "init: %v\n", err)
 		os.Exit(1)
