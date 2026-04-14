@@ -343,6 +343,7 @@ conn ikev2-mschapv2
     auto=add
     type=tunnel
     left=%%any
+    leftid=%s
     leftcert=ikev2-server.cert.pem
     leftsendcert=always
     leftsubnet=0.0.0.0/0
@@ -358,7 +359,7 @@ conn ikev2-mschapv2
     dpddelay=300s
     ike=aes256-sha256-modp2048,aes128-sha256-modp2048!
     esp=aes256-sha256,aes128-sha256!
-`, ipRange, dns)
+`, localID, ipRange, dns)
 
 		// Generate EAP secrets
 		a.updateEAPSecrets()
@@ -394,28 +395,28 @@ conn ikev2-mschapv2
 	// Setup iptables (same dual-stack approach as L2TP)
 	os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
 
-	if testIptablesAvailable() {
+	if iptablesOK {
 		if iptUseChroot() {
 			log.Printf("[ikev2] mode: iptables via chroot /host (host kernel compat)")
 		} else {
 			log.Printf("[ikev2] mode: native iptables DNAT + transparent proxy")
 		}
 		portStr := fmt.Sprintf("%d", proxyPort)
-		iptRun("iptables-legacy", "-t", "nat", "-I", "PREROUTING",
+		iptRun(iptVariant(), "-t", "nat", "-I", "PREROUTING",
 			"-s", subnet, "-p", "tcp",
 			"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%s", gateway, portStr))
-		iptRun("iptables-legacy", "-t", "nat", "-A", "POSTROUTING",
+		iptRun(iptVariant(), "-t", "nat", "-A", "POSTROUTING",
 			"-s", subnet, "-o", "eth0", "-j", "MASQUERADE")
-		iptRun("iptables-legacy", "-I", "FORWARD", "-s", subnet, "-o", "eth0", "-j", "ACCEPT")
-		iptRun("iptables-legacy", "-I", "FORWARD", "-d", subnet,
+		iptRun(iptVariant(), "-I", "FORWARD", "-s", subnet, "-o", "eth0", "-j", "ACCEPT")
+		iptRun(iptVariant(), "-I", "FORWARD", "-d", subnet,
 			"-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
-		iptRun("iptables-legacy", "-I", "INPUT", "-p", "tcp", "--dport", portStr,
+		iptRun(iptVariant(), "-I", "INPUT", "-p", "tcp", "--dport", portStr,
 			"-s", subnet, "-j", "ACCEPT")
-		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", portStr, "-j", "DROP")
+		iptRun(iptVariant(), "-A", "INPUT", "-p", "tcp", "--dport", portStr, "-j", "DROP")
 		hooksPortStr := fmt.Sprintf("%d", hooksPort)
-		iptRun("iptables-legacy", "-I", "INPUT", "-p", "tcp", "--dport", hooksPortStr,
+		iptRun(iptVariant(), "-I", "INPUT", "-p", "tcp", "--dport", hooksPortStr,
 			"-i", "lo", "-j", "ACCEPT")
-		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr, "-j", "DROP")
+		iptRun(iptVariant(), "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr, "-j", "DROP")
 		iptRun("iptables", "-I", "DOCKER-USER", "-s", subnet, "-j", "ACCEPT")
 		iptRun("iptables", "-I", "DOCKER-USER", "-d", subnet, "-j", "ACCEPT")
 		iptRun("iptables", "-t", "nat", "-A", "POSTROUTING",

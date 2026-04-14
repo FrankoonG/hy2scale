@@ -206,12 +206,17 @@ func (a *App) dialAdaptive(ctx context.Context, target, addr string) (net.Conn, 
 
 // dialPath dials through a specific path string.
 func (a *App) dialPath(ctx context.Context, path, addr string) (net.Conn, error) {
+	return a.dialPathIdx(ctx, path, addr, -1)
+}
+
+// dialPathIdx dials with a specific QUIC client index (for bond path pinning).
+func (a *App) dialPathIdx(ctx context.Context, path, addr string, clientIdx int) (net.Conn, error) {
 	parts := splitPath(path)
 	if len(parts) == 0 {
 		return net.DialTimeout("tcp", addr, 10*time.Second)
 	}
 	if len(parts) == 1 {
-		return a.node.DialTCP(ctx, parts[0], addr)
+		return a.node.DialTCPIdx(ctx, parts[0], addr, clientIdx)
 	}
 	return a.node.DialVia(ctx, parts, addr)
 }

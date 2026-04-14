@@ -67,20 +67,22 @@ type bondSession struct {
 	// Dynamic buffer limit
 	bufferLimit int // max bytes in reorder buffer
 
-	closed   atomic.Bool
-	closeCh  chan struct{}
+	closed      atomic.Bool
+	closeCh     chan struct{}
+	teardownCnt atomic.Int32 // number of paths that received teardown
 }
 
 // bondPath represents one path in the bond.
 type bondPath struct {
-	name    string   // path string (e.g. "au" or "jp/au")
-	conn    net.Conn // relay stream
-	index   int
-	weight  float64  // 0.0–1.0, proportional send allocation
-	rttMs   float64  // estimated RTT
-	healthy bool
-	txBytes int64
-	mu      sync.Mutex
+	name     string   // path string (e.g. "au" or "jp/au")
+	conn     net.Conn // relay stream
+	index    int
+	weight   float64  // 0.0–1.0, proportional send allocation
+	rttMs    float64  // estimated RTT
+	healthy  bool
+	tornDown bool // true after receiving teardown — don't reopen
+	txBytes  int64
+	mu       sync.Mutex
 }
 
 var bondIDCounter atomic.Uint32
@@ -92,7 +94,7 @@ func (a *App) dialBond(ctx context.Context, target, addr string) (net.Conn, erro
 		return nil, fmt.Errorf("bond: no paths to %s", target)
 	}
 	if len(paths) == 1 {
-		debugLog("[bond] %s: only 1 path, using direct", target)
+		log.Printf("[bond] %s: only 1 path (%d conn), using direct", target, a.node.PeerConnCount(target))
 		return a.dialPath(ctx, paths[0], addr)
 	}
 
@@ -141,7 +143,9 @@ func (a *App) dialBond(ctx context.Context, target, addr string) (net.Conn, erro
 
 	var opened []*bondPath
 	for i, p := range paths {
-		conn, err := a.dialPath(ctx, p, bondAddr)
+		// Pin each path to a specific QUIC client index to ensure
+		// duplicate peer paths (multi-IP) use different connections.
+		conn, err := a.dialPathIdx(ctx, p, bondAddr, i)
 		if err != nil {
 			log.Printf("[bond] %s: path %s failed to open: %v", target, p, err)
 			// Add as unhealthy — health monitor will retry later
@@ -197,7 +201,9 @@ func (a *App) dialBond(ctx context.Context, target, addr string) (net.Conn, erro
 
 	// Start readers: read from each path, feed into reorder buffer
 	for _, bp := range opened {
-		go sess.runPathReader(bp)
+		if bp.healthy && bp.conn != nil {
+			go sess.runPathReader(bp)
+		}
 	}
 
 	// Start deliverer: delivers reordered data to bondConn
@@ -342,22 +348,34 @@ func (sess *bondSession) selectPath(seq int) *bondPath {
 
 // runPathReader reads framed chunks from a single path and feeds into reorder buffer.
 func (sess *bondSession) runPathReader(bp *bondPath) {
+	bp.mu.Lock()
+	conn := bp.conn
+	bp.mu.Unlock()
+	if conn == nil {
+		return
+	}
 	var hdr [bondFrameHeaderSize]byte
 	for {
 		if sess.closed.Load() {
 			return
 		}
 
-		if _, err := io.ReadFull(bp.conn, hdr[:]); err != nil {
+		// Set read deadline: if no data for 8s on this path, assume it's dead.
+		// This is much faster than QUIC's 30s idle timeout.
+		conn.SetReadDeadline(time.Now().Add(8 * time.Second))
+		if _, err := io.ReadFull(conn, hdr[:]); err != nil {
 			if sess.closed.Load() {
 				return
 			}
-			log.Printf("[bond] %d: path %s read header error: %v", sess.id, bp.name, err)
+			log.Printf("[bond] %d: path %s read error: %v", sess.id, bp.name, err)
 			bp.mu.Lock()
 			bp.healthy = false
+			// Close the connection to signal the remote receiver
+			if bp.conn != nil {
+				bp.conn.Close()
+			}
 			bp.mu.Unlock()
 			sess.updateWeights()
-			// Skip pending reorder gaps — dead path's chunks will never arrive
 			sess.skipReorderGaps()
 			return
 		}
@@ -367,7 +385,26 @@ func (sess *bondSession) runPathReader(bp *bondPath) {
 		length := binary.BigEndian.Uint16(hdr[8:10])
 
 		if seq == bondTeardownSeq {
-			debugLog("[bond] %d: path %s received teardown", sess.id, bp.name)
+			cnt := sess.teardownCnt.Add(1)
+			log.Printf("[bond] %d: path %s teardown (%d/%d paths done, delivered %d seqs)",
+				sess.id, bp.name, cnt, len(sess.paths), sess.reorderNext-1)
+			bp.mu.Lock()
+			bp.healthy = false
+			bp.tornDown = true
+			bp.mu.Unlock()
+			if int(cnt) >= len(sess.paths) {
+				log.Printf("[bond] %d: all teardowns received, closing", sess.id)
+				sess.close()
+			} else {
+				// Wait for remaining teardowns, then force close
+				go func() {
+					time.Sleep(15 * time.Second)
+					if !sess.closed.Load() {
+						log.Printf("[bond] %d: teardown timeout, force closing", sess.id)
+						sess.close()
+					}
+				}()
+			}
 			return
 		}
 
@@ -376,11 +413,15 @@ func (sess *bondSession) runPathReader(bp *bondPath) {
 		}
 
 		data := make([]byte, length)
-		if _, err := io.ReadFull(bp.conn, data); err != nil {
-			debugLog("[bond] %d: path %s read data error: %v", sess.id, bp.name, err)
+		if _, err := io.ReadFull(conn, data); err != nil {
+			log.Printf("[bond] %d: path %s read data error: %v", sess.id, bp.name, err)
 			bp.mu.Lock()
 			bp.healthy = false
+			if bp.conn != nil {
+				bp.conn.Close()
+			}
 			bp.mu.Unlock()
+			sess.skipReorderGaps()
 			return
 		}
 
@@ -429,7 +470,33 @@ func (sess *bondSession) runDeliverer(dst net.Conn) {
 		sess.reorderMu.Unlock()
 
 		if !delivered {
-			timeout := 200 * time.Millisecond
+			if bufSize > 0 {
+				// Only skip aggressively for abnormally dead paths (not teardown)
+				if sess.hasAbnormalDeadPaths() {
+					sess.skipReorderGaps()
+					continue
+				}
+				// Spin waiting for the next expected seq
+				spinIters := 50 + bufSize*20
+				if spinIters > 500 {
+					spinIters = 500
+				}
+				spun := false
+				for i := 0; i < spinIters; i++ {
+					time.Sleep(100 * time.Microsecond)
+					sess.reorderMu.Lock()
+					_, ready := sess.reorderBuf[sess.reorderNext]
+					sess.reorderMu.Unlock()
+					if ready {
+						spun = true
+						break
+					}
+				}
+				if spun {
+					continue
+				}
+			}
+			timeout := 100 * time.Millisecond
 			if bufSize == 0 {
 				timeout = 5 * time.Second
 			}
@@ -440,6 +507,20 @@ func (sess *bondSession) runDeliverer(dst net.Conn) {
 					sess.skipReorderGaps()
 				}
 			case <-sess.closeCh:
+				// Final flush: deliver any remaining contiguous data
+				sess.reorderMu.Lock()
+				for {
+					data, ok := sess.reorderBuf[sess.reorderNext]
+					if !ok {
+						break
+					}
+					delete(sess.reorderBuf, sess.reorderNext)
+					sess.reorderNext++
+					sess.reorderMu.Unlock()
+					dst.Write(data)
+					sess.reorderMu.Lock()
+				}
+				sess.reorderMu.Unlock()
 				return
 			}
 		}
@@ -472,7 +553,6 @@ func (sess *bondSession) skipReorderGaps() {
 		if _, ok := sess.reorderBuf[sess.reorderNext]; ok {
 			break
 		}
-		// Find the lowest buffered seq ahead of reorderNext
 		var minSeq uint32
 		found := false
 		for s := range sess.reorderBuf {
@@ -489,12 +569,59 @@ func (sess *bondSession) skipReorderGaps() {
 	}
 	sess.reorderMu.Unlock()
 	if skipped > 0 {
-		log.Printf("[bond] %d: skipped %d missing seqs after path death", sess.id, skipped)
+		if skipped > 3 {
+			log.Printf("[bond] %d: skipped %d missing seqs", sess.id, skipped)
+		}
 		select {
 		case sess.reorderCh <- struct{}{}:
 		default:
 		}
 	}
+}
+
+// hasHealthyPaths returns true if at least one path is healthy.
+func (sess *bondSession) hasHealthyPaths() bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	for _, bp := range sess.paths {
+		bp.mu.Lock()
+		h := bp.healthy
+		bp.mu.Unlock()
+		if h {
+			return true
+		}
+	}
+	return false
+}
+
+// hasAbnormalDeadPaths returns true if any path died abnormally (not from teardown).
+func (sess *bondSession) hasAbnormalDeadPaths() bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	for _, bp := range sess.paths {
+		bp.mu.Lock()
+		dead := !bp.healthy && !bp.tornDown
+		bp.mu.Unlock()
+		if dead {
+			return true
+		}
+	}
+	return false
+}
+
+// hasDeadPaths returns true if any bond path is unhealthy.
+func (sess *bondSession) hasDeadPaths() bool {
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	for _, bp := range sess.paths {
+		bp.mu.Lock()
+		h := bp.healthy
+		bp.mu.Unlock()
+		if !h {
+			return true
+		}
+	}
+	return false
 }
 
 // updateWeights recalculates path weights based on RTT.
@@ -599,12 +726,13 @@ func (sess *bondSession) runHealthMonitor(a *App) {
 			// Send weight hints to receiver (via path 0, which is always connected)
 			sess.sendWeightHints()
 
-			// Try to reopen dead paths
+			// Try to reopen dead paths (skip torn-down ones)
 			for _, bp := range sess.paths {
 				bp.mu.Lock()
 				dead := !bp.healthy
+				td := bp.tornDown
 				bp.mu.Unlock()
-				if dead {
+				if dead && !td {
 					sess.tryReopenPath(a, bp)
 				}
 			}
@@ -617,11 +745,14 @@ func (sess *bondSession) runHealthMonitor(a *App) {
 
 // tryReopenPath attempts to reconnect a failed path.
 func (sess *bondSession) tryReopenPath(a *App, bp *bondPath) {
+	if sess.closed.Load() {
+		return
+	}
 	bondAddr := fmt.Sprintf("_bond_%d_%s", sess.id, sess.addr)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	conn, err := a.dialPath(ctx, bp.name, bondAddr)
+	conn, err := a.dialPathIdx(ctx, bp.name, bondAddr, bp.index)
 	if err != nil {
 		return
 	}
@@ -632,6 +763,12 @@ func (sess *bondSession) tryReopenPath(a *App, bp *bondPath) {
 	}
 
 	bp.mu.Lock()
+	if bp.tornDown {
+		// Path was torn down while we were reconnecting — discard
+		bp.mu.Unlock()
+		conn.Close()
+		return
+	}
 	oldConn := bp.conn
 	bp.conn = conn
 	bp.healthy = true

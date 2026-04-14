@@ -10,7 +10,6 @@
 package relay
 
 import (
-	"bufio"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -18,7 +17,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -81,22 +79,51 @@ func IsRelayStream(addr string) bool {
 		addr == streamLatencyReport ||
 		strings.HasPrefix(addr, streamViaPrefix) ||
 		strings.HasPrefix(addr, streamDataPrefix) ||
-		strings.HasPrefix(addr, streamIPTunPrefix)
+		strings.HasPrefix(addr, streamIPTunPrefix) ||
+		strings.HasPrefix(addr, bridgeRebindAddr)
+}
+
+// isLocalRelayStream returns true if addr is a relay stream that can be handled
+// locally via HandleStream in a reverse-dial context. Excludes transport-level
+// streams (register, ctrl, data delivery) that are part of connection setup.
+func isLocalRelayStream(addr string) bool {
+	if addr == streamRegister || addr == streamCtrlS2C {
+		return false
+	}
+	if strings.HasPrefix(addr, streamDataPrefix) {
+		return false
+	}
+	return IsRelayStream(addr)
 }
 
 // PeerInfo describes a connected peer.
 type PeerInfo struct {
-	Name      string `json:"name"`
-	ExitNode  bool   `json:"exit_node"`
-	Direction string `json:"direction"`
-	Native    bool   `json:"native"`
-	LatencyMs int    `json:"latency_ms"` // self-reported latency to this peer
-	Version   string `json:"version,omitempty"`
+	Name         string `json:"name"`
+	ExitNode     bool   `json:"exit_node"`
+	Direction    string `json:"direction"`
+	Native       bool   `json:"native"`
+	LatencyMs    int    `json:"latency_ms"`
+	Version      string `json:"version,omitempty"`
+	Incompatible bool   `json:"incompatible,omitempty"`
+	Conflict     bool   `json:"conflict,omitempty"`
 }
 
 // NodeVersion is the version string sent during peer registration.
 // Set by the app package at init time.
 var NodeVersion = "1.0.0"
+
+// MinCompatVersion is the minimum peer version we can work with.
+// Peers below this version are marked incompatible: relay blocked, nested disabled.
+const MinCompatVersion = "1.3.0"
+
+// isCompatible checks if a peer version meets minimum requirements.
+func isCompatible(version string) bool {
+	if version == "" || version == "1.0.0" {
+		return false // old peers that don't send version
+	}
+	// Simple semver major.minor comparison
+	return version >= MinCompatVersion
+}
 
 // peerMeta is extensible metadata exchanged after basic handshake.
 // New fields can be added freely — old peers ignore unknown fields.
@@ -147,6 +174,7 @@ type peer struct {
 	txBytes   atomic.Uint64
 	rxBytes   atomic.Uint64
 	failCount atomic.Int32 // consecutive ping failures
+	ctx       context.Context    // canceled when peer disconnects
 	cancel    context.CancelFunc
 
 	// Multi-IP: additional outbound QUIC connections
@@ -179,6 +207,29 @@ func (p *peer) pickClient() hyclient.Client {
 	return healthy[idx]
 }
 
+// pickClientIdx returns a specific QUIC client by index.
+// Index 0 = primary, 1+ = extra connections.
+func (p *peer) pickClientIdx(idx int) hyclient.Client {
+	if idx == 0 || len(p.extraConns) == 0 {
+		return p.client
+	}
+	// Build healthy list same as pickClient
+	healthy := []hyclient.Client{p.client}
+	for i, c := range p.extraConns {
+		status := "online"
+		if i < len(p.connStatuses) {
+			status = p.connStatuses[i]
+		}
+		if status == "online" {
+			healthy = append(healthy, c)
+		}
+	}
+	if idx >= len(healthy) {
+		idx = idx % len(healthy)
+	}
+	return healthy[idx]
+}
+
 // ConnCount returns the total number of active QUIC connections for this peer.
 func (p *peer) ConnCount() int {
 	if p.client == nil {
@@ -187,8 +238,19 @@ func (p *peer) ConnCount() int {
 	return 1 + len(p.extraConns)
 }
 
-// AddConn adds an extra QUIC connection for a secondary IP address.
+// AddConn adds or replaces an extra QUIC connection for a secondary IP address.
 func (p *peer) AddConn(client hyclient.Client, addr, status string) {
+	// Replace existing entry with same addr
+	for i, a := range p.connAddrs {
+		if a == addr {
+			if p.extraConns[i] != nil {
+				p.extraConns[i].Close()
+			}
+			p.extraConns[i] = client
+			p.connStatuses[i] = status
+			return
+		}
+	}
 	p.extraConns = append(p.extraConns, client)
 	p.connAddrs = append(p.connAddrs, addr)
 	p.connStatuses = append(p.connStatuses, status)
@@ -240,12 +302,21 @@ type Node struct {
 	peerRates  map[string]PeerTraffic
 
 	// Per-peer latency (updated by background prober)
-	latencyMu    sync.RWMutex
-	latencies    map[string]int
+	latencyMu      sync.RWMutex
+	latencies      map[string]int
+	addrLatencies  map[string]map[string]int // peer → addr → ms
 	peersOfCache map[string][]PeerInfo // cached PeersOf results from prober
+	conflicts    map[string]string    // client addr → conflicting name
+
+	// Injected handler: returns rich peer list JSON (with children) for nested discovery.
+	// If nil, falls back to flat n.Peers() JSON.
+	listPeersFunc func() []byte
 
 	// IP tunnel handler for TUN-based raw packet forwarding
 	ipTunHandler func(peerName string, stream net.Conn)
+
+	// Stream bridge manager for connection persistence across QUIC reconnects
+	bridges *bridgeManager
 }
 
 // PeerRates returns per-peer traffic rates.
@@ -269,14 +340,84 @@ func (n *Node) SetLatency(peerName string, ms int) {
 	n.latencyMu.Unlock()
 }
 
-// GetLatency returns stored latency for a peer. -1 if unknown.
+// GetLatency returns stored latency for a peer. For multi-addr peers, returns
+// average of all addr latencies. -1 if unknown.
 func (n *Node) GetLatency(peerName string) int {
 	n.latencyMu.RLock()
 	defer n.latencyMu.RUnlock()
+	// If per-addr latencies exist, return average
+	if al, ok := n.addrLatencies[peerName]; ok && len(al) > 0 {
+		sum, count := 0, 0
+		for _, ms := range al {
+			if ms > 0 {
+				sum += ms
+				count++
+			}
+		}
+		if count > 0 {
+			return sum / count
+		}
+	}
 	if ms, ok := n.latencies[peerName]; ok {
 		return ms
 	}
 	return -1
+}
+
+// GetAddrLatencies returns per-address latency for a multi-addr peer.
+func (n *Node) GetAddrLatencies(peerName string) map[string]int {
+	n.latencyMu.RLock()
+	defer n.latencyMu.RUnlock()
+	if al, ok := n.addrLatencies[peerName]; ok {
+		out := make(map[string]int, len(al))
+		for k, v := range al {
+			out[k] = v
+		}
+		return out
+	}
+	return nil
+}
+
+// setAddrLatency stores latency for a specific address of a peer.
+func (n *Node) setAddrLatency(peerName, addr string, ms int) {
+	n.latencyMu.Lock()
+	defer n.latencyMu.Unlock()
+	if n.addrLatencies[peerName] == nil {
+		n.addrLatencies[peerName] = make(map[string]int)
+	}
+	n.addrLatencies[peerName][addr] = ms
+}
+
+// probeExtraConns pings each extra QUIC connection and stores per-addr latency.
+func (n *Node) probeExtraConns(name string, p *peer) {
+	if len(p.extraConns) == 0 {
+		return
+	}
+	for i, ec := range p.extraConns {
+		if ec == nil {
+			continue
+		}
+		addr := ""
+		if i+1 < len(p.connAddrs) {
+			addr = p.connAddrs[i+1] // connAddrs[0] is primary, extras start at [1]
+		}
+		if addr == "" {
+			continue
+		}
+		rtt := n.pingClient(ec)
+		if rtt >= 0 {
+			n.setAddrLatency(name, addr, int(rtt.Milliseconds()))
+			// Update status to online
+			if i < len(p.connStatuses) {
+				p.connStatuses[i] = "online"
+			}
+		} else {
+			n.setAddrLatency(name, addr, -1)
+			if i < len(p.connStatuses) {
+				p.connStatuses[i] = "offline"
+			}
+		}
+	}
 }
 
 // SetPeersOfCache sets the cached peer list for a given peer name.
@@ -319,29 +460,43 @@ func (n *Node) StartLatencyProber(ctx context.Context) {
 			}
 			n.mu.RUnlock()
 			for i, p := range peers {
-				if p.client == nil {
-					continue
-				}
 				go func(name string, p *peer) {
-					rtt := n.PingPeer(name)
-					if rtt >= 0 {
-						n.SetLatency(name, int(rtt.Milliseconds()))
-						p.failCount.Store(0)
-						// Cache peer's sub-peers only if nested discovery is enabled
-						if n.IsNestedEnabled(name) {
-							if subPeers, err := n.PeersOf(name); err == nil {
-								n.peerRateMu.Lock()
-								n.peersOfCache[name] = subPeers
-								n.peerRateMu.Unlock()
+					if p.client != nil {
+						// Outbound peer: ping + nested discovery
+						rtt := n.PingPeer(name)
+						if rtt >= 0 {
+							n.SetLatency(name, int(rtt.Milliseconds()))
+							p.failCount.Store(0)
+							// Store per-addr latency for primary
+							if len(p.connAddrs) > 0 {
+								n.setAddrLatency(name, p.connAddrs[0], int(rtt.Milliseconds()))
+							}
+						} else {
+							n.SetLatency(name, -1)
+							fails := p.failCount.Add(1)
+							if fails >= 3 && p.cancel != nil {
+								log.Printf("[relay] %s: %d consecutive ping failures, disconnecting for reconnect", name, fails)
+								p.cancel()
+							}
+							if len(p.connAddrs) > 0 {
+								n.setAddrLatency(name, p.connAddrs[0], -1)
 							}
 						}
-					} else {
-						n.SetLatency(name, -1)
-						fails := p.failCount.Add(1)
-						if fails >= 3 && p.cancel != nil {
-							log.Printf("[relay] %s: %d consecutive ping failures, disconnecting for reconnect", name, fails)
-							p.cancel()
+						// Probe extra connections for per-addr latency
+						n.probeExtraConns(name, p)
+					}
+					// Cache nested sub-peers for both outbound AND inbound peers
+					if n.IsNestedEnabled(name) {
+						if subPeers, err := n.PeersOf(name); err == nil {
+							n.peerRateMu.Lock()
+							n.peersOfCache[name] = subPeers
+							n.peerRateMu.Unlock()
 						}
+					} else {
+						// Nested disabled: remove stale cache
+						n.peerRateMu.Lock()
+						delete(n.peersOfCache, name)
+						n.peerRateMu.Unlock()
 					}
 				}(names[i], p)
 			}
@@ -430,8 +585,10 @@ func NewNode(name string, exitNode bool) *Node {
 		nested:    make(map[string]bool),
 		blocked:   make(map[string]bool),
 		peerRates: make(map[string]PeerTraffic),
-		latencies:    make(map[string]int),
+		latencies:     make(map[string]int),
+		addrLatencies: make(map[string]map[string]int),
 		peersOfCache: make(map[string][]PeerInfo),
+		bridges:   newBridgeManager(),
 	}
 }
 
@@ -450,6 +607,7 @@ func (n *Node) AttachNative(ctx context.Context, peerName string, client hyclien
 		info:    PeerInfo{Name: peerName, Direction: "outbound", Native: true},
 		client:  client,
 		waiting: make(map[string]chan net.Conn),
+		ctx:     childCtx,
 		cancel:  cancel,
 	}
 	n.mu.Lock()
@@ -511,6 +669,19 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	if onID != nil {
 		onID(actualName)
 	}
+	// Check if onID flagged a conflict — abort registration to avoid overwriting real peer
+	n.mu.RLock()
+	hasConflict := false
+	for _, cname := range n.conflicts {
+		if cname == actualName {
+			hasConflict = true
+			break
+		}
+	}
+	n.mu.RUnlock()
+	if hasConflict {
+		return fmt.Errorf("relay: peer %s has name conflict (claims %q)", peerName, actualName)
+	}
 
 	// Open s2c ctrl for dial requests from remote
 	s2cCtrl, err := client.TCP(streamCtrlS2C)
@@ -521,16 +692,38 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	writeString(s2cCtrl, n.name)
 
 	// Register peer with remote's actual name
+	compat := isCompatible(remoteMeta.Version)
+	if !compat {
+		log.Printf("[%s] peer %s version %s is incompatible (min %s)", n.name, actualName, remoteMeta.Version, MinCompatVersion)
+	}
 	childCtx, childCancel := context.WithCancel(ctx)
 	p := &peer{
-		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version},
+		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version, Incompatible: !compat},
 		client:  client,
 		waiting: make(map[string]chan net.Conn),
+		ctx:     childCtx,
 		cancel:  childCancel,
 	}
 	n.mu.Lock()
+	oldPeer, hadOld := n.peers[actualName]
+	// Carry over extra IP connections from old peer (they have independent QUIC clients)
+	if hadOld && len(oldPeer.extraConns) > 0 {
+		p.extraConns = oldPeer.extraConns
+		p.connAddrs = oldPeer.connAddrs
+		p.connStatuses = oldPeer.connStatuses
+	}
 	n.peers[actualName] = p
 	n.mu.Unlock()
+	// Close old PRIMARY QUIC client to force-terminate stale streams.
+	// Extra connections are preserved above.
+	if hadOld {
+		if oldPeer.cancel != nil {
+			oldPeer.cancel()
+		}
+		if oldPeer.client != nil {
+			oldPeer.client.Close()
+		}
+	}
 	defer func() {
 		childCancel()
 		n.mu.Lock()
@@ -635,6 +828,18 @@ func (n *Node) HandleStream(ctx context.Context, reqAddr string, stream net.Conn
 		if strings.HasPrefix(reqAddr, streamDataPrefix) {
 			id := strings.TrimSuffix(reqAddr[len(streamDataPrefix):], streamDataSuffix)
 			n.deliverDataStream(id, stream)
+			return
+		}
+		// Stream rebind: reconnect a suspended bridge to a new QUIC stream
+		if strings.HasPrefix(reqAddr, bridgeRebindAddr) {
+			bridgeID := strings.TrimSuffix(reqAddr[len(bridgeRebindAddr):], ":0")
+			if n.bridges.Rebind(bridgeID, stream) {
+				log.Printf("[bridge] rebind accepted: %s", bridgeID)
+			} else {
+				log.Printf("[bridge] rebind rejected: %s (not found or not suspended)", bridgeID)
+				stream.Close()
+			}
+			return
 		}
 	}
 }
@@ -670,26 +875,51 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 		return
 	}
 
+	compat := isCompatible(remoteMeta.Version)
+	if !compat {
+		log.Printf("[%s] inbound peer %s version %s is incompatible (min %s)", n.name, name, remoteMeta.Version, MinCompatVersion)
+	}
 	peerCtx, peerCancel := context.WithCancel(ctx)
 	p := &peer{
 		info: PeerInfo{
-			Name:      name,
-			ExitNode:  flags[0]&0x01 != 0,
-			Direction: "inbound",
-			Version:   remoteMeta.Version,
+			Name:         name,
+			ExitNode:     flags[0]&0x01 != 0,
+			Direction:    "inbound",
+			Version:      remoteMeta.Version,
+			Incompatible: !compat,
 		},
 		waiting: make(map[string]chan net.Conn),
+		ctx:     peerCtx,
 		cancel:  peerCancel,
 	}
 
 	n.mu.Lock()
+	existing, exists := n.peers[name]
+	if exists && existing.ctrlW != nil {
+		// Peer already registered with an active ctrl stream (e.g. extra IP verification).
+		// Don't overwrite — just update version if newer.
+		if remoteMeta.Version != "" && remoteMeta.Version != "1.0.0" {
+			existing.info.Version = remoteMeta.Version
+		}
+		n.mu.Unlock()
+		peerCancel()
+		<-peerCtx.Done()
+		return
+	}
+	// Cancel old peer context to clean up stale connections
+	if exists && existing.cancel != nil {
+		existing.cancel()
+	}
 	n.peers[name] = p
 	n.mu.Unlock()
 
 	<-peerCtx.Done()
 
 	n.mu.Lock()
-	delete(n.peers, name)
+	// Only delete if we're still the current entry (not replaced by another registration)
+	if current, ok := n.peers[name]; ok && current == p {
+		delete(n.peers, name)
+	}
 	n.mu.Unlock()
 }
 
@@ -711,28 +941,64 @@ func (n *Node) handleLatencyReport(stream net.Conn) {
 
 func (n *Node) handleListPeers(stream net.Conn) {
 	defer stream.Close()
+	if n.listPeersFunc != nil {
+		stream.Write(n.listPeersFunc())
+		return
+	}
 	peers := n.Peers()
 	data, _ := json.Marshal(peers)
 	stream.Write(data)
 }
 
 func (n *Node) handleVia(ctx context.Context, peerName, targetAddr string, stream net.Conn) {
+	// Parse bridge tag from target address for rebind support
+	actualAddr, bridgeID, isBridged := ParseBridgeAddr(targetAddr)
+
+	// Check if this is a rebind to an existing via bridge
+	if isBridged {
+		log.Printf("[via] checking rebind %s for peer %s", bridgeID, peerName)
+		if rebindConn := n.bridges.TryRebind(bridgeID); rebindConn != nil {
+			log.Printf("[via] rebind accepted: %s (peer %s)", bridgeID, peerName)
+			defer rebindConn.Close()
+			defer stream.Close()
+			go func() { io.Copy(rebindConn, stream); rebindConn.Close() }()
+			io.Copy(stream, rebindConn)
+			return
+		}
+		log.Printf("[via] rebind failed: %s (not found or not suspended)", bridgeID)
+	}
+
+	// New connection: dial the next hop
 	var exitConn net.Conn
 	var err error
 	if parts := strings.Split(peerName, "/"); len(parts) > 1 {
-		exitConn, err = n.DialVia(ctx, parts, targetAddr)
+		exitConn, err = n.DialVia(ctx, parts, actualAddr)
 	} else {
-		exitConn, err = n.DialTCP(ctx, peerName, targetAddr)
+		exitConn, _, err = n.DialTCPBridged(peerName, actualAddr)
+		if err != nil {
+			exitConn, err = n.DialTCP(ctx, peerName, actualAddr)
+		}
 	}
 	if err != nil {
 		stream.Close()
 		return
 	}
-	defer exitConn.Close()
-	defer stream.Close()
-	// exitConn is already a countedConn from DialTCP/DialVia, so just use plain io.Copy
-	go func() { io.Copy(exitConn, stream); exitConn.Close() }()
-	io.Copy(stream, exitConn)
+
+	if isBridged {
+		// Create a bridge so the exit connection survives incoming stream death.
+		// When the incoming via stream dies (prev-hop QUIC failure), the bridge
+		// suspends and waits for a rebind from the previous hop.
+		pipeConn := n.bridges.CreateWithID(bridgeID, actualAddr, exitConn)
+		defer pipeConn.Close()
+		defer stream.Close()
+		go func() { io.Copy(pipeConn, stream); pipeConn.Close() }()
+		io.Copy(stream, pipeConn)
+	} else {
+		defer exitConn.Close()
+		defer stream.Close()
+		go func() { io.Copy(exitConn, stream); exitConn.Close() }()
+		io.Copy(stream, exitConn)
+	}
 }
 
 func (n *Node) deliverDataStream(id string, stream net.Conn) {
@@ -773,23 +1039,30 @@ func (n *Node) deliverDataStream(id string, stream net.Conn) {
 }
 
 func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclient.Client, id, addr string) {
+	// Block requests from incompatible peers
+	n.mu.RLock()
+	if p, ok := n.peers[peerName]; ok && n.isPeerBlocked(p) {
+		n.mu.RUnlock()
+		return
+	}
+	n.mu.RUnlock()
+
 	// UDP dial request: addr starts with "udp:"
 	if strings.HasPrefix(addr, "udp:") {
 		n.dialUDPAndStream(ctx, peerName, client, id, addr[4:])
 		return
 	}
 
-	// IP tunnel request: deliver stream to IP tunnel handler
-	if strings.HasPrefix(addr, streamIPTunPrefix) {
+	// Relay internal stream: handle locally via HandleStream — the same dispatch
+	// used for direct inbound QUIC streams. Any future relay stream added to
+	// HandleStream automatically works for both outbound and inbound peers.
+	// Excludes transport-level streams (register, ctrl, data delivery).
+	if isLocalRelayStream(addr) {
 		stream, err := client.TCP(streamDataPrefix + id + streamDataSuffix)
 		if err != nil {
 			return
 		}
-		if n.ipTunHandler != nil {
-			n.ipTunHandler(addr[len(streamIPTunPrefix):], stream)
-		} else {
-			stream.Close()
-		}
+		n.HandleStream(ctx, addr, stream)
 		return
 	}
 
@@ -819,16 +1092,12 @@ func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclie
 
 	n.conns.Add(1)
 	defer n.conns.Add(-1)
-	n.mu.RLock()
-	p := n.peers[peerName]
-	n.mu.RUnlock()
-	var ptx, prx *atomic.Uint64
-	if p != nil {
-		ptx = &p.txBytes
-		prx = &p.rxBytes
-	}
-	go func() { n.copyCount(stream, target, &n.rxBytes, prx); stream.Close() }()
-	n.copyCount(target, stream, &n.txBytes, ptx)
+
+	// Create a bridge to enable stream rebinding.
+	// If the QUIC stream dies (peer reconnects), the TCP connection to the
+	// destination stays alive and waits for a rebind from the requester.
+	bridge := n.bridges.Create(peerName, addr, stream)
+	bridge.RunRelay(target, n.bridges)
 }
 
 // dialUDPAndStream handles a remote UDP dial request.
@@ -895,18 +1164,27 @@ func (n *Node) Peers() []PeerInfo {
 	n.latencyMu.RLock()
 	defer n.latencyMu.RUnlock()
 	result := make([]PeerInfo, 0, len(n.peers))
+	// Build set of conflicting peer names
+	conflictNames := make(map[string]bool)
+	for _, name := range n.conflicts {
+		conflictNames[name] = true
+	}
 	for name, p := range n.peers {
 		info := p.info
 		if ms, ok := n.latencies[name]; ok {
 			info.LatencyMs = ms
+		}
+		if conflictNames[name] {
+			info.Conflict = true
 		}
 		result = append(result, info)
 	}
 	return result
 }
 
-// PeersOf returns a peer's peers. Requires nested discovery enabled for that peer.
-func (n *Node) PeersOf(peerName string) ([]PeerInfo, error) {
+// PeersOfRaw returns the raw JSON from a peer's streamListPeers response.
+// Used by the API server to get rich tree data (with children).
+func (n *Node) PeersOfRaw(peerName string) ([]byte, error) {
 	n.mu.RLock()
 	p, ok := n.peers[peerName]
 	n.mu.RUnlock()
@@ -915,8 +1193,8 @@ func (n *Node) PeersOf(peerName string) ([]PeerInfo, error) {
 	}
 
 	type result struct {
-		peers []PeerInfo
-		err   error
+		data []byte
+		err  error
 	}
 	ch := make(chan result, 1)
 	go func() {
@@ -931,41 +1209,48 @@ func (n *Node) PeersOf(peerName string) ([]PeerInfo, error) {
 			defer stream.Close()
 			data, err = io.ReadAll(stream)
 		} else {
-			// Inbound peer: query via HTTP through reverse tunnel to their API
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			conn, cerr := n.DialTCP(ctx, peerName, "127.0.0.1:5565")
+			conn, cerr := n.DialTCP(ctx, peerName, streamListPeers)
 			if cerr != nil {
 				ch <- result{nil, cerr}
 				return
 			}
 			defer conn.Close()
-			fmt.Fprintf(conn, "GET /scale/api/internal/peers HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-			resp, rerr := http.ReadResponse(bufio.NewReader(conn), nil)
-			if rerr != nil {
-				ch <- result{nil, rerr}
-				return
-			}
-			defer resp.Body.Close()
-			data, err = io.ReadAll(resp.Body)
+			data, err = io.ReadAll(conn)
 		}
 		if err != nil {
 			ch <- result{nil, err}
 			return
 		}
-		var peers []PeerInfo
-		if err := json.Unmarshal(data, &peers); err != nil {
-			ch <- result{nil, err}
-			return
-		}
-		ch <- result{peers, nil}
+		ch <- result{data, nil}
 	}()
 	select {
 	case r := <-ch:
-		return r.peers, r.err
+		return r.data, r.err
 	case <-time.After(3 * time.Second):
 		return nil, fmt.Errorf("relay: peer %q query timeout", peerName)
 	}
+}
+
+// PeersOf returns a peer's peers (flat list). Used by the prober for cache.
+func (n *Node) PeersOf(peerName string) ([]PeerInfo, error) {
+	// Return empty for incompatible peers (no nested discovery)
+	n.mu.RLock()
+	if p, ok := n.peers[peerName]; ok && n.isPeerBlocked(p) {
+		n.mu.RUnlock()
+		return nil, nil
+	}
+	n.mu.RUnlock()
+	data, err := n.PeersOfRaw(peerName)
+	if err != nil {
+		return nil, err
+	}
+	var peers []PeerInfo
+	if err := json.Unmarshal(data, &peers); err != nil {
+		return nil, err
+	}
+	return peers, nil
 }
 
 // PeersOfVia returns a peer's peers through a multi-hop path.
@@ -1009,11 +1294,26 @@ func (n *Node) IsNestedEnabled(peerName string) bool {
 }
 
 // DisconnectPeer forcibly disconnects a peer (both inbound and outbound).
+// Closes the QUIC client to kill all active streams through this peer,
+// ensuring no connections hang in a black hole after reconnection.
 func (n *Node) DisconnectPeer(name string) {
 	n.mu.Lock()
 	p, ok := n.peers[name]
-	if ok && p.cancel != nil {
-		p.cancel()
+	if ok {
+		if p.cancel != nil {
+			p.cancel()
+		}
+		// Close QUIC client(s) to force-terminate all active streams.
+		// Without this, streams on the dead QUIC connection hang forever
+		// because quic-go's Read() doesn't return on Close().
+		if p.client != nil {
+			p.client.Close()
+		}
+		for _, c := range p.extraConns {
+			if c != nil {
+				c.Close()
+			}
+		}
 	}
 	delete(n.peers, name)
 	n.mu.Unlock()
@@ -1061,8 +1361,9 @@ func (n *Node) AddPeerConn(name string, client hyclient.Client, addr, status str
 
 // IPStatus represents per-IP connection info.
 type IPStatus struct {
-	Addr   string `json:"addr"`
-	Status string `json:"status"` // "online", "offline", "mismatch", "native"
+	Addr      string `json:"addr"`
+	Status    string `json:"status"` // "online", "offline", "mismatch", "native"
+	LatencyMs int    `json:"latency_ms,omitempty"`
 }
 
 // PeerIPStatuses returns per-IP status for a peer.
@@ -1166,6 +1467,31 @@ func (n *Node) PingPeer(name string) time.Duration {
 			return
 		}
 		stream, err := p.client.TCP(streamListPeers)
+		if err != nil {
+			ch <- -1
+			return
+		}
+		io.ReadAll(stream)
+		stream.Close()
+		ch <- time.Since(start)
+	}()
+	select {
+	case d := <-ch:
+		return d
+	case <-time.After(2 * time.Second):
+		return -1
+	}
+}
+
+// pingClient measures RTT to a specific QUIC client connection. Returns -1 if unreachable.
+func (n *Node) pingClient(c hyclient.Client) time.Duration {
+	if c == nil {
+		return -1
+	}
+	ch := make(chan time.Duration, 1)
+	go func() {
+		start := time.Now()
+		stream, err := c.TCP(streamListPeers)
 		if err != nil {
 			ch <- -1
 			return
@@ -1349,12 +1675,103 @@ func (w *hyUDPConnWrapper) SetDeadline(t time.Time) error      { return nil }
 func (w *hyUDPConnWrapper) SetReadDeadline(t time.Time) error  { return nil }
 func (w *hyUDPConnWrapper) SetWriteDeadline(t time.Time) error { return nil }
 
+// PeerCtx returns the context for a peer, canceled when the peer disconnects.
+// Used by idle timeout to detect dead relay streams immediately.
+// Bridges returns the bridge manager for stream rebinding.
+func (n *Node) Bridges() *bridgeManager { return n.bridges }
+
+// isPeerBlocked checks if a peer should be blocked from relay.
+// Must be called with n.mu held (at least RLock).
+func (n *Node) isPeerBlocked(p *peer) bool {
+	if p.info.Incompatible {
+		return true
+	}
+	// Check name conflict
+	for _, conflictName := range n.conflicts {
+		if conflictName == p.info.Name {
+			return true
+		}
+	}
+	return false
+}
+
+// SetPeerConflict records a name conflict for a client address.
+// The conflict is tracked separately from the peer entry to avoid
+// marking legitimate peers as conflicting.
+func (n *Node) SetPeerConflict(clientAddr string, conflictName string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.conflicts == nil {
+		n.conflicts = make(map[string]string)
+	}
+	if conflictName == "" {
+		delete(n.conflicts, clientAddr)
+	} else {
+		n.conflicts[clientAddr] = conflictName
+	}
+}
+
+// PeerConflicts returns a map of client addr → conflicting name.
+func (n *Node) PeerConflicts() map[string]string {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	if len(n.conflicts) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(n.conflicts))
+	for k, v := range n.conflicts {
+		result[k] = v
+	}
+	return result
+}
+
+func (n *Node) PeerCtx(peerName string) context.Context {
+	n.mu.RLock()
+	p, ok := n.peers[peerName]
+	n.mu.RUnlock()
+	if !ok || p.ctx == nil {
+		return context.Background()
+	}
+	return p.ctx
+}
+
+// DialTCPIdx dials TCP through a specific QUIC client index (for bond path pinning).
+// Index -1 means round-robin (same as DialTCP).
+func (n *Node) DialTCPIdx(ctx context.Context, peerName string, addr string, clientIdx int) (net.Conn, error) {
+	n.mu.RLock()
+	p, ok := n.peers[peerName]
+	n.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
+	}
+	if n.isPeerBlocked(p) {
+		return nil, fmt.Errorf("relay: peer %q is blocked (incompatible or conflict)", peerName)
+	}
+	if p.client != nil {
+		var cl hyclient.Client
+		if clientIdx >= 0 {
+			cl = p.pickClientIdx(clientIdx)
+		} else {
+			cl = p.pickClient()
+		}
+		conn, err := cl.TCP(addr)
+		if err != nil {
+			return nil, err
+		}
+		return n.wrapConn(peerName, conn), nil
+	}
+	return n.DialTCP(ctx, peerName, addr)
+}
+
 func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.Conn, error) {
 	n.mu.RLock()
 	p, ok := n.peers[peerName]
 	n.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
+	}
+	if n.isPeerBlocked(p) {
+		return nil, fmt.Errorf("relay: peer %q is blocked (incompatible or conflict)", peerName)
 	}
 
 	// Outbound peer: use round-robin across available QUIC connections
@@ -1394,6 +1811,12 @@ func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.C
 		p.writeMu.Unlock()
 		return nil, ctx.Err()
 	}
+}
+
+// SetListPeersFunc registers a function that returns rich peer list JSON (with children).
+// Used by handleListPeers so both outbound and inbound nested discovery return identical data.
+func (n *Node) SetListPeersFunc(fn func() []byte) {
+	n.listPeersFunc = fn
 }
 
 // SetIPTunHandler registers a handler for incoming IP tunnel streams from peers.
@@ -1443,6 +1866,57 @@ func (n *Node) DialIPTun(ctx context.Context, peerName string) (net.Conn, error)
 		p.writeMu.Unlock()
 		return nil, ctx.Err()
 	}
+}
+
+// DialViaBridged dials addr through a chain of peers with bridge support.
+// Returns a bridgedConn that survives first-hop QUIC reconnects.
+func (n *Node) DialViaBridged(ctx context.Context, path []string, addr string) (net.Conn, string, error) {
+	if len(path) < 2 {
+		return nil, "", fmt.Errorf("relay: DialViaBridged requires multi-hop path")
+	}
+	firstPeer := path[0]
+	remaining := strings.Join(path[1:], "/")
+	// Tag the target address with bridge ID so the exit node creates a bridge
+	bridge := n.bridges.Create(firstPeer, addr, nil)
+	taggedAddr := addr + "#bridge=" + bridge.id
+	viaAddr := streamViaPrefix + remaining + "_" + taggedAddr + ":0"
+
+	n.mu.RLock()
+	p, ok := n.peers[firstPeer]
+	n.mu.RUnlock()
+	if !ok {
+		n.bridges.Remove(bridge.id)
+		return nil, "", fmt.Errorf("relay: peer %q not connected", firstPeer)
+	}
+	if p.info.Incompatible {
+		n.bridges.Remove(bridge.id)
+		return nil, "", fmt.Errorf("relay: peer %q version %s is incompatible", firstPeer, p.info.Version)
+	}
+	if p.client == nil {
+		n.bridges.Remove(bridge.id)
+		return nil, "", fmt.Errorf("relay: peer %q is inbound (no client)", firstPeer)
+	}
+
+	cl := p.pickClient()
+	stream, err := cl.TCP(viaAddr)
+	if err != nil {
+		n.bridges.Remove(bridge.id)
+		return nil, "", err
+	}
+	bridge.mu.Lock()
+	bridge.relayStream = stream
+	bridge.mu.Unlock()
+
+	bc := &bridgedConn{
+		bridge:   bridge,
+		node:     n,
+		peerName: firstPeer,
+		stream:   n.wrapConn(firstPeer, stream),
+	}
+	// Store the via address template for rebind
+	bc.viaPath = path
+	bc.viaTargetAddr = addr
+	return bc, bridge.id, nil
 }
 
 // DialVia dials addr through a chain of peers.
