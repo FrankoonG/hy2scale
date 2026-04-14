@@ -249,8 +249,8 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 				exitVia, exitMode = ruleEng.lookupExit(id.LocalAddress.String())
 			}
 
-			debugLog("[tun-fwd] TCP %s(%s/%s) → %s exit=%q mode=%s",
-				srcIP, username, protocol, dstAddr, exitVia, exitMode)
+			debugLog("[tun-fwd] TCP %s → %s exit=%q mode=%s",
+				srcIP, dstAddr, exitVia, exitMode)
 
 			var remote net.Conn
 			var err error
