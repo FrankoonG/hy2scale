@@ -13,6 +13,10 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"gvisor.dev/gvisor/pkg/buffer"
+	"gvisor.dev/gvisor/pkg/tcpip/header"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
 
 // TUN-based IP packet forwarding engine.
@@ -34,10 +38,15 @@ type ipfwdEngine struct {
 	tunFd  *tunDevice
 	cancel context.CancelFunc
 
-	// Per-peer QUIC IP tunnel streams (entry side)
+	// Per-peer QUIC IP tunnel streams (entry side, full TUN capable exits)
 	streams      map[string]*ipfwdStream
-	reconnecting map[string]bool // peers with async reconnect in progress
+	reconnecting map[string]bool
 	streamsMu    sync.Mutex
+
+	// Compat mode: exits without TUN capability use gvisor netstack
+	// to extract TCP/UDP from IP packets and proxy through relay
+	compatExits   map[string]bool // exitVia → true if compat mode
+	compatExitsMu sync.RWMutex
 
 	// Dynamic target list (updated by hot rule changes)
 	targets   []ipfwdTarget
@@ -113,6 +122,7 @@ func (a *App) StartIPForwarding(targets []ipfwdTarget) error {
 		cancel:       cancel,
 		streams:      make(map[string]*ipfwdStream),
 		reconnecting: make(map[string]bool),
+		compatExits:  make(map[string]bool),
 	}
 
 	// Add routing rules for each target
@@ -255,13 +265,26 @@ func (eng *ipfwdEngine) tunReadLoop(ctx context.Context) {
 			continue
 		}
 
-		// Get existing stream or trigger async reconnect (never blocks)
-		stream := eng.getStream(ctx, exitPeer)
-		if stream == nil {
-			continue // no stream yet — packet dropped, reconnect in background
+		// Check if this exit uses compat mode (no TUN capability)
+		eng.compatExitsMu.RLock()
+		isCompat := eng.compatExits[exitPeer]
+		eng.compatExitsMu.RUnlock()
+
+		if isCompat {
+			// Compat mode: feed packet to gvisor netstack for L7 extraction.
+			// The capture forwarders will proxy TCP/UDP through relay.
+			if tunCaptureInst != nil && tunCaptureInst.ep != nil {
+				eng.injectToNetstack(pkt)
+			}
+			continue
 		}
 
-		// Write framed packet: [2-byte length][packet]
+		// Full TUN mode: send raw IP frame to exit via QUIC stream
+		stream := eng.getStream(ctx, exitPeer)
+		if stream == nil {
+			continue
+		}
+
 		frame := make([]byte, 2+n)
 		binary.BigEndian.PutUint16(frame[:2], uint16(n))
 		copy(frame[2:], pkt)
@@ -503,10 +526,9 @@ func (a *App) registerExitIPTunHandler(ctx context.Context) {
 func (eng *ipfwdEngine) addTargets(ruleID string, cidrs []string, exitVia string) {
 	eng.targetsMu.Lock()
 	defer eng.targetsMu.Unlock()
-	// Remove any existing target for the same rule (hot update)
 	eng.targets = filterTargets(eng.targets, ruleID)
 	eng.targets = append(eng.targets, ipfwdTarget{cidrs: cidrs, exitVia: exitVia, ruleID: ruleID})
-	// Close stale stream for old exit (forces reconnect to new exit)
+	// Close stale streams (forces reconnect to new exit)
 	eng.streamsMu.Lock()
 	for k, s := range eng.streams {
 		if s.closed {
@@ -514,6 +536,8 @@ func (eng *ipfwdEngine) addTargets(ruleID string, cidrs []string, exitVia string
 		}
 	}
 	eng.streamsMu.Unlock()
+	// Check if exit supports full TUN; if not, enable compat mode
+	go eng.checkAndSetCompatMode(exitVia)
 }
 
 // removeTargetsForRule removes targets by rule ID.
@@ -521,6 +545,77 @@ func (eng *ipfwdEngine) removeTargetsForRule(ruleID string) {
 	eng.targetsMu.Lock()
 	defer eng.targetsMu.Unlock()
 	eng.targets = filterTargets(eng.targets, ruleID)
+}
+
+// injectToNetstack feeds a raw IP packet into the gvisor capture stack
+// for L7 (TCP/UDP) extraction and relay proxy forwarding.
+func (eng *ipfwdEngine) injectToNetstack(pkt []byte) {
+	if tunCaptureInst == nil || tunCaptureInst.ep == nil {
+		return
+	}
+	pkb := stack.NewPacketBuffer(stack.PacketBufferOptions{
+		Payload: buffer.MakeWithData(append([]byte(nil), pkt...)),
+	})
+	switch pkt[0] >> 4 {
+	case 4:
+		tunCaptureInst.ep.InjectInbound(header.IPv4ProtocolNumber, pkb)
+	case 6:
+		tunCaptureInst.ep.InjectInbound(header.IPv6ProtocolNumber, pkb)
+	}
+	pkb.DecRef()
+}
+
+// checkAndSetCompatMode detects if an exit peer supports full TUN.
+// If not, marks it for compat mode and ensures gvisor capture stack is running.
+func (eng *ipfwdEngine) checkAndSetCompatMode(exitVia string) {
+	if !eng.app.node.IsPeerTunCapable(exitVia) {
+		eng.compatExitsMu.Lock()
+		eng.compatExits[exitVia] = true
+		eng.compatExitsMu.Unlock()
+		// Ensure gvisor capture stack is running for compat forwarding
+		if !tunCaptureActive.Load() {
+			log.Printf("[tun-ipfwd] exit %s not TUN-capable, starting compat (L7 proxy) mode", exitVia)
+			eng.ensureCompatStack()
+		}
+	}
+}
+
+// ensureCompatStack starts the gvisor netstack + capture forwarders if not already running.
+// It also bridges gvisor output back to the kernel TUN so TCP handshakes complete.
+func (eng *ipfwdEngine) ensureCompatStack() {
+	if tunCaptureActive.Load() {
+		return
+	}
+	ep, gvStack, err := createCaptureStack(ipfwdTunMTU)
+	if err != nil {
+		log.Printf("[tun-ipfwd] compat stack creation failed: %v", err)
+		return
+	}
+	tunCaptureMu.Lock()
+	tunCaptureInst = &tunCaptureState{tunFile: eng.tunFd.file, ep: ep, gvStack: gvStack}
+	tunCaptureActive.Store(true)
+	tunCaptureMu.Unlock()
+
+	installCaptureForwarders(gvStack, eng.app)
+
+	// Bridge gvisor output → kernel TUN (SYN-ACK, data replies go back to host)
+	go func() {
+		for {
+			pkt := ep.Read()
+			if pkt == nil {
+				time.Sleep(time.Millisecond)
+				continue
+			}
+			view := pkt.ToView()
+			pkt.DecRef()
+			data := view.AsSlice()
+			if len(data) > 0 {
+				eng.tunFd.Write(data)
+			}
+		}
+	}()
+
+	log.Printf("[tun-ipfwd] compat L7 proxy stack active")
 }
 
 func filterTargets(targets []ipfwdTarget, excludeRuleID string) []ipfwdTarget {

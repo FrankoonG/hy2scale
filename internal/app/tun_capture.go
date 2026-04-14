@@ -244,6 +244,10 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 					exitVia = v.(string)
 				}
 			}
+			// Fallback: check rules engine for TUN compat mode routing
+			if exitVia == "" && ruleEng != nil {
+				exitVia, exitMode = ruleEng.lookupExit(id.LocalAddress.String())
+			}
 
 			debugLog("[tun-fwd] TCP %s(%s/%s) → %s exit=%q mode=%s",
 				srcIP, username, protocol, dstAddr, exitVia, exitMode)
