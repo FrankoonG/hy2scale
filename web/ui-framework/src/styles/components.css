@@ -174,14 +174,15 @@ a.peer-link:hover{text-decoration:underline}
 /* ====== Toggle ====== */
 .hy-toggle{position:relative;width:36px;height:20px;cursor:pointer;display:inline-block;vertical-align:middle}
 .hy-toggle input{opacity:0;width:0;height:0;position:absolute}
-.hy-toggle .slider{position:absolute;inset:0;background:var(--border);border-radius:10px;transition:background .2s ease}
-.hy-toggle .slider::before{content:'';position:absolute;height:14px;width:14px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:transform .2s cubic-bezier(.4,0,.2,1);box-shadow:0 1px 3px rgba(0,0,0,.15)}
+.hy-toggle .slider{position:absolute;inset:0;background:var(--border);border-radius:4px;transition:background .2s ease}
+.hy-toggle .slider::before{content:'';position:absolute;height:14px;width:14px;left:3px;bottom:3px;background:#fff;border-radius:3px;transition:transform .2s cubic-bezier(.4,0,.2,1);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 .hy-toggle input:checked+.slider{background:var(--primary)}
 .hy-toggle input:checked+.slider::before{transform:translateX(16px)}
 .hy-toggle.disabled{opacity:.4;pointer-events:none}
 .hy-toggle input:disabled+.slider{opacity:.4;cursor:not-allowed}
 .hy-toggle.sm{width:30px;height:16px}
-.hy-toggle.sm .slider::before{width:10px;height:10px}
+.hy-toggle.sm .slider{border-radius:3px}
+.hy-toggle.sm .slider::before{width:10px;height:10px;border-radius:2px}
 .hy-toggle.sm input:checked+.slider::before{transform:translateX(14px)}
 
 /* ====== Forms ====== */
