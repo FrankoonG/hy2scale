@@ -116,15 +116,32 @@ type ikuaiAdapter struct {
 func (a *ikuaiAdapter) Name() string { return "ikuai" }
 
 func (a *ikuaiAdapter) FixIPTables() bool {
+	// Strategy 1: try bundled uClibc iptables (for offline/custom builds)
+	if a.tryBundle() {
+		return true
+	}
+
+	// Strategy 2: chroot to host filesystem (iKuai mounts host at /host)
+	if a.tryHostChroot() {
+		return true
+	}
+
+	// Strategy 3: container's own iptables-legacy (may work on newer iKuai)
+	if a.tryContainerIPT() {
+		return true
+	}
+
+	return false
+}
+
+func (a *ikuaiAdapter) tryBundle() bool {
 	bundlePath := platformBundleDir + "/ikuai-iptables.tar.gz"
 	extractDir := platformBundleDir + "/ikuai"
 
 	if _, err := os.Stat(bundlePath); err != nil {
-		log.Printf("[ikuai] iptables bundle not found at %s", bundlePath)
 		return false
 	}
 
-	// Extract on demand (stays compressed until needed)
 	binPath := extractDir + "/usr/sbin/xtables-legacy-multi"
 	if _, err := os.Stat(binPath); err != nil {
 		log.Printf("[ikuai] extracting iptables bundle...")
@@ -134,30 +151,66 @@ func (a *ikuaiAdapter) FixIPTables() bool {
 			log.Printf("[ikuai] extract failed: %v: %s", err, string(out))
 			return false
 		}
-		// Create required symlinks for the uClibc runtime
 		os.Symlink("libuClibc-1.0.40.so", extractDir+"/lib/libc.so.0")
 		os.Symlink("libip4tc.so.2.0.0", extractDir+"/usr/lib/libip4tc.so.2")
 		os.Symlink("libip6tc.so.2.0.0", extractDir+"/usr/lib/libip6tc.so.2")
 		os.Symlink("libxtables.so.12.2.0", extractDir+"/usr/lib/libxtables.so.12")
 	}
 
-	// The ELF interpreter is hardcoded as /lib/ld64-uClibc.so.0 in the binary.
-	// Symlink to the extracted copy so the kernel can find it.
 	os.Symlink(extractDir+"/lib/ld64-uClibc-1.0.40.so", "/lib/ld64-uClibc.so.0")
 	os.Symlink(extractDir+"/lib/ld64-uClibc-1.0.40.so", "/lib/ld64-uClibc.so.1")
 
 	a.iptBin = binPath
 	a.ldPath = extractDir + "/lib:" + extractDir + "/usr/lib"
 
-	// Test before marking ready
 	testCmd := exec.Command("sh", "-c",
 		"LD_LIBRARY_PATH="+a.ldPath+" "+a.iptBin+" iptables -t nat -L -n")
 	if out, err := testCmd.CombinedOutput(); err != nil {
-		log.Printf("[ikuai] iptables test failed: %v: %s", err, string(out))
+		log.Printf("[ikuai] bundle iptables test failed: %v: %s", err, string(out))
 		return false
 	}
 
+	log.Printf("[ikuai] using bundled iptables")
+
 	a.ready = true
+	return true
+}
+
+func (a *ikuaiAdapter) tryHostChroot() bool {
+	// iKuai Docker mounts host root at /host
+	for _, hostIPT := range []string{
+		"/host/usr/sbin/iptables",
+		"/host/sbin/iptables",
+		"/host/usr/sbin/iptables-legacy",
+	} {
+		if _, err := os.Stat(hostIPT); err != nil {
+			continue
+		}
+		testCmd := exec.Command("chroot", "/host", hostIPT[len("/host"):], "-t", "nat", "-L", "-n")
+		if out, err := testCmd.CombinedOutput(); err != nil {
+			log.Printf("[ikuai] host chroot %s test failed: %v: %s", hostIPT, err, string(out))
+			continue
+		}
+		a.iptBin = hostIPT[len("/host"):] // path relative to /host
+		a.ldPath = "chroot"               // sentinel: use chroot mode
+		a.ready = true
+		log.Printf("[ikuai] using host iptables via chroot (%s)", a.iptBin)
+		return true
+	}
+	return false
+}
+
+func (a *ikuaiAdapter) tryContainerIPT() bool {
+	// Try the container's own iptables-legacy
+	testCmd := exec.Command("iptables-legacy", "-t", "nat", "-L", "-n")
+	if out, err := testCmd.CombinedOutput(); err != nil {
+		log.Printf("[ikuai] container iptables-legacy test failed: %v: %s", err, string(out))
+		return false
+	}
+	a.iptBin = "iptables-legacy"
+	a.ldPath = ""
+	a.ready = true
+	log.Printf("[ikuai] using container iptables-legacy")
 	return true
 }
 
@@ -165,14 +218,26 @@ func (a *ikuaiAdapter) IPTExec(prog string, args []string) *exec.Cmd {
 	if !a.ready {
 		return nil
 	}
-	// Intercept both "iptables" and "iptables-legacy" — on iKuai, the container's
-	// iptables binary is broken regardless of variant, we always use the host bundle
 	if prog != "iptables-legacy" && prog != "iptables" {
 		return nil
 	}
-	shellCmd := "LD_LIBRARY_PATH=" + a.ldPath + " " + a.iptBin + " iptables"
-	for _, arg := range args {
-		shellCmd += " " + arg
+
+	if a.ldPath == "chroot" {
+		// Host chroot mode
+		chrootArgs := []string{"/host", a.iptBin}
+		chrootArgs = append(chrootArgs, args...)
+		return exec.Command("chroot", chrootArgs...)
 	}
-	return exec.Command("sh", "-c", shellCmd)
+
+	if a.ldPath != "" {
+		// Bundle mode with LD_LIBRARY_PATH
+		shellCmd := "LD_LIBRARY_PATH=" + a.ldPath + " " + a.iptBin + " iptables"
+		for _, arg := range args {
+			shellCmd += " " + arg
+		}
+		return exec.Command("sh", "-c", shellCmd)
+	}
+
+	// Container binary mode
+	return exec.Command(a.iptBin, args...)
 }
