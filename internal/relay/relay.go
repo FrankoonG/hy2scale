@@ -108,11 +108,16 @@ type PeerInfo struct {
 	Version      string `json:"version,omitempty"`
 	Incompatible bool   `json:"incompatible,omitempty"`
 	Conflict     bool   `json:"conflict,omitempty"`
+	TunCapable   bool   `json:"tun_capable,omitempty"`
 }
 
 // NodeVersion is the version string sent during peer registration.
 // Set by the app package at init time.
 var NodeVersion = "1.0.0"
+
+// NodeTunCapable is set by the app layer at startup if this node can handle
+// exit-side TUN (has NET_ADMIN + /dev/net/tun).
+var NodeTunCapable bool
 
 // MinCompatVersion is the minimum peer version we can work with.
 // Peers below this version are marked incompatible: relay blocked, nested disabled.
@@ -130,8 +135,8 @@ func isCompatible(version string) bool {
 // peerMeta is extensible metadata exchanged after basic handshake.
 // New fields can be added freely — old peers ignore unknown fields.
 type peerMeta struct {
-	Version string `json:"v,omitempty"`
-	// Future fields go here (e.g., Capabilities, Region, etc.)
+	Version    string `json:"v,omitempty"`
+	TunCapable bool   `json:"tun,omitempty"` // true if node can handle exit TUN (has NET_ADMIN + /dev/net/tun)
 }
 
 // writeMeta sends a length-prefixed JSON metadata blob.
@@ -666,7 +671,7 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 		remoteMeta.Version = "1.0.0" // old peers don't send version
 	}
 	// Send our metadata (remote reads it only if it sent the flag)
-	writeMeta(regStream, peerMeta{Version: NodeVersion})
+	writeMeta(regStream, peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable})
 
 	if onID != nil {
 		onID(actualName)
@@ -700,7 +705,7 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	}
 	childCtx, childCancel := context.WithCancel(ctx)
 	p := &peer{
-		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version, Incompatible: !compat},
+		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version, Incompatible: !compat, TunCapable: remoteMeta.TunCapable},
 		client:  client,
 		waiting: make(map[string]chan net.Conn),
 		ctx:     childCtx,
@@ -872,7 +877,7 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 	var remoteMeta peerMeta
 	if flags[0]&0x02 != 0 {
 		// Send our metadata, then read client's
-		writeMeta(stream, peerMeta{Version: NodeVersion})
+		writeMeta(stream, peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable})
 		remoteMeta = readMeta(stream, 2*time.Second)
 	}
 	if remoteMeta.Version == "" {
@@ -898,6 +903,7 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 			Direction:    "inbound",
 			Version:      remoteMeta.Version,
 			Incompatible: !compat,
+			TunCapable:   remoteMeta.TunCapable,
 		},
 		waiting: make(map[string]chan net.Conn),
 		ctx:     peerCtx,
@@ -1350,6 +1356,23 @@ func (n *Node) DisconnectPeer(name string) {
 	}
 	delete(n.peers, name)
 	n.mu.Unlock()
+}
+
+// IsPeerTunCapable checks if a peer supports exit-side TUN.
+// For multi-hop paths ("A/B/C"), checks the last segment (final exit).
+func (n *Node) IsPeerTunCapable(peerName string) bool {
+	// For path-style names, resolve the last peer
+	target := peerName
+	if parts := strings.Split(peerName, "/"); len(parts) > 1 {
+		target = parts[len(parts)-1]
+	}
+	n.mu.RLock()
+	p, ok := n.peers[target]
+	n.mu.RUnlock()
+	if !ok {
+		return false // unknown peer — assume not capable
+	}
+	return p.info.TunCapable
 }
 
 // BlockPeer prevents a peer from registering (inbound connections rejected).

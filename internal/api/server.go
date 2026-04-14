@@ -477,6 +477,8 @@ const Version = "1.3.0"
 func init() {
 	app.AppVersion = Version
 	relay.NodeVersion = Version
+	capOK, _ := app.CheckCapability()
+	relay.NodeTunCapable = capOK
 }
 
 func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
