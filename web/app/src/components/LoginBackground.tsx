@@ -11,13 +11,22 @@ const HUB_INNER = 6.5;
 const BASE_ALPHA = 0.022;
 const MAX_ALPHA = 0.36;
 
-// Ripple settings
-const RIPPLE_SPEED = 180;       // px per second expansion
-const RIPPLE_WIDTH = 140;       // width of the visible ring (px)
-const RIPPLE_LIFE = 3.0;        // seconds before fully gone
-const RIPPLE_FADE_IN = 0.3;     // seconds for leading edge fade-in
-const AUTO_RIPPLE_INTERVAL = 1800; // ms between random ripples
-const LINE_RING = 120;          // line visible within this of the ring center
+// Ripple — force controls range and duration
+const RIPPLE_SPEED = 120;         // px/s base expansion speed
+const RIPPLE_WIDTH = 100;         // ring thickness (px) at force=1
+const RIPPLE_FADE_IN = 0.25;      // leading edge fade-in (s)
+const AUTO_INTERVAL = 2200;       // ms between auto-ripples
+
+// Force ranges
+const MIN_FORCE = 0.3;            // auto-ripple minimum
+const MAX_FORCE = 1.0;            // max from rapid clicks
+
+// Force → parameters
+function rippleLife(force: number) { return 2.5 + force * 3.5; }      // 2.5s – 6s
+function rippleMaxRadius(force: number) { return 80 + force * 320; }   // 80px – 400px
+
+// Click combo tracking
+const COMBO_WINDOW = 600;         // ms — clicks within this window stack force
 
 function hash(x: number, y: number, seed: number) {
   let h = (x * 374761393 + y * 668265263 + seed * 1274126177) | 0;
@@ -27,12 +36,13 @@ function hash(x: number, y: number, seed: number) {
 
 interface Link { a: number; b: number; width: number; }
 interface Circle { x: number; y: number; idx: number; isHub: boolean; }
-interface Ripple { x: number; y: number; time: number; }
+interface Ripple { x: number; y: number; time: number; force: number; }
 
 export default function LoginBackground() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const raf = useRef(0);
   const ripples = useRef<Ripple[]>([]);
+  const clickTimes = useRef<number[]>([]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -107,34 +117,32 @@ export default function LoginBackground() {
       return [toX - (dx / len) * r, toY - (dy / len) * r];
     }
 
-    // Calculate visibility intensity (0..1) for a point from all active ripples
     function getIntensity(px: number, py: number, now: number): number {
       let maxI = 0;
       for (const rip of ripples.current) {
-        const age = (now - rip.time) / 1000; // seconds
-        if (age > RIPPLE_LIFE) continue;
+        const life = rippleLife(rip.force);
+        const maxR = rippleMaxRadius(rip.force);
+        const age = (now - rip.time) / 1000;
+        if (age > life) continue;
 
         const dist = Math.sqrt((px - rip.x) ** 2 + (py - rip.y) ** 2);
-        const ringCenter = age * RIPPLE_SPEED;
-        const ringInner = ringCenter - RIPPLE_WIDTH / 2;
-        const ringOuter = ringCenter + RIPPLE_WIDTH / 2;
+
+        // Ring expands but caps at maxRadius
+        const ringCenter = Math.min(age * RIPPLE_SPEED, maxR);
+        const width = RIPPLE_WIDTH * rip.force;
+        const ringInner = ringCenter - width / 2;
+        const ringOuter = ringCenter + width / 2;
 
         if (dist < ringInner || dist > ringOuter) continue;
 
-        // Position within ring: 0 = inner edge, 1 = outer edge (leading front)
-        const ringPos = (dist - ringInner) / RIPPLE_WIDTH;
-
-        // Leading edge fades in, trailing edge fades out
-        // Use a bell-like shape: peak at ~0.6 of the ring (closer to leading edge)
+        const ringPos = (dist - ringInner) / width;
         const bell = Math.sin(ringPos * Math.PI);
 
-        // Global fade-out over lifetime
-        const lifeFade = 1 - smoothstep(age / RIPPLE_LIFE);
-
-        // Leading edge fade-in for the first moments
+        // Slower fade-out: use sqrt curve for more lingering visibility
+        const lifeFade = 1 - smoothstep(Math.pow(age / life, 0.7));
         const edgeFade = Math.min(1, age / RIPPLE_FADE_IN);
 
-        const intensity = bell * lifeFade * edgeFade;
+        const intensity = bell * lifeFade * edgeFade * Math.min(1, rip.force + 0.3);
         if (intensity > maxI) maxI = intensity;
       }
       return maxI;
@@ -148,7 +156,9 @@ export default function LoginBackground() {
       const now = performance.now();
 
       // Prune dead ripples
-      ripples.current = ripples.current.filter(r => (now - r.time) / 1000 < RIPPLE_LIFE);
+      ripples.current = ripples.current.filter(r =>
+        (now - r.time) / 1000 < rippleLife(r.force)
+      );
 
       // --- Pass 1: connection lines ---
       ctx.lineCap = 'round';
@@ -195,25 +205,36 @@ export default function LoginBackground() {
     }
 
     function onClick(e: MouseEvent) {
-      // Only trigger on background area clicks (not on interactive elements like inputs/buttons)
       const tag = (e.target as HTMLElement).tagName;
       if (tag === 'INPUT' || tag === 'BUTTON' || tag === 'LABEL' || tag === 'SELECT' || tag === 'TEXTAREA') return;
-      ripples.current.push({ x: e.clientX, y: e.clientY, time: performance.now() });
+
+      const now = performance.now();
+      // Track click times for combo
+      clickTimes.current.push(now);
+      clickTimes.current = clickTimes.current.filter(t => now - t < COMBO_WINDOW);
+
+      // Force scales with combo count: 1 click = 0.35, 2 = 0.55, 3 = 0.75, 4+ = 1.0
+      const combo = clickTimes.current.length;
+      const force = Math.min(MAX_FORCE, 0.2 + combo * 0.2);
+
+      ripples.current.push({ x: e.clientX, y: e.clientY, time: now, force });
     }
 
-    // Random auto-ripples
+    // Auto-ripples with random force
     const autoTimer = setInterval(() => {
       const x = Math.random() * window.innerWidth;
       const y = Math.random() * window.innerHeight;
-      ripples.current.push({ x, y, time: performance.now() });
-    }, AUTO_RIPPLE_INTERVAL);
+      const force = MIN_FORCE + Math.random() * 0.4; // 0.3 – 0.7
+      ripples.current.push({ x, y, time: performance.now(), force });
+    }, AUTO_INTERVAL);
 
-    // Fire an initial ripple near center
+    // Initial ripple
     setTimeout(() => {
       ripples.current.push({
         x: window.innerWidth * (0.3 + Math.random() * 0.4),
         y: window.innerHeight * (0.3 + Math.random() * 0.4),
         time: performance.now(),
+        force: 0.5,
       });
     }, 500);
 
