@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Card, Button, Input, PasswordInput, Toggle, Select, FormGroup, FormGrid, Tabs, TabPanel, useToast, useConfirm,
+  Card, Button, Input, PasswordInput, Toggle, Select, FormGroup, FormGrid, Tabs, TabPanel, Badge, useToast, useConfirm,
 } from '@hy2scale/ui';
 import * as api from '@/api';
 import { useAuthStore } from '@/store/auth';
@@ -19,8 +19,9 @@ export default function SettingsPage() {
 
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getUISettings });
   const { data: certs = [] } = useQuery({ queryKey: ['certs'], queryFn: api.getCerts });
+  const { data: archInfo } = useQuery({ queryKey: ['systemArch'], queryFn: api.getSystemArch });
 
-  const [activeTab, setActiveTab] = useState<'system' | 'web'>('system');
+  const [activeTab, setActiveTab] = useState<'system' | 'web' | 'upgrade'>('system');
 
   // UI Settings
   const [listen, setListen] = useState('');
@@ -39,8 +40,10 @@ export default function SettingsPage() {
   const [confirmPw, setConfirmPw] = useState('');
   const [savingPw, setSavingPw] = useState(false);
 
-  // Restore
+  // Restore & Upgrade
   const restoreRef = useRef<HTMLInputElement>(null);
+  const upgradeRef = useRef<HTMLInputElement>(null);
+  const [upgrading, setUpgrading] = useState(false);
 
   useEffect(() => {
     if (settings) {
@@ -126,6 +129,28 @@ export default function SettingsPage() {
     } catch (e: any) { toast.error(t('settings.restoreFailed') + ': ' + String(e.message || e)); }
   };
 
+  const handleUpgrade = async (file: File) => {
+    if (!file.name.endsWith('.tar.gz') && !file.name.endsWith('.tgz')) {
+      toast.error(t('settings.upgradeFailed') + ': expected .tar.gz');
+      return;
+    }
+    const ok = await confirm({
+      title: t('settings.upgradeTitle'),
+      message: t('settings.upgradeConfirm'),
+      danger: true, confirmText: t('app.confirm'), cancelText: t('app.cancel'),
+    });
+    if (!ok) return;
+    setUpgrading(true);
+    try {
+      toast.info(t('settings.upgradeUploading'));
+      await api.uploadUpgrade(file);
+      toast.success(t('settings.upgradeComplete'));
+      setTimeout(() => window.location.reload(), 5000);
+    } catch (e: any) {
+      toast.error(t('settings.upgradeFailed') + ': ' + String(e.message || e));
+    } finally { setUpgrading(false); }
+  };
+
   const certOptions = [
     { value: '', label: '\u2014' },
     ...certs.map((c) => ({ value: c.id, label: c.name || c.id })),
@@ -137,12 +162,13 @@ export default function SettingsPage() {
         items={[
           { key: 'system', label: t('settings.system') },
           { key: 'web', label: t('settings.web') },
+          { key: 'upgrade', label: t('settings.upgrade') },
         ]}
         activeKey={activeTab}
-        onChange={(key) => setActiveTab(key as 'system' | 'web')}
+        onChange={(key) => setActiveTab(key as 'system' | 'web' | 'upgrade')}
       />
 
-      <TabPanel activeKey={activeTab} keys={['system', 'web']}>
+      <TabPanel activeKey={activeTab} keys={['system', 'web', 'upgrade']}>
         {activeTab === 'system' ? (
           <>
             {/* System: DNS */}
@@ -173,6 +199,67 @@ export default function SettingsPage() {
                 <Button variant="primary" onClick={handleChangePw} loading={savingPw} style={{ alignSelf: 'flex-start' }}>{t('settings.update')}</Button>
               </div>
             </Card>
+          </>
+        ) : activeTab === 'web' ? (
+          <Card title={t('settings.webUi')}>
+            <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
+              <FormGroup label={t('settings.listenAddress')}>
+                <Input value={listen} onChange={(e) => setListen(e.target.value)} placeholder=":5565" />
+              </FormGroup>
+              <FormGroup label={t('settings.basePath')}>
+                <Input value={basePath} onChange={(e) => setBasePath(e.target.value)} placeholder="/scale" />
+              </FormGroup>
+              <FormGroup label={t('settings.forceHttps')}>
+                <Toggle checked={forceHttps} onChange={(e) => setForceHttps(e.target.checked)} />
+              </FormGroup>
+              <FormGroup label={t('settings.httpsCert')}>
+                <Select value={httpsCertId} onChange={(e) => setHttpsCertId(e.target.value)} options={certOptions} />
+              </FormGroup>
+              <FormGroup label={t('settings.sessionTimeout')}>
+                <Input type="number" value={sessionTimeout} onChange={(e) => setSessionTimeout(e.target.value)} suffix="h" />
+              </FormGroup>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t('settings.restartRequired')}</div>
+              <Button variant="primary" onClick={handleSaveWeb} loading={savingUI} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
+            </div>
+          </Card>
+        ) : (
+          <>
+            {/* Upgrade Binary — only in Docker */}
+            <Card title={t('settings.upgradeTitle')}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {archInfo && (
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('settings.currentArch')}:</span>
+                    <Badge>{archInfo.os}/{archInfo.arch}</Badge>
+                    <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{t('settings.currentVersion')}:</span>
+                    <Badge>{archInfo.version}</Badge>
+                  </div>
+                )}
+                {archInfo?.in_docker ? (
+                  <>
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('settings.upgradeDesc')}</div>
+                    <div>
+                      <Button variant="primary" onClick={() => upgradeRef.current?.click()} loading={upgrading}>
+                        {t('settings.uploadPackage')}
+                      </Button>
+                      <input
+                        ref={upgradeRef}
+                        type="file"
+                        accept=".tar.gz,.tgz"
+                        style={{ display: 'none' }}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleUpgrade(file);
+                          e.target.value = '';
+                        }}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('settings.upgradeNotAvailable')}</div>
+                )}
+              </div>
+            </Card>
 
             {/* Backup & Restore */}
             <Card title={t('settings.backup')}>
@@ -196,28 +283,6 @@ export default function SettingsPage() {
               </div>
             </Card>
           </>
-        ) : (
-          <Card title={t('settings.webUi')}>
-            <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <FormGroup label={t('settings.listenAddress')}>
-                <Input value={listen} onChange={(e) => setListen(e.target.value)} placeholder=":5565" />
-              </FormGroup>
-              <FormGroup label={t('settings.basePath')}>
-                <Input value={basePath} onChange={(e) => setBasePath(e.target.value)} placeholder="/scale" />
-              </FormGroup>
-              <FormGroup label={t('settings.forceHttps')}>
-                <Toggle checked={forceHttps} onChange={(e) => setForceHttps(e.target.checked)} />
-              </FormGroup>
-              <FormGroup label={t('settings.httpsCert')}>
-                <Select value={httpsCertId} onChange={(e) => setHttpsCertId(e.target.value)} options={certOptions} />
-              </FormGroup>
-              <FormGroup label={t('settings.sessionTimeout')}>
-                <Input type="number" value={sessionTimeout} onChange={(e) => setSessionTimeout(e.target.value)} suffix="h" />
-              </FormGroup>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t('settings.restartRequired')}</div>
-              <Button variant="primary" onClick={handleSaveWeb} loading={savingUI} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
-            </div>
-          </Card>
         )}
       </TabPanel>
     </div>

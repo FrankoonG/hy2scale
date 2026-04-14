@@ -12,11 +12,14 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"compress/gzip"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -199,6 +202,10 @@ func (s *Server) Start(ctx context.Context) error {
 	// Backup / Restore
 	authed.HandleFunc("GET /api/backup", s.downloadBackup)
 	authed.HandleFunc("POST /api/restore", s.uploadRestore)
+
+	// Upgrade
+	authed.HandleFunc("GET /api/system/arch", s.getSystemArch)
+	authed.HandleFunc("POST /api/upgrade", s.uploadUpgrade)
 	authed.HandleFunc("GET /api/settings/ui", s.getUISettings)
 	authed.HandleFunc("PUT /api/settings/ui", s.updateUISettings)
 
@@ -2364,5 +2371,139 @@ func (s *Server) uploadRestore(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		os.Exit(0) // container/systemd will restart the process
+	}()
+}
+
+func isRunningInDocker() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	// Fallback: check cgroup for docker/containerd
+	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		s := string(data)
+		if strings.Contains(s, "docker") || strings.Contains(s, "containerd") || strings.Contains(s, "/lxc/") {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) getSystemArch(w http.ResponseWriter, r *http.Request) {
+	self, _ := os.Executable()
+	writeJSON(w, map[string]any{
+		"os":        runtime.GOOS,
+		"arch":      runtime.GOARCH,
+		"version":   Version,
+		"binary":    filepath.Base(self),
+		"in_docker": isRunningInDocker(),
+	})
+}
+
+func (s *Server) uploadUpgrade(w http.ResponseWriter, r *http.Request) {
+	if !isRunningInDocker() {
+		http.Error(w, "upgrade via web is only available in Docker deployments", 403)
+		return
+	}
+	// Limit to 200MB
+	r.Body = http.MaxBytesReader(w, r.Body, 200<<20)
+
+	gr, err := gzip.NewReader(r.Body)
+	if err != nil {
+		http.Error(w, "invalid gzip: "+err.Error(), 400)
+		return
+	}
+	defer gr.Close()
+
+	tr := tar.NewReader(gr)
+	expectedArch := runtime.GOOS + "-" + runtime.GOARCH
+	// Also accept just the binary name without arch suffix
+	expectedBin := "hy2scale"
+
+	var found bool
+	var tmpPath string
+
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			http.Error(w, "invalid tar: "+err.Error(), 400)
+			return
+		}
+		name := filepath.Base(hdr.Name)
+		// Match: hy2scale, hy2scale-linux-amd64, hy2scale-linux-arm64, etc.
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		isMatch := name == expectedBin ||
+			name == expectedBin+"-"+expectedArch ||
+			name == expectedBin+"_"+expectedArch
+		if !isMatch {
+			continue
+		}
+
+		// Extract to temp file
+		tmp, err := os.CreateTemp("", "hy2scale-upgrade-*")
+		if err != nil {
+			http.Error(w, "temp file: "+err.Error(), 500)
+			return
+		}
+		if _, err := io.Copy(tmp, tr); err != nil {
+			tmp.Close()
+			os.Remove(tmp.Name())
+			http.Error(w, "extract: "+err.Error(), 500)
+			return
+		}
+		tmp.Close()
+		os.Chmod(tmp.Name(), 0755)
+		tmpPath = tmp.Name()
+		found = true
+		break
+	}
+
+	if !found {
+		http.Error(w, fmt.Sprintf("no matching binary for %s found in archive", expectedArch), 400)
+		return
+	}
+
+	// Verify it's a real binary by trying to run --version or just checking it's executable
+	out, err := exec.Command(tmpPath, "--version").CombinedOutput()
+	_ = out // ignore output, just check it runs
+	// Some binaries may not support --version, so we don't require success
+
+	// Replace current binary
+	self, err := os.Executable()
+	if err != nil {
+		os.Remove(tmpPath)
+		http.Error(w, "cannot find self: "+err.Error(), 500)
+		return
+	}
+	self, _ = filepath.EvalSymlinks(self)
+
+	// Rename current binary as backup
+	bakPath := self + ".bak"
+	os.Remove(bakPath)
+	if err := os.Rename(self, bakPath); err != nil {
+		os.Remove(tmpPath)
+		http.Error(w, "backup old binary: "+err.Error(), 500)
+		return
+	}
+
+	// Move new binary into place
+	if err := os.Rename(tmpPath, self); err != nil {
+		// Restore backup
+		os.Rename(bakPath, self)
+		http.Error(w, "install new binary: "+err.Error(), 500)
+		return
+	}
+	os.Chmod(self, 0755)
+
+	log.Printf("[upgrade] binary upgraded from upload, restarting...")
+	writeJSON(w, map[string]string{"status": "ok", "message": "upgrade successful, restarting"})
+
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
 	}()
 }
