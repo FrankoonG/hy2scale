@@ -53,4 +53,4 @@ COPY --from=builder /hy2scale /usr/local/bin/hy2scale
 # Platform compatibility bundles (compressed, extracted on demand at runtime)
 COPY internal/platform/ikuai-iptables/bundle.tar.gz /opt/platform-compat/ikuai-iptables.tar.gz
 VOLUME /data
-ENTRYPOINT ["hy2scale"]
+ENTRYPOINT ["hy2scale", "--data", "/data"]
