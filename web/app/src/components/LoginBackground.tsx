@@ -132,27 +132,26 @@ export default function LoginBackground() {
 
         const dist = Math.sqrt((px - rip.x) ** 2 + (py - rip.y) ** 2);
 
-        // Ring expands then holds at maxRadius
-        const ringCenter = Math.min(age * RIPPLE_SPEED, maxR);
-        const width = RIPPLE_WIDTH * rip.force;
-        const ringInner = ringCenter - width / 2;
-        const ringOuter = ringCenter + width / 2;
+        // Filled circle: current radius expands then caps at maxR
+        const currentR = Math.min(age * RIPPLE_SPEED, maxR);
 
-        if (dist < ringInner || dist > ringOuter) continue;
+        // Outside the filled circle → not visible
+        if (dist > currentR) continue;
 
-        const ringPos = (dist - ringInner) / width;
-        const bell = Math.sin(ringPos * Math.PI);
+        // Soft edge: slight fade near the expanding frontier
+        const edgeSoft = dist > currentR - 20
+          ? (currentR - dist) / 20
+          : 1;
 
-        // Fade: 0 during expand phase, then smooth fade-out during fade phase
+        // Full brightness during expand; uniform fade after expand completes
         let lifeFade = 1;
         if (age > expandT) {
-          const fadeAge = (age - expandT) / fadeT;
-          lifeFade = 1 - smoothstep(fadeAge);
+          lifeFade = 1 - smoothstep((age - expandT) / fadeT);
         }
 
         const edgeFade = Math.min(1, age / RIPPLE_FADE_IN);
 
-        const intensity = bell * lifeFade * edgeFade * Math.min(1, rip.force + 0.3);
+        const intensity = edgeSoft * lifeFade * edgeFade * Math.min(1, rip.force + 0.3);
         if (intensity > maxI) maxI = intensity;
       }
       return maxI;
