@@ -346,7 +346,7 @@ func (e *ruleEngine) applyIPRuleTun(r RoutingRule) {
 	}
 	// Update TUN target list for packet routing
 	if ipfwdEng != nil {
-		ipfwdEng.addTargets(r.Targets, r.ExitVia)
+		ipfwdEng.addTargets(r.ID, r.Targets, r.ExitVia)
 	}
 	log.Printf("[rules] applied IP rule %q: %d targets → exit %s (tun)", r.Name, len(r.Targets), r.ExitVia)
 }
@@ -441,7 +441,7 @@ func (e *ruleEngine) applyDomainRule(r RoutingRule) {
 		for _, ip := range resolvedIPs {
 			cidrs = append(cidrs, ip+"/32")
 		}
-		ipfwdEng.addTargets(cidrs, r.ExitVia)
+		ipfwdEng.addTargets(r.ID, cidrs, r.ExitVia)
 	}
 	mode := "proxy"
 	if ipfwdActive.Load() {
