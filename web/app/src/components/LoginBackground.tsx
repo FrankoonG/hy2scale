@@ -251,6 +251,7 @@ export default function LoginBackground() {
     }
 
     const autoTimer = setInterval(() => {
+      if (document.hidden) return;
       const x = Math.random() * window.innerWidth;
       const y = Math.random() * window.innerHeight;
       const force = MIN_FORCE + Math.random() * 0.45;
