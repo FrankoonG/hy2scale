@@ -161,6 +161,38 @@ pools {
 	log.Printf("[ikev2] swanctl config written with if_id for xfrm interface mode")
 }
 
+// writeSwanctlSecrets writes only the secrets file (for native iptables mode where
+// the connection is defined via ipsec.conf/stroke, but swanctl --load-all still
+// needs the secrets in swanctl format).
+func (a *App) writeSwanctlSecrets(cfg IKEv2Config) {
+	os.MkdirAll("/etc/swanctl/secrets.d", 0755)
+
+	var secrets string
+	switch cfg.Mode {
+	case "psk":
+		if cfg.PSK != "" {
+			secrets = fmt.Sprintf("secrets {\n    ike-psk {\n        secret = \"%s\"\n    }\n}\n", cfg.PSK)
+		}
+	case "mschapv2":
+		var sb strings.Builder
+		sb.WriteString("secrets {\n")
+		sb.WriteString("    rsa-key {\n        file = ikev2-server.key.pem\n    }\n")
+		cfgStore := a.store.Get()
+		for i, u := range cfgStore.Users {
+			if u.Enabled {
+				sb.WriteString(fmt.Sprintf("    eap-user%d {\n        id = %s\n        secret = \"%s\"\n    }\n", i, u.Username, u.Password))
+			}
+		}
+		sb.WriteString("}\n")
+		secrets = sb.String()
+	}
+	if secrets != "" {
+		os.WriteFile("/etc/swanctl/secrets.d/ikev2.conf", []byte(secrets), 0644)
+	}
+	// Ensure base swanctl.conf exists
+	os.WriteFile("/etc/swanctl/swanctl.conf", []byte("include conf.d/*.conf\ninclude secrets.d/*.conf\n"), 0644)
+}
+
 // getDNS returns DNS servers from the global config, space-separated for strongswan.
 func (a *App) getDNS() string {
 	dns := a.store.Get().DNS
@@ -421,6 +453,8 @@ conn ikev2-mschapv2
 		iptRun("iptables", "-I", "DOCKER-USER", "-d", subnet, "-j", "ACCEPT")
 		iptRun("iptables", "-t", "nat", "-A", "POSTROUTING",
 			"-s", subnet, "-j", "MASQUERADE")
+		// Write swanctl secrets for native mode (swanctl --load-all reloads secrets)
+		a.writeSwanctlSecrets(cfg)
 		go a.runIKEv2Proxy(ikev2Ctx, gateway, proxyPort, hooksPort, cfg)
 	} else {
 		// Compat mode: xfrm interface + TUN capture (swanctl with if_id)
