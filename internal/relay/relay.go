@@ -982,15 +982,16 @@ func (n *Node) handleVia(ctx context.Context, peerName, targetAddr string, strea
 		log.Printf("[via] rebind failed: %s (not found or not suspended)", bridgeID)
 	}
 
-	// New connection: dial the next hop.
-	// Use plain DialTCP for relay hops (no bridge overhead needed — bridge
-	// only benefits the entry-side connection, not intermediate relay hops).
+	// New connection: dial the next hop
 	var exitConn net.Conn
 	var err error
 	if parts := strings.Split(peerName, "/"); len(parts) > 1 {
 		exitConn, err = n.DialVia(ctx, parts, actualAddr)
 	} else {
-		exitConn, err = n.DialTCP(ctx, peerName, actualAddr)
+		exitConn, _, err = n.DialTCPBridged(peerName, actualAddr)
+		if err != nil {
+			exitConn, err = n.DialTCP(ctx, peerName, actualAddr)
+		}
 	}
 	if err != nil {
 		stream.Close()
@@ -998,14 +999,14 @@ func (n *Node) handleVia(ctx context.Context, peerName, targetAddr string, strea
 	}
 
 	if isBridged {
-		// Create a bridge so the exit connection survives incoming stream death.
 		pipeConn := n.bridges.CreateWithID(bridgeID, actualAddr, exitConn)
 		defer pipeConn.Close()
 		defer stream.Close()
-		go func() { io.Copy(pipeConn, stream); pipeConn.Close() }()
-		io.Copy(stream, pipeConn)
+		done := make(chan struct{})
+		go func() { relayCopy(pipeConn, stream); pipeConn.Close(); close(done) }()
+		relayCopy(stream, pipeConn)
+		<-done
 	} else {
-		// Lightweight relay: no bridge overhead, small buffer for low latency
 		defer exitConn.Close()
 		defer stream.Close()
 		done := make(chan struct{})
@@ -1990,7 +1991,7 @@ func (n *Node) DialVia(ctx context.Context, path []string, addr string) (net.Con
 		if err != nil {
 			return nil, err
 		}
-		return conn, nil // skip wrapConn for via — counting not needed on relay hops
+		return n.wrapConn(firstPeer, conn), nil
 	}
 
 	// Inbound peer: send via address as a dial request through control stream.

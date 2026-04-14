@@ -28,6 +28,26 @@ type bridgedConn struct {
 	// For multi-hop via: re-open via chain on rebind instead of using _relay_rebind_
 	viaPath       []string
 	viaTargetAddr string
+
+	// Single monitor goroutine that closes the stream when bridge dies
+	monitorOnce sync.Once
+}
+
+// startMonitor launches a single goroutine (per conn) that watches bridge.ctx
+// and closes the underlying stream when the bridge is killed. This replaces
+// the per-Read/per-Write goroutine+channel pattern.
+func (c *bridgedConn) startMonitor() {
+	c.monitorOnce.Do(func() {
+		go func() {
+			<-c.bridge.ctx.Done()
+			c.mu.Lock()
+			s := c.stream
+			c.mu.Unlock()
+			if s != nil {
+				s.Close() // unblocks any pending Read/Write
+			}
+		}()
+	})
 }
 
 // DialTCPBridged is like DialTCP but returns a connection that survives
@@ -66,6 +86,7 @@ func (n *Node) DialTCPBridged(peerName, addr string) (net.Conn, string, error) {
 		peerName: peerName,
 		stream:   n.wrapConn(peerName, stream),
 	}
+	bc.startMonitor()
 	return bc, bridge.id, nil
 }
 
@@ -78,32 +99,24 @@ func (c *bridgedConn) Read(b []byte) (int, error) {
 			return 0, net.ErrClosed
 		}
 
-		// Use a channel so we can detect bridge state changes
-		type readResult struct {
-			n   int
-			err error
+		n, err := s.Read(b)
+		if n > 0 {
+			c.lastRead.Store(time.Now().UnixNano())
 		}
-		ch := make(chan readResult, 1)
-		go func() {
-			n, err := s.Read(b)
-			ch <- readResult{n, err}
-		}()
+		if err == nil || n > 0 {
+			return n, err
+		}
 
-		select {
-		case r := <-ch:
-			if r.err == nil || r.n > 0 {
-				c.lastRead.Store(time.Now().UnixNano())
-				return r.n, r.err
-			}
-			if !c.tryRebind() {
-				return 0, r.err
-			}
-			// Rebind succeeded — retry with new stream
-		case <-c.bridge.ctx.Done():
-			// Bridge killed — force close stream to unblock the goroutine
-			s.Close()
+		// Read error — check if bridge was killed
+		if c.bridge.ctx.Err() != nil {
 			return 0, net.ErrClosed
 		}
+
+		// Try rebind
+		if !c.tryRebind() {
+			return 0, err
+		}
+		// Rebind succeeded — retry with new stream
 	}
 }
 
@@ -117,7 +130,6 @@ func (c *bridgedConn) Write(b []byte) (int, error) {
 		}
 
 		// Check for sustained congestion (direct connections only, not multi-hop via).
-		// Multi-hop paths have naturally higher latency; proactive rebind would be disruptive.
 		if len(c.viaPath) == 0 {
 			lastR := c.lastRead.Load()
 			if lastR > 0 && c.lastWrite.Load() > lastR {
@@ -133,28 +145,19 @@ func (c *bridgedConn) Write(b []byte) (int, error) {
 			}
 		}
 
-		type writeResult struct {
-			n   int
-			err error
+		n, err := s.Write(b)
+		if err == nil {
+			c.lastWrite.Store(time.Now().UnixNano())
+			return n, err
 		}
-		ch := make(chan writeResult, 1)
-		go func() {
-			n, err := s.Write(b)
-			ch <- writeResult{n, err}
-		}()
 
-		select {
-		case r := <-ch:
-			if r.err == nil {
-				c.lastWrite.Store(time.Now().UnixNano())
-				return r.n, r.err
-			}
-			if !c.tryRebind() {
-				return 0, r.err
-			}
-		case <-c.bridge.ctx.Done():
-			s.Close()
+		// Write error — check if bridge was killed
+		if c.bridge.ctx.Err() != nil {
 			return 0, net.ErrClosed
+		}
+
+		if !c.tryRebind() {
+			return 0, err
 		}
 	}
 }
@@ -239,6 +242,9 @@ func (c *bridgedConn) tryRebind() bool {
 			c.lastRead.Store(now)
 			c.lastWrite.Store(0)
 			c.mu.Unlock()
+			// Restart monitor for the new stream
+			c.monitorOnce = sync.Once{}
+			c.startMonitor()
 			log.Printf("[bridge] %s rebound on requester side (peer %s)", c.bridge.id, c.peerName)
 			return true
 		}
