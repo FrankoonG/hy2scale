@@ -982,16 +982,15 @@ func (n *Node) handleVia(ctx context.Context, peerName, targetAddr string, strea
 		log.Printf("[via] rebind failed: %s (not found or not suspended)", bridgeID)
 	}
 
-	// New connection: dial the next hop
+	// New connection: dial the next hop.
+	// Use plain DialTCP for relay hops (no bridge overhead needed — bridge
+	// only benefits the entry-side connection, not intermediate relay hops).
 	var exitConn net.Conn
 	var err error
 	if parts := strings.Split(peerName, "/"); len(parts) > 1 {
 		exitConn, err = n.DialVia(ctx, parts, actualAddr)
 	} else {
-		exitConn, _, err = n.DialTCPBridged(peerName, actualAddr)
-		if err != nil {
-			exitConn, err = n.DialTCP(ctx, peerName, actualAddr)
-		}
+		exitConn, err = n.DialTCP(ctx, peerName, actualAddr)
 	}
 	if err != nil {
 		stream.Close()
@@ -1000,18 +999,37 @@ func (n *Node) handleVia(ctx context.Context, peerName, targetAddr string, strea
 
 	if isBridged {
 		// Create a bridge so the exit connection survives incoming stream death.
-		// When the incoming via stream dies (prev-hop QUIC failure), the bridge
-		// suspends and waits for a rebind from the previous hop.
 		pipeConn := n.bridges.CreateWithID(bridgeID, actualAddr, exitConn)
 		defer pipeConn.Close()
 		defer stream.Close()
 		go func() { io.Copy(pipeConn, stream); pipeConn.Close() }()
 		io.Copy(stream, pipeConn)
 	} else {
+		// Lightweight relay: no bridge overhead, small buffer for low latency
 		defer exitConn.Close()
 		defer stream.Close()
-		go func() { io.Copy(exitConn, stream); exitConn.Close() }()
-		io.Copy(stream, exitConn)
+		done := make(chan struct{})
+		go func() { relayCopy(exitConn, stream); close(done) }()
+		relayCopy(stream, exitConn)
+		<-done
+	}
+}
+
+// relayCopy is an optimized io.Copy for relay hops with a smaller buffer
+// to minimize latency for interactive traffic. 8KB is enough for most packets
+// while avoiding the 32KB default that delays small writes.
+func relayCopy(dst, src net.Conn) {
+	buf := make([]byte, 8192)
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				break
+			}
+		}
+		if err != nil {
+			break
+		}
 	}
 }
 
@@ -1972,7 +1990,7 @@ func (n *Node) DialVia(ctx context.Context, path []string, addr string) (net.Con
 		if err != nil {
 			return nil, err
 		}
-		return n.wrapConn(firstPeer, conn), nil
+		return conn, nil // skip wrapConn for via — counting not needed on relay hops
 	}
 
 	// Inbound peer: send via address as a dial request through control stream.
