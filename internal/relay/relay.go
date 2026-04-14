@@ -853,14 +853,18 @@ func (n *Node) HandleStream(ctx context.Context, reqAddr string, stream net.Conn
 func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 	var flags [1]byte
 	if _, err := io.ReadFull(stream, flags[:]); err != nil {
+		log.Printf("[%s] register: read flags failed: %v", n.name, err)
 		stream.Close()
 		return
 	}
 	name, err := readString(stream)
 	if err != nil {
+		log.Printf("[%s] register: read name failed: %v", n.name, err)
 		stream.Close()
 		return
 	}
+	log.Printf("[%s] register: inbound %s (flags=0x%02x)", n.name, name, flags[0])
+
 	// Send back our name
 	writeString(stream, n.name)
 
@@ -877,6 +881,7 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 
 	// Reject blocked peers (disabled nodes)
 	if n.IsPeerBlocked(name) {
+		log.Printf("[%s] register: %s is blocked, rejecting", n.name, name)
 		stream.Close()
 		return
 	}
@@ -901,9 +906,9 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 
 	n.mu.Lock()
 	existing, exists := n.peers[name]
-	if exists && existing.ctrlW != nil {
-		// Peer already registered with an active ctrl stream (e.g. extra IP verification).
-		// Don't overwrite — just update version if newer.
+	if exists && existing.ctrlW != nil && existing.info.Direction == "inbound" {
+		// Peer already registered with an active inbound ctrl stream.
+		log.Printf("[%s] register: %s already has active inbound ctrl, skipping", n.name, name)
 		if remoteMeta.Version != "" && remoteMeta.Version != "1.0.0" {
 			existing.info.Version = remoteMeta.Version
 		}
@@ -911,6 +916,9 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 		peerCancel()
 		<-peerCtx.Done()
 		return
+	}
+	if exists {
+		log.Printf("[%s] register: %s replacing existing peer (dir=%s, hasCtrl=%v)", n.name, name, existing.info.Direction, existing.ctrlW != nil)
 	}
 	// Cancel old peer context to clean up stale connections
 	if exists && existing.cancel != nil {
