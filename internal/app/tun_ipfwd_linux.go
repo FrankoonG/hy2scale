@@ -35,8 +35,9 @@ type ipfwdEngine struct {
 	cancel context.CancelFunc
 
 	// Per-peer QUIC IP tunnel streams (entry side)
-	streams   map[string]*ipfwdStream
-	streamsMu sync.Mutex
+	streams      map[string]*ipfwdStream
+	reconnecting map[string]bool // peers with async reconnect in progress
+	streamsMu    sync.Mutex
 
 	// Dynamic target list (updated by hot rule changes)
 	targets   []ipfwdTarget
@@ -107,10 +108,11 @@ func (a *App) StartIPForwarding(targets []ipfwdTarget) error {
 
 	ctx, cancel := context.WithCancel(a.appCtx)
 	eng := &ipfwdEngine{
-		app:     a,
-		tunFd:   &tunDevice{fd: rawFd, file: tunFile, name: ipfwdTunName},
-		cancel:  cancel,
-		streams: make(map[string]*ipfwdStream),
+		app:          a,
+		tunFd:        &tunDevice{fd: rawFd, file: tunFile, name: ipfwdTunName},
+		cancel:       cancel,
+		streams:      make(map[string]*ipfwdStream),
+		reconnecting: make(map[string]bool),
 	}
 
 	// Add routing rules for each target
@@ -252,11 +254,10 @@ func (eng *ipfwdEngine) tunReadLoop(ctx context.Context) {
 			continue
 		}
 
-		// Get or create QUIC IP tunnel stream to exit peer
-		stream, err := eng.getStream(ctx, exitPeer)
-		if err != nil {
-			debugLog("[tun-ipfwd] stream to %s: %v", exitPeer, err)
-			continue
+		// Get existing stream or trigger async reconnect (never blocks)
+		stream := eng.getStream(ctx, exitPeer)
+		if stream == nil {
+			continue // no stream yet — packet dropped, reconnect in background
 		}
 
 		// Write framed packet: [2-byte length][packet]
@@ -273,36 +274,51 @@ func (eng *ipfwdEngine) tunReadLoop(ctx context.Context) {
 	}
 }
 
-// getStream returns or creates a QUIC IP tunnel stream to the exit peer.
-func (eng *ipfwdEngine) getStream(ctx context.Context, peerName string) (*ipfwdStream, error) {
+// getStream returns an existing healthy stream or nil (never blocks).
+// If no stream exists, kicks off async reconnect in the background.
+func (eng *ipfwdEngine) getStream(ctx context.Context, peerName string) *ipfwdStream {
 	eng.streamsMu.Lock()
 	defer eng.streamsMu.Unlock()
 
 	if s, ok := eng.streams[peerName]; ok && !s.closed {
-		return s, nil
+		return s
 	}
 
-	// Dial IP tunnel to peer (with timeout to avoid blocking read loop)
+	// No healthy stream — trigger async reconnect (if not already running)
+	if _, reconnecting := eng.reconnecting[peerName]; !reconnecting {
+		eng.reconnecting[peerName] = true
+		go eng.asyncConnect(ctx, peerName)
+	}
+	return nil
+}
+
+// asyncConnect dials the exit peer in the background and installs the stream.
+func (eng *ipfwdEngine) asyncConnect(ctx context.Context, peerName string) {
+	defer func() {
+		eng.streamsMu.Lock()
+		delete(eng.reconnecting, peerName)
+		eng.streamsMu.Unlock()
+	}()
+
 	dialCtx, dialCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer dialCancel()
+
 	conn, err := eng.app.node.DialIPTun(dialCtx, peerName)
 	if err != nil {
-		return nil, err
+		debugLog("[tun-ipfwd] dial %s failed: %v", peerName, err)
+		return
 	}
 
 	s := &ipfwdStream{conn: conn}
+	eng.streamsMu.Lock()
 	eng.streams[peerName] = s
-
-	// Start reverse reader: exit peer → TUN
-	go func() {
-		defer func() {
-			eng.removeStream(peerName)
-		}()
-		eng.readFromStream(ctx, s)
-	}()
+	eng.streamsMu.Unlock()
 
 	log.Printf("[tun-ipfwd] IP tunnel to %s established", peerName)
-	return s, nil
+
+	// Reverse reader: exit peer → TUN
+	eng.readFromStream(ctx, s)
+	eng.removeStream(peerName)
 }
 
 func (eng *ipfwdEngine) removeStream(peerName string) {
