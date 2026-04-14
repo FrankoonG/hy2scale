@@ -50,7 +50,7 @@ COPY --from=swan-builder /out/etc/strongswan.d/ /etc/strongswan.d/
 COPY --from=swan-builder /out/etc/ipsec.conf /etc/ipsec.conf.default
 COPY --from=swan-builder /out/etc/ipsec.d/ /etc/ipsec.d/
 COPY --from=builder /hy2scale /usr/local/bin/hy2scale
-# Platform compatibility bundles (optional — code has fallback to host chroot)
-RUN mkdir -p /opt/platform-compat
+# Platform compatibility: iKuai uClibc-linked iptables bundle
+COPY internal/platform/ikuai-iptables/bundle.tar.gz /opt/platform-compat/ikuai-iptables.tar.gz
 VOLUME /data
 ENTRYPOINT ["hy2scale", "--data", "/data"]
