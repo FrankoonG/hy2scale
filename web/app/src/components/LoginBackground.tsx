@@ -18,11 +18,11 @@ const RIPPLE_FADE_IN = 0.25;      // leading edge fade-in (s)
 const AUTO_INTERVAL = 2200;       // ms between auto-ripples
 
 // Force ranges
-const MIN_FORCE = 0.3;            // auto-ripple minimum
+const MIN_FORCE = 0.12;           // auto-ripple minimum
 const MAX_FORCE = 1.0;            // max from rapid clicks
 
 // Force → parameters
-function rippleMaxRadius(force: number) { return 80 + force * 320; }   // 80px – 400px
+function rippleMaxRadius(force: number) { return 40 + force * 360; }   // ~40px min – 400px max
 // Expand phase = time for ring to reach maxRadius; fade phase follows
 function rippleExpandTime(force: number) { return rippleMaxRadius(force) / RIPPLE_SPEED; }
 function rippleFadeTime(force: number) { return 1.5 + force * 2.5; }   // 1.5s – 4s fade after expand
@@ -132,16 +132,29 @@ export default function LoginBackground() {
 
         const dist = Math.sqrt((px - rip.x) ** 2 + (py - rip.y) ** 2);
 
-        // Filled circle: current radius expands then caps at maxR
-        const currentR = Math.min(age * RIPPLE_SPEED, maxR);
+        // During expand: filled circle grows to maxR
+        // During fade: radius keeps growing beyond maxR as a "halo"
+        const currentR = age * RIPPLE_SPEED;
+        const haloExtra = maxR * 0.5; // halo extends up to 50% beyond maxR
+        const totalR = maxR + haloExtra;
 
-        // Outside the filled circle → not visible
-        if (dist > currentR) continue;
+        if (dist > Math.min(currentR, totalR)) continue;
 
-        // Soft edge: slight fade near the expanding frontier
-        const edgeSoft = dist > currentR - 20
-          ? (currentR - dist) / 20
-          : 1;
+        let spatialFade: number;
+        if (dist <= Math.min(currentR, maxR)) {
+          // Core zone: inside the main disc
+          const edgeSoft = dist > Math.min(currentR, maxR) - 20
+            ? (Math.min(currentR, maxR) - dist) / 20
+            : 1;
+          spatialFade = edgeSoft;
+        } else if (age > expandT && dist <= currentR) {
+          // Halo zone: beyond maxR, only during fade phase
+          // Gradient from ~0.55 at maxR edge down to 0 at halo frontier
+          const haloPos = (dist - maxR) / Math.min(currentR - maxR, haloExtra);
+          spatialFade = 0.55 * (1 - smoothstep(haloPos));
+        } else {
+          continue;
+        }
 
         // Full brightness during expand; uniform fade after expand completes
         let lifeFade = 1;
@@ -151,7 +164,7 @@ export default function LoginBackground() {
 
         const edgeFade = Math.min(1, age / RIPPLE_FADE_IN);
 
-        const intensity = edgeSoft * lifeFade * edgeFade * Math.min(1, rip.force + 0.3);
+        const intensity = spatialFade * lifeFade * edgeFade * Math.min(1, rip.force + 0.3);
         if (intensity > maxI) maxI = intensity;
       }
       return maxI;
@@ -233,7 +246,7 @@ export default function LoginBackground() {
     const autoTimer = setInterval(() => {
       const x = Math.random() * window.innerWidth;
       const y = Math.random() * window.innerHeight;
-      const force = MIN_FORCE + Math.random() * 0.4; // 0.3 – 0.7
+      const force = MIN_FORCE + Math.random() * 0.45; // 0.12 – 0.57
       ripples.current.push({ x, y, time: performance.now(), force });
     }, AUTO_INTERVAL);
 
