@@ -1870,6 +1870,19 @@ func (n *Node) SetIPTunHandler(handler func(peerName string, stream net.Conn)) {
 // DialIPTun opens a bidirectional IP packet tunnel stream to a peer.
 // The stream uses 2-byte length-prefixed framing for raw IP packets.
 func (n *Node) DialIPTun(ctx context.Context, peerName string) (net.Conn, error) {
+	// Handle path with self-prefix (e.g. "AUB/au-kbv" on AUB → strip to "au-kbv")
+	// and multi-hop via paths
+	if parts := strings.Split(peerName, "/"); len(parts) > 1 {
+		// Strip leading self-name segments
+		for len(parts) > 1 && parts[0] == n.name {
+			parts = parts[1:]
+		}
+		if len(parts) > 1 {
+			return n.DialVia(ctx, parts, streamIPTunPrefix+n.name)
+		}
+		peerName = parts[0]
+	}
+
 	n.mu.RLock()
 	p, ok := n.peers[peerName]
 	n.mu.RUnlock()
