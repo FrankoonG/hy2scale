@@ -40,11 +40,12 @@ func (c *bridgedConn) startMonitor() {
 	c.monitorOnce.Do(func() {
 		go func() {
 			<-c.bridge.ctx.Done()
+			// Close the current stream (may have been replaced by rebind)
 			c.mu.Lock()
 			s := c.stream
 			c.mu.Unlock()
 			if s != nil {
-				s.Close() // unblocks any pending Read/Write
+				s.Close()
 			}
 		}()
 	})
@@ -242,9 +243,7 @@ func (c *bridgedConn) tryRebind() bool {
 			c.lastRead.Store(now)
 			c.lastWrite.Store(0)
 			c.mu.Unlock()
-			// Restart monitor for the new stream
-			c.monitorOnce = sync.Once{}
-			c.startMonitor()
+			// Monitor goroutine still watches same bridge.ctx — no restart needed
 			log.Printf("[bridge] %s rebound on requester side (peer %s)", c.bridge.id, c.peerName)
 			return true
 		}
