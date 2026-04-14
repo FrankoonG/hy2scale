@@ -64,6 +64,7 @@ const (
 	streamRegister      = "_relay_register_:0"
 	streamCtrlS2C       = "_relay_s2c_ctrl_:0"
 	streamListPeers     = "_relay_list_peers_:0"
+	streamPing          = "_relay_ping_:0"
 	streamLatencyReport = "_relay_latency_:0"
 	streamViaPrefix     = "_relay_via_"
 	streamDataPrefix    = "_relay_data_"
@@ -76,6 +77,7 @@ func IsRelayStream(addr string) bool {
 	return addr == streamRegister ||
 		addr == streamCtrlS2C ||
 		addr == streamListPeers ||
+		addr == streamPing ||
 		addr == streamLatencyReport ||
 		strings.HasPrefix(addr, streamViaPrefix) ||
 		strings.HasPrefix(addr, streamDataPrefix) ||
@@ -807,6 +809,10 @@ func (n *Node) HandleStream(ctx context.Context, reqAddr string, stream net.Conn
 	case streamLatencyReport:
 		n.handleLatencyReport(stream)
 
+	case streamPing:
+		stream.Write([]byte{1})
+		stream.Close()
+
 	case streamListPeers:
 		n.handleListPeers(stream)
 
@@ -1466,14 +1472,12 @@ func (n *Node) PingPeer(name string) time.Duration {
 			ch <- time.Since(start)
 			return
 		}
-		stream, err := p.client.TCP(streamListPeers)
-		if err != nil {
-			ch <- -1
-			return
+		// Try lightweight ping first, fall back to listPeers for compat with <1.3
+		rtt := pingStream(p.pickClient(), streamPing)
+		if rtt < 0 {
+			rtt = pingStream(p.pickClient(), streamListPeers)
 		}
-		io.ReadAll(stream)
-		stream.Close()
-		ch <- time.Since(start)
+		ch <- rtt
 	}()
 	select {
 	case d := <-ch:
@@ -1483,6 +1487,22 @@ func (n *Node) PingPeer(name string) time.Duration {
 	}
 }
 
+// pingStream opens a stream, reads 1 byte, and returns the round-trip duration.
+func pingStream(c hyclient.Client, addr string) time.Duration {
+	if c == nil {
+		return -1
+	}
+	start := time.Now()
+	stream, err := c.TCP(addr)
+	if err != nil {
+		return -1
+	}
+	buf := make([]byte, 1)
+	stream.Read(buf)
+	stream.Close()
+	return time.Since(start)
+}
+
 // pingClient measures RTT to a specific QUIC client connection. Returns -1 if unreachable.
 func (n *Node) pingClient(c hyclient.Client) time.Duration {
 	if c == nil {
@@ -1490,15 +1510,11 @@ func (n *Node) pingClient(c hyclient.Client) time.Duration {
 	}
 	ch := make(chan time.Duration, 1)
 	go func() {
-		start := time.Now()
-		stream, err := c.TCP(streamListPeers)
-		if err != nil {
-			ch <- -1
-			return
+		rtt := pingStream(c, streamPing)
+		if rtt < 0 {
+			rtt = pingStream(c, streamListPeers)
 		}
-		io.ReadAll(stream)
-		stream.Close()
-		ch <- time.Since(start)
+		ch <- rtt
 	}()
 	select {
 	case d := <-ch:
