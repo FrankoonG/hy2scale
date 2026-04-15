@@ -132,12 +132,10 @@ func (a *App) StartIPForwarding(targets []ipfwdTarget) error {
 	}
 
 	// Add routing rules for each target
-	// "iif lo" ensures only locally-originated traffic is captured,
-	// not forwarded traffic from Docker containers or other interfaces.
 	for _, t := range targets {
 		for _, cidr := range t.cidrs {
-			rule := fmt.Sprintf("iif lo to %s lookup %s priority 100", cidr, ipfwdTable)
-			run("ip", "rule", "add", "iif", "lo", "to", cidr, "lookup", ipfwdTable, "priority", "100")
+			rule := fmt.Sprintf("to %s lookup %s priority 100", cidr, ipfwdTable)
+			run("ip", "rule", "add", "to", cidr, "lookup", ipfwdTable, "priority", "100")
 			eng.appliedRoutes = append(eng.appliedRoutes, rule)
 		}
 	}
