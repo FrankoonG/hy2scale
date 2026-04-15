@@ -43,11 +43,6 @@ type ipfwdEngine struct {
 	reconnecting map[string]bool
 	streamsMu    sync.Mutex
 
-	// Compat mode: exits without TUN capability use gvisor netstack
-	// to extract TCP/UDP from IP packets and proxy through relay
-	compatExits   map[string]bool // exitVia → true if compat mode
-	compatExitsMu sync.RWMutex
-
 	// Dynamic target list (updated by hot rule changes)
 	targets   []ipfwdTarget
 	targetsMu sync.RWMutex
@@ -128,7 +123,6 @@ func (a *App) StartIPForwarding(targets []ipfwdTarget) error {
 		cancel:       cancel,
 		streams:      make(map[string]*ipfwdStream),
 		reconnecting: make(map[string]bool),
-		compatExits:  make(map[string]bool),
 	}
 
 	// Add routing rules for each target
@@ -271,14 +265,16 @@ func (eng *ipfwdEngine) tunReadLoop(ctx context.Context) {
 			continue
 		}
 
-		// Check if this exit uses compat mode (no TUN capability)
-		eng.compatExitsMu.RLock()
-		isCompat := eng.compatExits[exitPeer]
-		eng.compatExitsMu.RUnlock()
-
-		if isCompat {
-			// Compat mode: feed packet to gvisor netstack for L7 extraction.
-			// The capture forwarders will proxy TCP/UDP through relay.
+		// Decide compat vs full-TUN per packet by querying current peer
+		// capability — the answer can change as peers connect/disconnect, and
+		// caching at rule-apply time would freeze a wrong decision when peers
+		// hadn't registered yet.
+		if !eng.app.node.IsPeerTunCapable(exitPeer) {
+			// Compat mode: lazily start gvisor stack on first compat packet,
+			// then inject for L7 (TCP/UDP) extraction and relay proxying.
+			if !tunCaptureActive.Load() {
+				eng.ensureCompatStack()
+			}
 			debugLog("[tun-ipfwd] compat→ inject %d bytes dst=%s via=%s", len(pkt), dstIP, exitPeer)
 			eng.injectToNetstack(pkt)
 			continue
@@ -541,8 +537,6 @@ func (eng *ipfwdEngine) addTargets(ruleID string, cidrs []string, exitVia string
 		}
 	}
 	eng.streamsMu.Unlock()
-	// Check if exit supports full TUN; if not, enable compat mode
-	go eng.checkAndSetCompatMode(exitVia)
 }
 
 // removeTargetsForRule removes targets by rule ID.
@@ -572,21 +566,6 @@ func (eng *ipfwdEngine) injectToNetstack(pkt []byte) {
 		inst.ep.InjectInbound(header.IPv6ProtocolNumber, pkb)
 	}
 	pkb.DecRef()
-}
-
-// checkAndSetCompatMode detects if an exit peer supports full TUN.
-// If not, marks it for compat mode and ensures gvisor capture stack is running.
-func (eng *ipfwdEngine) checkAndSetCompatMode(exitVia string) {
-	if !eng.app.node.IsPeerTunCapable(exitVia) {
-		eng.compatExitsMu.Lock()
-		eng.compatExits[exitVia] = true
-		eng.compatExitsMu.Unlock()
-		// Ensure gvisor capture stack is running for compat forwarding
-		if !tunCaptureActive.Load() {
-			log.Printf("[tun-ipfwd] exit %s not TUN-capable, starting compat (L7 proxy) mode", exitVia)
-			eng.ensureCompatStack()
-		}
-	}
 }
 
 // ensureCompatStack starts the gvisor netstack + capture forwarders if not already running.
