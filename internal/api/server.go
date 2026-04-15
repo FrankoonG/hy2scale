@@ -732,7 +732,8 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			selfChildren[i].RxRate = pr.RxRate
 		}
 		if c.Nested {
-			children := filterSelfFromChildren(s.getCachedSubPeers(c.Name), cfg.NodeID)
+			ancestors := map[string]bool{cfg.NodeID: true, cfg.Name: true, c.Name: true}
+			children := filterAncestorPaths(s.getCachedSubPeers(c.Name), ancestors)
 			selfChildren[i].Children = filterChildrenByNestedConfig(children, c.Name, cfg)
 		}
 	}
@@ -816,7 +817,8 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 
 		// Load sub-peers from background cache only (never blocks)
 		if tn.Nested && tn.Connected && !tn.Native && !tn.Incompatible && !tn.Conflict {
-			children := filterSelfFromChildren(s.getCachedSubPeers(name), cfg.NodeID)
+			ancestors := map[string]bool{cfg.NodeID: true, cfg.Name: true, name: true}
+			children := filterAncestorPaths(s.getCachedSubPeers(name), ancestors)
 			tn.Children = filterChildrenByNestedConfig(children, name, cfg)
 		}
 		// Also load children for inbound peers nested under self
@@ -1100,17 +1102,25 @@ func filterChildrenByNestedConfig(children []topoSubPeer, parentName string, cfg
 	return result
 }
 
-// filterSelfFromChildren recursively removes self node ID from all levels of children.
-func filterSelfFromChildren(children []topoSubPeer, selfID string) []topoSubPeer {
+// filterAncestorPaths recursively removes any descendant whose name already
+// appears in the ancestor path (including self). This prevents loops like
+// "AUB/tz-cm-temp/2400/tz-cm-temp" where a descendant's peer list legitimately
+// includes the upstream node, since routing through a node already in the path
+// would just bounce the traffic back.
+// `ancestors` is mutated during recursion (add on descent, remove on backtrack)
+// so the same name IS allowed in parallel sibling branches.
+func filterAncestorPaths(children []topoSubPeer, ancestors map[string]bool) []topoSubPeer {
 	if len(children) == 0 {
 		return children
 	}
 	filtered := make([]topoSubPeer, 0, len(children))
 	for _, c := range children {
-		if c.Name == selfID {
+		if ancestors[c.Name] {
 			continue
 		}
-		c.Children = filterSelfFromChildren(c.Children, selfID)
+		ancestors[c.Name] = true
+		c.Children = filterAncestorPaths(c.Children, ancestors)
+		delete(ancestors, c.Name)
 		filtered = append(filtered, c)
 	}
 	return filtered
