@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Card, Button, Input, Toggle, Table, FormGroup, FormGrid, Badge, Modal,
-  CopyButton, useToast, useConfirm, useSelection, type Column,
+  useToast, useConfirm, useSelection, type Column,
 } from '@hy2scale/ui';
 import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
 import { ExitViaCell } from '@/components/ExitViaCell';
@@ -264,10 +264,7 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
             </div>
           </FormGroup>
           <FormGroup label={t('wg.pubKey')}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Input value={pubKey} readOnly style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-muted)' }} />
-              {pubKey && <CopyButton text={pubKey} />}
-            </div>
+            <Input value={pubKey} readOnly style={{ fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--text-muted)' }} />
           </FormGroup>
           <FormGroup label={t('wg.mtu')}>
             <Input type="number" value={wgMtu} onChange={(e) => setWgMtu(e.target.value)} />
