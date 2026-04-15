@@ -106,6 +106,12 @@ func (a *App) StartIPForwarding(targets []ipfwdTarget) error {
 	// Configure TUN interface — no IP address to avoid kernel using it as source
 	run("ip", "link", "set", ipfwdTunName, "up", "mtu", fmt.Sprintf("%d", ipfwdTunMTU))
 
+	// Disable reverse-path filter: gvisor compat mode writes SYN-ACK packets
+	// to the TUN with spoofed source IPs (e.g. 8.8.8.8) that aren't routable
+	// via this interface in the main table. rp_filter=1 (strict) drops them.
+	run("sysctl", "-w", "net.ipv4.conf."+ipfwdTunName+".rp_filter=0")
+	run("sysctl", "-w", "net.ipv4.conf.all.rp_filter=0")
+
 	// Default route in table 101 via TUN.
 	// Specify src to avoid kernel picking a local IP that may conflict on exit node.
 	mainIP := getMainIP()
@@ -126,10 +132,12 @@ func (a *App) StartIPForwarding(targets []ipfwdTarget) error {
 	}
 
 	// Add routing rules for each target
+	// "iif lo" ensures only locally-originated traffic is captured,
+	// not forwarded traffic from Docker containers or other interfaces.
 	for _, t := range targets {
 		for _, cidr := range t.cidrs {
-			rule := fmt.Sprintf("to %s lookup %s priority 100", cidr, ipfwdTable)
-			run("ip", "rule", "add", "to", cidr, "lookup", ipfwdTable, "priority", "100")
+			rule := fmt.Sprintf("iif lo to %s lookup %s priority 100", cidr, ipfwdTable)
+			run("ip", "rule", "add", "iif", "lo", "to", cidr, "lookup", ipfwdTable, "priority", "100")
 			eng.appliedRoutes = append(eng.appliedRoutes, rule)
 		}
 	}
@@ -273,9 +281,8 @@ func (eng *ipfwdEngine) tunReadLoop(ctx context.Context) {
 		if isCompat {
 			// Compat mode: feed packet to gvisor netstack for L7 extraction.
 			// The capture forwarders will proxy TCP/UDP through relay.
-			if tunCaptureInst != nil && tunCaptureInst.ep != nil {
-				eng.injectToNetstack(pkt)
-			}
+			debugLog("[tun-ipfwd] compat→ inject %d bytes dst=%s via=%s", len(pkt), dstIP, exitPeer)
+			eng.injectToNetstack(pkt)
 			continue
 		}
 
@@ -550,7 +557,11 @@ func (eng *ipfwdEngine) removeTargetsForRule(ruleID string) {
 // injectToNetstack feeds a raw IP packet into the gvisor capture stack
 // for L7 (TCP/UDP) extraction and relay proxy forwarding.
 func (eng *ipfwdEngine) injectToNetstack(pkt []byte) {
-	if tunCaptureInst == nil || tunCaptureInst.ep == nil {
+	tunCaptureMu.Lock()
+	inst := tunCaptureInst
+	tunCaptureMu.Unlock()
+	if inst == nil || inst.ep == nil {
+		debugLog("[tun-ipfwd] compat inject: no capture stack yet")
 		return
 	}
 	pkb := stack.NewPacketBuffer(stack.PacketBufferOptions{
@@ -558,9 +569,9 @@ func (eng *ipfwdEngine) injectToNetstack(pkt []byte) {
 	})
 	switch pkt[0] >> 4 {
 	case 4:
-		tunCaptureInst.ep.InjectInbound(header.IPv4ProtocolNumber, pkb)
+		inst.ep.InjectInbound(header.IPv4ProtocolNumber, pkb)
 	case 6:
-		tunCaptureInst.ep.InjectInbound(header.IPv6ProtocolNumber, pkb)
+		inst.ep.InjectInbound(header.IPv6ProtocolNumber, pkb)
 	}
 	pkb.DecRef()
 }
@@ -591,12 +602,15 @@ func (eng *ipfwdEngine) ensureCompatStack() {
 		log.Printf("[tun-ipfwd] compat stack creation failed: %v", err)
 		return
 	}
+
+	// Install forwarders BEFORE activating — prevents race where an injected
+	// SYN arrives before handlers are set (gvisor would RST it).
+	installCaptureForwarders(gvStack, eng.app)
+
 	tunCaptureMu.Lock()
 	tunCaptureInst = &tunCaptureState{tunFile: eng.tunFd.file, ep: ep, gvStack: gvStack}
 	tunCaptureActive.Store(true)
 	tunCaptureMu.Unlock()
-
-	installCaptureForwarders(gvStack, eng.app)
 
 	// Bridge gvisor output → kernel TUN (SYN-ACK, data replies go back to host)
 	go func() {
@@ -610,12 +624,31 @@ func (eng *ipfwdEngine) ensureCompatStack() {
 			pkt.DecRef()
 			data := view.AsSlice()
 			if len(data) > 0 {
+				if len(data) >= 20 {
+					proto := data[9]
+					srcIP := net.IP(data[12:16])
+					dstIP := net.IP(data[16:20])
+					debugLog("[tun-ipfwd] compat← gvisor %d bytes proto=%d %s→%s",
+						len(data), proto, srcIP, dstIP)
+				}
 				eng.tunFd.Write(data)
 			}
 		}
 	}()
 
 	log.Printf("[tun-ipfwd] compat L7 proxy stack active")
+}
+
+// IsExitCompat returns true if the given exit peer is using compat (L7 proxy) mode
+// instead of full TUN forwarding.
+func IsExitCompat(exitVia string) bool {
+	eng := ipfwdEng
+	if eng == nil {
+		return false
+	}
+	eng.compatExitsMu.RLock()
+	defer eng.compatExitsMu.RUnlock()
+	return eng.compatExits[exitVia]
 }
 
 func filterTargets(targets []ipfwdTarget, excludeRuleID string) []ipfwdTarget {

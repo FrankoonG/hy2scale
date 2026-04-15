@@ -326,6 +326,7 @@
   "rules.advancedMode": "高级",
   "rules.tunMode": "TUN 模式",
   "rules.tunDesc": "TUN 模式通过中继转发原始 IP 数据包，保持端到端 TCP/UDP 会话。适用于 Moonlight 等将加密绑定到 TCP 会话的协议。",
+  "rules.compat": "兼容",
   "rules.tunEnabled": "TUN 转发已启用",
   "rules.tunDisabled": "TUN 转发已禁用",
   "rules.tunModeLabel": "模式",

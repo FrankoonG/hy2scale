@@ -117,7 +117,12 @@ export default function RulesPage() {
   ) : null;
 
   const columns: Column<RoutingRule>[] = [
-    { key: 'name', title: t('rules.name'), render: (r) => <strong>{r.name || '—'}</strong> },
+    { key: 'name', title: t('rules.name'), render: (r) => (
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <strong>{r.name || '—'}</strong>
+        {r.compat && <Badge variant="warn">{t('rules.compat')}</Badge>}
+      </span>
+    )},
     { key: 'targets', title: t('rules.targets'), render: (r) => <span className="mono" style={{ fontSize: 11 }}>{r.targets.slice(0, 3).join(', ')}{r.targets.length > 3 ? ` +${r.targets.length - 3}` : ''}</span> },
     { key: 'exit', title: t('rules.exitVia'), render: (r) => <ExitViaCell exitVia={r.exit_via} exitPaths={r.exit_paths} exitMode={r.exit_mode} /> },
     {

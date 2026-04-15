@@ -249,18 +249,20 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 				exitVia, exitMode = ruleEng.lookupExit(id.LocalAddress.String())
 			}
 
-			debugLog("[tun-fwd] TCP %s → %s exit=%q mode=%s",
-				srcIP, dstAddr, exitVia, exitMode)
+			log.Printf("[tun-fwd] TCP %s:%d → %s exit=%q mode=%s",
+				srcIP, id.RemotePort, dstAddr, exitVia, exitMode)
 
 			var remote net.Conn
 			var err error
+			dialCtx, dialCancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer dialCancel()
 			if exitVia == "" {
 				remote, err = net.DialTimeout("tcp", dstAddr, 10*time.Second)
 			} else {
-				remote, err = a.dialExitWithMode(context.Background(), exitVia, exitMode, dstAddr)
+				remote, err = a.dialExitWithMode(dialCtx, exitVia, exitMode, dstAddr)
 			}
 			if err != nil {
-				debugLog("[tun-fwd] dial error: %s → %s: %v", srcIP, dstAddr, err)
+				log.Printf("[tun-fwd] dial error: %s → %s: %v", srcIP, dstAddr, err)
 				return
 			}
 			defer remote.Close()
