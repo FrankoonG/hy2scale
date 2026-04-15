@@ -4,7 +4,7 @@ import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { Reorder, useDragControls } from 'framer-motion';
 import {
   Modal, Button, Input, PasswordInput, Toggle, Textarea, Select,
-  FormGroup, FormGrid, Tabs, TabPanel, GripIcon, useToast,
+  FormGroup, FormGrid, GripIcon, useToast,
 } from '@hy2scale/ui';
 import * as api from '@/api';
 import type { ClientEntry, CertInfo } from '@/api';
@@ -50,13 +50,11 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   const toast = useToast();
   const queryClient = useQueryClient();
 
-  const [tab, setTab] = useState('addrs');
   const [loading, setLoading] = useState(false);
   const [addrItems, setAddrItems] = useState<AddrItem[]>([{ id: addrNextId++, host: '', port: '' }]);
   const addrListRef = useRef<HTMLUListElement>(null);
   const [addrError, setAddrError] = useState('');
 
-  // Connection tab
   const [password, setPassword] = useState('');
   const [fastOpen, setFastOpen] = useState(false);
   const [maxTx, setMaxTx] = useState('');
@@ -79,10 +77,8 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   });
   const caCerts = (certs || []).filter((c: CertInfo) => c.is_ca);
 
-  // Reset tab on close so next open starts fresh
   useEffect(() => {
     if (!open) {
-      setTab('addrs');
       setAddrError('');
       return;
     }
@@ -152,12 +148,10 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
     for (const item of addrItems) {
       if (!item.host.trim()) {
         setAddrError(t('nodes.hostRequired'));
-        setTab('addrs');
         return null;
       }
       if (!item.port.trim() || !validatePortSpec(item.port.trim())) {
         setAddrError(t('nodes.invalidPort'));
-        setTab('addrs');
         return null;
       }
     }
@@ -166,7 +160,6 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
     for (const s of strs) {
       if (seen.has(s)) {
         setAddrError(t('nodes.dupAddress', { addr: s }));
-        setTab('addrs');
         return null;
       }
       seen.add(s);
@@ -179,7 +172,6 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
     if (!addrs) return;
     if (!password.trim()) {
       toast.error(t('nodes.passRequired'));
-      setTab('conn');
       return;
     }
 
@@ -250,20 +242,11 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
         </>
       }
     >
-      <Tabs
-        items={[
-          { key: 'addrs', label: t('nodes.addresses') },
-          { key: 'conn', label: t('nodes.connection') },
-        ]}
-        activeKey={tab}
-        onChange={setTab}
-      />
-
-      <TabPanel activeKey={tab} keys={['addrs', 'conn']}>
-        {tab === 'addrs' ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            {/* Address rows */}
-            {addrError && <div style={{ color: 'var(--red)', fontSize: 13 }}>{addrError}</div>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {/* Address rows — always at the top */}
+        <FormGroup label={t('nodes.addresses')}>
+          <>
+            {addrError && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 6 }}>{addrError}</div>}
             <Reorder.Group
               ref={addrListRef}
               axis="y"
@@ -290,80 +273,78 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
             <div className="addr-add-row" onClick={addAddrRow}>
               {t('nodes.addAddress')}
             </div>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <FormGroup label={t('nodes.password')} required>
-              <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} />
+          </>
+        </FormGroup>
+
+        <FormGroup label={t('nodes.password')} required>
+          <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} />
+        </FormGroup>
+
+        <FormGroup label={t('nodes.fastOpen')}>
+          <Toggle checked={fastOpen} onChange={(e) => setFastOpen(e.target.checked)} />
+        </FormGroup>
+
+        {/* Bandwidth */}
+        <FormGrid>
+          <FormGroup label={t('nodes.upload')}>
+            <Input type="number" value={maxTx} onChange={(e) => setMaxTx(e.target.value)} placeholder="0" suffix="Mbps" />
+          </FormGroup>
+          <FormGroup label={t('nodes.download')}>
+            <Input type="number" value={maxRx} onChange={(e) => setMaxRx(e.target.value)} placeholder="0" suffix="Mbps" />
+          </FormGroup>
+        </FormGrid>
+
+        {/* TLS */}
+        <FormGrid>
+          <FormGroup label={t('nodes.sni')}>
+            <Input value={sni} onChange={(e) => setSni(e.target.value)} placeholder="server.example.com" />
+          </FormGroup>
+          <FormGroup label={t('nodes.skipVerify')}>
+            <div style={{ paddingTop: 6 }}>
+              <Toggle checked={insecure} onChange={(e) => setInsecure(e.target.checked)} />
+            </div>
+          </FormGroup>
+        </FormGrid>
+
+        <FormGroup label={t('nodes.caCert')}>
+          <Select
+            value={caSource}
+            onChange={(e) => setCaSource(e.target.value)}
+            options={caOptions}
+          />
+          {caSource === '__manual__' && (
+            <Textarea
+              value={caManual}
+              onChange={(e) => setCaManual(e.target.value)}
+              rows={3}
+              monospace
+              placeholder="-----BEGIN CERTIFICATE-----"
+              style={{ marginTop: 8 }}
+            />
+          )}
+        </FormGroup>
+
+        {/* QUIC Advanced */}
+        <details open={showQuic} onToggle={(e) => setShowQuic((e.target as HTMLDetailsElement).open)}>
+          <summary style={{ cursor: 'pointer', fontSize: 13, color: 'var(--text-secondary)', marginBottom: 10 }}>
+            {t('nodes.quicAdvanced')}
+          </summary>
+          <FormGrid>
+            <FormGroup label={t('nodes.initStreamWindow')}>
+              <Input type="number" value={initStreamWin} onChange={(e) => setInitStreamWin(e.target.value)} />
             </FormGroup>
-
-            <FormGroup label={t('nodes.fastOpen')}>
-              <Toggle checked={fastOpen} onChange={(e) => setFastOpen(e.target.checked)} />
+            <FormGroup label={t('nodes.maxStreamWindow')}>
+              <Input type="number" value={maxStreamWin} onChange={(e) => setMaxStreamWin(e.target.value)} />
             </FormGroup>
-
-            {/* Bandwidth */}
-            <FormGrid>
-              <FormGroup label={t('nodes.upload')}>
-                <Input type="number" value={maxTx} onChange={(e) => setMaxTx(e.target.value)} placeholder="0" suffix="Mbps" />
-              </FormGroup>
-              <FormGroup label={t('nodes.download')}>
-                <Input type="number" value={maxRx} onChange={(e) => setMaxRx(e.target.value)} placeholder="0" suffix="Mbps" />
-              </FormGroup>
-            </FormGrid>
-
-            {/* TLS */}
-            <FormGrid>
-              <FormGroup label={t('nodes.sni')}>
-                <Input value={sni} onChange={(e) => setSni(e.target.value)} placeholder="server.example.com" />
-              </FormGroup>
-              <FormGroup label={t('nodes.skipVerify')}>
-                <div style={{ paddingTop: 6 }}>
-                  <Toggle checked={insecure} onChange={(e) => setInsecure(e.target.checked)} />
-                </div>
-              </FormGroup>
-            </FormGrid>
-
-            <FormGroup label={t('nodes.caCert')}>
-              <Select
-                value={caSource}
-                onChange={(e) => setCaSource(e.target.value)}
-                options={caOptions}
-              />
-              {caSource === '__manual__' && (
-                <Textarea
-                  value={caManual}
-                  onChange={(e) => setCaManual(e.target.value)}
-                  rows={3}
-                  monospace
-                  placeholder="-----BEGIN CERTIFICATE-----"
-                  style={{ marginTop: 8 }}
-                />
-              )}
+            <FormGroup label={t('nodes.initConnWindow')}>
+              <Input type="number" value={initConnWin} onChange={(e) => setInitConnWin(e.target.value)} />
             </FormGroup>
-
-            {/* QUIC Advanced */}
-            <details open={showQuic} onToggle={(e) => setShowQuic((e.target as HTMLDetailsElement).open)}>
-              <summary style={{ cursor: 'pointer', fontSize: 13, color: 'var(--text-secondary)', marginBottom: 10 }}>
-                {t('nodes.quicAdvanced')}
-              </summary>
-              <FormGrid>
-                <FormGroup label={t('nodes.initStreamWindow')}>
-                  <Input type="number" value={initStreamWin} onChange={(e) => setInitStreamWin(e.target.value)} />
-                </FormGroup>
-                <FormGroup label={t('nodes.maxStreamWindow')}>
-                  <Input type="number" value={maxStreamWin} onChange={(e) => setMaxStreamWin(e.target.value)} />
-                </FormGroup>
-                <FormGroup label={t('nodes.initConnWindow')}>
-                  <Input type="number" value={initConnWin} onChange={(e) => setInitConnWin(e.target.value)} />
-                </FormGroup>
-                <FormGroup label={t('nodes.maxConnWindow')}>
-                  <Input type="number" value={maxConnWin} onChange={(e) => setMaxConnWin(e.target.value)} />
-                </FormGroup>
-              </FormGrid>
-            </details>
-          </div>
-        )}
-      </TabPanel>
+            <FormGroup label={t('nodes.maxConnWindow')}>
+              <Input type="number" value={maxConnWin} onChange={(e) => setMaxConnWin(e.target.value)} />
+            </FormGroup>
+          </FormGrid>
+        </details>
+      </div>
     </Modal>
   );
 }
