@@ -70,6 +70,11 @@ const (
 	streamDataPrefix    = "_relay_data_"
 	streamDataSuffix    = ":0"
 	streamIPTunPrefix   = "_relay_iptun_"
+	// StreamAPI is the well-known relay address the web UI's remote proxy
+	// uses to reach a peer's own API server. It bypasses the normal
+	// loopback-rewrite logic (which would redirect 127.0.0.1 to the Docker
+	// gateway and break this case).
+	StreamAPI = "_relay_api_:0"
 )
 
 // IsRelayStream returns true if addr is a relay internal stream.
@@ -79,6 +84,7 @@ func IsRelayStream(addr string) bool {
 		addr == streamListPeers ||
 		addr == streamPing ||
 		addr == streamLatencyReport ||
+		addr == StreamAPI ||
 		strings.HasPrefix(addr, streamViaPrefix) ||
 		strings.HasPrefix(addr, streamDataPrefix) ||
 		strings.HasPrefix(addr, streamIPTunPrefix) ||
@@ -321,6 +327,11 @@ type Node struct {
 
 	// IP tunnel handler for TUN-based raw packet forwarding
 	ipTunHandler func(peerName string, stream net.Conn)
+
+	// API proxy handler for remote web-UI tunneling. Set by the app layer at
+	// startup so the relay can deliver _relay_api_ streams directly to the
+	// local HTTP API listener without routing through rewriteLocalAddr.
+	apiHandler func(stream net.Conn)
 
 	// Stream bridge manager for connection persistence across QUIC reconnects
 	bridges *bridgeManager
@@ -820,6 +831,13 @@ func (n *Node) HandleStream(ctx context.Context, reqAddr string, stream net.Conn
 
 	case streamListPeers:
 		n.handleListPeers(stream)
+
+	case StreamAPI:
+		if n.apiHandler != nil {
+			n.apiHandler(stream)
+		} else {
+			stream.Close()
+		}
 
 	default:
 		// IP tunnel stream for TUN-based raw packet forwarding
@@ -1370,8 +1388,12 @@ func (n *Node) DisconnectPeer(name string) {
 }
 
 // IsPeerTunCapable checks if a peer supports exit-side TUN.
-// For multi-hop paths ("A/B/C"), checks the last segment (final exit).
-// Looks up direct peers first, then sub-peer caches for nested peers.
+// For multi-hop paths ("A/B/C") it walks each segment: first hop must be a
+// direct peer, then each subsequent segment is looked up in the sub-peer
+// cache under the qualified parent path ("A", then "A/B", ...). This
+// disambiguates cases where a nested peer shares a name with a direct peer
+// of the local node (e.g. HUB has a direct "2400" AND another "2400" exists
+// as a child of some intermediate peer).
 func (n *Node) IsPeerTunCapable(peerName string) bool {
 	parts := strings.Split(peerName, "/")
 	// Strip leading self name (e.g. "AUB/tz-cm-temp" on node AUB → ["tz-cm-temp"])
@@ -1381,27 +1403,55 @@ func (n *Node) IsPeerTunCapable(peerName string) bool {
 	if len(parts) == 0 {
 		return NodeTunCapable
 	}
-	target := parts[len(parts)-1]
 
-	// Check direct peers
+	// First hop must be a direct peer.
+	firstHop := parts[0]
 	n.mu.RLock()
-	p, ok := n.peers[target]
+	p, ok := n.peers[firstHop]
 	n.mu.RUnlock()
-	if ok {
+	if !ok {
+		return false // first hop not connected yet
+	}
+	if len(parts) == 1 {
 		return p.info.TunCapable
 	}
 
-	// Check sub-peer caches (peer's children may be the target)
+	// Multi-hop: walk children via qualified-path cache.
 	n.peerRateMu.RLock()
 	defer n.peerRateMu.RUnlock()
-	for _, subPeers := range n.peersOfCache {
-		for _, sp := range subPeers {
-			if sp.Name == target {
-				return sp.TunCapable
+
+	path := firstHop
+	for i := 1; i < len(parts); i++ {
+		seg := parts[i]
+		children, ok := n.peersOfCache[path]
+		if !ok {
+			// No cache yet under this exact qualified path — fall back to the
+			// bare-name cache of the immediate parent as a best-effort (may be
+			// ambiguous but still better than returning false blindly).
+			parentParts := strings.Split(path, "/")
+			bareParent := parentParts[len(parentParts)-1]
+			children, ok = n.peersOfCache[bareParent]
+			if !ok {
+				return false
 			}
 		}
+		var found *PeerInfo
+		for j := range children {
+			if children[j].Name == seg {
+				c := children[j]
+				found = &c
+				break
+			}
+		}
+		if found == nil {
+			return false
+		}
+		if i == len(parts)-1 {
+			return found.TunCapable
+		}
+		path = path + "/" + seg
 	}
-	return false // unknown peer — assume not capable
+	return false
 }
 
 // BlockPeer prevents a peer from registering (inbound connections rejected).
@@ -1917,6 +1967,12 @@ func (n *Node) SetListPeersFunc(fn func() []byte) {
 // SetIPTunHandler registers a handler for incoming IP tunnel streams from peers.
 func (n *Node) SetIPTunHandler(handler func(peerName string, stream net.Conn)) {
 	n.ipTunHandler = handler
+}
+
+// SetAPIHandler registers a handler for incoming _relay_api_ streams (remote
+// web-UI proxy tunneling).
+func (n *Node) SetAPIHandler(handler func(stream net.Conn)) {
+	n.apiHandler = handler
 }
 
 // DialIPTun opens a bidirectional IP packet tunnel stream to a peer.

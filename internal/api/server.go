@@ -33,18 +33,19 @@ import (
 )
 
 type topoSubPeer struct {
-	Name      string         `json:"name"`
-	ExitNode  bool           `json:"exit_node"`
-	Direction string         `json:"direction"`
-	Via       string         `json:"via"`
-	LatencyMs int            `json:"latency_ms"`
-	Nested    bool           `json:"nested"`
-	Disabled  bool           `json:"disabled,omitempty"`
-	Native    bool           `json:"native,omitempty"`
-	Version   string         `json:"version,omitempty"`
-	TxRate    uint64         `json:"tx_rate"`
-	RxRate    uint64         `json:"rx_rate"`
-	Children  []topoSubPeer  `json:"children,omitempty"`
+	Name       string         `json:"name"`
+	ExitNode   bool           `json:"exit_node"`
+	Direction  string         `json:"direction"`
+	Via        string         `json:"via"`
+	LatencyMs  int            `json:"latency_ms"`
+	Nested     bool           `json:"nested"`
+	Disabled   bool           `json:"disabled,omitempty"`
+	Native     bool           `json:"native,omitempty"`
+	Version    string         `json:"version,omitempty"`
+	TunCapable bool           `json:"tun_capable,omitempty"`
+	TxRate     uint64         `json:"tx_rate"`
+	RxRate     uint64         `json:"rx_rate"`
+	Children   []topoSubPeer  `json:"children,omitempty"`
 }
 
 type Server struct {
@@ -307,7 +308,61 @@ func (s *Server) Start(ctx context.Context) error {
 	} else {
 		log.Printf("API/UI on %s", s.addr)
 	}
+
+	// Relay incoming remote-proxy streams (_relay_api_) to the same HTTP
+	// handler by bridging the stream into an in-process listener.
+	apiBridge := newStreamListener()
+	s.app.Node().SetAPIHandler(func(stream net.Conn) {
+		apiBridge.push(stream)
+	})
+	go srv.Serve(apiBridge)
+
 	return srv.Serve(ln)
+}
+
+// streamListener is a net.Listener backed by a channel; each Accept returns a
+// net.Conn that was fed via push(). Used so relay-delivered API streams can
+// be served by the same *http.Server without a separate TCP socket.
+type streamListener struct {
+	ch     chan net.Conn
+	closed chan struct{}
+}
+
+func newStreamListener() *streamListener {
+	return &streamListener{ch: make(chan net.Conn, 16), closed: make(chan struct{})}
+}
+
+func (l *streamListener) push(c net.Conn) {
+	select {
+	case l.ch <- c:
+	case <-l.closed:
+		c.Close()
+	default:
+		// channel full — drop
+		c.Close()
+	}
+}
+
+func (l *streamListener) Accept() (net.Conn, error) {
+	select {
+	case c := <-l.ch:
+		return c, nil
+	case <-l.closed:
+		return nil, fmt.Errorf("listener closed")
+	}
+}
+
+func (l *streamListener) Close() error {
+	select {
+	case <-l.closed:
+	default:
+		close(l.closed)
+	}
+	return nil
+}
+
+func (l *streamListener) Addr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4zero, Port: 0}
 }
 
 // --- Auth ---
@@ -660,6 +715,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		Version      string            `json:"version,omitempty"`
 		Incompatible bool              `json:"incompatible,omitempty"`
 		Conflict     bool              `json:"conflict,omitempty"`
+		TunCapable   bool              `json:"tun_capable,omitempty"`
 		LatencyMs    int               `json:"latency_ms"`
 		TxRate       uint64            `json:"tx_rate"`
 		RxRate       uint64            `json:"rx_rate"`
@@ -705,12 +761,13 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		if p.Direction == "inbound" {
 			inboundNames[p.Name] = true
 			child := topoSubPeer{
-				Name:      p.Name,
-				ExitNode:  p.ExitNode,
-				Direction: "inbound",
-				Via:       cfg.NodeID,
-				LatencyMs: latencyCache[p.Name],
-				Version:   p.Version,
+				Name:       p.Name,
+				ExitNode:   p.ExitNode,
+				Direction:  "inbound",
+				Via:        cfg.NodeID,
+				LatencyMs:  latencyCache[p.Name],
+				Version:    p.Version,
+				TunCapable: p.TunCapable,
 			}
 			if pc, ok := cfg.Peers[p.Name]; ok {
 				if pc.Nested {
@@ -741,14 +798,15 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 
 	result := make([]treeNode, 0, len(names)+1)
 	result = append(result, treeNode{
-		Name:      cfg.NodeID,
-		Addr:      selfServer,
-		Direction: "local",
-		Connected: true,
-		Disabled:  selfDisabled,
-		IsSelf:    true,
-		LatencyMs: 0,
-		Children:  selfChildren,
+		Name:       cfg.NodeID,
+		Addr:       selfServer,
+		Direction:  "local",
+		Connected:  true,
+		Disabled:   selfDisabled,
+		IsSelf:     true,
+		LatencyMs:  0,
+		TunCapable: relay.NodeTunCapable,
+		Children:   selfChildren,
 	})
 
 	for _, name := range names {
@@ -791,6 +849,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			if p.Name == name {
 				tn.ExitNode = p.ExitNode
 				tn.Direction = p.Direction
+				tn.TunCapable = p.TunCapable
 				break
 			}
 		}
@@ -972,32 +1031,52 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 		s.subPeersCache = newCache
 		s.subPeersMu.Unlock()
 
-		// Feed sub-peer data into relay's peersOfCache for path discovery
-		visited := make(map[string]bool)
-		var walkAndCache func(parentName string, children []topoSubPeer)
-		walkAndCache = func(parentName string, children []topoSubPeer) {
-			if visited[parentName] {
+		// Feed sub-peer data into relay's peersOfCache for path discovery.
+		// Cache at BOTH qualified path (e.g. "cn-xinchang/2400" — unambiguous
+		// for multi-hop TUN capability lookup) AND at bare last-segment name
+		// (backward-compat for adaptive BFS).
+		//
+		// Cycle-safety: `visitedBare` tracks bare peer NAMES we've already
+		// expanded. A cyclic reference (e.g. A→B→A) would otherwise generate
+		// unbounded qualified paths because the fallback lookup via newCache
+		// keeps finding more children under the same node name — previously
+		// this caused demo-au to run away to 7.5GB RSS in ~30s.
+		visitedBare := make(map[string]bool)
+		var walkAndCache func(qualifiedPath string, children []topoSubPeer)
+		walkAndCache = func(qualifiedPath string, children []topoSubPeer) {
+			parts := strings.Split(qualifiedPath, "/")
+			bare := parts[len(parts)-1]
+			if visitedBare[bare] {
 				return
 			}
-			visited[parentName] = true
+			visitedBare[bare] = true
+
 			var infos []relay.PeerInfo
 			for _, c := range children {
 				infos = append(infos, relay.PeerInfo{
-					Name:     c.Name,
-					ExitNode: c.ExitNode,
-					Native:   c.Native,
+					Name:       c.Name,
+					ExitNode:   c.ExitNode,
+					Native:     c.Native,
+					Version:    c.Version,
+					TunCapable: c.TunCapable,
 				})
 			}
 			if len(infos) > 0 {
-				s.app.Node().SetPeersOfCache(parentName, infos)
+				s.app.Node().SetPeersOfCache(qualifiedPath, infos)
+				if strings.Contains(qualifiedPath, "/") {
+					if _, exists := s.app.Node().PeersOfCached(bare); !exists {
+						s.app.Node().SetPeersOfCache(bare, infos)
+					}
+				}
 			}
 			for _, c := range children {
+				if visitedBare[c.Name] {
+					continue
+				}
 				if len(c.Children) > 0 {
-					walkAndCache(c.Name, c.Children)
-				} else {
-					if cached, ok := newCache[c.Name]; ok && len(cached) > 0 {
-						walkAndCache(c.Name, cached)
-					}
+					walkAndCache(qualifiedPath+"/"+c.Name, c.Children)
+				} else if cached, ok := newCache[c.Name]; ok && len(cached) > 0 {
+					walkAndCache(qualifiedPath+"/"+c.Name, cached)
 				}
 			}
 		}
@@ -1018,13 +1097,14 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 		return nil
 	}
 	type peerWithChildren struct {
-		Name      string        `json:"name"`
-		ExitNode  bool          `json:"exit_node"`
-		Direction string        `json:"direction"`
-		Native    bool          `json:"native"`
-		LatencyMs int           `json:"latency_ms"`
-		Version   string        `json:"version,omitempty"`
-		Children  []topoSubPeer `json:"children,omitempty"`
+		Name       string        `json:"name"`
+		ExitNode   bool          `json:"exit_node"`
+		Direction  string        `json:"direction"`
+		Native     bool          `json:"native"`
+		LatencyMs  int           `json:"latency_ms"`
+		Version    string        `json:"version,omitempty"`
+		TunCapable bool          `json:"tun_capable,omitempty"`
+		Children   []topoSubPeer `json:"children,omitempty"`
 	}
 	var remotePeers []peerWithChildren
 	if err := json.Unmarshal(data, &remotePeers); err != nil {
@@ -1038,13 +1118,15 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 			childLatency += parentLatency
 		}
 		child := topoSubPeer{
-			Name:      rp.Name,
-			ExitNode:  rp.ExitNode,
-			Direction: rp.Direction,
-			Via:       peerName,
-			LatencyMs: childLatency,
-			Native:    rp.Native,
-			Children:  rp.Children,
+			Name:       rp.Name,
+			ExitNode:   rp.ExitNode,
+			Direction:  rp.Direction,
+			Via:        peerName,
+			LatencyMs:  childLatency,
+			Native:     rp.Native,
+			Version:    rp.Version,
+			TunCapable: rp.TunCapable,
+			Children:   rp.Children,
 		}
 		children = append(children, child)
 	}
@@ -2214,10 +2296,13 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 	// Split into chain + remaining. Chain = contiguous peer names (no dots, no slashes in names).
 	// First segment with a dot or known as a file extension ends the chain.
 	segments := strings.Split(strings.TrimSuffix(raw, "/"), "/")
-	// Known path prefixes that mark the end of the peer chain
+	// Known path prefixes that mark the end of the peer chain.
+	// The frontend builds links like "/scale/remote/{peer}/scale/..." so
+	// "scale" must be recognized as a base-path sentinel, not a peer name.
 	notPeer := map[string]bool{
 		"api": true, "login": true, "nodes": true, "proxies": true,
 		"tls": true, "settings": true, "remote": true,
+		"scale": true, "users": true, "rules": true, "assets": true,
 	}
 	chainLen := 0
 	for _, seg := range segments {
@@ -2240,12 +2325,18 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.mu.RUnlock()
-	remaining := strings.Join(segments[chainLen:], "/")
+	// Frontend emits /scale/remote/{chain}/scale/{remaining}. The literal
+	// "scale" sentinel after the chain is the remote's base-path marker;
+	// strip it so we don't end up with /scale/scale/... after prepending.
+	rest := segments[chainLen:]
+	if len(rest) > 0 && rest[0] == "scale" {
+		rest = rest[1:]
+	}
+	remaining := strings.Join(rest, "/")
 	// The remote's actual path: prepend their base path (/scale)
 	// /remote/vm/ → remote /scale/
-	// /remote/vm/login → remote /scale/login
-	// /remote/vm/api/node → remote /scale/api/node
-	// /remote/vm/style.css → remote /scale/style.css
+	// /remote/vm/scale/login → remote /scale/login
+	// /remote/vm/scale/api/node → remote /scale/api/node
 	remotePath := "/scale/" + remaining
 
 	// Proxy base: what the remote's __BASE__ should point to
@@ -2257,9 +2348,9 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 	var conn net.Conn
 	var err error
 	if len(chain) == 1 {
-		conn, err = s.app.Node().DialTCP(ctx, chain[0], "127.0.0.1:5565")
+		conn, err = s.app.Node().DialTCP(ctx, chain[0], relay.StreamAPI)
 	} else {
-		conn, err = s.app.Node().DialVia(ctx, chain, "127.0.0.1:5565")
+		conn, err = s.app.Node().DialVia(ctx, chain, relay.StreamAPI)
 	}
 	if err != nil {
 		http.Error(w, fmt.Sprintf("tunnel to %s failed: %v", strings.Join(chain, "/"), err), 502)
@@ -2267,17 +2358,37 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// Construct proxied request using http.Request.Write for correctness
+	// Construct proxied request. Use a fresh header so we don't forward the
+	// local API token (remote node authenticates independently) or Hop-by-Hop
+	// headers that confuse it. Force HTTP/1.1 with Connection: close so the
+	// remote sends a complete response-with-body and closes cleanly.
 	outReq, _ := http.NewRequest(r.Method, "http://127.0.0.1:5565"+remotePath, r.Body)
 	outReq.URL.RawQuery = r.URL.RawQuery
-	outReq.Header = r.Header.Clone()
-	outReq.Header.Set("Host", "127.0.0.1:5565")
-	outReq.Header.Set("Connection", "close")
+	outReq.Proto = "HTTP/1.1"
+	outReq.ProtoMajor = 1
+	outReq.ProtoMinor = 1
+	outReq.Host = "127.0.0.1:5565"
+	// Copy only headers relevant for the proxied request
+	for k, vv := range r.Header {
+		lk := strings.ToLower(k)
+		// Drop Authorization so remote's own session is used; drop
+		// hop-by-hop headers that can corrupt the proxied request.
+		if lk == "authorization" || lk == "connection" || lk == "proxy-connection" ||
+			lk == "keep-alive" || lk == "te" || lk == "trailers" || lk == "transfer-encoding" {
+			continue
+		}
+		outReq.Header[k] = vv
+	}
 	outReq.Header.Set("X-Hy2scale-Proxy", "true")
+	outReq.Close = true // force Connection: close in serialization
 	outReq.ContentLength = r.ContentLength
-	outReq.Write(conn)
 
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err := outReq.Write(conn); err != nil {
+		http.Error(w, "write to remote failed: "+err.Error(), 502)
+		return
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(conn), outReq)
 	if err != nil {
 		http.Error(w, "bad response from remote: "+err.Error(), 502)
 		return
