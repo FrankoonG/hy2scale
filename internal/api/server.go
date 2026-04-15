@@ -1916,8 +1916,8 @@ func (s *Server) getRules(w http.ResponseWriter, r *http.Request) {
 	rules := make([]ruleWithCompat, len(cfg.Rules))
 	for i, r := range cfg.Rules {
 		rules[i] = ruleWithCompat{RoutingRule: r}
-		if app.TunModeActive() && r.Enabled && r.ExitVia != "" {
-			rules[i].Compat = app.IsExitCompat(r.ExitVia)
+		if r.Enabled && r.ExitVia != "" {
+			rules[i].Compat = s.app.IsExitCompat(r.ExitVia)
 		}
 	}
 	result := map[string]any{
