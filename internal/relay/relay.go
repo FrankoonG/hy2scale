@@ -1360,19 +1360,37 @@ func (n *Node) DisconnectPeer(name string) {
 
 // IsPeerTunCapable checks if a peer supports exit-side TUN.
 // For multi-hop paths ("A/B/C"), checks the last segment (final exit).
+// Looks up direct peers first, then sub-peer caches for nested peers.
 func (n *Node) IsPeerTunCapable(peerName string) bool {
-	// For path-style names, resolve the last peer
-	target := peerName
-	if parts := strings.Split(peerName, "/"); len(parts) > 1 {
-		target = parts[len(parts)-1]
+	parts := strings.Split(peerName, "/")
+	// Strip leading self name (e.g. "AUB/tz-cm-temp" on node AUB → ["tz-cm-temp"])
+	if len(parts) > 0 && parts[0] == n.name {
+		parts = parts[1:]
 	}
+	if len(parts) == 0 {
+		return NodeTunCapable
+	}
+	target := parts[len(parts)-1]
+
+	// Check direct peers
 	n.mu.RLock()
 	p, ok := n.peers[target]
 	n.mu.RUnlock()
-	if !ok {
-		return false // unknown peer — assume not capable
+	if ok {
+		return p.info.TunCapable
 	}
-	return p.info.TunCapable
+
+	// Check sub-peer caches (peer's children may be the target)
+	n.peerRateMu.RLock()
+	defer n.peerRateMu.RUnlock()
+	for _, subPeers := range n.peersOfCache {
+		for _, sp := range subPeers {
+			if sp.Name == target {
+				return sp.TunCapable
+			}
+		}
+	}
+	return false // unknown peer — assume not capable
 }
 
 // BlockPeer prevents a peer from registering (inbound connections rejected).

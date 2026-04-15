@@ -639,16 +639,15 @@ func (eng *ipfwdEngine) ensureCompatStack() {
 	log.Printf("[tun-ipfwd] compat L7 proxy stack active")
 }
 
-// IsExitCompat returns true if the given exit peer is using compat (L7 proxy) mode
-// instead of full TUN forwarding.
-func IsExitCompat(exitVia string) bool {
-	eng := ipfwdEng
-	if eng == nil {
+// IsExitCompat returns true if the given exit peer cannot perform full TUN
+// forwarding (i.e. is "limited" — no NET_ADMIN/no /dev/net/tun on its side).
+// This indicates traffic to that exit must use L7 proxy semantics rather than
+// raw IP forwarding, regardless of whether THIS node is running TUN locally.
+func (a *App) IsExitCompat(exitVia string) bool {
+	if exitVia == "" {
 		return false
 	}
-	eng.compatExitsMu.RLock()
-	defer eng.compatExitsMu.RUnlock()
-	return eng.compatExits[exitVia]
+	return !a.node.IsPeerTunCapable(exitVia)
 }
 
 func filterTargets(targets []ipfwdTarget, excludeRuleID string) []ipfwdTarget {
