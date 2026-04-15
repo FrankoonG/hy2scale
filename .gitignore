@@ -21,35 +21,20 @@ vendor/
 # Configs (may contain secrets)
 configs/
 
-# Test scripts and local files
+# Test outputs and local scripts (all temp files go here)
 test/
-test_*.sh
-run-lossy-test.sh
-docker-compose.local-test.yml
 
 # Internal docs (not for git)
 docs/
 
-# Claude Code project instructions
+# Claude Code
 CLAUDE.md
 .claude/
 .playwright-mcp/
+
+# ipkg build artifacts (generated, not source)
 ipkg/*.ipkg
 ipkg/hy2scale/docker_image.tar.gz
-prompts/
-
-# Temp files and screenshots
-*.png
-*.tar
-*.tar.gz
-!internal/platform/ikuai-iptables/bundle.tar.gz
-*.log
-test_*.py
-debug_*.py
-remote_*.py
-rawtest
-pending.md
-DOCKERHUB.md
 
 # Frontend build artifacts
 node_modules/
