@@ -108,11 +108,11 @@ jobs:
 
       - name: Build Docker image
         run: |
-          DOCKER_BUILDKIT=0 docker build -t hy2scale:release .
+          DOCKER_BUILDKIT=0 docker build -t hy2scale:ikuai .
 
       - name: Export Docker image
         run: |
-          docker save hy2scale:release | gzip > docker-image-amd64.tar.gz
+          docker save hy2scale:ikuai | gzip > docker-image-amd64.tar.gz
           echo "DOCKER_SIZE=$(du -h docker-image-amd64.tar.gz | cut -f1)" >> $GITHUB_ENV
 
       - name: Build ipkg
@@ -125,7 +125,7 @@ jobs:
           sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${IPKG_VERSION}\"/" ipkg/hy2scale/manifest.json
 
           # Embed Docker image
-          docker save hy2scale:release | gzip > ipkg/hy2scale/docker_image.tar.gz
+          docker save hy2scale:ikuai | gzip > ipkg/hy2scale/docker_image.tar.gz
 
           # Package ipkg
           cd ipkg

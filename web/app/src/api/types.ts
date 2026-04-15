@@ -202,6 +202,7 @@ export interface RoutingRule {
   exit_paths?: string[];
   exit_mode?: '' | 'quality' | 'aggregate';
   enabled: boolean;
+  compat?: boolean;
 }
 
 export interface TunModeConfig {

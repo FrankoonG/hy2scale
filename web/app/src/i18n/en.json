@@ -326,6 +326,7 @@
   "rules.advancedMode": "Advanced",
   "rules.tunMode": "TUN Mode",
   "rules.tunDesc": "TUN mode forwards raw IP packets through the relay, preserving end-to-end TCP/UDP sessions. Required for protocols like Moonlight that bind encryption to TCP sessions.",
+  "rules.compat": "compat",
   "rules.tunEnabled": "TUN forwarding enabled",
   "rules.tunDisabled": "TUN forwarding disabled",
   "rules.tunModeLabel": "Mode",

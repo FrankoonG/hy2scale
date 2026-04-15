@@ -1908,9 +1908,21 @@ func (s *Server) resetUserTrafficAPI(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getRules(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
+	// Annotate rules with compat mode status (per-exit)
+	type ruleWithCompat struct {
+		app.RoutingRule
+		Compat bool `json:"compat,omitempty"`
+	}
+	rules := make([]ruleWithCompat, len(cfg.Rules))
+	for i, r := range cfg.Rules {
+		rules[i] = ruleWithCompat{RoutingRule: r}
+		if app.TunModeActive() && r.Enabled && r.ExitVia != "" {
+			rules[i].Compat = app.IsExitCompat(r.ExitVia)
+		}
+	}
 	result := map[string]any{
 		"available": app.RuleEngineAvailable(),
-		"rules":     cfg.Rules,
+		"rules":     rules,
 	}
 	writeJSON(w, result)
 }
