@@ -1956,6 +1956,16 @@ func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, err
 	if len(parts) > 0 && parts[0] == a.node.Name() {
 		parts = parts[1:]
 	}
+	// Reject paths that revisit any node (including self) — routing through
+	// a node already in the path is always wasted/looped.
+	seen := map[string]bool{a.node.Name(): true}
+	for _, h := range parts {
+		if seen[h] {
+			log.Printf("[exit] rejecting loop path %q (revisits %q)", exitVia, h)
+			return nil, fmt.Errorf("exit path %q loops back through %q", exitVia, h)
+		}
+		seen[h] = true
+	}
 	if len(parts) == 0 {
 		return net.DialTimeout("tcp", rewriteLocalAddr(addr), 10*time.Second)
 	}

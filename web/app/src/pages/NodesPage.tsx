@@ -118,15 +118,20 @@ export default function NodesPage() {
       return a.name.localeCompare(b.name);
     });
 
+    const selfId = node?.node_id || '';
     return sorted.map((n) => {
       const rootPath = n.is_self ? (node?.node_id || n.name) : n.name;
+      // Defensive: first-level children shouldn't contain self or the root itself
+      const safeChildren = n.children?.filter(
+        (c) => c.name !== selfId && c.name !== n.name
+      );
       return {
         key: n.is_self ? '__self__' : n.name,
         data: n,
         expanded: true,
         className: n.is_self ? 'self-row' : syncingNodes.has(n.name) ? 'syncing' : n.disabled ? 'disabled-row' : undefined,
-        children: n.children
-          ? [...n.children].sort((a, b) => a.name.localeCompare(b.name)).map((c) => buildChildNode(c, rootPath))
+        children: safeChildren && safeChildren.length > 0
+          ? [...safeChildren].sort((a, b) => a.name.localeCompare(b.name)).map((c) => buildChildNode(c, rootPath))
           : undefined,
       };
     });
@@ -134,15 +139,18 @@ export default function NodesPage() {
 
   const buildChildNode = (c: TopologyNode, parentPath: string): TreeNode<TopologyNode> => {
     const qp = `${parentPath}/${c.name}`;
+    const ancestors = new Set(parentPath.split('/'));
+    // Defensive: filter out grand-children that would form a loop
+    const safeChildren = c.children?.filter((cc) => !ancestors.has(cc.name) && cc.name !== c.name);
     return {
       key: qp,
       data: c,
       expanded: true,
       className: `sub-row${syncingNodes.has(qp) ? ' syncing' : ''}${c.disabled ? ' disabled-row' : ''}`,
       // Don't expand children of a disabled node — they're effectively unreachable
-      children: c.disabled || !c.children
+      children: c.disabled || !safeChildren || safeChildren.length === 0
         ? undefined
-        : [...c.children].sort((a, b) => a.name.localeCompare(b.name)).map((cc) => buildChildNode(cc, qp)),
+        : [...safeChildren].sort((a, b) => a.name.localeCompare(b.name)).map((cc) => buildChildNode(cc, qp)),
     };
   };
 

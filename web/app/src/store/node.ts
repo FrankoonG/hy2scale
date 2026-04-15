@@ -19,12 +19,20 @@ interface NodeState {
 function buildExitPaths(topo: TopologyNode[], selfId?: string): string[] {
   const paths: string[] = [];
 
+  // Defensive: skip any child whose name is already in the ancestor chain
+  // (backend should prevent this, but guard against stale data).
+  function isLoop(prefix: string, name: string): boolean {
+    if (!prefix) return false;
+    const ancestors = prefix.split('/');
+    return ancestors.includes(name);
+  }
+
   function walk(nodes: TopologyNode[], prefix: string) {
     for (const n of nodes) {
       if (n.is_self) {
-        // Self's children get selfId prefix
         if (n.children) {
           for (const c of n.children) {
+            if (selfId && isLoop(selfId, c.name)) continue;
             const childPath = selfId ? `${selfId}/${c.name}` : c.name;
             paths.push(childPath);
             if (c.children) walkChildren(c.children, childPath);
@@ -32,15 +40,16 @@ function buildExitPaths(topo: TopologyNode[], selfId?: string): string[] {
         }
         continue;
       }
-      paths.push(prefix ? `${prefix}/${n.name}` : n.name);
-      if (n.children) {
-        walkChildren(n.children, prefix ? `${prefix}/${n.name}` : n.name);
-      }
+      if (isLoop(prefix, n.name)) continue;
+      const p = prefix ? `${prefix}/${n.name}` : n.name;
+      paths.push(p);
+      if (n.children) walkChildren(n.children, p);
     }
   }
 
   function walkChildren(nodes: TopologyNode[], prefix: string) {
     for (const c of nodes) {
+      if (isLoop(prefix, c.name)) continue;
       const p = `${prefix}/${c.name}`;
       paths.push(p);
       if (c.children) walkChildren(c.children, p);
