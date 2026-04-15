@@ -335,11 +335,9 @@ func (e *ruleEngine) applyIPRuleTun(r RoutingRule) {
 		if target == "" {
 			continue
 		}
-		// ip rule add iif lo to <target> lookup <table> priority 100
-		// "iif lo" ensures only locally-originated traffic is captured,
-		// not forwarded traffic (e.g. Docker containers reaching the same IP).
-		run("ip", "rule", "add", "iif", "lo", "to", target, "lookup", ipfwdTable, "priority", "100")
-		ipRuleArgs = append(ipRuleArgs, "iif lo to "+target+" lookup "+ipfwdTable+" priority 100")
+		// ip rule add to <target> lookup <table> priority 100
+		run("ip", "rule", "add", "to", target, "lookup", ipfwdTable, "priority", "100")
+		ipRuleArgs = append(ipRuleArgs, "to "+target+" lookup "+ipfwdTable+" priority 100")
 		e.registerTargetExit(r.ID, target, r.ExitVia, r.ExitMode)
 	}
 	// Store for cleanup (use appliedIPT with "iprule:" prefix to distinguish)
@@ -411,8 +409,8 @@ func (e *ruleEngine) applyDomainRule(r RoutingRule) {
 			if ipfwdActive.Load() {
 				// TUN mode: add ip rule for each resolved IP
 				target := ip + "/32"
-				run("ip", "rule", "add", "iif", "lo", "to", target, "lookup", ipfwdTable, "priority", "100")
-				ruleArgs = append(ruleArgs, "iprule:iif lo to "+target+" lookup "+ipfwdTable+" priority 100")
+				run("ip", "rule", "add", "to", target, "lookup", ipfwdTable, "priority", "100")
+				ruleArgs = append(ruleArgs, "iprule:to "+target+" lookup "+ipfwdTable+" priority 100")
 			} else {
 				// Proxy mode: DNAT
 				udpDst := fmt.Sprintf("127.0.0.99:%d", ruleUDPProxyPort)
