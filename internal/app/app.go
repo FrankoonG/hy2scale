@@ -49,8 +49,9 @@ type ClientEntry struct {
 	MaxConnWindow    int `yaml:"max_conn_window,omitempty" json:"max_conn_window"`
 
 	// Misc
-	FastOpen bool `yaml:"fast_open,omitempty" json:"fast_open"`
-	Disabled bool `yaml:"disabled,omitempty" json:"disabled"`
+	FastOpen   bool   `yaml:"fast_open,omitempty" json:"fast_open"`
+	BBRProfile string `yaml:"bbr_profile,omitempty" json:"bbr_profile,omitempty"` // "", "standard", "conservative", "aggressive"
+	Disabled   bool   `yaml:"disabled,omitempty" json:"disabled"`
 }
 
 // AllAddrs returns the effective address list. If Addrs is populated, returns it.
@@ -1098,6 +1099,9 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 				MaxConnectionReceiveWindow:     134217728,
 				DisablePathMTUDiscovery:        TunCaptureActive(), // only in compat mode where Docker bridge may drop large UDP
 			},
+			CongestionConfig: hyclient.CongestionConfig{
+				BBRProfile: cl.BBRProfile,
+			},
 			BandwidthConfig: hyclient.BandwidthConfig{
 				MaxTx: 125000000,
 				MaxRx: 125000000,
@@ -1260,6 +1264,9 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 			MaxConnectionReceiveWindow:     mcw,
 			DisablePathMTUDiscovery:        TunCaptureActive(), // only in compat mode where Docker bridge may drop large UDP
 		},
+		CongestionConfig: hyclient.CongestionConfig{
+			BBRProfile: cl.BBRProfile,
+		},
 		BandwidthConfig: hyclient.BandwidthConfig{
 			MaxTx: maxTx,
 			MaxRx: maxRx,
@@ -1352,6 +1359,9 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 				MaxStreamReceiveWindow:         msw,
 				InitialConnectionReceiveWindow: icw,
 				MaxConnectionReceiveWindow:     mcw,
+			},
+			CongestionConfig: hyclient.CongestionConfig{
+				BBRProfile: cl.BBRProfile,
 			},
 			BandwidthConfig: hyclient.BandwidthConfig{MaxTx: maxTx, MaxRx: maxRx},
 			FastOpen:        cl.FastOpen,

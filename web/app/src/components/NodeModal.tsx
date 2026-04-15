@@ -57,6 +57,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
 
   const [password, setPassword] = useState('');
   const [fastOpen, setFastOpen] = useState(false);
+  const [bbrProfile, setBbrProfile] = useState<'' | 'standard' | 'conservative' | 'aggressive'>('');
   const [maxTx, setMaxTx] = useState('');
   const [maxRx, setMaxRx] = useState('');
   const [sni, setSni] = useState('');
@@ -86,7 +87,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
     if (!editingName) {
       // Reset for add
       setAddrItems([{ id: addrNextId++, host: '', port: '' }]);
-      setPassword(''); setFastOpen(false);
+      setPassword(''); setFastOpen(false); setBbrProfile('');
       setMaxTx(''); setMaxRx('');
       setSni(''); setInsecure(true);
       setCaSource(''); setCaManual('');
@@ -103,6 +104,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       setAddrItems(addrs.map(a => { const p = parseAddr(a); return { id: addrNextId++, host: p.host, port: p.port }; }));
       setPassword(c.password || '');
       setFastOpen(c.fast_open || false);
+      setBbrProfile((c.bbr_profile as any) || '');
       setMaxTx(c.max_tx ? String(c.max_tx / 125000) : '');
       setMaxRx(c.max_rx ? String(c.max_rx / 125000) : '');
       setSni(c.sni || '');
@@ -195,6 +197,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       max_tx: maxTx ? Math.round(parseFloat(maxTx) * 125000) : undefined,
       max_rx: maxRx ? Math.round(parseFloat(maxRx) * 125000) : undefined,
       fast_open: fastOpen || undefined,
+      bbr_profile: bbrProfile || undefined,
       init_stream_window: initStreamWin ? parseInt(initStreamWin) : undefined,
       max_stream_window: maxStreamWin ? parseInt(maxStreamWin) : undefined,
       init_conn_window: initConnWin ? parseInt(initConnWin) : undefined,
@@ -280,9 +283,24 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
           <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} />
         </FormGroup>
 
-        <FormGroup label={t('nodes.fastOpen')}>
-          <Toggle checked={fastOpen} onChange={(e) => setFastOpen(e.target.checked)} />
-        </FormGroup>
+        <FormGrid>
+          <FormGroup label={t('nodes.fastOpen')}>
+            <div style={{ paddingTop: 6 }}>
+              <Toggle checked={fastOpen} onChange={(e) => setFastOpen(e.target.checked)} />
+            </div>
+          </FormGroup>
+          <FormGroup label={t('nodes.bbrProfile')}>
+            <Select
+              value={bbrProfile}
+              onChange={(e) => setBbrProfile(e.target.value as any)}
+              options={[
+                { value: '', label: t('nodes.bbrStandard') },
+                { value: 'conservative', label: t('nodes.bbrConservative') },
+                { value: 'aggressive', label: t('nodes.bbrAggressive') },
+              ]}
+            />
+          </FormGroup>
+        </FormGrid>
 
         {/* Bandwidth */}
         <FormGrid>
