@@ -73,6 +73,7 @@ export interface ClientEntry {
   max_conn_window?: number;
   conn_mode?: '' | 'quality' | 'aggregate';
   fast_open?: boolean;
+  bbr_profile?: '' | 'standard' | 'conservative' | 'aggressive';
   disabled?: boolean;
   connected?: boolean;
 }
