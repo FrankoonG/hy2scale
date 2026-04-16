@@ -548,15 +548,25 @@ func (a *App) registerExitIPTunHandler(ctx context.Context) {
 }
 
 // addTargets adds or replaces CIDR→exit mappings in the TUN forwarding table.
+// Closes any TUN stream whose exit peer is no longer referenced by any target.
 func (eng *ipfwdEngine) addTargets(ruleID string, cidrs []string, exitVia string) {
 	eng.targetsMu.Lock()
-	defer eng.targetsMu.Unlock()
 	eng.targets = filterTargets(eng.targets, ruleID)
 	eng.targets = append(eng.targets, ipfwdTarget{cidrs: cidrs, exitVia: exitVia, ruleID: ruleID})
-	// Close stale streams (forces reconnect to new exit)
+	// Build set of all exits still in use
+	activeExits := make(map[string]bool)
+	for _, t := range eng.targets {
+		activeExits[t.exitVia] = true
+	}
+	eng.targetsMu.Unlock()
+
+	// Close streams whose exit is no longer referenced (forces reconnect to new exit)
 	eng.streamsMu.Lock()
 	for k, s := range eng.streams {
-		if s.closed {
+		if s.closed || !activeExits[k] {
+			log.Printf("[tun-ipfwd] closing stale tunnel to %s (exit changed)", k)
+			s.closed = true
+			s.conn.Close()
 			delete(eng.streams, k)
 		}
 	}
