@@ -318,6 +318,10 @@ func (eng *ipfwdEngine) getStream(ctx context.Context, peerName string) *ipfwdSt
 }
 
 // asyncConnect dials the exit peer in the background and installs the stream.
+// It also monitors the first-hop peer's connection health: when the relay peer
+// disconnects (PeerCtx cancelled), the TUN stream is torn down immediately
+// instead of waiting for QUIC idle timeout. The next incoming packet will
+// trigger a fresh asyncConnect via getStream.
 func (eng *ipfwdEngine) asyncConnect(ctx context.Context, peerName string) {
 	defer func() {
 		eng.streamsMu.Lock()
@@ -341,7 +345,27 @@ func (eng *ipfwdEngine) asyncConnect(ctx context.Context, peerName string) {
 
 	log.Printf("[tun-ipfwd] IP tunnel to %s established", peerName)
 
-	// Reverse reader: exit peer → TUN
+	// Watch first-hop peer liveness. When relay detects peer disconnect
+	// (3 failed pings → cancel peerCtx), tear down this stream immediately.
+	firstHop := peerName
+	if parts := strings.Split(peerName, "/"); len(parts) > 0 {
+		if parts[0] == eng.app.node.Name() && len(parts) > 1 {
+			firstHop = parts[1]
+		} else {
+			firstHop = parts[0]
+		}
+	}
+	peerCtx := eng.app.node.PeerCtx(firstHop)
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-peerCtx.Done():
+			log.Printf("[tun-ipfwd] first-hop %s disconnected, tearing down tunnel to %s", firstHop, peerName)
+			s.conn.Close()
+		}
+	}()
+
+	// Reverse reader: exit peer → TUN (blocks until stream dies)
 	eng.readFromStream(ctx, s)
 	eng.removeStream(peerName)
 }
