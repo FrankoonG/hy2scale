@@ -222,18 +222,18 @@ export default function RulesPage() {
           </FormGroup>
           <TargetList type={tab as 'ip' | 'domain'} value={targets} onChange={setTargets} />
 
-          {tab === 'ip' && (
-            <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-              <div style={{ flex: '0 0 120px' }}>
-                <FormGroup label={t('rules.priority')}>
-                  <Input
-                    type="number"
-                    value={priority}
-                    onChange={(e) => setPriority(e.target.value)}
-                    placeholder="0"
-                  />
-                </FormGroup>
-              </div>
+          <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+            <div style={{ flex: tab === 'ip' ? '0 0 120px' : 1 }}>
+              <FormGroup label={t('rules.priority')}>
+                <Input
+                  type="number"
+                  value={priority}
+                  onChange={(e) => setPriority(e.target.value)}
+                  placeholder="0"
+                />
+              </FormGroup>
+            </div>
+            {tab === 'ip' && (
               <div style={{ flex: 1 }}>
                 <FormGroup label={t('rules.useTun')}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -249,8 +249,8 @@ export default function RulesPage() {
                   </div>
                 </FormGroup>
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
           {useTun ? (
             <FormGroup label={t('rules.exitVia')} required>

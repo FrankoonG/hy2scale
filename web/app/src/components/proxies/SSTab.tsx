@@ -40,28 +40,30 @@ export default function SSTab() {
   return (
     <Card title={t('ss.title')}>
       <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <FormGroup label={t('app.enabled')}>
-          <Toggle checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-        </FormGroup>
         <FormGrid>
-          <FormGroup label={t('ss.port')} required>
-            <Input value={listen} onChange={(e) => setListen(e.target.value)} placeholder=":8388" />
+          <FormGroup label={t('app.enabled')}>
+            <div style={{ paddingTop: 6 }}>
+              <Toggle checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            </div>
           </FormGroup>
-          <FormGroup label={t('ss.method')}>
-            <Select
-              value={method}
-              onChange={(e) => setMethod(e.target.value)}
-              options={[
-                { value: 'aes-128-gcm', label: 'aes-128-gcm' },
-                { value: 'aes-256-gcm', label: 'aes-256-gcm' },
-                { value: 'chacha20-ietf-poly1305', label: 'chacha20-ietf-poly1305' },
-                { value: '2022-blake3-aes-128-gcm', label: '2022-blake3-aes-128-gcm' },
-                { value: '2022-blake3-aes-256-gcm', label: '2022-blake3-aes-256-gcm' },
-                { value: 'none', label: 'none (no encryption)' },
-              ]}
-            />
+          <FormGroup label={t('ss.listen')} required>
+            <Input value={listen} onChange={(e) => setListen(e.target.value)} placeholder="0.0.0.0:8388" />
           </FormGroup>
         </FormGrid>
+        <FormGroup label={t('ss.method')}>
+          <Select
+            value={method}
+            onChange={(e) => setMethod(e.target.value)}
+            options={[
+              { value: 'aes-128-gcm', label: 'aes-128-gcm' },
+              { value: 'aes-256-gcm', label: 'aes-256-gcm' },
+              { value: 'chacha20-ietf-poly1305', label: 'chacha20-ietf-poly1305' },
+              { value: '2022-blake3-aes-128-gcm', label: '2022-blake3-aes-128-gcm' },
+              { value: '2022-blake3-aes-256-gcm', label: '2022-blake3-aes-256-gcm' },
+              { value: 'none', label: 'none (no encryption)' },
+            ]}
+          />
+        </FormGroup>
         <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('ss.desc')}</div>
         <Button variant="primary" onClick={handleSave} loading={loading} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
       </div>

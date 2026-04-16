@@ -196,6 +196,11 @@ func LoadOrInitConfig(dataDir string) (Config, error) {
 	tlsStore := NewTLSStore(dataDir)
 	tlsStore.Generate("default", "Default", []string{nodeID}, 3650)
 
+	// Pre-generate a WireGuard server key pair so the UI shows a valid key
+	// from the start — users were hitting "invalid key" errors when the
+	// Public Key field stayed empty after first load.
+	wgPriv, _ := GenerateWireGuardKey()
+
 	cfg := Config{
 		NodeID:   nodeID,
 		Name:     nodeID,
@@ -207,6 +212,13 @@ func LoadOrInitConfig(dataDir string) (Config, error) {
 			TLSKey:  filepath.Join(dataDir, "tls", "default.key"),
 		},
 		Peers: make(map[string]PeerConfig),
+		WireGuard: &WireGuardConfig{
+			Enabled:    false,
+			ListenPort: 51820,
+			PrivateKey: wgPriv,
+			Address:    "10.0.0.1/24",
+			MTU:        1420,
+		},
 	}
 	return cfg, nil
 }

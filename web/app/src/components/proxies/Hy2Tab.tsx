@@ -10,9 +10,8 @@ export default function Hy2Tab() {
   const queryClient = useQueryClient();
   const node = useNodeStore((s) => s.node);
 
-  const serverListen = node?.server?.listen;
-  const serverPort = serverListen?.replace(/.*:/, '') || '5565';
-  const serverStatus = serverListen ? 'Enabled' : 'Disabled';
+  const serverListen = node?.server?.listen || '0.0.0.0:5565';
+  const serverEnabled = !!node?.server?.listen;
 
   const handleAuthToggle = async () => {
     try {
@@ -28,11 +27,13 @@ export default function Hy2Tab() {
     <Card title={t('hy2.title')}>
       <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 16 }}>
         <FormGrid>
-          <FormGroup label={t('hy2.port')}>
-            <Input value={serverPort} readOnly disabled />
-          </FormGroup>
           <FormGroup label={t('hy2.serverStatus')}>
-            <Input value={serverStatus} readOnly disabled />
+            <div style={{ paddingTop: 6, pointerEvents: 'none', opacity: 0.8 }}>
+              <Toggle checked={serverEnabled} onChange={() => {}} />
+            </div>
+          </FormGroup>
+          <FormGroup label={t('hy2.listen')}>
+            <Input value={serverListen} readOnly disabled />
           </FormGroup>
         </FormGrid>
 
