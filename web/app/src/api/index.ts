@@ -3,10 +3,10 @@ import type {
   NodeConfig, Stats, TopologyNode, ClientEntry,
   UserConfig, Session, ProxyConfig, SSConfig, L2TPConfig,
   IKEv2Config, WireGuardConfig, WireGuardPeer,
-  RoutingRule, TunModeConfig, CertInfo, UISettings, PortConflict, PasswordConflicts,
+  RoutingRule, CertInfo, UISettings, PortConflict, PasswordConflicts,
 } from './types';
 
-export type { NodeConfig, Stats, TopologyNode, ClientEntry, UserConfig, Session, ProxyConfig, SSConfig, L2TPConfig, IKEv2Config, WireGuardConfig, WireGuardPeer, RoutingRule, TunModeConfig, CertInfo, UISettings, PortConflict, PasswordConflicts };
+export type { NodeConfig, Stats, TopologyNode, ClientEntry, UserConfig, Session, ProxyConfig, SSConfig, L2TPConfig, IKEv2Config, WireGuardConfig, WireGuardPeer, RoutingRule, CertInfo, UISettings, PortConflict, PasswordConflicts };
 
 // Auth
 export const login = (username: string, password: string) =>
@@ -113,9 +113,6 @@ export const deleteRule = (id: string) =>
   api(`/rules/${encodeURIComponent(id)}`, { method: 'DELETE' });
 export const toggleRule = (id: string, enabled: boolean) =>
   api(`/rules/${encodeURIComponent(id)}/toggle`, { method: 'PUT', body: JSON.stringify({ enabled }) });
-export const getTunMode = () => api<TunModeConfig>('/rules/tun-mode');
-export const updateTunMode = (data: Partial<TunModeConfig>) =>
-  api('/rules/tun-mode', { method: 'PUT', body: JSON.stringify(data) });
 
 // TLS
 export const getCerts = () => api<CertInfo[]>('/tls');

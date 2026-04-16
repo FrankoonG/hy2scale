@@ -351,6 +351,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	// Start rule engine (host mode only)
 	a.StartRuleEngine()
+	a.StartRuleReconciler(ctx)
 
 	// Start clients (block disabled ones from inbound too)
 	for _, cl := range cfg.Clients {

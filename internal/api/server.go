@@ -179,8 +179,6 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("PUT /api/rules/{id}", s.updateRule)
 	authed.HandleFunc("DELETE /api/rules/{id}", s.deleteRule)
 	authed.HandleFunc("PUT /api/rules/{id}/toggle", s.toggleRule)
-	authed.HandleFunc("GET /api/rules/tun-mode", s.getTunMode)
-	authed.HandleFunc("PUT /api/rules/tun-mode", s.setTunMode)
 
 	// Port check
 	authed.HandleFunc("POST /api/check-ports", s.checkPorts)
@@ -2000,17 +1998,17 @@ func (s *Server) resetUserTrafficAPI(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getRules(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
-	// Annotate rules with compat mode status (per-exit)
-	type ruleWithCompat struct {
+	// Annotate each rule with its live TUN status: true only when UseTun is
+	// requested AND the exit peer is TUN-capable AND the target is routable
+	// (i.e. the rule is really running on the TUN path, not the proxy fallback).
+	type ruleWithTun struct {
 		app.RoutingRule
-		Compat bool `json:"compat,omitempty"`
+		TunActive bool `json:"tun_active,omitempty"`
 	}
-	rules := make([]ruleWithCompat, len(cfg.Rules))
-	for i, r := range cfg.Rules {
-		rules[i] = ruleWithCompat{RoutingRule: r}
-		if r.Enabled && r.ExitVia != "" {
-			rules[i].Compat = s.app.IsExitCompat(r.ExitVia)
-		}
+	rules := make([]ruleWithTun, len(cfg.Rules))
+	for i, rr := range cfg.Rules {
+		rules[i] = ruleWithTun{RoutingRule: rr}
+		rules[i].TunActive = s.app.RuleUsesTun(rr)
 	}
 	result := map[string]any{
 		"available": app.RuleEngineAvailable(),
@@ -2087,43 +2085,6 @@ func (s *Server) toggleRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.app.ToggleRule(id, body.Enabled)
-	writeJSON(w, map[string]string{"status": "ok"})
-}
-
-func (s *Server) getTunMode(w http.ResponseWriter, r *http.Request) {
-	cfg := s.app.Store().Get()
-	tm := cfg.TunMode
-	if tm == nil {
-		tm = &app.TunModeConfig{}
-	}
-	result := map[string]any{
-		"enabled": tm.Enabled,
-		"mode":    tm.Mode,
-		"active":  app.TunModeActive(),
-	}
-	writeJSON(w, result)
-}
-
-func (s *Server) setTunMode(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Enabled bool   `json:"enabled"`
-		Mode    string `json:"mode"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, err.Error(), 400)
-		return
-	}
-	if body.Mode == "" {
-		body.Mode = "mixed"
-	}
-	if body.Enabled {
-		if err := s.app.EnableTunMode(body.Mode); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-	} else {
-		s.app.DisableTunMode()
-	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 

@@ -63,6 +63,12 @@ type RoutingRule struct {
 	ExitPaths []string `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
 	ExitMode  string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"` // ""|"quality"|"aggregate"
 	Enabled   bool     `yaml:"enabled" json:"enabled"`
+	// UseTun requests full TUN forwarding for this rule. When the exit peer is
+	// TUN-capable (has NET_ADMIN + /dev/net/tun) and the target is routable,
+	// packets go through a raw IP tunnel (source IP preserved, ICMP supported).
+	// Otherwise silently falls back to normal relay proxy. When UseTun is set
+	// ExitPaths and ExitMode are ignored — only a single exit_via is honored.
+	UseTun bool `yaml:"use_tun,omitempty" json:"use_tun,omitempty"`
 }
 
 // TunModeConfig controls TUN-based IP packet forwarding for the rules engine.
@@ -160,6 +166,19 @@ func LoadOrInitConfig(dataDir string) (Config, error) {
 		}
 		if cfg.Peers == nil {
 			cfg.Peers = make(map[string]PeerConfig)
+		}
+		// Migration: old global tun_mode → per-rule use_tun. When the legacy
+		// global flag was enabled, mark every IP rule as TUN-using so existing
+		// deployments keep their current behaviour after upgrade. The global
+		// TunMode struct is left in place (unused) and will be dropped on the
+		// next config save naturally.
+		if cfg.TunMode != nil && cfg.TunMode.Enabled {
+			for i := range cfg.Rules {
+				if cfg.Rules[i].Type == "ip" {
+					cfg.Rules[i].UseTun = true
+				}
+			}
+			cfg.TunMode = nil
 		}
 		return cfg, nil
 	}

@@ -38,6 +38,9 @@ const (
 )
 
 // StartRuleEngine initializes the rule engine if in host network mode.
+// Each rule decides independently whether to use TUN (via r.UseTun) or normal
+// relay proxy; the TUN engine starts lazily when the first TUN rule is
+// applied and stops automatically when the last one is removed.
 func (a *App) StartRuleEngine() {
 	if !CheckHostNetwork() {
 		debugLog("[rules] not in host network mode, rule engine disabled")
@@ -48,23 +51,7 @@ func (a *App) StartRuleEngine() {
 		return
 	}
 
-	// Auto-restore TUN mode from saved config
 	cfg := a.store.Get()
-	if cfg.TunMode != nil && cfg.TunMode.Enabled && !ipfwdActive.Load() {
-		log.Printf("[rules] restoring TUN mode from config (mode=%s)", cfg.TunMode.Mode)
-		if err := a.EnableTunMode(cfg.TunMode.Mode); err != nil {
-			log.Printf("[rules] TUN restore failed: %v, falling back to proxy", err)
-			// Clear the enabled flag so we don't get stuck in "starting"
-			a.store.Update(func(c *Config) {
-				if c.TunMode != nil {
-					c.TunMode.Enabled = false
-				}
-			})
-		} else {
-			return // TUN mode handles everything
-		}
-	}
-
 	ruleEngOnce = sync.Once{} // allow re-init
 	ruleEng = &ruleEngine{
 		app:        a,
@@ -102,7 +89,6 @@ func (a *App) StartRuleEngine() {
 	log.Printf("[rules] engine started, proxy on %s", ruleEng.proxyAddr)
 
 	// Exclude relay peer ports from rules (prevent DNAT intercepting QUIC)
-	cfg = a.store.Get()
 	for _, cl := range cfg.Clients {
 		addr := extractPrimaryAddr(cl.Addr)
 		host, port, err := net.SplitHostPort(addr)
@@ -161,76 +147,115 @@ func RuleEngineAvailable() bool {
 	return CheckHostNetwork()
 }
 
-// TunModeActive returns whether TUN IP forwarding is active.
+// TunModeActive returns whether the TUN IP forwarding engine is running.
 func TunModeActive() bool {
 	return ipfwdActive.Load()
 }
 
-// EnableTunMode stops proxy mode and starts TUN IP forwarding.
-func (a *App) EnableTunMode(mode string) error {
-	// Stop proxy mode (removes iptables DNAT rules)
-	a.StopRuleEngine()
-
-	// Collect targets for TUN
-	cfg := a.store.Get()
-	var targets []ipfwdTarget
-	for _, r := range cfg.Rules {
-		if !r.Enabled || r.Type != "ip" {
-			continue
-		}
-		if mode == "mixed" && !a.isRuleRoutable(r) {
-			continue // skip non-routable targets in mixed mode
-		}
-		targets = append(targets, ipfwdTarget{
-			cidrs:   r.Targets,
-			exitVia: r.ExitVia,
-			ruleID:  r.ID,
-		})
+// RuleUsesTun reports whether an enabled rule is actually running through
+// the TUN path right now (as opposed to the relay proxy fallback). A rule
+// with UseTun=true only takes the TUN path when the exit peer is TUN-capable
+// and the target is locally routable.
+func (a *App) RuleUsesTun(r RoutingRule) bool {
+	if !r.Enabled || r.Type != "ip" || !r.UseTun || r.ExitVia == "" {
+		return false
 	}
-
-	if err := a.StartIPForwarding(targets); err != nil {
-		// Fallback: restart proxy mode
-		a.StartRuleEngine()
-		return err
+	if !a.node.IsPeerTunCapable(r.ExitVia) {
+		return false
 	}
-
-	// Save config BEFORE restarting proxy (so auto-restore check sees correct state)
-	a.store.Update(func(c *Config) {
-		c.TunMode = &TunModeConfig{Enabled: true, Mode: mode}
-	})
-
-	// Re-start proxy mode for rules NOT handled by TUN (mixed mode)
-	if mode == "mixed" {
-		a.startProxyForNonTunRules()
-	}
-	return nil
-}
-
-// DisableTunMode stops TUN and restarts proxy mode.
-func (a *App) DisableTunMode() {
-	a.StopIPForwarding()
-	a.StopRuleEngine() // close any existing proxy listener first
-
-	// Update config
-	a.store.Update(func(c *Config) {
-		if c.TunMode != nil {
-			c.TunMode.Enabled = false
-		}
-	})
-
-	// Restart proxy mode
-	a.StartRuleEngine()
+	return a.isRuleRoutable(r)
 }
 
 func (a *App) isRuleRoutable(r RoutingRule) bool {
 	return isTargetRoutableCheck(r.Targets)
 }
 
-// startProxyForNonTunRules starts the proxy engine for rules not handled by TUN.
-func (a *App) startProxyForNonTunRules() {
-	// Re-init proxy for non-routable rules only
-	a.StartRuleEngine()
-	// The applyIPRule will skip routable targets since they're handled by TUN
+// reconcileRuleModes re-evaluates every enabled rule's TUN eligibility and
+// re-applies any whose current mode (proxy vs TUN) doesn't match what
+// RuleUsesTun says it should be. Called periodically so rules flip to TUN
+// once their exit peer comes online, and fall back to proxy when it drops.
+func (a *App) reconcileRuleModes() {
+	if ruleEng == nil {
+		return
+	}
+	cfg := a.store.Get()
+	ruleEng.mu.Lock()
+	// Snapshot current mode per rule: if eng.appliedIPT[id] has any entry
+	// starting with "iprule:" it is currently on the TUN path, otherwise proxy.
+	currentOnTun := make(map[string]bool)
+	for id, args := range ruleEng.appliedIPT {
+		for _, a := range args {
+			if len(a) > 7 && a[:7] == "iprule:" {
+				currentOnTun[id] = true
+				break
+			}
+		}
+	}
+	ruleEng.mu.Unlock()
+
+	for _, r := range cfg.Rules {
+		if !r.Enabled || r.Type != "ip" {
+			continue
+		}
+		wantTun := a.RuleUsesTun(r)
+		haveTun := currentOnTun[r.ID]
+		if wantTun != haveTun {
+			log.Printf("[rules] reconcile %s: re-apply (wantTun=%v haveTun=%v)", r.Name, wantTun, haveTun)
+			ruleEng.mu.Lock()
+			ruleEng.removeIPTRulesLocked(r.ID)
+			ruleEng.mu.Unlock()
+			a.ensureTunEngineForRules()
+			ruleEng.mu.Lock()
+			ruleEng.applyRule(r)
+			ruleEng.mu.Unlock()
+		}
+	}
+	// After reconciling, stop TUN engine if nothing uses it
+	a.ensureTunEngineForRules()
+}
+
+// StartRuleReconciler periodically re-evaluates rule modes (TUN vs proxy).
+func (a *App) StartRuleReconciler(ctx context.Context) {
+	go func() {
+		t := time.NewTicker(10 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				a.reconcileRuleModes()
+			}
+		}
+	}()
+}
+
+// ensureTunEngineForRules starts the TUN engine if any enabled rule currently
+// qualifies for TUN, or stops it if none do. Safe to call repeatedly.
+func (a *App) ensureTunEngineForRules() {
+	cfg := a.store.Get()
+	var tunTargets []ipfwdTarget
+	for _, r := range cfg.Rules {
+		if !a.RuleUsesTun(r) {
+			continue
+		}
+		tunTargets = append(tunTargets, ipfwdTarget{
+			cidrs:   r.Targets,
+			exitVia: r.ExitVia,
+			ruleID:  r.ID,
+		})
+	}
+	if len(tunTargets) == 0 {
+		if ipfwdActive.Load() {
+			a.StopIPForwarding()
+		}
+		return
+	}
+	if !ipfwdActive.Load() {
+		if err := a.StartIPForwarding(tunTargets); err != nil {
+			log.Printf("[rules] TUN engine start failed: %v — affected rules will run as proxy", err)
+		}
+	}
 }
 
 // ApplyRule enables a routing rule (adds iptables + proxy mapping).
@@ -249,15 +274,16 @@ func (a *App) RemoveRule(id string) {
 		return
 	}
 	ruleEng.mu.Lock()
-	defer ruleEng.mu.Unlock()
 	ruleEng.removeIPTRulesLocked(id)
-	// Clean dest→exit mappings for this rule
 	ruleEng.destToExit.Range(func(k, v any) bool {
 		if exit, ok := v.(ruleExitInfo); ok && exit.ruleID == id {
 			ruleEng.destToExit.Delete(k)
 		}
 		return true
 	})
+	ruleEng.mu.Unlock()
+	// After removing, re-evaluate whether the TUN engine should still run.
+	a.ensureTunEngineForRules()
 }
 
 type ruleExitInfo struct {
@@ -279,10 +305,17 @@ func (e *ruleEngine) applyIPRule(r RoutingRule) {
 	// Remove old rules for this ID first
 	e.removeIPTRulesLocked(r.ID)
 
-	if ipfwdActive.Load() {
-		// TUN mode: add ip routing rules to capture traffic into TUN
-		e.applyIPRuleTun(r)
-		return
+	// Per-rule TUN: if the rule requests TUN AND the exit peer is capable AND
+	// the target is routable, take the TUN path. Otherwise fall through to
+	// the normal proxy DNAT path.
+	if e.app.RuleUsesTun(r) {
+		// Lazily start the TUN engine if this is the first TUN rule
+		e.app.ensureTunEngineForRules()
+		if ipfwdActive.Load() {
+			e.applyIPRuleTun(r)
+			return
+		}
+		log.Printf("[rules] rule %q requested TUN but engine failed to start — falling back to proxy", r.Name)
 	}
 
 	// Proxy mode: DNAT to transparent proxy
