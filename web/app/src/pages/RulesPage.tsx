@@ -3,13 +3,14 @@ import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Card, Button, Table, Toggle, Badge, Modal, Input, Tabs, TabPanel,
-  FormGroup, useToast, useConfirm, useSelection, type Column,
+  FormGroup, Autocomplete, useToast, useConfirm, useSelection, type Column,
 } from '@hy2scale/ui';
 import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
 import { TargetList } from '@/components/TargetList';
 import { ExitViaCell } from '@/components/ExitViaCell';
 import ImportExportButton from '@/components/ImportExportButton';
 import BulkActionBar from '@/components/BulkActionBar';
+import { useExitPaths } from '@/hooks/useExitPaths';
 import type { RoutingRule } from '@/api';
 import * as api from '@/api';
 
@@ -20,7 +21,7 @@ export default function RulesPage() {
   const queryClient = useQueryClient();
 
   const { data } = useQuery({ queryKey: ['rules'], queryFn: api.getRules });
-  const { data: tunMode } = useQuery({ queryKey: ['tunMode'], queryFn: api.getTunMode });
+  const { exitPaths } = useExitPaths();
 
   const rules = data?.rules || [];
   const available = data?.available !== false;
@@ -41,32 +42,55 @@ export default function RulesPage() {
   const [name, setName] = useState('');
   const [targets, setTargets] = useState<string[]>([]);
   const [exitPath, setExitPath] = useState<ExitPathValue>({ paths: [''], mode: '' });
+  const [useTun, setUseTun] = useState(false);
+  const [tunExitVia, setTunExitVia] = useState('');
   const [ruleEnabled, setRuleEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  const resetForm = () => {
+    setName(''); setTargets([]); setExitPath({ paths: [''], mode: '' });
+    setUseTun(false); setTunExitVia(''); setRuleEnabled(true);
+  };
 
   const openAdd = (e: MouseEvent) => {
     setClickPos({ x: e.clientX, y: e.clientY });
     setEditId(null);
-    setName(''); setTargets([]); setExitPath({ paths: [''], mode: '' }); setRuleEnabled(true);
+    resetForm();
     setModalOpen(true);
   };
 
   const openEdit = (r: RoutingRule, e: MouseEvent) => {
     setClickPos({ x: e.clientX, y: e.clientY });
     setEditId(r.id);
-    setName(r.name); setTargets([...r.targets]);
-    setExitPath(apiToExitPath(r.exit_via, r.exit_paths, r.exit_mode)); setRuleEnabled(r.enabled);
+    setName(r.name);
+    setTargets([...r.targets]);
+    setUseTun(!!r.use_tun);
+    setTunExitVia(r.use_tun ? r.exit_via : '');
+    setExitPath(apiToExitPath(r.exit_via, r.exit_paths, r.exit_mode));
+    setRuleEnabled(r.enabled);
     setModalOpen(true);
   };
 
   const handleSave = async () => {
     const targetList = targets.filter(Boolean);
     if (targetList.length === 0) { toast.error(t('rules.targetsRequired')); return; }
-    const exitData = exitPathToApi(exitPath);
+
+    let exitData: { exit_via: string; exit_paths?: string[]; exit_mode?: '' | 'quality' | 'aggregate' };
+    if (useTun) {
+      if (!tunExitVia.trim()) { toast.error(t('rules.exitRequired')); return; }
+      exitData = { exit_via: tunExitVia.trim(), exit_paths: undefined, exit_mode: '' };
+    } else {
+      exitData = exitPathToApi(exitPath) as typeof exitData;
+    }
 
     setSaving(true);
     try {
-      const ruleData = { name, type: tab as 'ip' | 'domain', targets: targetList, ...exitData, enabled: ruleEnabled };
+      const ruleData = {
+        name, type: tab as 'ip' | 'domain', targets: targetList,
+        ...exitData,
+        use_tun: useTun || undefined,
+        enabled: ruleEnabled,
+      };
       if (editId) {
         await api.updateRule(editId, ruleData);
       } else {
@@ -79,7 +103,6 @@ export default function RulesPage() {
     finally { setSaving(false); }
   };
 
-  // Bulk actions
   const bulkToggle = useCallback(async (enabled: boolean) => {
     try {
       await Promise.all([...selection.selected].map((id) => api.toggleRule(id, enabled)));
@@ -101,15 +124,6 @@ export default function RulesPage() {
     } catch (e: any) { toast.error(String(e.message || e)); }
   }, [selection, confirmDlg, queryClient, toast, t]);
 
-  // TUN mode handlers
-  const handleTunToggle = async () => {
-    try {
-      await api.updateTunMode({ enabled: !tunMode?.enabled });
-      toast.success(tunMode?.enabled ? t('rules.tunDisabled') : t('rules.tunEnabled'));
-      queryClient.invalidateQueries({ queryKey: ['tunMode'] });
-    } catch (e: any) { toast.error(String(e.message || e)); }
-  };
-
   const unavailableBanner = !available ? (
     <div className="hy-warn-banner">
       {t('rules.unavailable')}
@@ -120,7 +134,7 @@ export default function RulesPage() {
     { key: 'name', title: t('rules.name'), render: (r) => (
       <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <strong>{r.name || '—'}</strong>
-        {r.compat && <Badge variant="warn">{t('rules.compat')}</Badge>}
+        {r.tun_active && <Badge variant="blue">{t('rules.tun')}</Badge>}
       </span>
     )},
     { key: 'targets', title: t('rules.targets'), render: (r) => <span className="mono" style={{ fontSize: 11 }}>{r.targets.slice(0, 3).join(', ')}{r.targets.length > 3 ? ` +${r.targets.length - 3}` : ''}</span> },
@@ -142,58 +156,46 @@ export default function RulesPage() {
         items={[
           { key: 'ip', label: t('rules.ipRules') },
           { key: 'domain', label: t('rules.domainRules') },
-          { key: 'advanced', label: t('rules.advanced') },
         ]}
         activeKey={tab}
         onChange={setTab}
       />
 
-      <TabPanel activeKey={tab} keys={['ip', 'domain', 'advanced']}>
+      <TabPanel activeKey={tab} keys={['ip', 'domain']}>
         {unavailableBanner}
-        {tab === 'advanced' ? (
-          <Card title={t('rules.tunMode')}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, ...(!available ? { opacity: 0.4, pointerEvents: 'none' as const } : {}) }}>
-              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('rules.tunDesc')}</div>
-              <FormGroup label={t('rules.tunEnabled')}>
-                <Toggle checked={tunMode?.enabled || false} onChange={handleTunToggle} />
-              </FormGroup>
+        <Card
+          title={tabTitle}
+          count={currentRules.length}
+          actions={
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <BulkActionBar count={selection.count} onClear={selection.clear}>
+                {(() => {
+                  const sel = [...selection.selected];
+                  const items = sel.map((id) => currentRules.find((r) => r.id === id)).filter(Boolean);
+                  const hasDisabled = items.some((r) => !r!.enabled);
+                  const hasEnabled = items.some((r) => r!.enabled);
+                  return <>
+                    {hasDisabled && <Button size="sm" onClick={() => bulkToggle(true)}>{t('app.bulkEnable')}</Button>}
+                    {hasEnabled && <Button size="sm" onClick={() => bulkToggle(false)}>{t('app.bulkDisable')}</Button>}
+                    <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>
+                  </>;
+                })()}
+              </BulkActionBar>
+              <ImportExportButton target="rules" />
+              <Button size="sm" variant="primary" onClick={openAdd}>{t('rules.newRule')}</Button>
             </div>
-          </Card>
-        ) : (
-          <Card
-            title={tabTitle}
-            count={currentRules.length}
-            actions={
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <BulkActionBar count={selection.count} onClear={selection.clear}>
-                  {(() => {
-                    const sel = [...selection.selected];
-                    const items = sel.map((id) => currentRules.find((r) => r.id === id)).filter(Boolean);
-                    const hasDisabled = items.some((r) => !r!.enabled);
-                    const hasEnabled = items.some((r) => r!.enabled);
-                    return <>
-                      {hasDisabled && <Button size="sm" onClick={() => bulkToggle(true)}>{t('app.bulkEnable')}</Button>}
-                      {hasEnabled && <Button size="sm" onClick={() => bulkToggle(false)}>{t('app.bulkDisable')}</Button>}
-                      <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>
-                    </>;
-                  })()}
-                </BulkActionBar>
-                <ImportExportButton target="rules" />
-                <Button size="sm" variant="primary" onClick={openAdd}>{t('rules.newRule')}</Button>
-              </div>
-            }
-            noPadding
-          >
-            <Table
-              columns={columns}
-              data={currentRules}
-              rowKey={(r) => r.id}
-              rowClassName={(r) => !r.enabled ? 'disabled-row' : undefined}
-              emptyText={t('rules.noRules')}
-              selection={selection}
-            />
-          </Card>
-        )}
+          }
+          noPadding
+        >
+          <Table
+            columns={columns}
+            data={currentRules}
+            rowKey={(r) => r.id}
+            rowClassName={(r) => !r.enabled ? 'disabled-row' : undefined}
+            emptyText={t('rules.noRules')}
+            selection={selection}
+          />
+        </Card>
       </TabPanel>
 
       {/* Rule Modal — type determined by active tab */}
@@ -215,7 +217,36 @@ export default function RulesPage() {
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('tls.optional')} />
           </FormGroup>
           <TargetList type={tab as 'ip' | 'domain'} value={targets} onChange={setTargets} />
-          <ExitPathList value={exitPath} onChange={setExitPath} label={t('rules.exitVia')} />
+
+          {tab === 'ip' && (
+            <FormGroup label={t('rules.useTun')}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <Toggle checked={useTun} onChange={(e) => {
+                  const on = e.target.checked;
+                  setUseTun(on);
+                  // When switching to TUN, preserve the current single exit path if any
+                  if (on && !tunExitVia) {
+                    const first = exitPath.paths.find(Boolean);
+                    if (first) setTunExitVia(first);
+                  }
+                }} />
+                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('rules.useTunHint')}</div>
+              </div>
+            </FormGroup>
+          )}
+
+          {useTun ? (
+            <FormGroup label={t('rules.exitVia')} required>
+              <Autocomplete
+                value={tunExitVia}
+                onChange={setTunExitVia}
+                options={exitPaths}
+                placeholder={t('users.exitViaHint')}
+              />
+            </FormGroup>
+          ) : (
+            <ExitPathList value={exitPath} onChange={setExitPath} label={t('rules.exitVia')} />
+          )}
         </div>
       </Modal>
     </div>

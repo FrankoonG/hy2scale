@@ -203,13 +203,8 @@ export interface RoutingRule {
   exit_paths?: string[];
   exit_mode?: '' | 'quality' | 'aggregate';
   enabled: boolean;
-  compat?: boolean;
-}
-
-export interface TunModeConfig {
-  enabled: boolean;
-  mode: 'mixed' | 'full';
-  status?: string;
+  use_tun?: boolean;    // request full TUN for this rule
+  tun_active?: boolean; // live: true only when actually running on TUN path
 }
 
 // ===== TLS =====
