@@ -930,26 +930,18 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 
 	n.mu.Lock()
 	existing, exists := n.peers[name]
-	if exists && existing.ctrlW != nil && existing.info.Direction == "inbound" {
-		// Active inbound already registered. Distinguish:
-		//   - True duplicate (same version/caps): keep old ctrl, just skip.
-		//   - Peer reconnected with different version/caps (e.g. after upgrade
-		//     from an incompatible 1.2.x to 1.3.x): must replace so meta gets
-		//     refreshed AND old dead ctrl gets cancelled, otherwise we keep
-		//     refusing to use the peer as exit / fetch its sub-peers.
-		versionChanged := remoteMeta.Version != "" && remoteMeta.Version != "1.0.0" && remoteMeta.Version != existing.info.Version
-		compatChanged := (!compat) != existing.info.Incompatible
-		tunChanged := remoteMeta.TunCapable != existing.info.TunCapable
-		if !versionChanged && !compatChanged && !tunChanged {
-			log.Printf("[%s] register: %s already has active inbound ctrl, skipping", n.name, name)
-			n.mu.Unlock()
-			peerCancel()
-			<-peerCtx.Done()
-			return
-		}
-		log.Printf("[%s] register: %s reconnected with new meta (ver %s→%s, compat %v→%v, tun %v→%v), replacing",
+	if exists && existing.info.Direction == "inbound" {
+		// An inbound register is always initiated over a FRESH QUIC connection
+		// on the remote side — so receiving a new one means the old ctrl
+		// stream is dead (either QUIC timed out on the remote or the remote
+		// explicitly reconnected). Always replace; never skip. Skipping would
+		// leave the dead ctrl in place and lock out the peer for the entire
+		// QUIC idle-timeout window (observed: kbv stuck in a 30min register
+		// rejection loop on AUB because the old inbound ctrl was dead but
+		// n.peers[kbv].ctrlW was still non-nil).
+		log.Printf("[%s] register: %s re-registering (replacing stale inbound ctrl, ver %s→%s, tun %v→%v)",
 			n.name, name, existing.info.Version, remoteMeta.Version,
-			!existing.info.Incompatible, compat, existing.info.TunCapable, remoteMeta.TunCapable)
+			existing.info.TunCapable, remoteMeta.TunCapable)
 		// fall through to the replacement branch below
 	}
 	if exists {
