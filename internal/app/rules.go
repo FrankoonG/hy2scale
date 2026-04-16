@@ -184,6 +184,7 @@ func (a *App) EnableTunMode(mode string) error {
 		targets = append(targets, ipfwdTarget{
 			cidrs:   r.Targets,
 			exitVia: r.ExitVia,
+			ruleID:  r.ID,
 		})
 	}
 
