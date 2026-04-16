@@ -328,6 +328,7 @@
   "rules.add": "추가",
   "rules.useTun": "TUN 사용",
   "rules.useTunHint": "이 규칙을 원시 IP 터널로 전달합니다 (소스 IP + ICMP 보존). 상대 노드가 TUN을 지원하지 않으면 일반 릴레이로 폴백합니다.",
+  "rules.priority": "우선순위",
   "rules.tun": "TUN",
   "exit.modeNone": "직접 연결",
   "exit.modeStability": "품질 우선",

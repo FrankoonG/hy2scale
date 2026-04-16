@@ -44,12 +44,13 @@ export default function RulesPage() {
   const [exitPath, setExitPath] = useState<ExitPathValue>({ paths: [''], mode: '' });
   const [useTun, setUseTun] = useState(false);
   const [tunExitVia, setTunExitVia] = useState('');
+  const [priority, setPriority] = useState<string>('0');
   const [ruleEnabled, setRuleEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const resetForm = () => {
     setName(''); setTargets([]); setExitPath({ paths: [''], mode: '' });
-    setUseTun(false); setTunExitVia(''); setRuleEnabled(true);
+    setUseTun(false); setTunExitVia(''); setPriority('0'); setRuleEnabled(true);
   };
 
   const openAdd = (e: MouseEvent) => {
@@ -66,6 +67,7 @@ export default function RulesPage() {
     setTargets([...r.targets]);
     setUseTun(!!r.use_tun);
     setTunExitVia(r.use_tun ? r.exit_via : '');
+    setPriority(String(r.priority || 0));
     setExitPath(apiToExitPath(r.exit_via, r.exit_paths, r.exit_mode));
     setRuleEnabled(r.enabled);
     setModalOpen(true);
@@ -85,10 +87,12 @@ export default function RulesPage() {
 
     setSaving(true);
     try {
+      const prioN = parseInt(priority, 10);
       const ruleData = {
         name, type: tab as 'ip' | 'domain', targets: targetList,
         ...exitData,
         use_tun: useTun || undefined,
+        priority: Number.isFinite(prioN) ? prioN : 0,
         enabled: ruleEnabled,
       };
       if (editId) {
@@ -219,20 +223,33 @@ export default function RulesPage() {
           <TargetList type={tab as 'ip' | 'domain'} value={targets} onChange={setTargets} />
 
           {tab === 'ip' && (
-            <FormGroup label={t('rules.useTun')}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <Toggle checked={useTun} onChange={(e) => {
-                  const on = e.target.checked;
-                  setUseTun(on);
-                  // When switching to TUN, preserve the current single exit path if any
-                  if (on && !tunExitVia) {
-                    const first = exitPath.paths.find(Boolean);
-                    if (first) setTunExitVia(first);
-                  }
-                }} />
-                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('rules.useTunHint')}</div>
+            <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+              <div style={{ flex: '0 0 120px' }}>
+                <FormGroup label={t('rules.priority')}>
+                  <Input
+                    type="number"
+                    value={priority}
+                    onChange={(e) => setPriority(e.target.value)}
+                    placeholder="0"
+                  />
+                </FormGroup>
               </div>
-            </FormGroup>
+              <div style={{ flex: 1 }}>
+                <FormGroup label={t('rules.useTun')}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <Toggle checked={useTun} onChange={(e) => {
+                      const on = e.target.checked;
+                      setUseTun(on);
+                      if (on && !tunExitVia) {
+                        const first = exitPath.paths.find(Boolean);
+                        if (first) setTunExitVia(first);
+                      }
+                    }} />
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('rules.useTunHint')}</div>
+                  </div>
+                </FormGroup>
+              </div>
+            </div>
           )}
 
           {useTun ? (

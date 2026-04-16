@@ -328,6 +328,7 @@
   "rules.add": "添加",
   "rules.useTun": "启用 TUN",
   "rules.useTunHint": "本条规则通过原始 IP 隧道转发（保留源 IP 和 ICMP）。若对方不支持 TUN 则自动回退到中继代理。",
+  "rules.priority": "优先级",
   "rules.tun": "TUN",
   "exit.modeNone": "直连",
   "exit.modeStability": "质量优先",

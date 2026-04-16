@@ -63,6 +63,10 @@ type RoutingRule struct {
 	ExitPaths []string `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
 	ExitMode  string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"` // ""|"quality"|"aggregate"
 	Enabled   bool     `yaml:"enabled" json:"enabled"`
+	// Priority resolves overlaps between rules. Higher priority wins for the
+	// same IP/CIDR. At equal priority, use_tun=true wins (TUN naturally
+	// preempts proxy at the routing layer anyway). Default 0.
+	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
 	// UseTun requests full TUN forwarding for this rule. When the exit peer is
 	// TUN-capable (has NET_ADMIN + /dev/net/tun) and the target is routable,
 	// packets go through a raw IP tunnel (source IP preserved, ICMP supported).
