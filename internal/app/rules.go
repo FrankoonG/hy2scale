@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -200,13 +201,30 @@ func (a *App) reconcileRuleModes() {
 		wantTun := a.RuleUsesTun(r)
 		haveTun := currentOnTun[r.ID]
 		if wantTun != haveTun {
-			log.Printf("[rules] reconcile %s: re-apply (wantTun=%v haveTun=%v)", r.Name, wantTun, haveTun)
+			// Re-read the rule right before applying to avoid overwriting a
+			// concurrent UpdateRule that just persisted new fields (priority,
+			// exit_via, etc.) between our snapshot and now.
+			latest := a.store.Get()
+			var fresh *RoutingRule
+			for i := range latest.Rules {
+				if latest.Rules[i].ID == r.ID {
+					fresh = &latest.Rules[i]
+					break
+				}
+			}
+			if fresh == nil || !fresh.Enabled {
+				continue
+			}
+			if a.RuleUsesTun(*fresh) == haveTun {
+				continue // state already matches after re-read
+			}
+			log.Printf("[rules] reconcile %s: re-apply (wantTun=%v haveTun=%v)", fresh.Name, !haveTun, haveTun)
 			ruleEng.mu.Lock()
-			ruleEng.removeIPTRulesLocked(r.ID)
+			ruleEng.removeIPTRulesLocked(fresh.ID)
 			ruleEng.mu.Unlock()
 			a.ensureTunEngineForRules()
 			ruleEng.mu.Lock()
-			ruleEng.applyRule(r)
+			ruleEng.applyRule(*fresh)
 			ruleEng.mu.Unlock()
 		}
 	}
@@ -358,20 +376,103 @@ func (e *ruleEngine) applyIPRule(r RoutingRule) {
 		e.registerTargetExit(r.ID, target, r.ExitVia, r.ExitMode)
 	}
 	e.appliedIPT[r.ID] = iptArgs
-	log.Printf("[rules] applied IP rule %q: %d targets → exit %s (proxy)", r.Name, len(r.Targets), r.ExitVia)
+	log.Printf("[rules] applied IP rule %q (prio %d): %d targets → exit %s (proxy)", r.Name, r.Priority, len(r.Targets), r.ExitVia)
+	// Re-sort proxy chain so higher-priority rules are evaluated first.
+	e.resortProxyChain()
+}
+
+// resortProxyChain removes every proxy (DNAT) iptables entry installed by
+// the rule engine and re-inserts them in priority order (desc). Rules with
+// higher Priority end up earlier in the chain so they win on CIDR overlap.
+// TUN rules are untouched (they live in the routing layer via ip rule).
+func (e *ruleEngine) resortProxyChain() {
+	cfg := e.app.store.Get()
+	idToRule := make(map[string]RoutingRule)
+	for _, r := range cfg.Rules {
+		idToRule[r.ID] = r
+	}
+	type entry struct {
+		id   string
+		rule RoutingRule
+		args []string
+	}
+	var proxyEntries []entry
+	for id, args := range e.appliedIPT {
+		r, ok := idToRule[id]
+		if !ok || !r.Enabled {
+			continue
+		}
+		isProxy := false
+		for _, a := range args {
+			if !strings.HasPrefix(a, "iprule:") {
+				isProxy = true
+				break
+			}
+		}
+		if !isProxy {
+			continue
+		}
+		proxyEntries = append(proxyEntries, entry{id, r, args})
+	}
+	if len(proxyEntries) <= 1 {
+		return
+	}
+	// Remove every proxy line
+	for _, pe := range proxyEntries {
+		for _, argStr := range pe.args {
+			if strings.HasPrefix(argStr, "iprule:") {
+				continue
+			}
+			parts := strings.Fields(argStr)
+			for i, p := range parts {
+				if p == "-A" {
+					parts[i] = "-D"
+					break
+				}
+			}
+			iptExec(iptVariant(), parts...).Run()
+		}
+	}
+	// Sort: Priority desc, then ID asc for deterministic tie-break
+	sort.SliceStable(proxyEntries, func(i, j int) bool {
+		if proxyEntries[i].rule.Priority != proxyEntries[j].rule.Priority {
+			return proxyEntries[i].rule.Priority > proxyEntries[j].rule.Priority
+		}
+		return proxyEntries[i].id < proxyEntries[j].id
+	})
+	// Re-add in sorted order (each chain is -A, so first added = first match)
+	for _, pe := range proxyEntries {
+		for _, argStr := range pe.args {
+			if strings.HasPrefix(argStr, "iprule:") {
+				continue
+			}
+			parts := strings.Fields(argStr)
+			iptRun(iptVariant(), parts...)
+		}
+	}
 }
 
 // applyIPRuleTun adds ip routing rules to capture traffic into the TUN device.
+// Rule Priority (user-facing, higher=wins) maps to Linux ip rule priority
+// (kernel, lower=wins) as prio = 100 - clamp(Priority, -99, 99). Default
+// Priority 0 → kernel priority 100 (the historical value).
 func (e *ruleEngine) applyIPRuleTun(r RoutingRule) {
+	kernelPrio := 100 - r.Priority
+	if kernelPrio < 1 {
+		kernelPrio = 1
+	}
+	if kernelPrio > 32765 {
+		kernelPrio = 32765
+	}
+	prioStr := fmt.Sprintf("%d", kernelPrio)
 	var ipRuleArgs []string
 	for _, target := range r.Targets {
 		target = strings.TrimSpace(target)
 		if target == "" {
 			continue
 		}
-		// ip rule add to <target> lookup <table> priority 100
-		run("ip", "rule", "add", "to", target, "lookup", ipfwdTable, "priority", "100")
-		ipRuleArgs = append(ipRuleArgs, "to "+target+" lookup "+ipfwdTable+" priority 100")
+		run("ip", "rule", "add", "to", target, "lookup", ipfwdTable, "priority", prioStr)
+		ipRuleArgs = append(ipRuleArgs, "to "+target+" lookup "+ipfwdTable+" priority "+prioStr)
 		e.registerTargetExit(r.ID, target, r.ExitVia, r.ExitMode)
 	}
 	// Store for cleanup (use appliedIPT with "iprule:" prefix to distinguish)
@@ -382,7 +483,7 @@ func (e *ruleEngine) applyIPRuleTun(r RoutingRule) {
 	if ipfwdEng != nil {
 		ipfwdEng.addTargets(r.ID, r.Targets, r.ExitVia)
 	}
-	log.Printf("[rules] applied IP rule %q: %d targets → exit %s (tun)", r.Name, len(r.Targets), r.ExitVia)
+	log.Printf("[rules] applied IP rule %q (prio %d, kernel %s): %d targets → exit %s (tun)", r.Name, r.Priority, prioStr, len(r.Targets), r.ExitVia)
 }
 
 // isTargetRoutableCheck checks if the first target in the list is reachable

@@ -203,6 +203,7 @@ export interface RoutingRule {
   exit_paths?: string[];
   exit_mode?: '' | 'quality' | 'aggregate';
   enabled: boolean;
+  priority?: number;    // higher wins on CIDR overlap; default 0
   use_tun?: boolean;    // request full TUN for this rule
   tun_active?: boolean; // live: true only when actually running on TUN path
 }

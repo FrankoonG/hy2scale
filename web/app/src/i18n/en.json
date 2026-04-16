@@ -328,6 +328,7 @@
   "rules.add": "Add",
   "rules.useTun": "Use TUN",
   "rules.useTunHint": "Route this rule via raw IP tunnel (preserves source IP + ICMP). Falls back to normal relay if the exit peer cannot do TUN.",
+  "rules.priority": "Priority",
   "rules.tun": "TUN",
   "exit.modeNone": "Direct",
   "exit.modeStability": "Quality",
