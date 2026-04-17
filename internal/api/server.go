@@ -1894,7 +1894,11 @@ func (s *Server) kickSession(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getUsers(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
-	writeJSON(w, cfg.Users)
+	users := cfg.Users
+	if users == nil {
+		users = []app.UserConfig{}
+	}
+	writeJSON(w, users)
 }
 
 func (s *Server) getUserConflicts(w http.ResponseWriter, r *http.Request) {
@@ -2329,12 +2333,14 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 	outReq.ProtoMajor = 1
 	outReq.ProtoMinor = 1
 	outReq.Host = "127.0.0.1:5565"
-	// Copy only headers relevant for the proxied request
+	// Copy request headers. Forward Authorization so the client's remote
+	// session token (stored in localStorage after the user logs into the
+	// remote UI) reaches the target — the local node's token is never
+	// used here because the frontend scopes tokens per __BASE__. Drop
+	// hop-by-hop headers that can corrupt the proxied request.
 	for k, vv := range r.Header {
 		lk := strings.ToLower(k)
-		// Drop Authorization so remote's own session is used; drop
-		// hop-by-hop headers that can corrupt the proxied request.
-		if lk == "authorization" || lk == "connection" || lk == "proxy-connection" ||
+		if lk == "connection" || lk == "proxy-connection" ||
 			lk == "keep-alive" || lk == "te" || lk == "trailers" || lk == "transfer-encoding" {
 			continue
 		}
@@ -2361,8 +2367,22 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 	isHTML := strings.Contains(ct, "text/html")
 
 	for k, vv := range resp.Header {
+		lk := strings.ToLower(k)
+		// Drop hop-by-hop headers and framing headers. Content-Length and
+		// Transfer-Encoding from upstream are invalidated because:
+		//   (a) we rewrite HTML bodies (length changes), and
+		//   (b) we serve on a different HTTP/1.1 connection with its own
+		//       framing that Go's net/http decides based on what we write.
+		// Keeping the upstream Content-Length causes Go to reject Write()
+		// calls that exceed it with "wrote more than the declared
+		// Content-Length" and send zero body bytes to the client.
+		if lk == "content-length" || lk == "transfer-encoding" ||
+			lk == "connection" || lk == "keep-alive" ||
+			lk == "proxy-connection" || lk == "trailer" || lk == "te" {
+			continue
+		}
 		// Rewrite Location header for redirects
-		if strings.EqualFold(k, "Location") {
+		if lk == "location" {
 			for i, v := range vv {
 				// Rewrite /scale/... → /scale/remote/{chain}/...
 				if strings.HasPrefix(v, "/scale/") {
