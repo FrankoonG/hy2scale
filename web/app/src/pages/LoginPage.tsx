@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button, Input, PasswordInput } from '@hy2scale/ui';
 import { useAuthStore, getSavedCredentials } from '@/store/auth';
-import { sha256 } from '@/hooks/useAuth';
+import { sha256, getSessionHash } from '@/hooks/useAuth';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
 import LoginBackground from '@/components/LoginBackground';
 
@@ -16,16 +16,34 @@ export default function LoginPage() {
   const [remember, setRemember] = useState(false);
   const [hasSaved, setHasSaved] = useState(false);
 
-  // Pre-fill from saved credentials (don't auto-login)
+  // Pre-fill from saved credentials (don't auto-login).
+  // Exception: in proxy mode (viewing a remote node's UI through the local
+  // one) try the local node's credentials against the remote. If they match
+  // (same admin/password), we skip the login step entirely. If the remote
+  // rejects them, the user is left on the login form as normal.
+  //
+  // Auto-login tries saved "remember me" credentials first, then falls back
+  // to the current tab's session hash (stored on local login regardless of
+  // remember-me). Either path makes visiting a peer node frictionless when
+  // they share the same password.
   useEffect(() => {
-    const cred = getSavedCredentials();
-    if (cred) {
-      setUsername(cred.u);
-      setPassword('••••••••'); // masked placeholder
+    const saved = getSavedCredentials();
+    if (saved) {
+      setUsername(saved.u);
+      setPassword('••••••••');
       setRemember(true);
       setHasSaved(true);
     }
-  }, []);
+    if ((window as any).__PROXY__) {
+      const attempt = saved || getSessionHash();
+      if (attempt) {
+        (async () => {
+          const ok = await loginWithHash(attempt.u, attempt.h, !!saved);
+          if (ok) navigate('/nodes', { replace: true });
+        })();
+      }
+    }
+  }, [loginWithHash, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

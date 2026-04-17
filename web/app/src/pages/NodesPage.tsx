@@ -190,8 +190,15 @@ export default function NodesPage() {
       key: 'node', title: t('nodes.node'), className: 'col-name',
       render: (n, meta) => {
         const basePath = getBasePath();
+        // Already viewing a remote node through the local proxy — don't
+        // offer to chain another /remote/ hop from here. Chained proxy
+        // paths stack double-proxy overhead and make auth/routing hard to
+        // reason about; the user should drive from their own local UI.
+        const isRemoteView = !!(window as any).__PROXY__;
         const nameEl = n.is_self ? (
           <span className="peer-name-cell" style={{ color: 'var(--primary)' }}>{n.name || node?.name || 'self'}</span>
+        ) : isRemoteView ? (
+          <span className="peer-name-cell">{n.name}</span>
         ) : (
           <a className="peer-link peer-name-cell" href={`${basePath}/remote/${n.name}/scale/`} target="_blank" rel="noopener">
             {n.name}
