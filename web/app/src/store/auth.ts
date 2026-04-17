@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { login as apiLogin } from '@/api';
-import { sha256, getToken, setToken, clearToken, getSavedCredentials, saveCredentials, clearCredentials } from '@/hooks/useAuth';
+import { sha256, getToken, setToken, clearToken, getSavedCredentials, saveCredentials, clearCredentials, setSessionHash, clearSessionHash } from '@/hooks/useAuth';
+
+const isProxy = () => !!(window as any).__PROXY__;
 
 interface AuthState {
   token: string | null;
@@ -31,6 +33,10 @@ export const useAuthStore = create<AuthState>((set) => ({
       } else {
         clearCredentials();
       }
+      // Remember this tab's hash when logging in to the local node so we can
+      // offer auto-login on remote nodes that share credentials, regardless
+      // of whether "remember me" is ticked.
+      if (!isProxy()) setSessionHash(username, passHash);
       set({ token: res.token, loading: false, forcePasswordChange: !!res.force_password_change });
       return true;
     } catch (e: any) {
@@ -45,6 +51,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       const res = await apiLogin(username, passHash);
       setToken(res.token);
       if (remember) saveCredentials(username, passHash);
+      if (!isProxy()) setSessionHash(username, passHash);
       set({ token: res.token, loading: false, forcePasswordChange: !!res.force_password_change });
       return true;
     } catch (e: any) {
@@ -56,6 +63,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: () => {
     clearToken();
+    if (!isProxy()) clearSessionHash();
     set({ token: null, forcePasswordChange: false });
   },
 

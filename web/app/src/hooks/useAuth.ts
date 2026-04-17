@@ -2,6 +2,10 @@ import { getBasePath } from '@/api/client';
 
 const tokenKey = () => 'token:' + getBasePath();
 const credKey = 'hy2scale_cred';
+// Session hash stored on successful local (non-proxy) login. Used to
+// auto-login when the user visits a remote node whose password matches,
+// even without the "remember me" box being ticked.
+const sessionHashKey = 'hy2scale_session_hash';
 
 export function getToken(): string | null {
   return sessionStorage.getItem(tokenKey());
@@ -13,6 +17,23 @@ export function setToken(token: string) {
 
 export function clearToken() {
   sessionStorage.removeItem(tokenKey());
+}
+
+export function getSessionHash(): { u: string; h: string } | null {
+  try {
+    const raw = sessionStorage.getItem(sessionHashKey);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setSessionHash(username: string, passHash: string) {
+  sessionStorage.setItem(sessionHashKey, JSON.stringify({ u: username, h: passHash }));
+}
+
+export function clearSessionHash() {
+  sessionStorage.removeItem(sessionHashKey);
 }
 
 export function getSavedCredentials(): { u: string; h: string } | null {
