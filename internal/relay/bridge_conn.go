@@ -233,6 +233,13 @@ func (c *bridgedConn) tryRebind() bool {
 			}
 
 			c.mu.Lock()
+			// Close the old wrapper before replacing it — countedConn.Close
+			// is what decrements n.conns and releases the dead QUIC stream
+			// reference. Overwriting c.stream without closing orphans the
+			// old countedConn, leaking one conn-count per successful rebind
+			// (observable as monotonically growing "active streams" on nodes
+			// with unstable upstream links that trigger frequent rebinds).
+			oldStream := c.stream
 			c.stream = c.node.wrapConn(c.peerName, newStream)
 			c.bridge.mu.Lock()
 			c.bridge.relayStream = newStream
@@ -243,6 +250,9 @@ func (c *bridgedConn) tryRebind() bool {
 			c.lastRead.Store(now)
 			c.lastWrite.Store(0)
 			c.mu.Unlock()
+			if oldStream != nil {
+				oldStream.Close()
+			}
 			// Monitor goroutine still watches same bridge.ctx — no restart needed
 			log.Printf("[bridge] %s rebound on requester side (peer %s)", c.bridge.id, c.peerName)
 			return true
