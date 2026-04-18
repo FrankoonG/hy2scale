@@ -1,7 +1,9 @@
 package relay
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"sync"
@@ -24,6 +26,18 @@ type bridgedConn struct {
 	rebindDone chan struct{} // closed when rebind completes (success or failure)
 	lastRead   atomic.Int64  // unix nanos of last successful Read
 	lastWrite  atomic.Int64  // unix nanos of last successful Write
+
+	// rebindsWithoutData counts consecutive successful rebinds that
+	// haven't yielded any Read data yet. The exit-side bridge is
+	// single-step: once the exit-side app-conn closes (e.g. HTTP
+	// response finished), the exit removes its bridge from the map.
+	// Any further rebind request from us gets "rebind rejected: not
+	// found" and the new QUIC stream is immediately closed — which
+	// makes the next Read/Write fail again, triggering another rebind.
+	// Without a cap, this spirals into a 500ms-ticker self-spin,
+	// flooding both ends' logs and wasting QUIC stream churn. We
+	// reset this counter on any successful Read (n > 0).
+	rebindsWithoutData atomic.Int32
 
 	// For multi-hop via: re-open via chain on rebind instead of using _relay_rebind_
 	viaPath       []string
@@ -103,6 +117,9 @@ func (c *bridgedConn) Read(b []byte) (int, error) {
 		n, err := s.Read(b)
 		if n > 0 {
 			c.lastRead.Store(time.Now().UnixNano())
+			// Any byte of payload means the rebound stream is actually
+			// working end-to-end; reset the zombie-rebind cap.
+			c.rebindsWithoutData.Store(0)
 		}
 		if err == nil || n > 0 {
 			return n, err
@@ -111,6 +128,25 @@ func (c *bridgedConn) Read(b []byte) (int, error) {
 		// Read error — check if bridge was killed
 		if c.bridge.ctx.Err() != nil {
 			return 0, net.ErrClosed
+		}
+
+		// Remote sent FIN / our side closed / half-close cases — these
+		// are *not* transport failures. Rebind exists to survive QUIC
+		// connection blips on long-lived sessions, not to resurrect
+		// connections the peer has already finished with. Propagate the
+		// close to the caller so the upper io.Copy terminates cleanly
+		// and the bridge dies naturally. This is the main fix for the
+		// "rebind rejected" storm observed on exit peers like AUB when
+		// HTTP short-connection traffic dominates the requester's path.
+		if isCleanClose(err) {
+			return 0, err
+		}
+
+		// Defense-in-depth: if prior rebinds produced no Read data
+		// before dying, the exit-side bridge is almost certainly gone
+		// (Rebind rejected) — further attempts can't recover. Stop.
+		if c.rebindsWithoutData.Load() >= maxZombieRebinds {
+			return 0, err
 		}
 
 		// Try rebind
@@ -157,11 +193,45 @@ func (c *bridgedConn) Write(b []byte) (int, error) {
 			return 0, net.ErrClosed
 		}
 
+		// Clean close on the write side (peer's read half closed, or
+		// we closed locally). Same reasoning as Read: rebinding here
+		// produces the self-spin storm against an already-dead
+		// exit-side bridge.
+		if isCleanClose(err) {
+			return 0, err
+		}
+
+		if c.rebindsWithoutData.Load() >= maxZombieRebinds {
+			return 0, err
+		}
+
 		if !c.tryRebind() {
 			return 0, err
 		}
 	}
 }
+
+// isCleanClose tells apart a normal stream-close (remote FIN, our
+// side Close, half-close) from a network-level failure worth trying
+// to rebind through. QUIC stream libraries surface remote FIN as
+// io.EOF; half-reads as io.ErrUnexpectedEOF; local Close() as
+// net.ErrClosed. None of these should trigger rebind — the peer has
+// definitively finished with this stream and no new stream to the
+// exit can stitch back to the now-gone exit-side bridge.
+func isCleanClose(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, net.ErrClosed)
+}
+
+// Ceiling on how many times Read/Write may push through a rebind
+// without ever seeing a payload byte. Two strikes are enough to
+// conclude the exit-side bridge is gone and give up; bigger values
+// let the storm run longer before we break the loop.
+const maxZombieRebinds = 2
 
 func (c *bridgedConn) tryRebind() bool {
 	c.mu.Lock()
@@ -253,6 +323,11 @@ func (c *bridgedConn) tryRebind() bool {
 			if oldStream != nil {
 				oldStream.Close()
 			}
+			// Count this rebind — Read resets the counter when it sees
+			// a byte of payload on the new stream. Two consecutive
+			// rebinds without any payload trigger the zombie cap in
+			// Read/Write and stop the spin.
+			c.rebindsWithoutData.Add(1)
 			// Monitor goroutine still watches same bridge.ctx — no restart needed
 			log.Printf("[bridge] %s rebound on requester side (peer %s)", c.bridge.id, c.peerName)
 			return true
