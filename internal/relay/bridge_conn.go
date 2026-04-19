@@ -187,6 +187,16 @@ func (c *bridgedConn) Write(b []byte) (int, error) {
 			c.lastWrite.Store(time.Now().UnixNano())
 			return n, err
 		}
+		// Partial write with error: return what was written. The loop
+		// below would otherwise rebind and re-Write the full buffer,
+		// which duplicates the n bytes already transmitted on the old
+		// stream. io.Copy and most stdlib writers correctly break out
+		// on (n, err), so the caller will close the bridgedConn and
+		// we'll never re-enter this path with the same byte range.
+		if n > 0 {
+			c.lastWrite.Store(time.Now().UnixNano())
+			return n, err
+		}
 
 		// Write error — check if bridge was killed
 		if c.bridge.ctx.Err() != nil {
