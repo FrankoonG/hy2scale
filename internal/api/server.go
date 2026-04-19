@@ -895,7 +895,19 @@ func (s *Server) getCachedSubPeers(name string) []topoSubPeer {
 // StartSubPeersUpdater runs in background, periodically refreshes nested peer data.
 // Uses relay streamListPeers for both outbound and inbound peers (same mechanism).
 func (s *Server) StartSubPeersUpdater(ctx context.Context) {
-	// Register rich peer list handler so remote nodes return tree data via relay stream
+	// Register rich peer list handler so remote nodes return tree data via relay stream.
+	//
+	// CRITICAL: strip Children (nested grandchildren) when serving. If two nodes
+	// both have `nested: true` for each other, embedding cached sub-trees here
+	// creates an exponential feedback loop: each cycle the cache depth grows by
+	// one level because each side stores what the other sent (trees that already
+	// include trees that already include trees...). Within a few minutes the
+	// hy2scale process OOM-kills. Observed in production as AUB↔cn-xinchang
+	// and AUB↔tz-cm-temp saturating the link (the giant listPeers responses
+	// themselves are the bandwidth). Reproduced in demo with 7-node mesh +
+	// mutual nested → hub OOM in ~2 minutes + eth0 hitting 1-2.6 Gbps bursts.
+	//
+	// Callers that need deeper nesting walk one hop at a time via PeersOfVia.
 	s.app.Node().SetListPeersFunc(func() []byte {
 		peers := s.app.Node().Peers()
 		type peerWithChildren struct {
@@ -905,7 +917,15 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 		result := make([]peerWithChildren, 0, len(peers))
 		for _, p := range peers {
 			pc := peerWithChildren{PeerInfo: p}
-			pc.Children = s.getCachedSubPeers(p.Name)
+			// Return one level of cached sub-peers, but drop THEIR children
+			// so response size stays bounded per cycle.
+			cached := s.getCachedSubPeers(p.Name)
+			flat := make([]topoSubPeer, len(cached))
+			for i, c := range cached {
+				c.Children = nil
+				flat[i] = c
+			}
+			pc.Children = flat
 			result = append(result, pc)
 		}
 		data, _ := json.Marshal(result)
@@ -1124,7 +1144,12 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 			Native:     rp.Native,
 			Version:    rp.Version,
 			TunCapable: rp.TunCapable,
-			Children:   rp.Children,
+			// Defense-in-depth: discard any deeper sub-tree received from the
+			// remote. Paired with the one-level-only strip in listPeersFunc
+			// above, this prevents depth from growing across cycles even when
+			// talking to an older unpatched peer that still includes full
+			// cached sub-trees in its response.
+			Children: nil,
 		}
 		children = append(children, child)
 	}
