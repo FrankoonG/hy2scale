@@ -108,11 +108,20 @@ jobs:
 
       - name: Build Docker image
         run: |
-          DOCKER_BUILDKIT=0 docker build -t hy2scale:ikuai .
+          # Tag the built image with the same name users get from Docker
+          # Hub (frankoong/hy2scale:<version>) so `docker load < tarball`
+          # lands under the expected name, avoiding a rename step before
+          # `docker run`. The local `hy2scale:ikuai` alias is kept so the
+          # ipkg script below and any other consumer that assumed that
+          # name keep working.
+          DOCKER_BUILDKIT=0 docker build \
+            -t frankoong/hy2scale:${{ steps.ver.outputs.version }} \
+            -t hy2scale:ikuai .
 
       - name: Export Docker image
         run: |
-          docker save hy2scale:ikuai | gzip > docker-image-amd64.tar.gz
+          docker save frankoong/hy2scale:${{ steps.ver.outputs.version }} \
+            | gzip > docker-image-amd64.tar.gz
           echo "DOCKER_SIZE=$(du -h docker-image-amd64.tar.gz | cut -f1)" >> $GITHUB_ENV
 
       - name: Build ipkg
@@ -124,7 +133,7 @@ jobs:
           # Update manifest version
           sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${IPKG_VERSION}\"/" ipkg/hy2scale/manifest.json
 
-          # Embed Docker image
+          # Embed Docker image (iKuai bootstrap expects hy2scale:ikuai tag).
           docker save hy2scale:ikuai | gzip > ipkg/hy2scale/docker_image.tar.gz
 
           # Package ipkg

@@ -1055,6 +1055,15 @@ func (n *Node) handleVia(ctx context.Context, peerName, targetAddr string, strea
 		done := make(chan struct{})
 		go func() { relayCopy(pipeConn, stream); pipeConn.Close(); close(done) }()
 		relayCopy(stream, pipeConn)
+		// Main exit-side copy returned (pipeConn EOF/err). Force-close
+		// stream + pipeConn so the inner goroutine blocked on
+		// stream.Read unblocks; otherwise <-done below hangs forever
+		// and deferred closes never fire. Observed in production as
+		// hundreds of stuck handleVia.bridged sessions on flappy
+		// CN↔AU links where the next-hop dies while the peer stream
+		// stays alive under QUIC keepalive.
+		stream.Close()
+		pipeConn.Close()
 		<-done
 	} else {
 		defer exitConn.Close()
@@ -1062,6 +1071,9 @@ func (n *Node) handleVia(ctx context.Context, peerName, targetAddr string, strea
 		done := make(chan struct{})
 		go func() { relayCopy(exitConn, stream); close(done) }()
 		relayCopy(stream, exitConn)
+		// Same race as the bridged branch above.
+		stream.Close()
+		exitConn.Close()
 		<-done
 	}
 }
