@@ -895,21 +895,24 @@ func (s *Server) getCachedSubPeers(name string) []topoSubPeer {
 // StartSubPeersUpdater runs in background, periodically refreshes nested peer data.
 // Uses relay streamListPeers for both outbound and inbound peers (same mechanism).
 func (s *Server) StartSubPeersUpdater(ctx context.Context) {
-	// Register rich peer list handler so remote nodes return tree data via relay stream.
+	// Register the rich listPeers handler used by remote nodes' SubPeersUpdater.
 	//
-	// CRITICAL: strip Children (nested grandchildren) when serving. If two nodes
-	// both have `nested: true` for each other, embedding cached sub-trees here
-	// creates an exponential feedback loop: each cycle the cache depth grows by
-	// one level because each side stores what the other sent (trees that already
-	// include trees that already include trees...). Within a few minutes the
-	// hy2scale process OOM-kills. Observed in production as AUB↔cn-xinchang
-	// and AUB↔tz-cm-temp saturating the link (the giant listPeers responses
-	// themselves are the bandwidth). Reproduced in demo with 7-node mesh +
-	// mutual nested → hub OOM in ~2 minutes + eth0 hitting 1-2.6 Gbps bursts.
-	//
-	// Callers that need deeper nesting walk one hop at a time via PeersOfVia.
+	// Per docs/nested-rules.md, the response:
+	//   - Rule 2: for each direct peer P, only embed sub-peers if we have
+	//     explicitly authorised P as nested on OUR side. Non-nested peers
+	//     ship with no Children.
+	//   - Rule 3: what we embed is OUR flat cache of P's direct peers,
+	//     strictly one level deep. We never walk into grandchildren — the
+	//     caller learns deeper paths by chaining their own fetches through
+	//     their direct peer, never by bypassing a hop.
+	// Together these prevent the exponential feedback loop that made
+	// AUB↔CN peers saturate the link (docs/nested-discovery-explosion.md):
+	// the payload never exceeds O(direct peers × one-hop descendants),
+	// and cycles like A → B → A collapse the second A via rule 1 at the
+	// decoder side.
 	s.app.Node().SetListPeersFunc(func() []byte {
 		peers := s.app.Node().Peers()
+		cfg := s.app.Store().Get()
 		type peerWithChildren struct {
 			relay.PeerInfo
 			Children []topoSubPeer `json:"children,omitempty"`
@@ -917,15 +920,15 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 		result := make([]peerWithChildren, 0, len(peers))
 		for _, p := range peers {
 			pc := peerWithChildren{PeerInfo: p}
-			// Return one level of cached sub-peers, but drop THEIR children
-			// so response size stays bounded per cycle.
-			cached := s.getCachedSubPeers(p.Name)
-			flat := make([]topoSubPeer, len(cached))
-			for i, c := range cached {
-				c.Children = nil
-				flat[i] = c
+			if pcfg, ok := cfg.Peers[p.Name]; ok && pcfg.Nested {
+				cached := s.getCachedSubPeers(p.Name)
+				flat := make([]topoSubPeer, 0, len(cached))
+				for _, c := range cached {
+					c.Children = nil // flat — rule 3
+					flat = append(flat, c)
+				}
+				pc.Children = flat
 			}
-			pc.Children = flat
 			result = append(result, pc)
 		}
 		data, _ := json.Marshal(result)
@@ -948,63 +951,72 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 		nativeMap := s.app.Node().NativeMap()
 		cfg := s.app.Store().Get()
 
-		// Collect fetch targets. Two kinds:
-		//  (1) Direct peer P with cfg.Peers[P].Nested=true → single-hop PeersOf(P)
-		//  (2) Qualified path A/B/.../X with cfg.Peers[A/B/.../X].Nested=true AND
-		//      every prefix A, A/B, ... also nested=true → multi-hop PeersOfVia.
-		// Each target caches under its full key (direct peer's own name, or
-		// qualified path). We explicitly walk user-declared paths instead of
-		// recursing through remote response trees — that's what caused the
-		// exponential-cache explosion before. Depth is bounded by config.
-		type fetchTarget struct {
-			key  string   // subPeersCache key
-			path []string // hop list; len==1 for direct peer
-		}
-		connectedSet := make(map[string]bool, len(connectedPeers))
-		for _, n := range connectedPeers {
-			connectedSet[n] = true
-		}
-		var fetchTargets []fetchTarget
-		for name, pc := range cfg.Peers {
-			if !pc.Nested {
+		// Per docs/nested-rules.md rule 3, we only query DIRECT peers.
+		// The response already carries one level of flat cached grandchildren
+		// per direct peer that the remote has authorised — that's our source
+		// of qualified-path data. Deeper paths extend through chained hops:
+		// the remote's own SubPeersUpdater populated its cache from its own
+		// direct peers the same way, so what it embeds is exactly "B's
+		// current view of its B/C level", never an arbitrarily-deep tree.
+		var fetchNames []string
+		for _, name := range connectedPeers {
+			if nativeMap[name] {
 				continue
 			}
-			parts := strings.Split(name, "/")
-			// First hop must be a directly connected non-native peer — can't
-			// PeersOfVia through a disconnected or native-hy2 node.
-			if !connectedSet[parts[0]] || nativeMap[parts[0]] {
+			pc, ok := cfg.Peers[name]
+			if !ok || !pc.Nested {
 				continue
 			}
-			// No "ancestor must be nested=true" requirement. PeersOfVia
-			// routes through bridged streams regardless of our local display
-			// preferences. filterChildrenByNestedConfig will still stop
-			// descending at any ancestor with nested=false; a pre-fetched
-			// cache entry for a hidden branch is just harmlessly unused.
-			fetchTargets = append(fetchTargets, fetchTarget{key: name, path: parts})
+			// Only direct (unqualified) peer names here.
+			if strings.Contains(name, "/") {
+				continue
+			}
+			fetchNames = append(fetchNames, name)
 		}
 
-		// Fetch all in parallel
 		type fetchResult struct {
-			key      string
+			name     string
 			children []topoSubPeer
 		}
-		resultCh := make(chan fetchResult, len(fetchTargets))
-		for _, t := range fetchTargets {
-			go func(t fetchTarget) {
-				var kids []topoSubPeer
-				if len(t.path) == 1 {
-					kids = s.fetchSubPeersViaStream(t.path[0])
-				} else {
-					kids = s.fetchSubPeersViaHop(t.path)
-				}
-				resultCh <- fetchResult{t.key, kids}
-			}(t)
+		resultCh := make(chan fetchResult, len(fetchNames))
+		for _, n := range fetchNames {
+			go func(name string) {
+				resultCh <- fetchResult{name, s.fetchSubPeersViaStream(name)}
+			}(n)
 		}
-		for range fetchTargets {
+		for range fetchNames {
 			select {
 			case r := <-resultCh:
-				if r.children != nil {
-					newCache[r.key] = r.children
+				if r.children == nil {
+					break
+				}
+				// Populate newCache at the direct-peer key as a flat list
+				// (UI's filterChildrenByNestedConfig recurses into Children
+				// separately by pulling from subPeersCache at qualified
+				// keys — which is what the inner loop below fills).
+				flatDirect := make([]topoSubPeer, len(r.children))
+				for i, c := range r.children {
+					c2 := c
+					c2.Children = nil
+					flatDirect[i] = c2
+				}
+				newCache[r.name] = flatDirect
+				// Each direct peer whose remote authorised as nested will
+				// have its own flat list of grandchildren attached — cache
+				// it under the qualified key. This is the one and only
+				// way we learn about qualified paths per rule 3.
+				for _, c := range r.children {
+					if len(c.Children) == 0 {
+						continue
+					}
+					qkey := r.name + "/" + c.Name
+					flatGrand := make([]topoSubPeer, len(c.Children))
+					for i, gc := range c.Children {
+						gc2 := gc
+						gc2.Children = nil
+						flatGrand[i] = gc2
+					}
+					newCache[qkey] = flatGrand
 				}
 			case <-time.After(6 * time.Second):
 			}
@@ -1134,10 +1146,16 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 }
 
 // fetchSubPeersViaStream queries a peer's topology via relay streamListPeers.
-// Same mechanism for both outbound and inbound peers — no HTTP, no exit handler.
-// fetchSubPeersViaStream queries a peer's topology via relay streamListPeers.
-// Does NOT filter self — cache stores unfiltered data so remote nodes can see all peers.
-// Self-filtering happens only at display time (getTopology).
+// Preserves the one-level-of-grandchildren structure the remote embeds per
+// rule 3 in docs/nested-rules.md. The caller (StartSubPeersUpdater) walks
+// the result once to populate subPeersCache flat at every qualified key it
+// observes, and hands the tree to walkAndCache for the relay-side
+// peersOfCache population.
+//
+// No multi-hop query variant exists. Per rule 3 we never bypass a direct
+// peer with PeersOfVia to inspect a descendant — the descendant's info
+// must come from the direct peer's own cache as embedded in its listPeers
+// reply, or not at all.
 func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 	data, err := s.app.Node().PeersOfRaw(peerName)
 	if err != nil {
@@ -1158,11 +1176,29 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 		return nil
 	}
 	parentLatency := s.app.Node().GetLatency(peerName)
+	cfg := s.app.Store().Get()
+	selfNames := map[string]bool{cfg.NodeID: true, cfg.Name: true, peerName: true}
 	children := make([]topoSubPeer, 0, len(remotePeers))
 	for _, rp := range remotePeers {
 		childLatency := rp.LatencyMs
 		if childLatency > 0 && parentLatency > 0 {
 			childLatency += parentLatency
+		}
+		// Rule 1 at the grandchildren level: drop any grandchild whose name
+		// already appears in {local self, direct peer}. Guards against
+		// paths like AUB/cn-xinchang/au-kbv looping back to us. Deeper
+		// cycle detection within embedded children isn't needed here —
+		// they are flat (rule 3) so at most one level of descendant.
+		var embedded []topoSubPeer
+		if len(rp.Children) > 0 {
+			embedded = make([]topoSubPeer, 0, len(rp.Children))
+			for _, gc := range rp.Children {
+				if selfNames[gc.Name] || gc.Name == rp.Name {
+					continue
+				}
+				gc.Children = nil // defense-in-depth flatten
+				embedded = append(embedded, gc)
+			}
 		}
 		child := topoSubPeer{
 			Name:       rp.Name,
@@ -1173,56 +1209,9 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 			Native:     rp.Native,
 			Version:    rp.Version,
 			TunCapable: rp.TunCapable,
-			// Defense-in-depth: discard any deeper sub-tree received from the
-			// remote. Paired with the one-level-only strip in listPeersFunc
-			// above, this prevents depth from growing across cycles even when
-			// talking to an older unpatched peer that still includes full
-			// cached sub-trees in its response.
-			Children: nil,
+			Children:   embedded,
 		}
 		children = append(children, child)
-	}
-	return children
-}
-
-// fetchSubPeersViaHop queries sub-peers through a multi-hop via chain using
-// the relay's PeersOfVia. Result is flat (no Children) — each level in the
-// user's qualified nested config is fetched independently by
-// StartSubPeersUpdater and cached under its own qualified key.
-func (s *Server) fetchSubPeersViaHop(path []string) []topoSubPeer {
-	if len(path) < 2 {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	peers, err := s.app.Node().PeersOfVia(ctx, path)
-	if err != nil {
-		return nil
-	}
-	parentName := path[len(path)-1]
-	// Cumulative latency approximation: sum per-hop latencies we know about.
-	var cumulativeLatency int
-	for _, hop := range path {
-		if l := s.app.Node().GetLatency(hop); l > 0 {
-			cumulativeLatency += l
-		}
-	}
-	children := make([]topoSubPeer, 0, len(peers))
-	for _, sp := range peers {
-		childLatency := sp.LatencyMs
-		if childLatency > 0 && cumulativeLatency > 0 {
-			childLatency += cumulativeLatency
-		}
-		children = append(children, topoSubPeer{
-			Name:       sp.Name,
-			ExitNode:   sp.ExitNode,
-			Direction:  sp.Direction,
-			Via:        parentName,
-			LatencyMs:  childLatency,
-			Native:     sp.Native,
-			Version:    sp.Version,
-			TunCapable: sp.TunCapable,
-		})
 	}
 	return children
 }
