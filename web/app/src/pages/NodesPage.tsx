@@ -302,7 +302,10 @@ export default function NodesPage() {
         if (n.is_self) {
           return <button className="hy-row-edit" onClick={(e) => openEditSelf(e as any)} title={t('app.edit')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>;
         }
-        if (meta.depth === 0 && !n.native) {
+        if (meta.depth === 0) {
+          // Root-level outbound clients (including native hy2 servers) are
+          // user-configured entries, so they get the edit button. Depth>0
+          // nested peers are discovered, not configured, and stay read-only.
           return <button className="hy-row-edit" onClick={(e) => openEdit(n.name, e as any)} title={t('app.edit')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>;
         }
         return null;
@@ -312,11 +315,12 @@ export default function NodesPage() {
 
   const treeNodes = buildTreeNodes(topology);
 
-  // Collect selectable keys (exclude self, native)
+  // Collect selectable keys. Exclude only the local self row; native hy2
+  // servers ARE user-configured outbound clients and deserve the checkbox.
   const selectableKeys: string[] = [];
   const collectKeys = (nodes: TreeNode<TopologyNode>[]) => {
     for (const n of nodes) {
-      if (!n.data.is_self && !n.data.native) selectableKeys.push(n.key);
+      if (!n.data.is_self) selectableKeys.push(n.key);
       if (n.children) collectKeys(n.children);
     }
   };
@@ -441,7 +445,7 @@ export default function NodesPage() {
           nodes={treeNodes}
           emptyText={t('nodes.noConnections')}
           selection={selection}
-          isSelectable={(node) => !node.data.is_self && !node.data.native}
+          isSelectable={(node) => !node.data.is_self}
         />
       </Card>
 
