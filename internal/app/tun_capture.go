@@ -230,12 +230,14 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 			// Determine exit_via and exit_mode
 			exitVia := ""
 			exitMode := ""
+			var exitPaths []string
 			if ok && username != "" && username != "__psk__" {
 				cfg := a.store.Get()
 				for _, u := range cfg.Users {
 					if u.Username == username && u.Enabled {
 						exitVia = u.ExitVia
 						exitMode = u.ExitMode
+						exitPaths = u.ExitPaths
 						break
 					}
 				}
@@ -259,7 +261,7 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 			if exitVia == "" {
 				remote, err = net.DialTimeout("tcp", dstAddr, 10*time.Second)
 			} else {
-				remote, err = a.dialExitWithMode(dialCtx, exitVia, exitMode, dstAddr)
+				remote, err = a.dialExitWithPaths(dialCtx, exitVia, exitPaths, exitMode, dstAddr)
 			}
 			if err != nil {
 				log.Printf("[tun-fwd] dial error: %s → %s: %v", srcIP, dstAddr, err)
