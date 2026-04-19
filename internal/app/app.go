@@ -1967,8 +1967,8 @@ func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, err
 	if len(parts) > 0 && parts[0] == a.node.Name() {
 		parts = parts[1:]
 	}
-	// Reject paths that revisit any node (including self) — routing through
-	// a node already in the path is always wasted/looped.
+	// Rule 1: reject paths that revisit any node (including self) — routing
+	// through a node already in the path is always wasted/looped.
 	seen := map[string]bool{a.node.Name(): true}
 	for _, h := range parts {
 		if seen[h] {
@@ -1976,6 +1976,16 @@ func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, err
 			return nil, fmt.Errorf("exit path %q loops back through %q", exitVia, h)
 		}
 		seen[h] = true
+	}
+	// Rule 2: every intermediate hop must have nested=true on our side
+	// before the path can be dialed. A single nested=false anywhere along
+	// the chain makes the exit unreachable, matching the UI — red node =
+	// undialable. This closes the "route bypasses nested gate" hole that
+	// pre-rule-3 findPathsTo left open.
+	cfg := a.store.Get()
+	if !isPathAuthorised(parts, cfg) {
+		log.Printf("[exit] rejecting unauthorised path %q (nested gate closed on an ancestor)", exitVia)
+		return nil, fmt.Errorf("exit path %q not authorised by local nested config", exitVia)
 	}
 	if len(parts) == 0 {
 		return net.DialTimeout("tcp", rewriteLocalAddr(addr), 10*time.Second)
