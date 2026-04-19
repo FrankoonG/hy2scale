@@ -305,9 +305,10 @@ func (a *App) RemoveRule(id string) {
 }
 
 type ruleExitInfo struct {
-	ruleID   string
-	exitVia  string
-	exitMode string
+	ruleID    string
+	exitVia   string
+	exitMode  string
+	exitPaths []string
 }
 
 func (e *ruleEngine) applyRule(r RoutingRule) {
@@ -373,7 +374,7 @@ func (e *ruleEngine) applyIPRule(r RoutingRule) {
 				}
 			}
 		}
-		e.registerTargetExit(r.ID, target, r.ExitVia, r.ExitMode)
+		e.registerTargetExit(r.ID, target, r.ExitVia, r.ExitMode, r.ExitPaths)
 	}
 	e.appliedIPT[r.ID] = iptArgs
 	log.Printf("[rules] applied IP rule %q (prio %d): %d targets → exit %s (proxy)", r.Name, r.Priority, len(r.Targets), r.ExitVia)
@@ -473,7 +474,7 @@ func (e *ruleEngine) applyIPRuleTun(r RoutingRule) {
 		}
 		run("ip", "rule", "add", "to", target, "lookup", ipfwdTable, "priority", prioStr)
 		ipRuleArgs = append(ipRuleArgs, "to "+target+" lookup "+ipfwdTable+" priority "+prioStr)
-		e.registerTargetExit(r.ID, target, r.ExitVia, r.ExitMode)
+		e.registerTargetExit(r.ID, target, r.ExitVia, r.ExitMode, r.ExitPaths)
 	}
 	// Store for cleanup (use appliedIPT with "iprule:" prefix to distinguish)
 	for _, arg := range ipRuleArgs {
@@ -565,7 +566,7 @@ func (e *ruleEngine) applyDomainRule(r RoutingRule) {
 				}
 			}
 			resolvedIPs = append(resolvedIPs, ip)
-			e.destToExit.Store(ip, ruleExitInfo{ruleID: r.ID, exitVia: r.ExitVia, exitMode: r.ExitMode})
+			e.destToExit.Store(ip, ruleExitInfo{ruleID: r.ID, exitVia: r.ExitVia, exitMode: r.ExitMode, exitPaths: r.ExitPaths})
 		}
 	}
 	e.appliedIPT[r.ID] = ruleArgs
@@ -586,8 +587,8 @@ func (e *ruleEngine) applyDomainRule(r RoutingRule) {
 		r.Name, len(r.Targets), len(resolvedIPs), r.ExitVia, mode)
 }
 
-func (e *ruleEngine) registerTargetExit(ruleID, target, exitVia, exitMode string) {
-	e.destToExit.Store(target, ruleExitInfo{ruleID: ruleID, exitVia: exitVia, exitMode: exitMode})
+func (e *ruleEngine) registerTargetExit(ruleID, target, exitVia, exitMode string, exitPaths []string) {
+	e.destToExit.Store(target, ruleExitInfo{ruleID: ruleID, exitVia: exitVia, exitMode: exitMode, exitPaths: exitPaths})
 }
 
 func (e *ruleEngine) removeIPTRulesLocked(id string) {
@@ -624,18 +625,26 @@ func (e *ruleEngine) removeIPTRulesLocked(id string) {
 
 // lookupExit finds the exit route and mode for a destination IP.
 func (e *ruleEngine) lookupExit(dstIP string) (string, string) {
+	via, mode, _ := e.lookupExitFull(dstIP)
+	return via, mode
+}
+
+// lookupExitFull is like lookupExit but also returns the configured exit_paths
+// so callers can honour quality-mode failover across multiple paths.
+func (e *ruleEngine) lookupExitFull(dstIP string) (string, string, []string) {
 	var resultVia, resultMode string
+	var resultPaths []string
 	e.destToExit.Range(func(k, v any) bool {
 		target := k.(string)
 		info := v.(ruleExitInfo)
 		if target == dstIP {
-			resultVia, resultMode = info.exitVia, info.exitMode
+			resultVia, resultMode, resultPaths = info.exitVia, info.exitMode, info.exitPaths
 			return false
 		}
 		if strings.Contains(target, "/") {
 			_, cidr, err := net.ParseCIDR(target)
 			if err == nil && cidr.Contains(net.ParseIP(dstIP)) {
-				resultVia, resultMode = info.exitVia, info.exitMode
+				resultVia, resultMode, resultPaths = info.exitVia, info.exitMode, info.exitPaths
 				return false
 			}
 		}
@@ -648,7 +657,7 @@ func (e *ruleEngine) lookupExit(dstIP string) (string, string) {
 				if startIP != nil && endIP != nil && ip != nil {
 					if bytesCompare(ip.To4(), startIP.To4()) >= 0 &&
 						bytesCompare(ip.To4(), endIP.To4()) <= 0 {
-						resultVia, resultMode = info.exitVia, info.exitMode
+						resultVia, resultMode, resultPaths = info.exitVia, info.exitMode, info.exitPaths
 						return false
 					}
 				}
@@ -656,7 +665,7 @@ func (e *ruleEngine) lookupExit(dstIP string) (string, string) {
 		}
 		return true
 	})
-	return resultVia, resultMode
+	return resultVia, resultMode, resultPaths
 }
 
 func bytesCompare(a, b []byte) int {
@@ -697,7 +706,7 @@ func (e *ruleEngine) handleConn(parentCtx context.Context, conn net.Conn) {
 	}
 
 	host, _, _ := net.SplitHostPort(origDst)
-	exitVia, exitMode := e.lookupExit(host)
+	exitVia, exitMode, exitPaths := e.lookupExitFull(host)
 	if exitVia == "" {
 		debugLog("[rules] no exit for %s, direct", origDst)
 		remote, err := net.DialTimeout("tcp", origDst, 10*time.Second)
@@ -714,8 +723,9 @@ func (e *ruleEngine) handleConn(parentCtx context.Context, conn net.Conn) {
 	}
 
 	log.Printf("[rules] %s → exit %s mode=%s", origDst, exitVia, exitMode)
-	// Route through hy2 relay network (exit node dials the actual destination)
-	remote, err := e.app.dialExitWithPaths(ctx, exitVia, []string{exitVia}, exitMode, origDst)
+	// Route through hy2 relay network (exit node dials the actual destination).
+	// exitPaths is honoured for quality failover; empty falls back to single primary.
+	remote, err := e.app.dialExitWithPaths(ctx, exitVia, exitPaths, exitMode, origDst)
 	if err != nil {
 		// Fallback: direct dial with SO_MARK bypass (for TUN/routing mode)
 		remote, err = dialTCPMarked(origDst, ruleBypassMark)

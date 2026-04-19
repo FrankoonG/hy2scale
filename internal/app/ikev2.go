@@ -820,6 +820,7 @@ func (a *App) handleIKEv2Transparent(conn net.Conn, cfg IKEv2Config) {
 	// Determine exit_via
 	exitVia := ""
 	exitMode := ""
+	var exitPaths []string
 	if ok && username != "__psk__" {
 		// User mode: look up user's exit_via
 		user, err := a.LookupUser(username, "")
@@ -835,6 +836,7 @@ func (a *App) handleIKEv2Transparent(conn net.Conn, cfg IKEv2Config) {
 		if user != nil {
 			exitVia = user.ExitVia
 			exitMode = user.ExitMode
+			exitPaths = user.ExitPaths
 		}
 	} else if cfg.Mode == "psk" && !cfg.PSKUserMode {
 		exitVia = cfg.DefaultExit
@@ -849,7 +851,7 @@ func (a *App) handleIKEv2Transparent(conn net.Conn, cfg IKEv2Config) {
 		remote, err = net.DialTimeout("tcp", origDst, 10*time.Second)
 	} else {
 		log.Printf("[ikev2] dial via %s to %s", exitVia, origDst)
-		remote, err = a.dialExitWithMode(context.Background(), exitVia, exitMode, origDst)
+		remote, err = a.dialExitWithPaths(context.Background(), exitVia, exitPaths, exitMode, origDst)
 	}
 	if err != nil {
 		log.Printf("[ikev2] dial error: %v", err)
