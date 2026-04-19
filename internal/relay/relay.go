@@ -954,7 +954,30 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 	n.peers[name] = p
 	n.mu.Unlock()
 
+	// Watchdog: tie the peer entry's lifetime to the register stream.
+	//
+	// Before this watchdog, `ctx` passed in from hy2's Outbound.TCP was
+	// the server-lifetime context — it never cancelled on peer disconnect,
+	// so this goroutine would block on <-peerCtx.Done() forever and the
+	// n.peers[name] entry would persist until either (a) the same peer
+	// re-registered (existing.cancel() above replaces it) or (b) the node
+	// restarted. Result: ghost inbound peers (latency=-1, conn=false) in
+	// topology, routes referencing them that hang in 30s dialExit retry
+	// loops, and masked capacity/health decisions elsewhere.
+	//
+	// The register stream is held open for the lifetime of the peer's
+	// QUIC connection. When the remote disconnects (clean shutdown, QUIC
+	// idle timeout, health-check kill, or crash) the stream closes; a
+	// blocking Read returns an error, which is our signal to cancel
+	// peerCtx and remove n.peers[name].
+	go func() {
+		var buf [1]byte
+		_, _ = stream.Read(buf[:])
+		peerCancel()
+	}()
+
 	<-peerCtx.Done()
+	stream.Close() // defensive — may already be closed by the remote or by existing.cancel()
 
 	n.mu.Lock()
 	// Only delete if we're still the current entry (not replaced by another registration)
