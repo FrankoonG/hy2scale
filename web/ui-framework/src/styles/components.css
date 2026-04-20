@@ -1,7 +1,12 @@
 /* ====== Layout ====== */
 .hy-layout{display:flex;height:100vh}
 .hy-main{flex:1;display:flex;flex-direction:column;min-width:0;margin-left:var(--sidebar-w)}
-.hy-content{flex:1;overflow-y:auto;padding:24px}
+.hy-content{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;padding:24px}
+.hy-content>.page-enter{flex:1;display:flex;flex-direction:column;min-height:0}
+
+/* Page root: fills .hy-content with a stack of panels. Children that use
+   .hy-card with fill=N flex to share the remaining height. */
+.hy-page{flex:1;display:flex;flex-direction:column;min-height:0;gap:20px}
 
 /* ====== Sidebar ====== */
 .hy-sidebar{width:var(--sidebar-w);background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden;position:fixed;left:0;top:0;height:100vh;z-index:100}
@@ -38,6 +43,21 @@
 .hy-card-actions{display:flex;gap:8px;margin-left:auto}
 .hy-card-body{} /* no padding when card has padding */
 .hy-card.no-pad .hy-card-body{padding:0}
+/* Fill mode: card becomes a flex child that shares remaining height with siblings;
+   its body scrolls internally so page-level scrolling is unnecessary. */
+.hy-card.fill{display:flex;flex-direction:column;min-height:0;margin-bottom:0;overflow:hidden}
+.hy-card.fill>.hy-card-header{flex-shrink:0}
+.hy-card.fill>.hy-card-body{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;scrollbar-gutter:stable}
+.hy-card.fill.no-pad>.hy-card-body{overflow:auto}
+/* Inside fill-card body, table-wrap must not create its own scroll context —
+   otherwise the sticky thead sticks to it instead of the card body. */
+.hy-card.fill>.hy-card-body .hy-table-wrap{overflow:visible}
+/* Subtle thin scrollbar so it doesn't visually dominate the thead area. */
+.hy-card.fill>.hy-card-body{scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+.hy-card.fill>.hy-card-body::-webkit-scrollbar{width:8px;height:8px}
+.hy-card.fill>.hy-card-body::-webkit-scrollbar-track{background:transparent}
+.hy-card.fill>.hy-card-body::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+.hy-card.fill>.hy-card-body::-webkit-scrollbar-thumb:hover{background:var(--text-muted)}
 
 /* ====== Badges ====== */
 .hy-badge{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:600;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
@@ -55,21 +75,25 @@
 .version-badge.incompatible{color:#e74c3c;background:rgba(231,76,60,0.08);border-color:rgba(231,76,60,0.35)}
 
 /* ====== Stats Grid ====== */
-.hy-stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
-.hy-stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow)}
+.hy-stats-grid{display:flex;gap:12px;flex-shrink:0}
+.hy-stat-card{flex:1 1 0;min-width:0;position:relative;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);overflow:hidden}
+.hy-stat-card>*{position:relative;z-index:1}
+.hy-stat-spark{position:absolute;inset:0;pointer-events:none;z-index:0}
+.hy-stat-spark svg{width:100%;height:100%;display:block}
+.hy-stat-peak{position:absolute;top:8px;right:12px;font-size:10px;font-weight:600;font-family:var(--mono);color:var(--text-muted);letter-spacing:.3px;z-index:1;pointer-events:none}
 .hy-stat-label{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
 .hy-stat-value{font-size:20px;font-weight:700;font-family:var(--mono);letter-spacing:-.5px}
 .hy-stat-sub{font-size:11px;color:var(--text-muted);margin-top:2px;font-family:var(--mono)}
 .stat-up{color:var(--blue)}
 .stat-down{color:var(--green)}
 .sep{color:var(--text-muted);font-weight:400;margin:0 2px}
-@media(max-width:768px){.hy-stats-grid{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:500px){.hy-stats-grid{grid-template-columns:1fr}}
+@media(max-width:768px){.hy-stats-grid{flex-wrap:wrap}.hy-stat-card{flex:1 1 calc(50% - 6px)}}
+@media(max-width:500px){.hy-stat-card{flex:1 1 100%}}
 
 /* ====== Peer Table ====== */
 .hy-table-wrap{overflow-x:auto;overflow-y:visible;-webkit-overflow-scrolling:touch}
 .hy-table{width:100%;min-width:700px;border-collapse:collapse;user-select:none;-webkit-user-select:none}
-.hy-table th{text-align:left;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;padding:8px 10px;border-bottom:2px solid var(--border);white-space:nowrap}
+.hy-table th{text-align:left;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;padding:8px 10px;border-bottom:2px solid var(--border);white-space:nowrap;position:sticky;top:0;background:var(--surface);z-index:1}
 .hy-table th:first-child,.hy-table td:first-child{padding-left:20px}
 .hy-table th:last-child,.hy-table td:last-child{padding-right:20px}
 .hy-table td{padding:10px;border-bottom:1px solid var(--border-light);font-size:13px;vertical-align:middle}

@@ -10,6 +10,7 @@ import type { TopologyNode } from '@/api';
 import * as api from '@/api';
 import { useNodeStore } from '@/store/node';
 import { fmtBytes, fmtRate } from '@/hooks/useFormat';
+import { useHistory } from '@/hooks/useHistory';
 import { getBasePath } from '@/api/client';
 import NodeModal from '@/components/NodeModal';
 import EditSelfModal from '@/components/EditSelfModal';
@@ -40,11 +41,20 @@ export default function NodesPage() {
   });
 
   // Poll stats every 2s
-  const { data: stats } = useQuery({
+  const { data: stats, dataUpdatedAt: statsTick } = useQuery({
     queryKey: ['stats'],
     queryFn: () => api.getStats(),
     refetchInterval: 2000,
   });
+
+  // Rolling history for stat-card sparklines (tech-feel background).
+  // Sample on the poll tick so plateaued metrics still advance the line.
+  const txBytesHist = useHistory(stats?.tx_bytes, statsTick);
+  const rxBytesHist = useHistory(stats?.rx_bytes, statsTick);
+  const txRateHist = useHistory(stats?.tx_rate, statsTick);
+  const rxRateHist = useHistory(stats?.rx_rate, statsTick);
+  const connsHist = useHistory(stats?.conns, statsTick);
+  const exitClientsHist = useHistory(stats?.exit_clients, statsTick);
 
   const openAdd = (e: MouseEvent) => {
     setClickPos({ x: e.clientX, y: e.clientY });
@@ -376,7 +386,7 @@ export default function NodesPage() {
   }, [selection, confirm, queryClient, toast, t]);
 
   return (
-    <div>
+    <div className="hy-page">
       <StatsGrid
         items={[
           {
@@ -385,6 +395,8 @@ export default function NodesPage() {
               <><span className="stat-up">{fmtBytes(stats.tx_bytes)}</span> <span className="sep">/</span> <span className="stat-down">{fmtBytes(stats.rx_bytes)}</span></>
             ) : '—',
             sub: t('stats.uploadDownload'),
+            history: { up: txBytesHist, down: rxBytesHist },
+            formatPeak: (m) => 'max ' + fmtBytes(m),
           },
           {
             label: t('stats.realtimeSpeed'),
@@ -392,21 +404,30 @@ export default function NodesPage() {
               <><span className="stat-up">{fmtRate(stats.tx_rate)}</span> <span className="sep">/</span> <span className="stat-down">{fmtRate(stats.rx_rate)}</span></>
             ) : '—',
             sub: t('stats.uploadDownload'),
+            history: { up: txRateHist, down: rxRateHist },
+            formatPeak: (m) => 'max ' + fmtRate(m),
           },
           {
             label: t('stats.connections'),
             value: stats?.conns ?? '—',
             sub: t('stats.activeStreams'),
+            history: connsHist,
+            sparkColor: 'var(--primary)',
+            formatPeak: (m) => 'max ' + Math.round(m),
           },
           {
             label: t('stats.exitClients'),
             value: stats?.exit_clients ?? '—',
             sub: t('stats.usingAsExit'),
+            history: exitClientsHist,
+            sparkColor: 'var(--primary)',
+            formatPeak: (m) => 'max ' + Math.round(m),
           },
         ]}
       />
 
       <Card
+        fill={1}
         title={t('nodes.title')}
         count={topology.length}
         actions={

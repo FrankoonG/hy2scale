@@ -99,13 +99,15 @@ export type PasswordConflicts = Record<string, Record<string, string[]>>;
 // ===== Sessions =====
 export interface Session {
   key: string;
-  user: string;
-  ip: string;
-  proxy: string;
-  conns: number;
+  username: string;
+  remote_ip: string;
+  protocol: string;
+  connect_at: number;
+  conn_count: number;
   tx_bytes: number;
   rx_bytes: number;
-  duration: string;
+  /** Elapsed seconds since the session began. */
+  duration: number;
 }
 
 // ===== Proxies =====

@@ -15,3 +15,17 @@ export function fmtRate(b: number): string {
 export function fmtTraffic(tx: number, rx: number): string {
   return `↑${fmtRate(tx)} ↓${fmtRate(rx)}`;
 }
+
+export function fmtDuration(secs: number): string {
+  if (!secs || secs < 0) return '—';
+  if (secs < 60) return secs + 's';
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  if (m < 60) return s ? `${m}m ${s}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  if (h < 24) return mm ? `${h}h ${mm}m` : `${h}h`;
+  const d = Math.floor(h / 24);
+  const hh = h % 24;
+  return hh ? `${d}d ${hh}h` : `${d}d`;
+}

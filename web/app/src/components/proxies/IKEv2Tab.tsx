@@ -74,7 +74,7 @@ export default function IKEv2Tab({ limited }: { limited?: boolean }) {
           {ikev2?.host_network === false ? t('ikev2.warnHostNetwork') : t('ikev2.warnText')}
         </div>
       )}
-    <Card title={t('ikev2.title')}>
+    <Card fill={1} title={t('ikev2.title')}>
       <div style={{ maxWidth: 450, display: 'flex', flexDirection: 'column', gap: 14, ...(isLimited ? { opacity: 0.4, pointerEvents: 'none' as const } : {}) }}>
         <FormGrid>
           <FormGroup label={t('ikev2.mode')}>

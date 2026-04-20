@@ -155,7 +155,7 @@ export default function RulesPage() {
   const tabTitle = tab === 'ip' ? t('rules.ipRules') : t('rules.domainRules');
 
   return (
-    <div>
+    <div className="hy-page">
       <Tabs
         items={[
           { key: 'ip', label: t('rules.ipRules') },
@@ -165,9 +165,10 @@ export default function RulesPage() {
         onChange={setTab}
       />
 
-      <TabPanel activeKey={tab} keys={['ip', 'domain']}>
+      <TabPanel fill activeKey={tab} keys={['ip', 'domain']}>
         {unavailableBanner}
         <Card
+          fill={1}
           title={tabTitle}
           count={currentRules.length}
           actions={
