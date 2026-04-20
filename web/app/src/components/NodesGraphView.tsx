@@ -24,6 +24,10 @@ interface GraphNode {
   name: string;
   isSelf: boolean;
   disabled: boolean;
+  /** Unreachable (connection down OR latency report negative OR disabled).
+   *  An offline direct-peer stays visible in the graph; its edge turns red
+   *  and the flow animation pauses. */
+  offline: boolean;
   nested: boolean;
   native: boolean;
   incompatible: boolean;
@@ -182,6 +186,10 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
         name: n.is_self ? (selfName || n.name || 'self') : n.name,
         isSelf: !!n.is_self,
         disabled: !!n.disabled,
+        // Offline if explicitly disabled, latency reported as -1 (unreachable),
+        // or the top-level `connected` flag is false. Root-peer offline keeps
+        // its dot visible but edges to it turn red + marked ×.
+        offline: !!n.disabled || (n.latency_ms < 0) || (n.connected === false && !n.is_self),
         nested: !!n.nested,
         native: !!n.native,
         incompatible: !!n.incompatible || !!n.conflict,
@@ -393,59 +401,91 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     | null
   >(null);
 
-  // Click-select / path-highlight state. selectedKey is the currently-clicked
-  // node; pathIdx cycles through alternative routes when the same node is
-  // clicked repeatedly (e.g. au-r1 reachable via au AND via au-r1-a).
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [pathIdx, setPathIdx] = useState(0);
-  // Pre-compute all qualified paths to the currently-selected node name.
+  // Selection is stored as a single currentQPath string. The node key and
+  // pathIdx are derived from it so topology refreshes — which can change the
+  // order of equivalent paths — never cause the highlighted route to drift:
+  // we look up the same qpath text in each fresh paths list.
+  const [currentQPath, setCurrentQPath] = useState<string | null>(selectedQPath ?? null);
+  useEffect(() => {
+    if ((selectedQPath ?? null) !== currentQPath) {
+      setCurrentQPath(selectedQPath ?? null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedQPath]);
+
+  const selectedKey = useMemo(() => {
+    if (!currentQPath) return null;
+    const segs = currentQPath.split('/');
+    return segs[segs.length - 1];
+  }, [currentQPath]);
   const selectedPaths = useMemo(() => {
     if (!selectedKey) return [] as string[][];
     return findPathsToName(topology, selectedKey, selfId, selfName);
   }, [selectedKey, topology, selfId, selfName]);
+  const pathIdx = useMemo(() => {
+    if (!currentQPath || selectedPaths.length === 0) return 0;
+    const i = selectedPaths.findIndex((p) => p.join('/') === currentQPath);
+    return i >= 0 ? i : 0;
+  }, [currentQPath, selectedPaths]);
   const activePath = selectedPaths[pathIdx] || null;
-  const pathNodeSet = useMemo(() => new Set(activePath || []), [activePath]);
-  const pathEdgeSet = useMemo(() => activePath ? edgeKeysOnPath(activePath, edges) : new Set<string>(), [activePath, edges]);
+  const activePathOrder = useMemo(() => {
+    const m = new Map<string, number>();
+    if (!activePath) return m;
+    for (let i = 0; i < activePath.length - 1; i++) {
+      const a = activePath[i], b = activePath[i + 1];
+      const candidates = [
+        `${a}→${b}`,
+        `${b}→${a}`,
+        `?${a < b ? a : b}|${a < b ? b : a}`,
+      ];
+      for (const c of candidates) if (edges.has(c)) { m.set(c, i); break; }
+    }
+    return m;
+  }, [activePath, edges]);
+
+  // Sequentially "draw" the path after a selection change — each edge
+  // fades in one step at a time. On deselect the counter drops to 0
+  // instantly so all edges un-highlight simultaneously.
+  const [pathProgress, setPathProgress] = useState(0);
+  useEffect(() => {
+    if (!activePath) { setPathProgress(0); return; }
+    const total = Math.max(0, activePath.length - 1);
+    if (total === 0) { setPathProgress(0); return; }
+    setPathProgress(1);
+    let step = 1;
+    const id = window.setInterval(() => {
+      step += 1;
+      setPathProgress(step);
+      if (step >= total) window.clearInterval(id);
+    }, 160);
+    return () => window.clearInterval(id);
+    // Lock on the qpath text so a topology refresh that reshuffles the paths
+    // array but keeps this route intact doesn't re-trigger the animation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePath ? activePath.join('/') : null]);
 
   const handleNodeClick = useCallback((key: string) => {
-    // Self-node click always selects self (path = [selfId]).
     const paths = findPathsToName(topology, key, selfId, selfName);
     if (paths.length === 0) return;
     if (selectedKey === key) {
-      const next = pathIdx + 1;
-      if (next >= paths.length) {
-        setSelectedKey(null);
-        setPathIdx(0);
-        onSelectQPath?.(null);
-      } else {
-        setPathIdx(next);
-        onSelectQPath?.(paths[next].join('/'));
-      }
+      // Same node → cycle paths (wrap around; deselect happens only when
+      // the user clicks the empty canvas).
+      const next = (pathIdx + 1) % paths.length;
+      const q = paths[next].join('/');
+      setCurrentQPath(q);
+      onSelectQPath?.(q);
     } else {
-      setSelectedKey(key);
-      setPathIdx(0);
-      onSelectQPath?.(paths[0].join('/'));
+      const q = paths[0].join('/');
+      setCurrentQPath(q);
+      onSelectQPath?.(q);
     }
   }, [topology, selfId, selfName, selectedKey, pathIdx, onSelectQPath]);
 
-  // Keep local selection in sync with the parent's selectedQPath (so the
-  // list-view and graph share a single selection).
-  useEffect(() => {
-    if (!selectedQPath) {
-      if (selectedKey !== null) { setSelectedKey(null); setPathIdx(0); }
-      return;
-    }
-    // Derive the node key from the last segment of the qpath.
-    const segs = selectedQPath.split('/');
-    const last = segs[segs.length - 1];
-    if (last !== selectedKey) {
-      setSelectedKey(last);
-      // Try to match pathIdx to this exact qpath if possible.
-      const paths = findPathsToName(topology, last, selfId, selfName);
-      const idx = paths.findIndex((p) => p.join('/') === selectedQPath);
-      setPathIdx(idx >= 0 ? idx : 0);
-    }
-  }, [selectedQPath, selectedKey, topology, selfId, selfName]);
+  const handleBlankClick = useCallback(() => {
+    if (!currentQPath) return;
+    setCurrentQPath(null);
+    onSelectQPath?.(null);
+  }, [currentQPath, onSelectQPath]);
 
   const clientToSvg = useCallback(
     (clientX: number, clientY: number): Pos => {
@@ -550,13 +590,16 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             return prev;
           });
         }
+      } else if (s?.mode === 'pan' && !s.moved) {
+        // Click on empty canvas → deselect current selection.
+        handleBlankClick();
       }
     }
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clientToSvg, handleNodeClick, clampPan, zoom]);
+  }, [clientToSvg, handleNodeClick, handleBlankClick, clampPan, zoom]);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -741,11 +784,23 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             const showRate = screenLen > 110;
             const width = edgeWidth(e);
 
-            const onPath = pathEdgeSet.has(e.key);
+            // Path highlight animation: each edge on the active path has
+            // its own index 0..n-1. `pathProgress` is a counter that ticks
+            // up once per ~160 ms after a selection change, so the route
+            // "draws" sequentially from self to the selected node.
+            const edgeIdx = activePathOrder.get(e.key);
+            const onPath = edgeIdx !== undefined && edgeIdx < pathProgress;
+            // An edge is offline/down when the edge itself is disabled OR
+            // either endpoint reports offline. Such edges turn red, lose
+            // the flow-dot animation, and carry an × marker at their
+            // midpoint so the broken hop is obvious at a glance.
+            const fromOff = nodes.get(e.from)?.offline;
+            const toOff = nodes.get(e.to)?.offline;
+            const offline = e.disabled || !!fromOff || !!toOff;
             const cls = [
               'hy-topo-edge',
-              e.disabled && 'disabled',
-              onPath && 'on-path',
+              offline && 'offline',
+              onPath && !offline && 'on-path',
             ].filter(Boolean).join(' ');
             return (
               <g key={e.key} className={cls}>
@@ -754,13 +809,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                   x1={x1} y1={y1} x2={x2} y2={y2}
                   className="hy-topo-edge-base"
                   strokeWidth={width}
-                  strokeDasharray={e.disabled ? '4 3' : undefined}
+                  strokeDasharray={offline ? '4 3' : undefined}
                 />
                 {/* Flow overlay — dashoffset is driven by the RAF loop
                     above; speed smoothly interpolates between the idle
-                    baseline and a rate-scaled peak, so there's no
-                    discontinuity when traffic starts or stops. */}
-                {e.directionKnown && (
+                    baseline and a rate-scaled peak. Offline edges have
+                    no flow: the × marker speaks for their state. */}
+                {e.directionKnown && !offline && (
                   <line
                     x1={x1} y1={y1} x2={x2} y2={y2}
                     className="hy-topo-edge-flow"
@@ -769,6 +824,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                       else flowLineRefs.current.delete(e.key);
                     }}
                   />
+                )}
+                {/* Offline × marker — small red cross at the midpoint,
+                    constant size independent of edge thickness. */}
+                {offline && (
+                  <g transform={`translate(${mx},${my})`} className="hy-topo-edge-x">
+                    <path d="M -4 -4 L 4 4 M -4 4 L 4 -4" />
+                  </g>
                 )}
                 {/* Labels are always rendered horizontally (not rotated
                     with the edge) so they're readable regardless of angle. */}
@@ -806,7 +868,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             const isHub = n.isSelf || n.degree >= 3;
             const rOuter = isHub ? R_HUB_OUTER : R_SINGLE;
             const isSelected = selectedKey === n.key;
-            const isOnPath = pathNodeSet.has(n.key);
+            // Intermediate nodes along the path no longer get a stroke —
+            // only the selected node itself is outlined. Path is
+            // communicated purely by the edge-highlight animation.
             const cls = [
               'hy-topo-dot',
               n.isSelf && 'self',
@@ -814,7 +878,6 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
               n.nested && 'nested',
               n.incompatible && 'bad',
               isSelected && 'selected',
-              isOnPath && !isSelected && 'on-path',
             ].filter(Boolean).join(' ');
             return (
               <g key={n.key} data-node-key={n.key} transform={`translate(${p.x},${p.y})`} className={cls} style={{ cursor: 'grab' }}>
