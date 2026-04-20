@@ -64,6 +64,7 @@
   "nodes.graph.resetView": "Reset view",
   "nodes.graph.resetLayout": "Reset layout",
   "nodes.graph.hint": "drag to pan · wheel to zoom · drag a node to move",
+  "nodes.graph.snap": "Snap to grid",
   "nodes.addrPassRequired": "Address and password are required",
   "nodes.updated": "Updated {{name}}",
   "nodes.connectedTo": "Connected to {{name}}",

@@ -195,6 +195,18 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   const [pan, setPan] = useState<Pos>({ x: 400, y: 80 });
   const [zoom, setZoom] = useState(1);
 
+  // Snap-to-grid: when on, dragging a node rounds its position to the
+  // nearest grid intersection (grid spacing matches the visual pattern).
+  const [snap, setSnap] = useState<boolean>(() => {
+    try { return localStorage.getItem('scale:topology-graph-snap') === '1'; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('scale:topology-graph-snap', snap ? '1' : '0'); } catch { /* ignore */ }
+  }, [snap]);
+  const GRID_STEP = 24;
+  const snapRef = useRef(snap);
+  useEffect(() => { snapRef.current = snap; }, [snap]);
+
   const dragState = useRef<
     | { mode: 'pan'; startClient: Pos; startPan: Pos }
     | { mode: 'node'; key: string; startSvg: Pos; startNodePos: Pos }
@@ -233,7 +245,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         setPan({ x: s.startPan.x + (ev.clientX - s.startClient.x), y: s.startPan.y + (ev.clientY - s.startClient.y) });
       } else {
         const cur = clientToSvg(ev.clientX, ev.clientY);
-        const nextPos = { x: s.startNodePos.x + (cur.x - s.startSvg.x), y: s.startNodePos.y + (cur.y - s.startSvg.y) };
+        let nextPos = { x: s.startNodePos.x + (cur.x - s.startSvg.x), y: s.startNodePos.y + (cur.y - s.startSvg.y) };
+        if (snapRef.current) {
+          nextPos = {
+            x: Math.round(nextPos.x / GRID_STEP) * GRID_STEP,
+            y: Math.round(nextPos.y / GRID_STEP) * GRID_STEP,
+          };
+        }
         setOverrides((prev) => ({ ...prev, [s.key]: nextPos }));
       }
     }
@@ -298,15 +316,30 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
   const resetLayout = () => { setOverrides({}); savePositions({}); };
 
-  // Flow animation timing: rate -> duration. Higher rate → shorter duration
-  // (faster flow). Normalized against this edge's own observed peak so the
-  // viz remains readable whether the peak is 1 KB/s or 100 MB/s.
-  function flowDurationSec(e: GraphEdge): number | null {
-    if (e.currentRate <= 0) return null;
-    const peak = maxByEdgeRef.current.get(e.key) || e.currentRate;
-    const t = Math.min(1, e.currentRate / Math.max(peak, 1));
-    // duration: 2.8s @ low, 0.4s @ peak
-    return 2.8 - 2.4 * t;
+  // Flow animation runs continuously so the edge always indicates its
+  // direction. Idle edges flow at a slow baseline (~9s cycle); heavy
+  // edges approach a fast limit (~0.4s). Normalized per-edge against
+  // that edge's observed peak so the viz scales from 1 KB/s to 100 MB/s.
+  function flowDurationSec(e: GraphEdge): number {
+    const peak = Math.max(maxByEdgeRef.current.get(e.key) || 0, 1);
+    const t = Math.min(1, e.currentRate / peak);
+    return 9 - 8.6 * t;
+  }
+
+  // Edge stroke width — scaled by peak throughput so heavy edges read as
+  // "thick pipes". Width is on the base line; the flow overlay stays a
+  // constant thin accent on top.
+  const globalMaxRate = useMemo(() => {
+    let m = 0;
+    maxByEdgeRef.current.forEach((v) => { if (v > m) m = v; });
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edges]);
+  function edgeWidth(e: GraphEdge): number {
+    const peak = maxByEdgeRef.current.get(e.key) || 0;
+    if (globalMaxRate <= 0) return 1.8;
+    const t = Math.max(0, peak / globalMaxRate);
+    return 1.8 + t * 5; // 1.8 .. 6.8 px
   }
 
   // Pixel length of an edge in screen space (factors in zoom). Used to decide
@@ -327,6 +360,12 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
           {t('nodes.graph.resetLayout')}
         </button>
         <span className="hy-topo-graph-hint">{t('nodes.graph.hint')}</span>
+      </div>
+      <div className="hy-topo-graph-toolbar-right">
+        <label className="hy-topo-snap">
+          <input type="checkbox" checked={snap} onChange={(e) => setSnap(e.target.checked)} />
+          <span>{t('nodes.graph.snap')}</span>
+        </label>
       </div>
       <svg ref={svgRef} className="hy-topo-graph-svg" onMouseDown={onMouseDown}>
         <defs>
@@ -358,57 +397,47 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             const y2 = q.y - uy * rTo;
             const mx = (x1 + x2) / 2;
             const my = (y1 + y2) / 2;
-            const angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
 
             const screenLen = edgeScreenLen(p, q);
-            // Labels appear only when the edge is long enough on screen to
-            // fit them without crowding the endpoints.
-            const showLatency = e.segmentLatencyMs !== 0 && screenLen > 70;
+            const showLatency = e.segmentLatencyMs !== 0 && screenLen > 60;
             const showRate = e.currentRate > 0 && screenLen > 110;
             const dur = flowDurationSec(e);
+            const width = edgeWidth(e);
 
             return (
               <g key={e.key} className={e.disabled ? 'hy-topo-edge disabled' : 'hy-topo-edge'}>
-                {/* Base line — always visible, low-opacity backbone */}
+                {/* Base line — thickness encodes peak throughput on this edge. */}
                 <line
                   x1={x1} y1={y1} x2={x2} y2={y2}
                   className="hy-topo-edge-base"
+                  strokeWidth={width}
                   strokeDasharray={e.disabled ? '4 3' : undefined}
                 />
-                {/* Flow overlay — animated stroke-dashoffset gives ants-
-                    marching visual from `from` to `to`. Only rendered when
-                    direction is known and rate > 0. Speed scales with rate. */}
-                {e.directionKnown && e.currentRate > 0 && dur != null && (
+                {/* Flow overlay — always animated when direction is known.
+                    Short duration = fast flow (heavy traffic). Idle edges
+                    flow slowly so direction is still visible. */}
+                {e.directionKnown && (
                   <line
                     x1={x1} y1={y1} x2={x2} y2={y2}
                     className="hy-topo-edge-flow"
                     style={{ animationDuration: `${dur.toFixed(2)}s` }}
                   />
                 )}
-                {/* Directional chevron at midpoint — constant small size so
-                    it never looks oversized next to a thick edge. */}
-                {e.directionKnown && (
-                  <g transform={`translate(${mx},${my}) rotate(${angleDeg})`}>
-                    <path d="M -3 -4 L 3 0 L -3 4" className="hy-topo-edge-chevron" />
-                  </g>
-                )}
-                {/* Latency label (segment latency between these two nodes) */}
+                {/* Labels are always rendered horizontally (not rotated
+                    with the edge) so they're readable regardless of angle. */}
                 {showLatency && (
                   <text
-                    x={mx} y={my - 6}
+                    x={mx} y={my - 5}
                     textAnchor="middle"
-                    transform={`rotate(${Math.abs(angleDeg) > 90 ? angleDeg + 180 : angleDeg}, ${mx}, ${my})`}
                     className={`hy-topo-edge-lat ${e.segmentLatencyMs < 0 ? 'bad' : e.segmentLatencyMs < 80 ? 'ok' : e.segmentLatencyMs < 200 ? 'mid' : 'bad'}`}
                   >
                     {fmtLatency(e.segmentLatencyMs)}
                   </text>
                 )}
-                {/* Real-time rate label — only when the edge span is long enough */}
                 {showRate && (
                   <text
-                    x={mx} y={my + 12}
+                    x={mx} y={my + 11}
                     textAnchor="middle"
-                    transform={`rotate(${Math.abs(angleDeg) > 90 ? angleDeg + 180 : angleDeg}, ${mx}, ${my})`}
                     className="hy-topo-edge-rate"
                   >
                     {fmtRate(e.currentRate)}
