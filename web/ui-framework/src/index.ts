@@ -44,6 +44,8 @@ export type { TreeTableProps, TreeColumn, TreeNode, TreeRowMeta, TreeCellProps }
 // Navigation
 export { Tabs } from './components/Tabs';
 export type { TabsProps, TabItem } from './components/Tabs';
+export { IconTabs } from './components/IconTabs';
+export type { IconTabsProps, IconTabItem } from './components/IconTabs';
 export { Sidebar } from './components/Sidebar';
 export type { SidebarProps, SidebarItem as SidebarNavItem } from './components/Sidebar';
 export { Topbar } from './components/Topbar';
