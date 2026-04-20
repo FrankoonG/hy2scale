@@ -65,6 +65,8 @@
   "nodes.graph.resetLayout": "레이아웃 초기화",
   "nodes.graph.hint": "드래그하여 이동 · 휠로 확대/축소 · 노드를 드래그하여 이동",
   "nodes.graph.snap": "그리드에 맞추기",
+  "nodes.graph.selectedPath": "선택된 경로",
+  "nodes.graph.unreachable": "연결 불가",
   "nodes.addrPassRequired": "주소와 비밀번호는 필수입니다",
   "nodes.updated": "{{name}} 업데이트됨",
   "nodes.connectedTo": "{{name}}에 연결됨",
