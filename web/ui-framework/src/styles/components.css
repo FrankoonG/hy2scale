@@ -310,6 +310,16 @@ a.peer-link:hover{text-decoration:underline}
 .hy-topo-graph-svg{flex:1;min-height:0;width:100%;cursor:grab;user-select:none;-webkit-user-select:none}
 .hy-topo-graph-svg:active{cursor:grabbing}
 
+/* Selected-path info overlay — bottom-left of the graph canvas. Matches
+   ExitViaCell styling: monospace, 12px, green/red per-hop colour, muted
+   slash separator. Total latency or "unreachable" appears on the right. */
+.hy-topo-graph-pathinfo{position:absolute;left:10px;bottom:10px;z-index:2;display:inline-flex;align-items:center;gap:10px;padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);font-family:var(--mono);font-size:12px;max-width:calc(100% - 20px);overflow:hidden}
+.hy-topo-pathinfo-label{color:var(--text-muted);font-family:var(--font-sans);font-size:11px;letter-spacing:.02em;text-transform:uppercase}
+.hy-topo-pathinfo-chain{display:inline-flex;align-items:center;flex-wrap:wrap;font-weight:600}
+.hy-topo-pathinfo-sep{color:var(--text-muted);margin:0 2px;font-weight:400}
+.hy-topo-pathinfo-hop{white-space:nowrap}
+.hy-topo-pathinfo-lat{color:var(--text-muted);font-size:11px;padding-left:6px;border-left:1px solid var(--border)}
+
 /* Topology graph palette — uses *literal* hex colours on the `color`
    property (not CSS vars) because dark-mode extensions (Dark Reader,
    Chrome Auto Dark Mode, Midnight Lizard, …) transform concrete colour
@@ -362,30 +372,24 @@ a.peer-link:hover{text-decoration:underline}
    the dark background). */
 .hy-topo-grid-line{color:#9ca3af;stroke:currentColor;stroke-width:.6;opacity:.18;fill:none}
 
-/* Selection / highlighted path */
-.hy-topo-dot.selected .hy-topo-dot-outer{color:#4361ee;stroke:currentColor;stroke-width:2;stroke-opacity:1}
-.hy-topo-edge.on-path .hy-topo-edge-base{color:#4361ee;stroke-opacity:.78}
-.hy-topo-edge.on-path .hy-topo-edge-flow{color:#4361ee;stroke-opacity:1}
+/* Selection & path highlight — clicking a node outlines only the selected
+   node; the route is communicated entirely through edge highlights that
+   fade in sequentially from self (pathProgress counter ticks edges on
+   one at a time). Uses the literal-hex-on-color + currentColor pattern
+   so dark-mode extensions reliably reverse the blue. Stroke widths here
+   explicitly override the throughput-scaled JSX attribute on .hy-topo-
+   edge-base — when a path is selected, visibility beats the throughput
+   encoding for the duration of the selection. */
+.hy-topo-dot.selected .hy-topo-dot-outer{color:#4361ee;stroke:currentColor;stroke-width:3;stroke-opacity:1}
+.hy-topo-dot.selected .hy-topo-dot-single{color:#4361ee;stroke:currentColor;stroke-width:3;stroke-opacity:1}
+.hy-topo-edge-base{transition:stroke .28s ease-out, stroke-opacity .28s ease-out, stroke-width .28s ease-out}
+.hy-topo-edge-flow{transition:stroke .28s ease-out, stroke-opacity .28s ease-out, stroke-width .28s ease-out}
+.hy-topo-edge.on-path .hy-topo-edge-base{color:#4361ee;stroke:currentColor;stroke-opacity:.85;stroke-width:5}
+.hy-topo-edge.on-path .hy-topo-edge-flow{color:#4361ee;stroke:currentColor;stroke-opacity:1;stroke-width:3.5}
 
 /* Offline / disabled edges — red, dashed, no flow, × marker. */
-.hy-topo-edge.offline .hy-topo-edge-base{color:#ef4444;stroke-opacity:.65}
+.hy-topo-edge.offline .hy-topo-edge-base{color:#ef4444;stroke:currentColor;stroke-opacity:.65}
 .hy-topo-edge-x{color:#ef4444;stroke:currentColor;stroke-opacity:.9;stroke-width:1.6;fill:none;stroke-linecap:round}
-
-/* Selection & path highlight — clicking a node outlines ONLY the
-   selected node (intermediate path nodes are not stroked). The route
-   is communicated entirely through edge highlights, which fade in
-   sequentially from self to the selection (pathProgress counter in
-   the component ticks edges on one at a time). */
-.hy-topo-dot.selected .hy-topo-dot-outer{stroke:var(--primary);stroke-width:2;stroke-opacity:1}
-.hy-topo-dot.selected .hy-topo-dot-single{stroke:var(--primary);stroke-width:2;stroke-opacity:1}
-.hy-topo-edge-base{transition:stroke .28s ease-out, stroke-opacity .28s ease-out}
-.hy-topo-edge-flow{transition:stroke .28s ease-out, stroke-opacity .28s ease-out}
-.hy-topo-edge.on-path .hy-topo-edge-base{stroke:var(--primary);stroke-opacity:.78}
-.hy-topo-edge.on-path .hy-topo-edge-flow{stroke:var(--primary);stroke-opacity:1}
-
-/* Offline/disabled edges — red, dashed, no flow overlay, × at midpoint. */
-.hy-topo-edge.offline .hy-topo-edge-base{stroke:var(--red);stroke-opacity:.65}
-.hy-topo-edge-x{stroke:var(--red);stroke-opacity:.9;stroke-width:1.6;fill:none;stroke-linecap:round}
 
 /* Icon-only mini tabs — sized to fit inside a Card header's action area.
    Two or three compact buttons that read as a segmented toggle. */

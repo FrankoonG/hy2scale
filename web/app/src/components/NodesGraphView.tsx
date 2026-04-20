@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { useTranslation } from 'react-i18next';
 import type { TopologyNode } from '@/api';
 import { fmtRate } from '@/hooks/useFormat';
+import { useExitPaths } from '@/hooks/useExitPaths';
 
 interface Props {
   topology: TopologyNode[];
@@ -34,6 +35,9 @@ interface GraphNode {
   depth: number;
   degree: number;
   qpath: string;
+  /** Cumulative latency from self, in ms (as reported by the topology).
+   *  0 when unknown, -1 when offline. */
+  totalLatencyMs: number;
 }
 
 interface GraphEdge {
@@ -63,9 +67,18 @@ const LS_POS_KEY = 'scale:topology-graph-positions';
  *  observed. Rates above 1 Gbps clamp to maximum width. */
 const REF_MBPS_1000 = 125_000_000;
 
+/** Concentric-circle marker: self, OR any peer we have nested-authorised.
+ *  Replaces the former "degree >= 3" heuristic — nodes that happen to have
+ *  many connections are no longer visually promoted to transit markers;
+ *  only nodes that actually function as transit (nested=true on our side)
+ *  show the double-ring treatment. */
+function isTransit(n: GraphNode | undefined): boolean {
+  return !!n && (n.isSelf || n.nested);
+}
+
 function nodeRadiusFor(n: GraphNode | undefined): number {
   if (!n) return R_SINGLE;
-  return (n.isSelf || n.degree >= 3) ? R_HUB_OUTER : R_SINGLE;
+  return isTransit(n) ? R_HUB_OUTER : R_SINGLE;
 }
 
 /**
@@ -196,10 +209,14 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
         depth,
         degree: 0,
         qpath,
+        totalLatencyMs: n.is_self ? 0 : (typeof n.latency_ms === 'number' ? n.latency_ms : 0),
       });
     } else if (depth < existing.depth) {
       existing.depth = depth;
       existing.qpath = qpath;
+      if (!n.is_self && typeof n.latency_ms === 'number' && n.latency_ms > 0) {
+        existing.totalLatencyMs = n.latency_ms;
+      }
     }
   }
 
@@ -304,6 +321,7 @@ function fmtLatency(ms: number): string {
 
 export default function NodesGraphView({ topology, selfId, selfName, onOpenRemote, selectedQPath, onSelectQPath }: Props) {
   const { t } = useTranslation();
+  const { isReachableAt } = useExitPaths();
   const svgRef = useRef<SVGSVGElement | null>(null);
 
   const { nodes, edges } = useMemo(() => buildGraph(topology, selfId, selfName), [topology, selfId, selfName]);
@@ -832,9 +850,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             const hasOpposite = edges.has(`${e.to}→${e.from}`);
             const offX = hasOpposite ? uy * 5 : 0;
             const offY = hasOpposite ? -ux * 5 : 0;
-            const isHub = (k: string) => nodes.get(k)?.isSelf || (nodes.get(k)?.degree || 0) >= 3;
-            const rFrom = isHub(e.from) ? R_HUB_OUTER : R_SINGLE;
-            const rTo = isHub(e.to) ? R_HUB_OUTER : R_SINGLE;
+            const rFrom = isTransit(nodes.get(e.from)) ? R_HUB_OUTER : R_SINGLE;
+            const rTo = isTransit(nodes.get(e.to)) ? R_HUB_OUTER : R_SINGLE;
             const x1 = p.x + ux * rFrom + offX;
             const y1 = p.y + uy * rFrom + offY;
             const x2 = q.x - ux * rTo + offX;
@@ -930,8 +947,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
           {Array.from(nodes.values()).map((n) => {
             const p = positions[n.key];
             if (!p) return null;
-            const isHub = n.isSelf || n.degree >= 3;
-            const rOuter = isHub ? R_HUB_OUTER : R_SINGLE;
+            const transit = isTransit(n);
+            const rOuter = transit ? R_HUB_OUTER : R_SINGLE;
             const isSelected = selectedKey === n.key;
             // Intermediate nodes along the path no longer get a stroke —
             // only the selected node itself is outlined. Path is
@@ -947,7 +964,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             return (
               <g key={n.key} data-node-key={n.key} transform={`translate(${p.x},${p.y})`} className={cls} style={{ cursor: 'grab' }}>
                 <circle r={rOuter} className="hy-topo-dot-outer" />
-                {isHub && <circle r={R_HUB_INNER} className="hy-topo-dot-inner" />}
+                {transit && <circle r={R_HUB_INNER} className="hy-topo-dot-inner" />}
                 <text y={rOuter + 14} textAnchor="middle" className="hy-topo-dot-name">
                   {n.name}
                 </text>
@@ -966,6 +983,32 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
           })}
         </g>
       </svg>
+      {activePath && activePath.length > 0 && (() => {
+        const selNode = nodes.get(activePath[activePath.length - 1]);
+        const totalLat = selNode?.totalLatencyMs ?? 0;
+        const offline = !!selNode?.offline || totalLat < 0;
+        const hops = activePath.map((k) => nodes.get(k)?.name || k);
+        return (
+          <div className="hy-topo-graph-pathinfo" role="status" aria-live="polite">
+            <span className="hy-topo-pathinfo-label">{t('nodes.graph.selectedPath')}</span>
+            <span className="hy-topo-pathinfo-chain">
+              {hops.map((hop, i) => {
+                const qp = hops.slice(0, i + 1).join('/');
+                const reach = i === 0 || isReachableAt(qp);
+                return (
+                  <span key={i}>
+                    {i > 0 && <span className="hy-topo-pathinfo-sep">/</span>}
+                    <span className="hy-topo-pathinfo-hop" style={{ color: reach ? 'var(--green)' : 'var(--red)' }}>{hop}</span>
+                  </span>
+                );
+              })}
+            </span>
+            <span className="hy-topo-pathinfo-lat">
+              {offline ? t('nodes.graph.unreachable') : fmtLatency(totalLat)}
+            </span>
+          </div>
+        );
+      })()}
     </div>
   );
 }
