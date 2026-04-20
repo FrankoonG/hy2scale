@@ -384,18 +384,28 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   useEffect(() => {
     let raf = 0;
     let last = performance.now();
-    const BASE_SPEED = 24;   // px/sec at idle — gentle drift, ~⅓ of prior baseline
-    const MAX_SPEED = 320;   // px/sec at peak
+    const BASE_SPEED = 24;   // px/sec at idle
+    const MAX_SPEED = 180;   // px/sec when current reaches the global max
     const LERP = 0.08;        // per-frame smoothing toward target speed
     const loop = (now: number) => {
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
       const curEdges = edgesRef.current;
       const maxs = maxByEdgeRef.current;
+      // Denominator for the flow-speed percentage is max(globalPeak, REF).
+      // - globalPeak: largest per-edge peak ever observed across the mesh.
+      //   Once heavy traffic has been seen, it anchors 100 % for everyone.
+      // - REF: a floor reference (10 MB/s). Before any heavy traffic has
+      //   been seen, a single edge at 100 KB/s reads as ~1 % and only
+      //   nudges above baseline — avoids the "first-burst instantly
+      //   saturates" pathology of using the observed-peak-only denominator.
+      const REF_MAX = 10 * 1024 * 1024;
+      let globalPeak = 0;
+      maxs.forEach((v) => { if (v > globalPeak) globalPeak = v; });
+      const denom = Math.max(globalPeak, REF_MAX);
       curEdges.forEach((e) => {
         if (!e.directionKnown) return;
-        const peak = Math.max(maxs.get(e.key) || 0, 1);
-        const t = Math.min(1, e.currentRate / peak);
+        const t = Math.min(1, e.currentRate / denom);
         const target = BASE_SPEED + t * (MAX_SPEED - BASE_SPEED);
         const state = flowStateRef.current.get(e.key) || { offset: 0, speed: BASE_SPEED };
         state.speed += (target - state.speed) * LERP;
@@ -477,7 +487,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
             const screenLen = edgeScreenLen(p, q);
             const showLatency = e.segmentLatencyMs !== 0 && screenLen > 60;
-            const showRate = e.currentRate > 0 && screenLen > 110;
+            // Rate label is always shown (even for 0 B/s) once the edge is
+            // long enough on screen to fit the label text.
+            const showRate = screenLen > 110;
             const width = edgeWidth(e);
 
             return (
@@ -527,17 +539,17 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             );
           })}
 
-          {/* Nodes — every node is concentric (outer pale disc + inner
-              dark-navy dot). Hubs (self or degree ≥ 3) render at the full
-              radii; leaves scale down but keep the same two-circle idiom
-              and the same fill colours, so the palette is consistent
-              across the whole graph. */}
+          {/* Nodes — hubs (self or degree ≥ 3) render as concentric rings
+              (pale outer + inner dot). Leaves render as a single pale disc
+              WITHOUT the inner dot — same outer colour as hubs so the
+              palette stays coherent. The inner dot is a "hub marker",
+              reserved for transit-like nodes and self. Self's inner is
+              primary blue; other hubs use the dark navy. */}
           {Array.from(nodes.values()).map((n) => {
             const p = positions[n.key];
             if (!p) return null;
             const isHub = n.isSelf || n.degree >= 3;
             const rOuter = isHub ? R_HUB_OUTER : R_SINGLE;
-            const rInner = isHub ? R_HUB_INNER : 4;
             const cls = [
               'hy-topo-dot',
               n.isSelf && 'self',
@@ -548,7 +560,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             return (
               <g key={n.key} data-node-key={n.key} transform={`translate(${p.x},${p.y})`} className={cls} style={{ cursor: 'grab' }}>
                 <circle r={rOuter} className="hy-topo-dot-outer" />
-                <circle r={rInner} className="hy-topo-dot-inner" />
+                {isHub && <circle r={R_HUB_INNER} className="hy-topo-dot-inner" />}
                 <text y={rOuter + 14} textAnchor="middle" className="hy-topo-dot-name">
                   {n.name}
                 </text>
