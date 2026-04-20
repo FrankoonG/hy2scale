@@ -779,6 +779,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	peerRates := s.app.Node().PeerRates()
+	pathRates := s.app.Node().PathRates()
 
 	// Add per-peer traffic and sub-peers for inbound children
 	for i, c := range selfChildren {
@@ -789,7 +790,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		if c.Nested {
 			ancestors := selfAncestors(cfg, c.Name)
 			children := filterAncestorPaths(s.getCachedSubPeers(c.Name), ancestors)
-			selfChildren[i].Children = s.filterChildrenByNestedConfig(children, c.Name, cfg, ancestors)
+			selfChildren[i].Children = s.filterChildrenByNestedConfig(children, c.Name, cfg, ancestors, pathRates)
 		}
 	}
 	sort.Slice(selfChildren, func(i, j int) bool { return selfChildren[i].Name < selfChildren[j].Name })
@@ -876,7 +877,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		if tn.Nested && tn.Connected && !tn.Native && !tn.Incompatible && !tn.Conflict {
 			ancestors := selfAncestors(cfg, name)
 			children := filterAncestorPaths(s.getCachedSubPeers(name), ancestors)
-			tn.Children = s.filterChildrenByNestedConfig(children, name, cfg, ancestors)
+			tn.Children = s.filterChildrenByNestedConfig(children, name, cfg, ancestors, pathRates)
 		}
 		// Also load children for inbound peers nested under self
 		// (they can have outbound connections visible if nested is enabled)
@@ -1255,7 +1256,11 @@ func doTruncate(children []topoSubPeer, parentLatency int, selfID string, depth 
 // ancestor on the path — OR matches our local node_id / name — is dropped.
 // `ancestors` is mutated on descent and restored on backtrack so identical
 // names on parallel sibling branches remain legal.
-func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName string, cfg app.Config, ancestors map[string]bool) []topoSubPeer {
+//
+// Path-qualified traffic rates are attached per node so the Nodes UI can
+// attribute relayed bytes to the specific nested descendant they're destined
+// for, not only to the first-hop direct peer that physically carries them.
+func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName string, cfg app.Config, ancestors map[string]bool, pathRates map[string]relay.PeerTraffic) []topoSubPeer {
 	if len(children) == 0 {
 		return children
 	}
@@ -1268,6 +1273,10 @@ func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName
 		pc, hasPC := cfg.Peers[qualifiedKey]
 		c.Nested = hasPC && pc.Nested
 		c.Disabled = hasPC && pc.Disabled
+		if pr, ok := pathRates[qualifiedKey]; ok {
+			c.TxRate = pr.TxRate
+			c.RxRate = pr.RxRate
+		}
 		if c.Nested {
 			if len(c.Children) == 0 {
 				// Pull one level from the per-qualified-path cache populated
@@ -1277,7 +1286,7 @@ func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName
 			}
 			if len(c.Children) > 0 {
 				ancestors[c.Name] = true
-				c.Children = s.filterChildrenByNestedConfig(c.Children, qualifiedKey, cfg, ancestors)
+				c.Children = s.filterChildrenByNestedConfig(c.Children, qualifiedKey, cfg, ancestors, pathRates)
 				delete(ancestors, c.Name)
 			}
 		} else {

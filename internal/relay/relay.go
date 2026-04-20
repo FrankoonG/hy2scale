@@ -314,6 +314,17 @@ type Node struct {
 	peerRateMu sync.RWMutex
 	peerRates  map[string]PeerTraffic
 
+	// Per-qualified-path byte counters, keyed by "p1/p2/.../pN" — the same
+	// format cfg.Peers uses. Populated by DialVia / DialViaBridged whenever
+	// the outgoing chain has more than one hop, and also whenever handleVia
+	// continues a chain on behalf of a remote. Lets the UI attribute
+	// relayed traffic to the specific nested descendant it's destined for,
+	// not just to the first-hop direct peer.
+	pathBytesMu sync.RWMutex
+	pathBytes   map[string]*pathCounters
+	pathRateMu  sync.RWMutex
+	pathRates   map[string]PeerTraffic
+
 	// Per-peer latency (updated by background prober)
 	latencyMu      sync.RWMutex
 	latencies      map[string]int
@@ -343,6 +354,46 @@ func (n *Node) PeerRates() map[string]PeerTraffic {
 	defer n.peerRateMu.RUnlock()
 	out := make(map[string]PeerTraffic, len(n.peerRates))
 	for k, v := range n.peerRates {
+		out[k] = v
+	}
+	return out
+}
+
+// pathCounters holds the tx/rx byte totals for a single qualified nested path.
+type pathCounters struct {
+	tx atomic.Uint64
+	rx atomic.Uint64
+}
+
+// getOrCreatePathCounters returns the counter record for the given qualified
+// path (e.g. "au/au-r1/au-r1-a"), creating it lazily on first use.
+func (n *Node) getOrCreatePathCounters(key string) *pathCounters {
+	n.pathBytesMu.RLock()
+	rec, ok := n.pathBytes[key]
+	n.pathBytesMu.RUnlock()
+	if ok {
+		return rec
+	}
+	n.pathBytesMu.Lock()
+	if rec, ok = n.pathBytes[key]; ok {
+		n.pathBytesMu.Unlock()
+		return rec
+	}
+	rec = &pathCounters{}
+	n.pathBytes[key] = rec
+	n.pathBytesMu.Unlock()
+	return rec
+}
+
+// PathRates returns per-qualified-path traffic rates, keyed identically to
+// cfg.Peers (e.g. "au", "au/au-r1", "au/au-r1/au-r1-a"). Only paths with
+// more than one hop are populated — single-hop flows are covered by the
+// per-peer counter returned from PeerRates.
+func (n *Node) PathRates() map[string]PeerTraffic {
+	n.pathRateMu.RLock()
+	defer n.pathRateMu.RUnlock()
+	out := make(map[string]PeerTraffic, len(n.pathRates))
+	for k, v := range n.pathRates {
 		out[k] = v
 	}
 	return out
@@ -558,6 +609,8 @@ func (n *Node) GetStats() Stats {
 func (n *Node) StartRateTicker(ctx context.Context) {
 	prevPeerTx := make(map[string]uint64)
 	prevPeerRx := make(map[string]uint64)
+	prevPathTx := make(map[string]uint64)
+	prevPathRx := make(map[string]uint64)
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	for {
@@ -590,6 +643,25 @@ func (n *Node) StartRateTicker(ctx context.Context) {
 			n.peerRateMu.Lock()
 			n.peerRates = rates
 			n.peerRateMu.Unlock()
+
+			// Per-qualified-path rates
+			pathRates := make(map[string]PeerTraffic)
+			n.pathBytesMu.RLock()
+			for key, rec := range n.pathBytes {
+				ptx := rec.tx.Load()
+				prx := rec.rx.Load()
+				pathRates[key] = PeerTraffic{
+					Name:   key,
+					TxRate: ptx - prevPathTx[key],
+					RxRate: prx - prevPathRx[key],
+				}
+				prevPathTx[key] = ptx
+				prevPathRx[key] = prx
+			}
+			n.pathBytesMu.RUnlock()
+			n.pathRateMu.Lock()
+			n.pathRates = pathRates
+			n.pathRateMu.Unlock()
 		}
 	}
 }
@@ -603,6 +675,8 @@ func NewNode(name string, exitNode bool) *Node {
 		nested:    make(map[string]bool),
 		blocked:   make(map[string]bool),
 		peerRates: make(map[string]PeerTraffic),
+		pathBytes: make(map[string]*pathCounters),
+		pathRates: make(map[string]PeerTraffic),
 		latencies:     make(map[string]int),
 		addrLatencies: make(map[string]map[string]int),
 		peersOfCache: make(map[string][]PeerInfo),
@@ -1686,6 +1760,10 @@ type countedConn struct {
 	net.Conn
 	tx, rx         *atomic.Uint64
 	peerTx, peerRx *atomic.Uint64
+	// Optional third counter set for a specific qualified nested path (e.g.
+	// "au/au-r1-a"). Lets one stream contribute to both the first-hop peer
+	// counter and a path-specific counter without double-wrapping.
+	pathTx, pathRx *atomic.Uint64
 	conns          *atomic.Int64
 	closed         atomic.Bool
 }
@@ -1704,6 +1782,9 @@ func (c *countedConn) Read(b []byte) (int, error) {
 		if c.peerRx != nil {
 			c.peerRx.Add(uint64(n))
 		}
+		if c.pathRx != nil {
+			c.pathRx.Add(uint64(n))
+		}
 	}
 	return n, err
 }
@@ -1715,11 +1796,23 @@ func (c *countedConn) Write(b []byte) (int, error) {
 		if c.peerTx != nil {
 			c.peerTx.Add(uint64(n))
 		}
+		if c.pathTx != nil {
+			c.pathTx.Add(uint64(n))
+		}
 	}
 	return n, err
 }
 
 func (n *Node) wrapConn(peerName string, conn net.Conn) net.Conn {
+	return n.wrapConnPath(peerName, "", conn)
+}
+
+// wrapConnPath wraps an outbound stream for byte accounting. `peerName` is
+// always the direct (first-hop) peer. `pathKey`, when non-empty, is the full
+// qualified chain (e.g. "au/au-r1-a") — used by the Nodes-page UI to show
+// traffic attributed to the specific nested descendant rather than only to
+// the first-hop peer. Pass "" for single-hop dials.
+func (n *Node) wrapConnPath(peerName, pathKey string, conn net.Conn) net.Conn {
 	n.mu.RLock()
 	p := n.peers[peerName]
 	n.mu.RUnlock()
@@ -1727,6 +1820,11 @@ func (n *Node) wrapConn(peerName string, conn net.Conn) net.Conn {
 	if p != nil {
 		cc.peerTx = &p.txBytes
 		cc.peerRx = &p.rxBytes
+	}
+	if pathKey != "" {
+		rec := n.getOrCreatePathCounters(pathKey)
+		cc.pathTx = &rec.tx
+		cc.pathRx = &rec.rx
 	}
 	n.conns.Add(1)
 	return cc
@@ -2102,7 +2200,7 @@ func (n *Node) DialViaBridged(ctx context.Context, path []string, addr string) (
 		bridge:   bridge,
 		node:     n,
 		peerName: firstPeer,
-		stream:   n.wrapConn(firstPeer, stream),
+		stream:   n.wrapConnPath(firstPeer, strings.Join(path, "/"), stream),
 	}
 	// Store the via address template for rebind
 	bc.viaPath = path
@@ -2132,6 +2230,10 @@ func (n *Node) DialVia(ctx context.Context, path []string, addr string) (net.Con
 	// Build nested via address
 	remaining := strings.Join(path[1:], "/")
 	viaAddr := streamViaPrefix + remaining + "_" + addr + ":0"
+	// Qualified path key for per-path counters — covers origin dials and
+	// bridge sub-dials alike, since handleVia also lands here for multi-
+	// hop continuations.
+	pathKey := strings.Join(path, "/")
 
 	if p.client != nil {
 		cl := p.pickClient()
@@ -2139,7 +2241,7 @@ func (n *Node) DialVia(ctx context.Context, path []string, addr string) (net.Con
 		if err != nil {
 			return nil, err
 		}
-		return n.wrapConn(firstPeer, conn), nil
+		return n.wrapConnPath(firstPeer, pathKey, conn), nil
 	}
 
 	// Inbound peer: send via address as a dial request through control stream.
@@ -2163,7 +2265,7 @@ func (n *Node) DialVia(ctx context.Context, path []string, addr string) (net.Con
 		if conn == nil {
 			return nil, fmt.Errorf("relay: dial via %q failed", firstPeer)
 		}
-		return n.wrapConn(firstPeer, conn), nil
+		return n.wrapConnPath(firstPeer, pathKey, conn), nil
 	case <-ctx.Done():
 		p.writeMu.Lock()
 		delete(p.waiting, id)
