@@ -64,6 +64,7 @@
   "nodes.graph.resetView": "重置视图",
   "nodes.graph.resetLayout": "重置布局",
   "nodes.graph.hint": "拖拽平移 · 滚轮缩放 · 拖拽节点移动",
+  "nodes.graph.snap": "对齐到网格",
   "nodes.addrPassRequired": "地址和密码为必填项",
   "nodes.updated": "已更新 {{name}}",
   "nodes.connectedTo": "已连接到 {{name}}",
