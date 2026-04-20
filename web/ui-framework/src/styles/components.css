@@ -295,8 +295,9 @@ a.peer-link:hover{text-decoration:underline}
 
 /* ====== Tabs (proxy-style button group) ====== */
 /* Topology graph view: infinite pan/zoom canvas hosted inside a fill Card's
-   body. Acts as a sibling to the list TreeTable under the same view toggle. */
-.hy-topo-graph{position:relative;width:100%;height:100%;display:flex;flex-direction:column;background:linear-gradient(var(--bg) 1px,transparent 1px) 0 0/20px 20px,linear-gradient(90deg,var(--bg) 1px,transparent 1px) 0 0/20px 20px,var(--surface);overflow:hidden}
+   body. Background grid lives inside the SVG's transformed group (see
+   <pattern id="hy-topo-grid">) so it pans and zooms with the nodes. */
+.hy-topo-graph{position:relative;width:100%;height:100%;display:flex;flex-direction:column;background:var(--surface);overflow:hidden}
 .hy-topo-graph-toolbar{position:absolute;top:8px;left:8px;display:flex;gap:6px;align-items:center;z-index:2;font-size:11px}
 .hy-topo-btn{border:1px solid var(--border);background:var(--surface);color:var(--text-secondary);padding:4px 10px;border-radius:var(--radius-sm);cursor:pointer;font-size:11px}
 .hy-topo-btn:hover{background:var(--primary-light);color:var(--primary);border-color:var(--primary-light)}
@@ -306,30 +307,37 @@ a.peer-link:hover{text-decoration:underline}
 
 /* Dot-style nodes: logo-inspired (#4D6EA3 outer, #102545 inner). Hub-like
    nodes (self or degree >= 3) get concentric rings, leaves get a single
-   filled disc. Labels live below the dot like annotations. */
-.hy-topo-dot-outer{fill:#4D6EA3;fill-opacity:.38;stroke:#4D6EA3;stroke-opacity:.6;stroke-width:1}
-.hy-topo-dot-inner{fill:#102545;fill-opacity:.82}
-.hy-topo-dot-single{fill:#4D6EA3;fill-opacity:.55;stroke:#4D6EA3;stroke-opacity:.9;stroke-width:1}
-.hy-topo-dot.self .hy-topo-dot-outer{fill:var(--primary);fill-opacity:.22;stroke:var(--primary);stroke-opacity:.9;stroke-width:1.4}
-.hy-topo-dot.self .hy-topo-dot-inner{fill:var(--primary);fill-opacity:.95}
-.hy-topo-dot.nested .hy-topo-dot-outer{stroke-width:1.6}
-.hy-topo-dot.disabled .hy-topo-dot-outer,.hy-topo-dot.disabled .hy-topo-dot-single{fill-opacity:.15;stroke-dasharray:3 3}
+   filled disc. Strokes are clearly visible to give the dots definition. */
+.hy-topo-dot-outer{fill:#4D6EA3;fill-opacity:.32;stroke:#102545;stroke-opacity:.8;stroke-width:1.4}
+.hy-topo-dot-inner{fill:#102545;fill-opacity:.88;stroke:#102545;stroke-width:1}
+.hy-topo-dot-single{fill:#4D6EA3;fill-opacity:.5;stroke:#102545;stroke-opacity:.8;stroke-width:1.4}
+.hy-topo-dot.self .hy-topo-dot-outer{fill:var(--primary);fill-opacity:.22;stroke:var(--primary);stroke-opacity:1;stroke-width:1.6}
+.hy-topo-dot.self .hy-topo-dot-inner{fill:var(--primary);fill-opacity:1;stroke:var(--primary)}
+.hy-topo-dot.nested .hy-topo-dot-outer{stroke-width:2}
+.hy-topo-dot.disabled .hy-topo-dot-outer,.hy-topo-dot.disabled .hy-topo-dot-single{fill-opacity:.12;stroke-dasharray:3 3}
 .hy-topo-dot.disabled .hy-topo-dot-inner{fill-opacity:.25}
 .hy-topo-dot.bad .hy-topo-dot-outer,.hy-topo-dot.bad .hy-topo-dot-single{stroke:var(--red)}
 .hy-topo-dot-name{font-size:11px;font-weight:600;fill:var(--text);font-family:var(--mono)}
 .hy-topo-dot.self .hy-topo-dot-name{fill:var(--primary)}
-.hy-topo-dot-meta{font-size:9px;fill:var(--text-muted)}
-.hy-topo-dot-meta.lat-ok{fill:var(--green)}
-.hy-topo-dot-meta.lat-mid{fill:#d97706}
-.hy-topo-dot-meta.lat-bad{fill:var(--red)}
-.hy-topo-dot-meta.lat-na{fill:var(--text-muted)}
-.hy-topo-dot-meta.lat-self{fill:var(--primary)}
 .hy-topo-dot-open{color:var(--text-muted);cursor:pointer;opacity:0;transition:opacity .15s}
 .hy-topo-dot:hover .hy-topo-dot-open{opacity:1}
 .hy-topo-dot-open:hover{color:var(--primary)}
 
-/* Edge labels (peak throughput) — only shown when traffic was ever observed. */
+/* Edges: base solid line + optional flowing overlay (animated
+   stroke-dashoffset). A small static chevron at midpoint gives direction
+   regardless of flow state. Rate + segment-latency labels appear only
+   when the edge has enough screen length to fit them. */
+.hy-topo-edge-base{stroke:#4D6EA3;stroke-opacity:.45;stroke-width:1.4;fill:none}
+.hy-topo-edge.disabled .hy-topo-edge-base{stroke-opacity:.25}
+.hy-topo-edge-flow{stroke:#4D6EA3;stroke-opacity:.9;stroke-width:2.2;fill:none;stroke-linecap:round;stroke-dasharray:2 14;animation-name:hy-topo-flow;animation-timing-function:linear;animation-iteration-count:infinite}
+@keyframes hy-topo-flow{from{stroke-dashoffset:0}to{stroke-dashoffset:-16}}
+.hy-topo-edge-chevron{fill:none;stroke:#102545;stroke-opacity:.9;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+.hy-topo-edge.disabled .hy-topo-edge-chevron{stroke-opacity:.4}
 .hy-topo-edge-rate{font-size:9px;fill:var(--text-muted);font-family:var(--mono);pointer-events:none}
+.hy-topo-edge-lat{font-size:9px;font-family:var(--mono);pointer-events:none}
+.hy-topo-edge-lat.ok{fill:var(--green)}
+.hy-topo-edge-lat.mid{fill:#d97706}
+.hy-topo-edge-lat.bad{fill:var(--red)}
 
 /* Icon-only mini tabs — sized to fit inside a Card header's action area.
    Two or three compact buttons that read as a segmented toggle. */
