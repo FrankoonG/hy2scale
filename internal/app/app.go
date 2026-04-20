@@ -1963,13 +1963,18 @@ func (a *App) isExitPathDisabled(exitVia string) bool {
 // dialExit routes traffic through an exit path (direct mode, no adaptive/LB).
 func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, error) {
 	parts := splitPath(exitVia)
-	// Strip leading self name (e.g. "AUB/64e7c9f5" on node AUB → ["64e7c9f5"])
-	if len(parts) > 0 && parts[0] == a.node.Name() {
+	cfg := a.store.Get()
+	// Strip leading self label (either our display name or our node_id)
+	// so exit_via expressed as either "hub/au/…" or "188c762f/au/…" both
+	// normalize to the same remaining chain.
+	if len(parts) > 0 && (parts[0] == a.node.Name() || parts[0] == cfg.NodeID) {
 		parts = parts[1:]
 	}
-	// Rule 1: reject paths that revisit any node (including self) — routing
-	// through a node already in the path is always wasted/looped.
-	seen := map[string]bool{a.node.Name(): true}
+	// Rule 1 (including self identity): reject paths that revisit any node.
+	// Self identity covers BOTH the display name and node_id — neither may
+	// reappear mid-path or as a terminal hop, regardless of which one was
+	// used at the root. Matches the UI ancestor filter.
+	seen := map[string]bool{a.node.Name(): true, cfg.NodeID: true}
 	for _, h := range parts {
 		if seen[h] {
 			log.Printf("[exit] rejecting loop path %q (revisits %q)", exitVia, h)
@@ -1982,7 +1987,6 @@ func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, err
 	// the chain makes the exit unreachable, matching the UI — red node =
 	// undialable. This closes the "route bypasses nested gate" hole that
 	// pre-rule-3 findPathsTo left open.
-	cfg := a.store.Get()
 	if !isPathAuthorised(parts, cfg) {
 		log.Printf("[exit] rejecting unauthorised path %q (nested gate closed on an ancestor)", exitVia)
 		return nil, fmt.Errorf("exit path %q not authorised by local nested config", exitVia)

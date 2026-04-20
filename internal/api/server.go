@@ -787,9 +787,9 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			selfChildren[i].RxRate = pr.RxRate
 		}
 		if c.Nested {
-			ancestors := map[string]bool{cfg.NodeID: true, cfg.Name: true, c.Name: true}
+			ancestors := selfAncestors(cfg, c.Name)
 			children := filterAncestorPaths(s.getCachedSubPeers(c.Name), ancestors)
-			selfChildren[i].Children = s.filterChildrenByNestedConfig(children, c.Name, cfg)
+			selfChildren[i].Children = s.filterChildrenByNestedConfig(children, c.Name, cfg, ancestors)
 		}
 	}
 	sort.Slice(selfChildren, func(i, j int) bool { return selfChildren[i].Name < selfChildren[j].Name })
@@ -874,9 +874,9 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 
 		// Load sub-peers from background cache only (never blocks)
 		if tn.Nested && tn.Connected && !tn.Native && !tn.Incompatible && !tn.Conflict {
-			ancestors := map[string]bool{cfg.NodeID: true, cfg.Name: true, name: true}
+			ancestors := selfAncestors(cfg, name)
 			children := filterAncestorPaths(s.getCachedSubPeers(name), ancestors)
-			tn.Children = s.filterChildrenByNestedConfig(children, name, cfg)
+			tn.Children = s.filterChildrenByNestedConfig(children, name, cfg, ancestors)
 		}
 		// Also load children for inbound peers nested under self
 		// (they can have outbound connections visible if nested is enabled)
@@ -1250,12 +1250,20 @@ func doTruncate(children []topoSubPeer, parentLatency int, selfID string, depth 
 // When c.Nested is enabled but c.Children is empty, pulls the flat child list
 // from subPeersCache[qualifiedKey] — StartSubPeersUpdater populates one cache
 // entry per user-declared qualified path via explicit PeersOfVia queries.
-func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName string, cfg app.Config) []topoSubPeer {
+//
+// Rule 1 (including self identity): a descendant whose name matches any
+// ancestor on the path — OR matches our local node_id / name — is dropped.
+// `ancestors` is mutated on descent and restored on backtrack so identical
+// names on parallel sibling branches remain legal.
+func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName string, cfg app.Config, ancestors map[string]bool) []topoSubPeer {
 	if len(children) == 0 {
 		return children
 	}
 	result := make([]topoSubPeer, 0, len(children))
 	for _, c := range children {
+		if ancestors[c.Name] {
+			continue
+		}
 		qualifiedKey := parentName + "/" + c.Name
 		pc, hasPC := cfg.Peers[qualifiedKey]
 		c.Nested = hasPC && pc.Nested
@@ -1268,7 +1276,9 @@ func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName
 				c.Children = s.getCachedSubPeers(qualifiedKey)
 			}
 			if len(c.Children) > 0 {
-				c.Children = s.filterChildrenByNestedConfig(c.Children, qualifiedKey, cfg)
+				ancestors[c.Name] = true
+				c.Children = s.filterChildrenByNestedConfig(c.Children, qualifiedKey, cfg, ancestors)
+				delete(ancestors, c.Name)
 			}
 		} else {
 			c.Children = nil
@@ -1276,6 +1286,19 @@ func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName
 		result = append(result, c)
 	}
 	return result
+}
+
+// selfAncestors returns the baseline ancestor set used for Rule 1 filtering.
+// Always contains the local node's ID and name so neither can ever appear as
+// a sub-peer at any depth.
+func selfAncestors(cfg app.Config, extra ...string) map[string]bool {
+	a := map[string]bool{cfg.NodeID: true, cfg.Name: true}
+	for _, e := range extra {
+		if e != "" {
+			a[e] = true
+		}
+	}
+	return a
 }
 
 // filterAncestorPaths recursively removes any descendant whose name already
