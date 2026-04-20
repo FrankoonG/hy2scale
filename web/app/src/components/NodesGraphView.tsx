@@ -45,7 +45,62 @@ const R_HUB_OUTER = 15;
 const R_HUB_INNER = 7;
 const LEVEL_GAP = 130;
 const SIBLING_GAP = 85;
+const NODE_PADDING = 8;           // extra px between two nodes' edges
 const LS_POS_KEY = 'scale:topology-graph-positions';
+/** 1000 Mbps ≡ 1 Gbps ≡ 125 000 000 bytes/sec. Used as the absolute ceiling
+ *  for edge-thickness scaling so line width is comparable across deployments
+ *  instead of being relative to whatever the local mesh happens to have
+ *  observed. Rates above 1 Gbps clamp to maximum width. */
+const REF_MBPS_1000 = 125_000_000;
+
+function nodeRadiusFor(n: GraphNode | undefined): number {
+  if (!n) return R_SINGLE;
+  return (n.isSelf || n.degree >= 3) ? R_HUB_OUTER : R_SINGLE;
+}
+
+/**
+ * Iteratively pushes `pos` outward from any node that overlaps it. Applied
+ * both to user drop points and to newly-inserted node positions so circles
+ * never stack on top of each other.
+ */
+function resolveOverlap(
+  key: string,
+  pos: Pos,
+  others: Record<string, Pos>,
+  nodes: Map<string, GraphNode>
+): Pos {
+  let x = pos.x;
+  let y = pos.y;
+  const rSelf = nodeRadiusFor(nodes.get(key));
+  for (let iter = 0; iter < 8; iter++) {
+    let moved = false;
+    for (const k in others) {
+      if (k === key) continue;
+      const other = others[k];
+      const rOther = nodeRadiusFor(nodes.get(k));
+      const minDist = rSelf + rOther + NODE_PADDING;
+      let dx = x - other.x;
+      let dy = y - other.y;
+      let dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 0.001) {
+        // Exactly coincident — pick a deterministic direction based on the
+        // hash of the key so repeat renders land consistently.
+        const ang = ((key.charCodeAt(0) * 37 + key.length * 11) % 360) * (Math.PI / 180);
+        dx = Math.cos(ang);
+        dy = Math.sin(ang);
+        dist = 1;
+      }
+      if (dist < minDist) {
+        const push = minDist - dist + 0.1;
+        x += (dx / dist) * push;
+        y += (dy / dist) * push;
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+  return { x, y };
+}
 
 function loadPositions(): Record<string, Pos> {
   try {
@@ -188,10 +243,51 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   }, [edges]);
 
   const auto = useMemo(() => autoLayout(nodes), [nodes]);
+  // `overrides` is the authoritative snapshot of every node's position.
+  // It's persisted to localStorage so that offline→online cycles restore
+  // the same spot, AND new nodes hot-created mid-session get remembered
+  // from the moment they first appear. It's updated in three places:
+  //   1. Below — when auto-layout produces positions for nodes that
+  //      weren't in storage yet (new hot-created / newly-seen inbound).
+  //   2. During drag-move — the dragged node's position tracks the cursor.
+  //   3. On drag release — snap + collision-resolved final position.
   const [overrides, setOverrides] = useState<Record<string, Pos>>(() => loadPositions());
+  const overridesRef = useRef(overrides);
+  useEffect(() => { overridesRef.current = overrides; }, [overrides]);
+  const nodesRef = useRef(nodes);
+  useEffect(() => { nodesRef.current = nodes; }, [nodes]);
+
+  // When the topology adds a new node that has no persisted position, use
+  // the auto-layout slot as its initial spot and nudge it out of the way
+  // of any existing node that happens to be sitting there. Immediately
+  // persist so next render treats it as user-placed and survives reload.
+  useEffect(() => {
+    const cur = overridesRef.current;
+    let changed = false;
+    const next: Record<string, Pos> = { ...cur };
+    for (const key in auto) {
+      if (!(key in cur)) {
+        const initial = auto[key];
+        const existing: Record<string, Pos> = {};
+        for (const k in next) if (k !== key) existing[k] = next[k];
+        next[key] = resolveOverlap(key, initial, existing, nodes);
+        changed = true;
+      }
+    }
+    if (changed) {
+      setOverrides(next);
+      savePositions(next);
+    }
+  }, [auto, nodes]);
+
   const positions = useMemo(() => {
-    const m: Record<string, Pos> = { ...auto };
-    for (const k in overrides) if (k in auto) m[k] = overrides[k];
+    // Position comes from overrides if known, otherwise the freshly computed
+    // auto-layout slot (covers the render between a topology change and the
+    // effect above persisting new entries).
+    const m: Record<string, Pos> = {};
+    for (const key in auto) {
+      m[key] = overrides[key] || auto[key];
+    }
     return m;
   }, [auto, overrides]);
 
@@ -240,16 +336,28 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     ev.preventDefault();
   }, [clientToSvg, positions, pan]);
 
-  // Eased snap-to-grid on release: during drag the node follows the cursor
-  // freely, and when the user lets go we animate over ~260ms to the nearest
-  // grid intersection. Cubic ease-out so it feels "magnetic" rather than
-  // a jump-cut to the grid point.
-  function animateSnap(key: string, from: Pos) {
-    const to = {
-      x: Math.round(from.x / GRID_STEP) * GRID_STEP,
-      y: Math.round(from.y / GRID_STEP) * GRID_STEP,
-    };
-    if (to.x === from.x && to.y === from.y) {
+  // Eased drop handler: runs snap-to-grid (optional) and collision-bounce
+  // in sequence, then animates the node from its release point to the
+  // final resting position over ~260 ms with a cubic ease-out. The same
+  // animation handles both "click-to-grid" magnetism and the "bounce off
+  // a neighbour" push, so there's one smooth motion regardless of which
+  // adjustments fired.
+  function animateToFinal(key: string, from: Pos) {
+    let to: Pos = { ...from };
+    if (snapRef.current) {
+      to = {
+        x: Math.round(to.x / GRID_STEP) * GRID_STEP,
+        y: Math.round(to.y / GRID_STEP) * GRID_STEP,
+      };
+    }
+    // Resolve against every other node (snap may have landed us on a
+    // neighbour; bounce outward until we're clear).
+    const others: Record<string, Pos> = {};
+    const cur = overridesRef.current;
+    for (const k in cur) if (k !== key) others[k] = cur[k];
+    to = resolveOverlap(key, to, others, nodesRef.current);
+
+    if (Math.abs(to.x - from.x) < 0.5 && Math.abs(to.y - from.y) < 0.5) {
       setOverrides((prev) => { savePositions(prev); return prev; });
       return;
     }
@@ -287,16 +395,14 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       const s = dragState.current;
       dragState.current = null;
       if (s?.mode === 'node') {
-        if (snapRef.current) {
-          // Animate to the nearest grid point over ~260ms.
-          setOverrides((prev) => {
-            const pos = prev[s.key];
-            if (pos) animateSnap(s.key, pos);
-            return prev;
-          });
-        } else {
-          setOverrides((prev) => { savePositions(prev); return prev; });
-        }
+        // Run the drop pipeline (snap → collision) and animate. Even when
+        // snap is off, the bounce-off-overlap step still fires, so
+        // releasing on top of another node always tidies itself up.
+        setOverrides((prev) => {
+          const pos = prev[s.key];
+          if (pos) animateToFinal(s.key, pos);
+          return prev;
+        });
       }
     }
     window.addEventListener('mousemove', onMove);
@@ -355,20 +461,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
   const resetLayout = () => { setOverrides({}); savePositions({}); };
 
-  // Edge stroke width — scaled by peak throughput so heavy edges read as
-  // "thick pipes". Width is on the base line; the flow overlay stays a
-  // constant thin accent on top.
-  const globalMaxRate = useMemo(() => {
-    let m = 0;
-    maxByEdgeRef.current.forEach((v) => { if (v > m) m = v; });
-    return m;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [edges]);
+  // Edge stroke width — scaled against an ABSOLUTE 0–1000 Mbps reference
+  // so a line's thickness means the same thing regardless of what else
+  // the mesh has seen. Values above 1 Gbps saturate at the max width.
   function edgeWidth(e: GraphEdge): number {
     const peak = maxByEdgeRef.current.get(e.key) || 0;
-    if (globalMaxRate <= 0) return 1.8;
-    const t = Math.max(0, peak / globalMaxRate);
-    return 1.8 + t * 5; // 1.8 .. 6.8 px
+    const t = Math.min(1, peak / REF_MBPS_1000);
+    return 1.5 + t * 5.5; // 1.5 .. 7 px
   }
 
   // Unified RAF-driven flow: a single animation mechanism expresses both
