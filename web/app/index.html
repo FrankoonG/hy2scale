@@ -3,6 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <!-- Light-only default. Signals to dark-mode extensions (Dark Reader,
+       Chrome Auto Dark Mode, etc.) that we don't ship our own dark theme,
+       so they should run their full inversion pipeline instead of backing
+       off under the assumption we'll handle it. -->
+  <meta name="color-scheme" content="light" />
   <title>HY2 SCALE</title>
   <link rel="icon" type="image/svg+xml" href="./logo.min.svg" />
 </head>

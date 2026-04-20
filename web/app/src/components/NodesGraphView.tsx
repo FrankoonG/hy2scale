@@ -832,25 +832,27 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                     <path d="M -4 -4 L 4 4 M -4 4 L 4 -4" />
                   </g>
                 )}
-                {/* Labels are always rendered horizontally (not rotated
-                    with the edge) so they're readable regardless of angle. */}
-                {showLatency && (
-                  <text
-                    x={mx} y={my - 5}
-                    textAnchor="middle"
-                    className={`hy-topo-edge-lat ${e.segmentLatencyMs < 0 ? 'bad' : e.segmentLatencyMs < 80 ? 'ok' : e.segmentLatencyMs < 200 ? 'mid' : 'bad'}`}
-                  >
-                    {fmtLatency(e.segmentLatencyMs)}
-                  </text>
-                )}
+                {/* Labels always render horizontally. Each label is a pair
+                    of <text> nodes — a halo (wider stroke in the surface
+                    colour) drawn first, then the fill text on top. The two
+                    colours are independent so dark-mode extensions can
+                    flip the halo-to-surface relationship naturally via
+                    the `color` property on each class. */}
+                {showLatency && (() => {
+                  const latClass = e.segmentLatencyMs < 0 ? 'lat-na' : e.segmentLatencyMs < 80 ? 'lat-ok' : e.segmentLatencyMs < 200 ? 'lat-mid' : 'lat-bad';
+                  const text = fmtLatency(e.segmentLatencyMs);
+                  return (
+                    <g>
+                      <text x={mx} y={my - 5} textAnchor="middle" className="hy-topo-edge-label-halo">{text}</text>
+                      <text x={mx} y={my - 5} textAnchor="middle" className={`hy-topo-edge-label ${latClass}`}>{text}</text>
+                    </g>
+                  );
+                })()}
                 {showRate && (
-                  <text
-                    x={mx} y={my + 11}
-                    textAnchor="middle"
-                    className="hy-topo-edge-rate"
-                  >
-                    {fmtRate(e.currentRate)}
-                  </text>
+                  <g>
+                    <text x={mx} y={my + 11} textAnchor="middle" className="hy-topo-edge-label-halo">{fmtRate(e.currentRate)}</text>
+                    <text x={mx} y={my + 11} textAnchor="middle" className="hy-topo-edge-label rate">{fmtRate(e.currentRate)}</text>
+                  </g>
                 )}
               </g>
             );
