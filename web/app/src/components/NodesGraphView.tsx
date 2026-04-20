@@ -67,13 +67,12 @@ const LS_POS_KEY = 'scale:topology-graph-positions';
  *  observed. Rates above 1 Gbps clamp to maximum width. */
 const REF_MBPS_1000 = 125_000_000;
 
-/** Concentric-circle marker: self, OR any peer we have nested-authorised.
- *  Replaces the former "degree >= 3" heuristic — nodes that happen to have
- *  many connections are no longer visually promoted to transit markers;
- *  only nodes that actually function as transit (nested=true on our side)
- *  show the double-ring treatment. */
+/** Concentric-circle marker: self, or any node that acts as transit in the
+ *  current mesh (degree >= 3). NOT gated on nested, because a single dot
+ *  can represent multiple qualified paths, each with its own nested state
+ *  — so "nested" isn't a clean per-dot property. Keep the heuristic. */
 function isTransit(n: GraphNode | undefined): boolean {
-  return !!n && (n.isSelf || n.nested);
+  return !!n && (n.isSelf || n.degree >= 3);
 }
 
 function nodeRadiusFor(n: GraphNode | undefined): number {
@@ -526,7 +525,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       step += 1;
       setPathProgress(step);
       if (step >= total) window.clearInterval(id);
-    }, 160);
+    }, 280);
     return () => window.clearInterval(id);
     // Lock on the qpath text so a topology refresh that reshuffles the paths
     // array but keeps this route intact doesn't re-trigger the animation.
@@ -884,6 +883,20 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
               offline && 'offline',
               onPath && !offline && 'on-path',
             ].filter(Boolean).join(' ');
+            // Draw-direction: for the path-highlight overlay we want the
+            // stroke to appear as if being "painted" from the self-side
+            // endpoint toward the farther endpoint, regardless of which
+            // side of this edge is the dialer. activePath is ordered
+            // self → target, so activePath[edgeIdx] is the nearer-self
+            // node on this edge — if that's e.to, we flip the overlay's
+            // coords so its (x1,y1) ends up at the self-side end.
+            const nearerSelfKey = onPath && edgeIdx !== undefined && activePath ? activePath[edgeIdx] : null;
+            const flipForDraw = nearerSelfKey === e.to;
+            const dx1 = flipForDraw ? x2 : x1;
+            const dy1 = flipForDraw ? y2 : y1;
+            const dx2 = flipForDraw ? x1 : x2;
+            const dy2 = flipForDraw ? y1 : y2;
+            const drawLen = Math.hypot(dx2 - dx1, dy2 - dy1);
             return (
               <g key={e.key} className={cls}>
                 {/* Base line — thickness encodes peak throughput on this edge. */}
@@ -893,6 +906,21 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                   strokeWidth={width}
                   strokeDasharray={offline ? '4 3' : undefined}
                 />
+                {/* Path draw overlay — appears only when this edge becomes
+                    on-path, oriented self-side → target-side so the stroke-
+                    dashoffset keyframe visually "paints" the blue from the
+                    self end outward. The pathProgress timer mounts edges
+                    one at a time in sequence from self, so the cumulative
+                    effect radiates outward to the selected node. A fresh
+                    key per selection change forces animation restart. */}
+                {onPath && !offline && (
+                  <line
+                    key={activePath ? activePath.join('/') + ':' + edgeIdx : 'draw'}
+                    x1={dx1} y1={dy1} x2={dx2} y2={dy2}
+                    className="hy-topo-edge-draw"
+                    style={{ ['--hy-path-len' as any]: drawLen }}
+                  />
+                )}
                 {/* Flow overlay — dashoffset is driven by the RAF loop
                     above; speed smoothly interpolates between the idle
                     baseline and a rate-scaled peak. Offline edges have
@@ -988,6 +1016,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         const totalLat = selNode?.totalLatencyMs ?? 0;
         const offline = !!selNode?.offline || totalLat < 0;
         const hops = activePath.map((k) => nodes.get(k)?.name || k);
+        const latClass = offline ? 'lat-bad' : totalLat <= 0 ? 'lat-na' : totalLat < 80 ? 'lat-ok' : totalLat < 200 ? 'lat-mid' : 'lat-bad';
         return (
           <div className="hy-topo-graph-pathinfo" role="status" aria-live="polite">
             <span className="hy-topo-pathinfo-label">{t('nodes.graph.selectedPath')}</span>
@@ -1003,7 +1032,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                 );
               })}
             </span>
-            <span className="hy-topo-pathinfo-lat">
+            <span className={`hy-topo-pathinfo-lat ${latClass}`}>
               {offline ? t('nodes.graph.unreachable') : fmtLatency(totalLat)}
             </span>
           </div>
