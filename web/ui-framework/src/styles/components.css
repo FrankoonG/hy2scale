@@ -291,6 +291,42 @@ a.peer-link:hover{text-decoration:underline}
 .hy-toast.info{background:var(--primary)}
 
 /* ====== Tabs (proxy-style button group) ====== */
+/* Topology graph view: infinite pan/zoom canvas hosted inside a fill Card's
+   body. Acts as a sibling to the list TreeTable under the same view toggle. */
+.hy-topo-graph{position:relative;width:100%;height:100%;display:flex;flex-direction:column;background:linear-gradient(var(--bg) 1px,transparent 1px) 0 0/20px 20px,linear-gradient(90deg,var(--bg) 1px,transparent 1px) 0 0/20px 20px,var(--surface);overflow:hidden}
+.hy-topo-graph-toolbar{position:absolute;top:8px;left:8px;display:flex;gap:6px;align-items:center;z-index:2;font-size:11px}
+.hy-topo-btn{border:1px solid var(--border);background:var(--surface);color:var(--text-secondary);padding:4px 10px;border-radius:var(--radius-sm);cursor:pointer;font-size:11px}
+.hy-topo-btn:hover{background:var(--primary-light);color:var(--primary);border-color:var(--primary-light)}
+.hy-topo-graph-hint{color:var(--text-muted);font-size:10px;margin-left:4px}
+.hy-topo-graph-svg{flex:1;min-height:0;width:100%;cursor:grab;user-select:none;-webkit-user-select:none}
+.hy-topo-graph-svg:active{cursor:grabbing}
+
+.hy-topo-node-box{fill:var(--surface);stroke:var(--border);stroke-width:1}
+.hy-topo-node.self .hy-topo-node-box{stroke:var(--primary);stroke-width:1.5}
+.hy-topo-node.nested .hy-topo-node-box{fill:color-mix(in srgb,var(--primary-light) 40%,var(--surface))}
+.hy-topo-node.disabled .hy-topo-node-box{fill:var(--bg);stroke-dasharray:4 3}
+.hy-topo-node.bad .hy-topo-node-box{stroke:var(--red)}
+.hy-topo-node-name{font-size:12px;font-weight:600;fill:var(--text);font-family:var(--mono)}
+.hy-topo-node.self .hy-topo-node-name{fill:var(--primary)}
+.hy-topo-node-meta{font-size:10px;fill:var(--text-muted)}
+.hy-topo-node-meta.lat-ok{fill:var(--green)}
+.hy-topo-node-meta.lat-mid{fill:#d97706}
+.hy-topo-node-meta.lat-bad{fill:var(--red)}
+.hy-topo-node-meta.lat-na{fill:var(--text-muted)}
+.hy-topo-node-rate{font-size:9px;fill:var(--text-muted);font-family:var(--mono)}
+.hy-topo-node-open{width:22px;height:22px;padding:0;border:none;background:transparent;color:var(--text-muted);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;border-radius:4px}
+.hy-topo-node-open:hover{background:var(--primary-light);color:var(--primary)}
+.hy-topo-node-open svg{width:12px;height:12px}
+
+/* Icon-only mini tabs — sized to fit inside a Card header's action area.
+   Two or three compact buttons that read as a segmented toggle. */
+.hy-icon-tabs{display:inline-flex;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg)}
+.hy-icon-tab{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:none;background:none;cursor:pointer;color:var(--text-muted);padding:0;transition:background .12s,color .12s}
+.hy-icon-tab+.hy-icon-tab{border-left:1px solid var(--border)}
+.hy-icon-tab:hover{background:var(--primary-light);color:var(--primary)}
+.hy-icon-tab.active{background:var(--primary-light);color:var(--primary)}
+.hy-icon-tab svg{width:14px;height:14px}
+
 .hy-tabs-row{display:flex;align-items:center;gap:8px;margin-bottom:16px}
 .hy-tabs-row .hy-tabs{margin-bottom:0}
 .hy-tabs{display:inline-flex;gap:0;margin-bottom:16px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow-x:auto;overflow-y:hidden;max-width:100%;width:fit-content;-webkit-overflow-scrolling:touch}

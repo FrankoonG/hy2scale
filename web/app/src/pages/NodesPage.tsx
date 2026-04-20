@@ -1,9 +1,9 @@
-import { useState, useCallback, type MouseEvent } from 'react';
+import { useState, useCallback, useEffect, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   StatsGrid, Card, Button, Badge, Tooltip,
-  TreeTable, TreeCell, useToast, useConfirm, useSelection,
+  TreeTable, TreeCell, IconTabs, useToast, useConfirm, useSelection,
   type TreeNode, type TreeColumn,
 } from '@hy2scale/ui';
 import type { TopologyNode } from '@/api';
@@ -16,6 +16,7 @@ import NodeModal from '@/components/NodeModal';
 import EditSelfModal from '@/components/EditSelfModal';
 import BulkActionBar from '@/components/BulkActionBar';
 import ImportExportButton from '@/components/ImportExportButton';
+import NodesGraphView from '@/components/NodesGraphView';
 
 export default function NodesPage() {
   const { t } = useTranslation();
@@ -28,6 +29,17 @@ export default function NodesPage() {
   const [editSelfOpen, setEditSelfOpen] = useState(false);
   const [editingName, setEditingName] = useState<string | null>(null);
   const [clickPos, setClickPos] = useState<{ x: number; y: number } | undefined>();
+  const [viewMode, setViewMode] = useState<'list' | 'graph'>(() => {
+    try {
+      const v = localStorage.getItem('scale:nodes-view');
+      return v === 'graph' ? 'graph' : 'list';
+    } catch {
+      return 'list';
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('scale:nodes-view', viewMode); } catch { /* ignore */ }
+  }, [viewMode]);
 
   // Poll topology every 2s
   useQuery({
@@ -432,6 +444,39 @@ export default function NodesPage() {
         count={topology.length}
         actions={
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <IconTabs
+              items={[
+                {
+                  key: 'list',
+                  tooltip: t('nodes.view.list'),
+                  icon: (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <line x1="8" y1="6" x2="21" y2="6" />
+                      <line x1="8" y1="12" x2="21" y2="12" />
+                      <line x1="8" y1="18" x2="21" y2="18" />
+                      <circle cx="4" cy="6" r="1.2" fill="currentColor" />
+                      <circle cx="4" cy="12" r="1.2" fill="currentColor" />
+                      <circle cx="4" cy="18" r="1.2" fill="currentColor" />
+                    </svg>
+                  ),
+                },
+                {
+                  key: 'graph',
+                  tooltip: t('nodes.view.graph'),
+                  icon: (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <circle cx="6" cy="6" r="2.4" />
+                      <circle cx="18" cy="6" r="2.4" />
+                      <circle cx="12" cy="18" r="2.4" />
+                      <line x1="7.7" y1="7.2" x2="10.7" y2="16.2" />
+                      <line x1="16.3" y1="7.2" x2="13.3" y2="16.2" />
+                    </svg>
+                  ),
+                },
+              ]}
+              activeKey={viewMode}
+              onChange={(k) => setViewMode(k as 'list' | 'graph')}
+            />
             <BulkActionBar count={selection.count} onClear={selection.clear}>
               {(() => {
                 // Inspect selected nodes to decide which buttons to show
@@ -471,13 +516,27 @@ export default function NodesPage() {
         }
         noPadding
       >
-        <TreeTable
-          columns={columns}
-          nodes={treeNodes}
-          emptyText={t('nodes.noConnections')}
-          selection={selection}
-          isSelectable={(node) => !node.data.is_self}
-        />
+        {viewMode === 'graph' ? (
+          <NodesGraphView
+            topology={topology}
+            selfId={node?.node_id || ''}
+            selfName={node?.name}
+            onOpenRemote={(qpath) => {
+              const basePath = getBasePath();
+              const selfId = node?.node_id || '';
+              const chain = selfId && qpath.startsWith(selfId + '/') ? qpath.slice(selfId.length + 1) : qpath;
+              window.open(`${basePath}/remote/${chain}/scale/`, '_blank', 'noopener');
+            }}
+          />
+        ) : (
+          <TreeTable
+            columns={columns}
+            nodes={treeNodes}
+            emptyText={t('nodes.noConnections')}
+            selection={selection}
+            isSelectable={(node) => !node.data.is_self}
+          />
+        )}
       </Card>
 
       <NodeModal
