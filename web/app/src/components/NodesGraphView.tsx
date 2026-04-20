@@ -93,24 +93,27 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
 
   function addEdge(a: string, b: string, direction: string | undefined, disabled: boolean, rate: number, segmentLatencyMs: number) {
     if (a === b) return;
-    const [lo, hi] = a < b ? [a, b] : [b, a];
-    const ekey = `${lo}|${hi}`;
-    let e = edges.get(ekey);
-    if (!e) {
-      let from = a, to = b, directionKnown = false;
-      if (direction === 'outbound') { from = a; to = b; directionKnown = true; }
-      else if (direction === 'inbound') { from = b; to = a; directionKnown = true; }
-      e = { key: ekey, from, to, directionKnown, disabled, currentRate: rate, segmentLatencyMs };
+    // Directed keying: an edge represents a specific dialer→dialee TCP link.
+    // - outbound: parent dialed child → key `a→b`
+    // - inbound:  child dialed parent → key `b→a`
+    // - unknown:  fall back to undirected sorted pair so it still dedupes
+    //             across passes; keep directionKnown=false.
+    let from = a, to = b, directionKnown = false, ekey: string;
+    if (direction === 'outbound') { from = a; to = b; directionKnown = true; ekey = `${from}→${to}`; }
+    else if (direction === 'inbound') { from = b; to = a; directionKnown = true; ekey = `${from}→${to}`; }
+    else {
+      const [lo, hi] = a < b ? [a, b] : [b, a];
+      ekey = `?${lo}|${hi}`;
+    }
+    const existing = edges.get(ekey);
+    if (!existing) {
+      const e: GraphEdge = { key: ekey, from, to, directionKnown, disabled, currentRate: rate, segmentLatencyMs };
       edges.set(ekey, e);
       const na = nodes.get(a); if (na) na.degree++;
       const nb = nodes.get(b); if (nb) nb.degree++;
     } else {
-      if (!e.directionKnown && direction) {
-        if (direction === 'outbound') { e.from = a; e.to = b; e.directionKnown = true; }
-        else if (direction === 'inbound') { e.from = b; e.to = a; e.directionKnown = true; }
-      }
-      if (rate > e.currentRate) e.currentRate = rate;
-      if (disabled) e.disabled = true;
+      if (rate > existing.currentRate) existing.currentRate = rate;
+      if (disabled) existing.disabled = true;
       // keep first-visited segment latency
     }
   }
@@ -381,7 +384,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   useEffect(() => {
     let raf = 0;
     let last = performance.now();
-    const BASE_SPEED = 70;   // px/sec at idle — readable but not busy
+    const BASE_SPEED = 24;   // px/sec at idle — gentle drift, ~⅓ of prior baseline
     const MAX_SPEED = 320;   // px/sec at peak
     const LERP = 0.08;        // per-frame smoothing toward target speed
     const loop = (now: number) => {
@@ -454,12 +457,21 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             const d = Math.sqrt(dx * dx + dy * dy) || 1;
             const ux = dx / d;
             const uy = dy / d;
-            const rFrom = (nodes.get(e.from)?.degree || 1) >= 3 || nodes.get(e.from)?.isSelf ? R_HUB_OUTER : R_SINGLE;
-            const rTo = (nodes.get(e.to)?.degree || 1) >= 3 || nodes.get(e.to)?.isSelf ? R_HUB_OUTER : R_SINGLE;
-            const x1 = p.x + ux * rFrom;
-            const y1 = p.y + uy * rFrom;
-            const x2 = q.x - ux * rTo;
-            const y2 = q.y - uy * rTo;
+            // If an opposite-direction edge exists between the same pair,
+            // offset both edges perpendicular to the line so they render as
+            // two parallel rails (flow in opposite directions). The offset
+            // direction is derived from the edge's own orientation, so each
+            // side naturally ends up on opposite rails.
+            const hasOpposite = edges.has(`${e.to}→${e.from}`);
+            const offX = hasOpposite ? uy * 5 : 0;
+            const offY = hasOpposite ? -ux * 5 : 0;
+            const isHub = (k: string) => nodes.get(k)?.isSelf || (nodes.get(k)?.degree || 0) >= 3;
+            const rFrom = isHub(e.from) ? R_HUB_OUTER : R_SINGLE;
+            const rTo = isHub(e.to) ? R_HUB_OUTER : R_SINGLE;
+            const x1 = p.x + ux * rFrom + offX;
+            const y1 = p.y + uy * rFrom + offY;
+            const x2 = q.x - ux * rTo + offX;
+            const y2 = q.y - uy * rTo + offY;
             const mx = (x1 + x2) / 2;
             const my = (y1 + y2) / 2;
 
@@ -515,11 +527,17 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             );
           })}
 
-          {/* Nodes */}
+          {/* Nodes — every node is concentric (outer pale disc + inner
+              dark-navy dot). Hubs (self or degree ≥ 3) render at the full
+              radii; leaves scale down but keep the same two-circle idiom
+              and the same fill colours, so the palette is consistent
+              across the whole graph. */}
           {Array.from(nodes.values()).map((n) => {
             const p = positions[n.key];
             if (!p) return null;
             const isHub = n.isSelf || n.degree >= 3;
+            const rOuter = isHub ? R_HUB_OUTER : R_SINGLE;
+            const rInner = isHub ? R_HUB_INNER : 4;
             const cls = [
               'hy-topo-dot',
               n.isSelf && 'self',
@@ -529,19 +547,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             ].filter(Boolean).join(' ');
             return (
               <g key={n.key} data-node-key={n.key} transform={`translate(${p.x},${p.y})`} className={cls} style={{ cursor: 'grab' }}>
-                {isHub ? (
-                  <>
-                    <circle r={R_HUB_OUTER} className="hy-topo-dot-outer" />
-                    <circle r={R_HUB_INNER} className="hy-topo-dot-inner" />
-                  </>
-                ) : (
-                  <circle r={R_SINGLE} className="hy-topo-dot-single" />
-                )}
-                <text y={(isHub ? R_HUB_OUTER : R_SINGLE) + 14} textAnchor="middle" className="hy-topo-dot-name">
+                <circle r={rOuter} className="hy-topo-dot-outer" />
+                <circle r={rInner} className="hy-topo-dot-inner" />
+                <text y={rOuter + 14} textAnchor="middle" className="hy-topo-dot-name">
                   {n.name}
                 </text>
                 {!n.isSelf && onOpenRemote && (
-                  <g transform={`translate(${(isHub ? R_HUB_OUTER : R_SINGLE) + 4},${-(isHub ? R_HUB_OUTER : R_SINGLE)})`} className="hy-topo-dot-open" onClick={(ev) => { ev.stopPropagation(); onOpenRemote(n.qpath); }}>
+                  <g transform={`translate(${rOuter + 4},${-rOuter})`} className="hy-topo-dot-open" onClick={(ev) => { ev.stopPropagation(); onOpenRemote(n.qpath); }}>
                     <rect width={14} height={14} rx={3} fill="transparent" />
                     <svg x={0} y={0} width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
                       <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
