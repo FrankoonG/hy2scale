@@ -237,6 +237,37 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     ev.preventDefault();
   }, [clientToSvg, positions, pan]);
 
+  // Eased snap-to-grid on release: during drag the node follows the cursor
+  // freely, and when the user lets go we animate over ~260ms to the nearest
+  // grid intersection. Cubic ease-out so it feels "magnetic" rather than
+  // a jump-cut to the grid point.
+  function animateSnap(key: string, from: Pos) {
+    const to = {
+      x: Math.round(from.x / GRID_STEP) * GRID_STEP,
+      y: Math.round(from.y / GRID_STEP) * GRID_STEP,
+    };
+    if (to.x === from.x && to.y === from.y) {
+      setOverrides((prev) => { savePositions(prev); return prev; });
+      return;
+    }
+    const start = performance.now();
+    const duration = 260;
+    const step = (now: number) => {
+      const tt = Math.min(1, (now - start) / duration);
+      const k = 1 - Math.pow(1 - tt, 3);
+      const nx = from.x + (to.x - from.x) * k;
+      const ny = from.y + (to.y - from.y) * k;
+      setOverrides((prev) => ({ ...prev, [key]: { x: nx, y: ny } }));
+      if (tt < 1) {
+        requestAnimationFrame(step);
+      } else {
+        setOverrides((prev) => ({ ...prev, [key]: to }));
+        setOverrides((prev) => { savePositions(prev); return prev; });
+      }
+    };
+    requestAnimationFrame(step);
+  }
+
   useEffect(() => {
     function onMove(ev: globalThis.MouseEvent) {
       const s = dragState.current;
@@ -245,25 +276,30 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         setPan({ x: s.startPan.x + (ev.clientX - s.startClient.x), y: s.startPan.y + (ev.clientY - s.startClient.y) });
       } else {
         const cur = clientToSvg(ev.clientX, ev.clientY);
-        let nextPos = { x: s.startNodePos.x + (cur.x - s.startSvg.x), y: s.startNodePos.y + (cur.y - s.startSvg.y) };
-        if (snapRef.current) {
-          nextPos = {
-            x: Math.round(nextPos.x / GRID_STEP) * GRID_STEP,
-            y: Math.round(nextPos.y / GRID_STEP) * GRID_STEP,
-          };
-        }
+        const nextPos = { x: s.startNodePos.x + (cur.x - s.startSvg.x), y: s.startNodePos.y + (cur.y - s.startSvg.y) };
         setOverrides((prev) => ({ ...prev, [s.key]: nextPos }));
       }
     }
     function onUp() {
-      if (dragState.current?.mode === 'node') {
-        setOverrides((prev) => { savePositions(prev); return prev; });
-      }
+      const s = dragState.current;
       dragState.current = null;
+      if (s?.mode === 'node') {
+        if (snapRef.current) {
+          // Animate to the nearest grid point over ~260ms.
+          setOverrides((prev) => {
+            const pos = prev[s.key];
+            if (pos) animateSnap(s.key, pos);
+            return prev;
+          });
+        } else {
+          setOverrides((prev) => { savePositions(prev); return prev; });
+        }
+      }
     }
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientToSvg]);
 
   useEffect(() => {
@@ -316,16 +352,6 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
   const resetLayout = () => { setOverrides({}); savePositions({}); };
 
-  // Flow animation runs continuously so the edge always indicates its
-  // direction. Idle edges flow at a slow baseline (~9s cycle); heavy
-  // edges approach a fast limit (~0.4s). Normalized per-edge against
-  // that edge's observed peak so the viz scales from 1 KB/s to 100 MB/s.
-  function flowDurationSec(e: GraphEdge): number {
-    const peak = Math.max(maxByEdgeRef.current.get(e.key) || 0, 1);
-    const t = Math.min(1, e.currentRate / peak);
-    return 9 - 8.6 * t;
-  }
-
   // Edge stroke width — scaled by peak throughput so heavy edges read as
   // "thick pipes". Width is on the base line; the flow overlay stays a
   // constant thin accent on top.
@@ -341,6 +367,45 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     const t = Math.max(0, peak / globalMaxRate);
     return 1.8 + t * 5; // 1.8 .. 6.8 px
   }
+
+  // Unified RAF-driven flow: a single animation mechanism expresses both
+  // direction AND real-time speed. Each edge's dashoffset advances by
+  // `speed * dt` each frame; `speed` is smoothed toward a rate-derived
+  // target so transitions between idle and active are gradual, not
+  // jump-cuts. An idle baseline speed keeps direction always readable.
+  const flowLineRefs = useRef<Map<string, SVGLineElement>>(new Map());
+  const flowStateRef = useRef<Map<string, { offset: number; speed: number }>>(new Map());
+  const edgesRef = useRef(edges);
+  useEffect(() => { edgesRef.current = edges; }, [edges]);
+
+  useEffect(() => {
+    let raf = 0;
+    let last = performance.now();
+    const BASE_SPEED = 70;   // px/sec at idle — readable but not busy
+    const MAX_SPEED = 320;   // px/sec at peak
+    const LERP = 0.08;        // per-frame smoothing toward target speed
+    const loop = (now: number) => {
+      const dt = Math.min(0.1, (now - last) / 1000);
+      last = now;
+      const curEdges = edgesRef.current;
+      const maxs = maxByEdgeRef.current;
+      curEdges.forEach((e) => {
+        if (!e.directionKnown) return;
+        const peak = Math.max(maxs.get(e.key) || 0, 1);
+        const t = Math.min(1, e.currentRate / peak);
+        const target = BASE_SPEED + t * (MAX_SPEED - BASE_SPEED);
+        const state = flowStateRef.current.get(e.key) || { offset: 0, speed: BASE_SPEED };
+        state.speed += (target - state.speed) * LERP;
+        state.offset -= state.speed * dt;
+        flowStateRef.current.set(e.key, state);
+        const el = flowLineRefs.current.get(e.key);
+        if (el) el.style.strokeDashoffset = String(state.offset);
+      });
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   // Pixel length of an edge in screen space (factors in zoom). Used to decide
   // whether the rate/latency labels fit inside the edge span.
@@ -401,7 +466,6 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             const screenLen = edgeScreenLen(p, q);
             const showLatency = e.segmentLatencyMs !== 0 && screenLen > 60;
             const showRate = e.currentRate > 0 && screenLen > 110;
-            const dur = flowDurationSec(e);
             const width = edgeWidth(e);
 
             return (
@@ -413,14 +477,18 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                   strokeWidth={width}
                   strokeDasharray={e.disabled ? '4 3' : undefined}
                 />
-                {/* Flow overlay — always animated when direction is known.
-                    Short duration = fast flow (heavy traffic). Idle edges
-                    flow slowly so direction is still visible. */}
+                {/* Flow overlay — dashoffset is driven by the RAF loop
+                    above; speed smoothly interpolates between the idle
+                    baseline and a rate-scaled peak, so there's no
+                    discontinuity when traffic starts or stops. */}
                 {e.directionKnown && (
                   <line
                     x1={x1} y1={y1} x2={x2} y2={y2}
                     className="hy-topo-edge-flow"
-                    style={{ animationDuration: `${dur.toFixed(2)}s` }}
+                    ref={(el) => {
+                      if (el) flowLineRefs.current.set(e.key, el);
+                      else flowLineRefs.current.delete(e.key);
+                    }}
                   />
                 )}
                 {/* Labels are always rendered horizontally (not rotated

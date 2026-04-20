@@ -332,8 +332,10 @@ a.peer-link:hover{text-decoration:underline}
    links, a fast stream for heavy ones. */
 .hy-topo-edge-base{stroke:#4D6EA3;stroke-opacity:.4;fill:none}
 .hy-topo-edge.disabled .hy-topo-edge-base{stroke-opacity:.22}
-.hy-topo-edge-flow{stroke:#4D6EA3;stroke-opacity:.95;stroke-width:2;fill:none;stroke-linecap:round;stroke-dasharray:2 14;animation-name:hy-topo-flow;animation-timing-function:linear;animation-iteration-count:infinite}
-@keyframes hy-topo-flow{from{stroke-dashoffset:0}to{stroke-dashoffset:-16}}
+/* Flow overlay — stroke-dashoffset is updated per-frame by a RAF loop in
+   the React component. Speed smoothly lerps between an idle baseline and
+   a rate-scaled peak so idle↔active transitions are continuous. */
+.hy-topo-edge-flow{stroke:#4D6EA3;stroke-opacity:.95;stroke-width:2;fill:none;stroke-linecap:round;stroke-dasharray:2 14}
 .hy-topo-edge-rate{font-size:9px;fill:var(--text-muted);font-family:var(--mono);pointer-events:none;paint-order:stroke;stroke:var(--surface);stroke-width:3;stroke-opacity:.9}
 .hy-topo-edge-lat{font-size:9px;font-family:var(--mono);pointer-events:none;paint-order:stroke;stroke:var(--surface);stroke-width:3;stroke-opacity:.9}
 .hy-topo-edge-lat.ok{fill:var(--green)}
