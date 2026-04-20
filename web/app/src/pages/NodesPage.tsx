@@ -526,6 +526,14 @@ export default function NodesPage() {
             topology={topology}
             selfId={node?.node_id || ''}
             selfName={node?.name}
+            selectedQPath={selection.count === 1 ? Array.from(selection.selected)[0] : null}
+            onSelectQPath={(qpath) => {
+              // Mirror list-view single-select semantics: clicking a node
+              // replaces the current selection so the same bulk-action bar
+              // responds in either view.
+              selection.clear();
+              if (qpath) selection.toggle(qpath);
+            }}
             onOpenRemote={(qpath) => {
               const basePath = getBasePath();
               const selfId = node?.node_id || '';

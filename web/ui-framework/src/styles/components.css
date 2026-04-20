@@ -369,6 +369,15 @@ a.peer-link:hover{text-decoration:underline}
    dark-mode extensions and prefers-color-scheme both flip it. */
 .hy-topo-grid-line{stroke:var(--topo-grid);stroke-width:.6;fill:none}
 
+/* Selection & path highlight — clicking a node outlines it in primary
+   blue and highlights every edge on the self→node route. Nodes along
+   the route get a softer outline. Clicking the same node repeatedly
+   cycles through alternate routes (handled in the component). */
+.hy-topo-dot.selected .hy-topo-dot-outer{stroke:var(--primary);stroke-width:2;stroke-opacity:1}
+.hy-topo-dot.on-path .hy-topo-dot-outer{stroke:var(--primary);stroke-width:1.5;stroke-opacity:.65}
+.hy-topo-edge.on-path .hy-topo-edge-base{stroke:var(--primary);stroke-opacity:.75}
+.hy-topo-edge.on-path .hy-topo-edge-flow{stroke:var(--primary);stroke-opacity:1}
+
 /* Icon-only mini tabs — sized to fit inside a Card header's action area.
    Two or three compact buttons that read as a segmented toggle. */
 .hy-icon-tabs{display:inline-flex;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg)}
