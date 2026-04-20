@@ -339,11 +339,17 @@ a.peer-link:hover{text-decoration:underline}
 .hy-topo-edge-base{color:#4D6EA3;stroke:currentColor;stroke-opacity:.4;fill:none;transition:color .28s ease-out, stroke-opacity .28s ease-out}
 .hy-topo-edge-flow{color:#4D6EA3;stroke:currentColor;stroke-opacity:.95;stroke-width:2;fill:none;stroke-linecap:round;stroke-dasharray:2 14;transition:color .28s ease-out, stroke-opacity .28s ease-out}
 
-/* Labels — no backdrop rect. DR's inversion algorithm preserves near-
-   whites as near-whites, which turned the old white capsule into a
-   visible beige pill in dark mode. Instead rely on the text colour
-   alone; flow dashes passing underneath briefly dim but don't erase. */
-.hy-topo-edge-label{font-size:9px;font-family:var(--mono);pointer-events:none;user-select:none;fill:currentColor;stroke:none}
+/* Labels — halo+fill pair of <text>s, but the halo now uses a literal
+   mid-grey stroke. DR's brightness-preserving algorithm transforms
+   near-whites into still-near-whites (producing visible beige pills
+   on dark backgrounds) and darks into still-dark (invisible on light
+   backgrounds). A mid-grey, however, stays mid-grey in both modes —
+   combined with low stroke-opacity we get a soft separation ring
+   around each label that reads identically in light and dark
+   sessions. */
+.hy-topo-edge-label,.hy-topo-edge-label-halo{font-size:9px;font-family:var(--mono);pointer-events:none;user-select:none}
+.hy-topo-edge-label-halo{color:#9ca3af;stroke:currentColor;stroke-width:3;stroke-linejoin:round;stroke-opacity:.45;fill:none}
+.hy-topo-edge-label{fill:currentColor;stroke:none}
 .hy-topo-edge-label.rate{color:#6b7280}
 .hy-topo-edge-label.lat-ok{color:#22c55e}
 .hy-topo-edge-label.lat-mid{color:#d97706}

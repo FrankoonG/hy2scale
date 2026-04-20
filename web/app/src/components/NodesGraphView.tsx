@@ -846,22 +846,25 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                     <path d="M -4 -4 L 4 4 M -4 4 L 4 -4" />
                   </g>
                 )}
-                {/* Labels render horizontally as plain text. No backdrop
-                    rect — DR preserves near-whites as near-whites and
-                    produces a visible pill, which is worse than just
-                    letting the text sit on the flow dashes. */}
+                {/* Labels — each rendered as two <text> nodes: a halo
+                    drawn first (wider stroke matching the surface
+                    colour) and the fill text on top. The halo uses a
+                    literal stroke colour that DR transforms reliably. */}
                 {showLatency && (() => {
                   const latClass = e.segmentLatencyMs < 0 ? 'lat-na' : e.segmentLatencyMs < 80 ? 'lat-ok' : e.segmentLatencyMs < 200 ? 'lat-mid' : 'lat-bad';
+                  const text = fmtLatency(e.segmentLatencyMs);
                   return (
-                    <text x={mx} y={my - 5} textAnchor="middle" className={`hy-topo-edge-label ${latClass}`}>
-                      {fmtLatency(e.segmentLatencyMs)}
-                    </text>
+                    <g>
+                      <text x={mx} y={my - 5} textAnchor="middle" className="hy-topo-edge-label-halo">{text}</text>
+                      <text x={mx} y={my - 5} textAnchor="middle" className={`hy-topo-edge-label ${latClass}`}>{text}</text>
+                    </g>
                   );
                 })()}
                 {showRate && (
-                  <text x={mx} y={my + 11} textAnchor="middle" className="hy-topo-edge-label rate">
-                    {fmtRate(e.currentRate)}
-                  </text>
+                  <g>
+                    <text x={mx} y={my + 11} textAnchor="middle" className="hy-topo-edge-label-halo">{fmtRate(e.currentRate)}</text>
+                    <text x={mx} y={my + 11} textAnchor="middle" className="hy-topo-edge-label rate">{fmtRate(e.currentRate)}</text>
+                  </g>
                 )}
               </g>
             );
