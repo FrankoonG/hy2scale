@@ -310,73 +310,57 @@ a.peer-link:hover{text-decoration:underline}
 .hy-topo-graph-svg{flex:1;min-height:0;width:100%;cursor:grab;user-select:none;-webkit-user-select:none}
 .hy-topo-graph-svg:active{cursor:grabbing}
 
-/* Graph palette — exposed as CSS vars. To maximise cross-extension dark-
-   mode compatibility, every coloured SVG element routes its colour through
-   the CSS `color` property and paints via `fill: currentColor` /
-   `stroke: currentColor`. Extensions like Dark Reader, Chrome Auto Dark
-   Mode, and Midnight Lizard transform the `color` property with much
-   higher reliability than raw SVG `fill`/`stroke` attributes, so driving
-   every visual through currentColor inherits that transformation for free.
-   No @media (prefers-color-scheme) swap here — the app has no dark chrome,
-   so flipping just the graph to dark would mismatch the rest of the UI.
-   When a dark-mode extension is active it handles the inversion itself
-   via its own transform pipeline. */
-.hy-topo-graph{
-  --topo-accent: #4D6EA3;
-  --topo-accent-dark: #102545;
-  --topo-grid: #e5e7eb;
-  --topo-halo: var(--surface);
-}
+/* Topology graph palette — uses *literal* hex colours on the `color`
+   property (not CSS vars) because dark-mode extensions (Dark Reader,
+   Chrome Auto Dark Mode, Midnight Lizard, …) transform concrete colour
+   values in the `color` property with much higher reliability than
+   `var(…)` indirection or raw SVG fill/stroke attributes. Every SVG
+   paint routes through `fill: currentColor` / `stroke: currentColor`
+   so it inherits whatever the extension substitutes for `color`.
+   Source: DR dynamic-theme-fixes config + general SVG-dark-mode guides.
+   The app has no native dark chrome, so we don't ship a prefers-
+   color-scheme fallback — extensions drive inversion themselves. */
 
-/* Dot-style nodes: logo-inspired. Pure filled discs, no strokes. Outer
-   pale disc + (hubs only) dark-navy inner dot. Every circle uses
-   currentColor so dark-mode extensions propagate through. */
-.hy-topo-dot-outer{color:var(--topo-accent);fill:currentColor;fill-opacity:.38;stroke:none}
-.hy-topo-dot-inner{color:var(--topo-accent-dark);fill:currentColor;fill-opacity:.92;stroke:none}
-.hy-topo-dot.self .hy-topo-dot-inner{color:var(--primary);fill-opacity:1}
+/* Dot-style nodes: pale blue outer disc + (hubs only) dark-navy inner. */
+.hy-topo-dot-outer{color:#4D6EA3;fill:currentColor;fill-opacity:.38;stroke:none}
+.hy-topo-dot-inner{color:#102545;fill:currentColor;fill-opacity:.92;stroke:none}
+.hy-topo-dot.self .hy-topo-dot-inner{color:#4361ee;fill-opacity:1}
 .hy-topo-dot.disabled .hy-topo-dot-outer{fill-opacity:.12}
 .hy-topo-dot.disabled .hy-topo-dot-inner{fill-opacity:.25}
-.hy-topo-dot.bad .hy-topo-dot-inner{color:var(--red)}
-.hy-topo-dot-name{font-size:11px;font-weight:600;fill:currentColor;color:var(--text);font-family:var(--mono)}
-.hy-topo-dot.self .hy-topo-dot-name{color:var(--primary)}
-.hy-topo-dot-open{color:var(--text-muted);cursor:pointer;opacity:0;transition:opacity .15s}
+.hy-topo-dot.bad .hy-topo-dot-inner{color:#ef4444}
+.hy-topo-dot-name{font-size:11px;font-weight:600;color:#1f2328;fill:currentColor;font-family:var(--mono)}
+.hy-topo-dot.self .hy-topo-dot-name{color:#4361ee}
+.hy-topo-dot-open{color:#6b7280;cursor:pointer;opacity:0;transition:opacity .15s}
 .hy-topo-dot:hover .hy-topo-dot-open{opacity:1}
-.hy-topo-dot-open:hover{color:var(--primary)}
+.hy-topo-dot-open:hover{color:#4361ee}
 
-/* Edges: base line thickness encodes peak throughput. A flowing dashed
-   overlay expresses direction + real-time rate. Both route through
-   currentColor for dark-mode compat. */
-.hy-topo-edge-base{color:var(--topo-accent);stroke:currentColor;stroke-opacity:.4;fill:none}
-.hy-topo-edge-flow{color:var(--topo-accent);stroke:currentColor;stroke-opacity:.95;stroke-width:2;fill:none;stroke-linecap:round;stroke-dasharray:2 14}
+/* Edges: base line thickness encodes peak throughput. Flowing dashed
+   overlay runs along direction, speed scaled by current rate. */
+.hy-topo-edge-base{color:#4D6EA3;stroke:currentColor;stroke-opacity:.4;fill:none;transition:color .28s ease-out, stroke-opacity .28s ease-out}
+.hy-topo-edge-flow{color:#4D6EA3;stroke:currentColor;stroke-opacity:.95;stroke-width:2;fill:none;stroke-linecap:round;stroke-dasharray:2 14;transition:color .28s ease-out, stroke-opacity .28s ease-out}
 
-/* Labels — render as a halo+fill pair of <text> elements so the halo
-   colour can be transformed independently of the text colour (both use
-   currentColor anchored to their own `color` var). Applied in the
-   component: one <text className="hy-topo-edge-label-halo"> drawn first
-   at a wider stroke, then the fill <text className="hy-topo-edge-label">
-   on top. */
+/* Labels — a halo+fill pair of <text> elements, each with its own
+   literal `color` so extensions invert them independently and the halo
+   stays the inverse of the text. */
 .hy-topo-edge-label,.hy-topo-edge-label-halo{font-size:9px;font-family:var(--mono);pointer-events:none;user-select:none}
-.hy-topo-edge-label-halo{color:var(--topo-halo);fill:none;stroke:currentColor;stroke-width:3;stroke-linejoin:round}
+.hy-topo-edge-label-halo{color:#ffffff;fill:none;stroke:currentColor;stroke-width:3;stroke-linejoin:round}
 .hy-topo-edge-label{fill:currentColor;stroke:none}
-.hy-topo-edge-label.rate{color:var(--text-muted)}
-.hy-topo-edge-label.lat-ok{color:var(--green)}
+.hy-topo-edge-label.rate{color:#6b7280}
+.hy-topo-edge-label.lat-ok{color:#22c55e}
 .hy-topo-edge-label.lat-mid{color:#d97706}
-.hy-topo-edge-label.lat-bad,.hy-topo-edge-label.lat-na{color:var(--text-muted)}
+.hy-topo-edge-label.lat-bad,.hy-topo-edge-label.lat-na{color:#6b7280}
 
-/* Background grid — currentColor driven by the class below. */
-.hy-topo-grid-line{color:var(--topo-grid);stroke:currentColor;stroke-width:.6;fill:none}
+/* Background grid */
+.hy-topo-grid-line{color:#e5e7eb;stroke:currentColor;stroke-width:.6;fill:none}
 
-/* Selection / highlighted path — uses --primary so dark-mode extensions
-   pick it up from the app-wide primary token. */
-.hy-topo-dot.selected .hy-topo-dot-outer{color:var(--primary);stroke:currentColor;stroke-width:2;stroke-opacity:1}
-.hy-topo-edge-base{transition:color .28s ease-out, stroke-opacity .28s ease-out}
-.hy-topo-edge-flow{transition:color .28s ease-out, stroke-opacity .28s ease-out}
-.hy-topo-edge.on-path .hy-topo-edge-base{color:var(--primary);stroke-opacity:.78}
-.hy-topo-edge.on-path .hy-topo-edge-flow{color:var(--primary);stroke-opacity:1}
+/* Selection / highlighted path */
+.hy-topo-dot.selected .hy-topo-dot-outer{color:#4361ee;stroke:currentColor;stroke-width:2;stroke-opacity:1}
+.hy-topo-edge.on-path .hy-topo-edge-base{color:#4361ee;stroke-opacity:.78}
+.hy-topo-edge.on-path .hy-topo-edge-flow{color:#4361ee;stroke-opacity:1}
 
-/* Offline / disabled edges — red, dashed, no flow overlay, × at midpoint. */
-.hy-topo-edge.offline .hy-topo-edge-base{color:var(--red);stroke-opacity:.65}
-.hy-topo-edge-x{color:var(--red);stroke:currentColor;stroke-opacity:.9;stroke-width:1.6;fill:none;stroke-linecap:round}
+/* Offline / disabled edges — red, dashed, no flow, × marker. */
+.hy-topo-edge.offline .hy-topo-edge-base{color:#ef4444;stroke-opacity:.65}
+.hy-topo-edge-x{color:#ef4444;stroke:currentColor;stroke-opacity:.9;stroke-width:1.6;fill:none;stroke-linecap:round}
 
 /* Selection & path highlight — clicking a node outlines ONLY the
    selected node (intermediate path nodes are not stroked). The route
