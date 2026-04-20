@@ -9,6 +9,12 @@ interface Props {
   selfId: string;
   selfName?: string;
   onOpenRemote?: (qpath: string) => void;
+  /** Current qpath selected from the list view (keyed path from self). When
+   *  the user clicks a node in the graph, we notify the parent to update
+   *  this — selection state is shared with the list so the card-header
+   *  bulk action buttons respond the same way. */
+  selectedQPath?: string | null;
+  onSelectQPath?: (qpath: string | null) => void;
 }
 
 interface Pos { x: number; y: number }
@@ -63,6 +69,49 @@ function nodeRadiusFor(n: GraphNode | undefined): number {
  * both to user drop points and to newly-inserted node positions so circles
  * never stack on top of each other.
  */
+/**
+ * Walks the topology tree once and collects every qualified path that lands
+ * on a node with the given display name (or self id/name when target is the
+ * local node). Each returned path is an array of peer-name segments; the
+ * first segment is always the self id (topology root key).
+ */
+function findPathsToName(
+  topology: TopologyNode[],
+  targetKey: string,
+  selfId: string,
+  selfName: string | undefined
+): string[][] {
+  const paths: string[][] = [];
+  const selfSet = new Set<string>([selfId, selfName || ''].filter(Boolean));
+  function keyOf(n: TopologyNode): string { return n.is_self ? selfId : n.name; }
+  function walk(list: TopologyNode[], segments: string[]) {
+    for (const n of list) {
+      if (segments.length > 0 && selfSet.has(n.name)) continue;
+      if (segments.length > 0 && segments.includes(n.name)) continue;
+      const nextSegs = segments.length === 0 ? [keyOf(n)] : [...segments, n.name];
+      if (keyOf(n) === targetKey) paths.push(nextSegs);
+      if (n.children && n.children.length > 0) walk(n.children, nextSegs);
+    }
+  }
+  walk(topology, []);
+  return paths;
+}
+
+/** Given a path of node keys, return the set of edge keys traversed. */
+function edgeKeysOnPath(path: string[], edges: Map<string, GraphEdge>): Set<string> {
+  const s = new Set<string>();
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = path[i], b = path[i + 1];
+    const candidates = [
+      `${a}→${b}`,
+      `${b}→${a}`,
+      `?${a < b ? a : b}|${a < b ? b : a}`,
+    ];
+    for (const c of candidates) if (edges.has(c)) { s.add(c); break; }
+  }
+  return s;
+}
+
 function resolveOverlap(
   key: string,
   pos: Pos,
@@ -227,7 +276,7 @@ function fmtLatency(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export default function NodesGraphView({ topology, selfId, selfName, onOpenRemote }: Props) {
+export default function NodesGraphView({ topology, selfId, selfName, onOpenRemote, selectedQPath, onSelectQPath }: Props) {
   const { t } = useTranslation();
   const svgRef = useRef<SVGSVGElement | null>(null);
 
@@ -294,6 +343,38 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   const [pan, setPan] = useState<Pos>({ x: 400, y: 80 });
   const [zoom, setZoom] = useState(1);
 
+  // Clamp pan so the positioned nodes' bounding box never leaves the viewport
+  // entirely. Keeps at least CLAMP_VISIBLE px of the bbox on-screen on every
+  // side — prevents the user from panning so far that the entire graph
+  // disappears with no anchor to scroll back to.
+  const CLAMP_VISIBLE = 60;
+  const positionsRef = useRef(positions);
+  useEffect(() => { positionsRef.current = positions; }, [positions]);
+  const clampPan = useCallback((p: Pos, z: number): Pos => {
+    const svg = svgRef.current;
+    if (!svg) return p;
+    const r = svg.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return p;
+    const pts = Object.values(positionsRef.current);
+    if (pts.length === 0) return p;
+    const minX = Math.min(...pts.map((pt) => pt.x)) - R_HUB_OUTER;
+    const maxX = Math.max(...pts.map((pt) => pt.x)) + R_HUB_OUTER;
+    const minY = Math.min(...pts.map((pt) => pt.y)) - R_HUB_OUTER;
+    const maxY = Math.max(...pts.map((pt) => pt.y)) + R_HUB_OUTER;
+    // bbox right edge in screen space must be >= CLAMP_VISIBLE
+    let x = p.x;
+    let y = p.y;
+    const rightMin = CLAMP_VISIBLE - maxX * z;
+    const leftMax = r.width - CLAMP_VISIBLE - minX * z;
+    if (x < rightMin) x = rightMin;
+    if (x > leftMax) x = leftMax;
+    const bottomMin = CLAMP_VISIBLE - maxY * z;
+    const topMax = r.height - CLAMP_VISIBLE - minY * z;
+    if (y < bottomMin) y = bottomMin;
+    if (y > topMax) y = topMax;
+    return { x, y };
+  }, []);
+
   // Snap-to-grid: when on, dragging a node rounds its position to the
   // nearest grid intersection (grid spacing matches the visual pattern).
   const [snap, setSnap] = useState<boolean>(() => {
@@ -307,10 +388,64 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   useEffect(() => { snapRef.current = snap; }, [snap]);
 
   const dragState = useRef<
-    | { mode: 'pan'; startClient: Pos; startPan: Pos }
-    | { mode: 'node'; key: string; startSvg: Pos; startNodePos: Pos }
+    | { mode: 'pan'; startClient: Pos; startPan: Pos; moved: boolean }
+    | { mode: 'node'; key: string; startSvg: Pos; startNodePos: Pos; moved: boolean }
     | null
   >(null);
+
+  // Click-select / path-highlight state. selectedKey is the currently-clicked
+  // node; pathIdx cycles through alternative routes when the same node is
+  // clicked repeatedly (e.g. au-r1 reachable via au AND via au-r1-a).
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [pathIdx, setPathIdx] = useState(0);
+  // Pre-compute all qualified paths to the currently-selected node name.
+  const selectedPaths = useMemo(() => {
+    if (!selectedKey) return [] as string[][];
+    return findPathsToName(topology, selectedKey, selfId, selfName);
+  }, [selectedKey, topology, selfId, selfName]);
+  const activePath = selectedPaths[pathIdx] || null;
+  const pathNodeSet = useMemo(() => new Set(activePath || []), [activePath]);
+  const pathEdgeSet = useMemo(() => activePath ? edgeKeysOnPath(activePath, edges) : new Set<string>(), [activePath, edges]);
+
+  const handleNodeClick = useCallback((key: string) => {
+    // Self-node click always selects self (path = [selfId]).
+    const paths = findPathsToName(topology, key, selfId, selfName);
+    if (paths.length === 0) return;
+    if (selectedKey === key) {
+      const next = pathIdx + 1;
+      if (next >= paths.length) {
+        setSelectedKey(null);
+        setPathIdx(0);
+        onSelectQPath?.(null);
+      } else {
+        setPathIdx(next);
+        onSelectQPath?.(paths[next].join('/'));
+      }
+    } else {
+      setSelectedKey(key);
+      setPathIdx(0);
+      onSelectQPath?.(paths[0].join('/'));
+    }
+  }, [topology, selfId, selfName, selectedKey, pathIdx, onSelectQPath]);
+
+  // Keep local selection in sync with the parent's selectedQPath (so the
+  // list-view and graph share a single selection).
+  useEffect(() => {
+    if (!selectedQPath) {
+      if (selectedKey !== null) { setSelectedKey(null); setPathIdx(0); }
+      return;
+    }
+    // Derive the node key from the last segment of the qpath.
+    const segs = selectedQPath.split('/');
+    const last = segs[segs.length - 1];
+    if (last !== selectedKey) {
+      setSelectedKey(last);
+      // Try to match pathIdx to this exact qpath if possible.
+      const paths = findPathsToName(topology, last, selfId, selfName);
+      const idx = paths.findIndex((p) => p.join('/') === selectedQPath);
+      setPathIdx(idx >= 0 ? idx : 0);
+    }
+  }, [selectedQPath, selectedKey, topology, selfId, selfName]);
 
   const clientToSvg = useCallback(
     (clientX: number, clientY: number): Pos => {
@@ -329,9 +464,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       const key = nodeEl.getAttribute('data-node-key') || '';
       const startSvg = clientToSvg(ev.clientX, ev.clientY);
       const startNodePos = positions[key] || { x: 0, y: 0 };
-      dragState.current = { mode: 'node', key, startSvg, startNodePos };
+      dragState.current = { mode: 'node', key, startSvg, startNodePos, moved: false };
     } else {
-      dragState.current = { mode: 'pan', startClient: { x: ev.clientX, y: ev.clientY }, startPan: pan };
+      dragState.current = { mode: 'pan', startClient: { x: ev.clientX, y: ev.clientY }, startPan: pan, moved: false };
     }
     ev.preventDefault();
   }, [clientToSvg, positions, pan]);
@@ -384,32 +519,44 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       const s = dragState.current;
       if (!s) return;
       if (s.mode === 'pan') {
-        setPan({ x: s.startPan.x + (ev.clientX - s.startClient.x), y: s.startPan.y + (ev.clientY - s.startClient.y) });
+        const dx = ev.clientX - s.startClient.x;
+        const dy = ev.clientY - s.startClient.y;
+        if (!s.moved && Math.abs(dx) + Math.abs(dy) > 4) s.moved = true;
+        setPan(clampPan({ x: s.startPan.x + dx, y: s.startPan.y + dy }, zoom));
       } else {
         const cur = clientToSvg(ev.clientX, ev.clientY);
-        const nextPos = { x: s.startNodePos.x + (cur.x - s.startSvg.x), y: s.startNodePos.y + (cur.y - s.startSvg.y) };
-        setOverrides((prev) => ({ ...prev, [s.key]: nextPos }));
+        const dx = cur.x - s.startSvg.x;
+        const dy = cur.y - s.startSvg.y;
+        // Treat as drag only when the cursor has moved past a small
+        // threshold (in SVG coords), otherwise the up-event is a click.
+        if (!s.moved && Math.abs(dx) + Math.abs(dy) > 3 / zoom) s.moved = true;
+        if (s.moved) {
+          const nextPos = { x: s.startNodePos.x + dx, y: s.startNodePos.y + dy };
+          setOverrides((prev) => ({ ...prev, [s.key]: nextPos }));
+        }
       }
     }
     function onUp() {
       const s = dragState.current;
       dragState.current = null;
       if (s?.mode === 'node') {
-        // Run the drop pipeline (snap → collision) and animate. Even when
-        // snap is off, the bounce-off-overlap step still fires, so
-        // releasing on top of another node always tidies itself up.
-        setOverrides((prev) => {
-          const pos = prev[s.key];
-          if (pos) animateToFinal(s.key, pos);
-          return prev;
-        });
+        if (!s.moved) {
+          handleNodeClick(s.key);
+        } else {
+          // Drag-drop pipeline: snap → collision-bounce → animate.
+          setOverrides((prev) => {
+            const pos = prev[s.key];
+            if (pos) animateToFinal(s.key, pos);
+            return prev;
+          });
+        }
       }
     }
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clientToSvg]);
+  }, [clientToSvg, handleNodeClick, clampPan, zoom]);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -423,7 +570,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       setZoom((z) => {
         const nz = Math.max(0.3, Math.min(3, z * factor));
         const scale = nz / z;
-        setPan((p) => ({ x: cx - (cx - p.x) * scale, y: cy - (cy - p.y) * scale }));
+        setPan((p) => clampPan({ x: cx - (cx - p.x) * scale, y: cy - (cy - p.y) * scale }, nz));
         return nz;
       });
     };
@@ -594,8 +741,14 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             const showRate = screenLen > 110;
             const width = edgeWidth(e);
 
+            const onPath = pathEdgeSet.has(e.key);
+            const cls = [
+              'hy-topo-edge',
+              e.disabled && 'disabled',
+              onPath && 'on-path',
+            ].filter(Boolean).join(' ');
             return (
-              <g key={e.key} className={e.disabled ? 'hy-topo-edge disabled' : 'hy-topo-edge'}>
+              <g key={e.key} className={cls}>
                 {/* Base line — thickness encodes peak throughput on this edge. */}
                 <line
                   x1={x1} y1={y1} x2={x2} y2={y2}
@@ -652,12 +805,16 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             if (!p) return null;
             const isHub = n.isSelf || n.degree >= 3;
             const rOuter = isHub ? R_HUB_OUTER : R_SINGLE;
+            const isSelected = selectedKey === n.key;
+            const isOnPath = pathNodeSet.has(n.key);
             const cls = [
               'hy-topo-dot',
               n.isSelf && 'self',
               n.disabled && 'disabled',
               n.nested && 'nested',
               n.incompatible && 'bad',
+              isSelected && 'selected',
+              isOnPath && !isSelected && 'on-path',
             ].filter(Boolean).join(' ');
             return (
               <g key={n.key} data-node-key={n.key} transform={`translate(${p.x},${p.y})`} className={cls} style={{ cursor: 'grab' }}>
