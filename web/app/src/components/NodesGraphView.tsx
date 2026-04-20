@@ -547,9 +547,12 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       <svg ref={svgRef} className="hy-topo-graph-svg" onMouseDown={onMouseDown}>
         <defs>
           {/* Background grid — lives inside the transformed <g> so it pans
-              and zooms as one piece with the nodes/edges. */}
+              and zooms as one piece with the nodes/edges. The stroke uses
+              `currentColor` (inherited from the <g class="hy-topo-grid-host">
+              below) so it flows through a CSS var and dark-mode extensions
+              can transform it. */}
           <pattern id="hy-topo-grid" width="24" height="24" patternUnits="userSpaceOnUse">
-            <path d="M 24 0 L 0 0 0 24" fill="none" stroke="var(--border-light)" strokeWidth="0.6" />
+            <path d="M 24 0 L 0 0 0 24" className="hy-topo-grid-line" />
           </pattern>
         </defs>
         <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
