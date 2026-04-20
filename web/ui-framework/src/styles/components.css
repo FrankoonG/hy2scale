@@ -339,12 +339,12 @@ a.peer-link:hover{text-decoration:underline}
 .hy-topo-edge-base{color:#4D6EA3;stroke:currentColor;stroke-opacity:.4;fill:none;transition:color .28s ease-out, stroke-opacity .28s ease-out}
 .hy-topo-edge-flow{color:#4D6EA3;stroke:currentColor;stroke-opacity:.95;stroke-width:2;fill:none;stroke-linecap:round;stroke-dasharray:2 14;transition:color .28s ease-out, stroke-opacity .28s ease-out}
 
-/* Labels — a halo+fill pair of <text> elements, each with its own
-   literal `color` so extensions invert them independently and the halo
-   stays the inverse of the text. */
-.hy-topo-edge-label,.hy-topo-edge-label-halo{font-size:9px;font-family:var(--mono);pointer-events:none;user-select:none}
-.hy-topo-edge-label-halo{color:#ffffff;fill:none;stroke:currentColor;stroke-width:3;stroke-linejoin:round}
-.hy-topo-edge-label{fill:currentColor;stroke:none}
+/* Labels — solid <rect> backdrop behind each text, then the fill
+   <text> on top. Each surface uses `color: #hex` + `fill: currentColor`
+   so dark-mode extensions invert them as plain paints (text stroke
+   halos frequently fail to transform). */
+.hy-topo-edge-label{font-size:9px;font-family:var(--mono);pointer-events:none;user-select:none;fill:currentColor;stroke:none}
+.hy-topo-edge-label-bg{color:#ffffff;fill:currentColor;stroke:none;fill-opacity:.85}
 .hy-topo-edge-label.rate{color:#6b7280}
 .hy-topo-edge-label.lat-ok{color:#22c55e}
 .hy-topo-edge-label.lat-mid{color:#d97706}

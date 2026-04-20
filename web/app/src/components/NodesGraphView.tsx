@@ -735,19 +735,33 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         </label>
       </div>
       <svg ref={svgRef} className="hy-topo-graph-svg" onMouseDown={onMouseDown}>
-        <defs>
-          {/* Background grid — lives inside the transformed <g> so it pans
-              and zooms as one piece with the nodes/edges. The stroke uses
-              `currentColor` (inherited from the <g class="hy-topo-grid-host">
-              below) so it flows through a CSS var and dark-mode extensions
-              can transform it. */}
-          <pattern id="hy-topo-grid" width="24" height="24" patternUnits="userSpaceOnUse">
-            <path d="M 24 0 L 0 0 0 24" className="hy-topo-grid-line" />
-          </pattern>
-        </defs>
         <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
-          {/* Grid: huge rect filled by the pattern. */}
-          <rect x={-5000} y={-5000} width={10000} height={10000} fill="url(#hy-topo-grid)" />
+          {/* Background grid — rendered as real <line> elements in the main
+              transformed group (not via <pattern>/<defs>). Dark-mode
+              extensions reliably transform strokes on main-tree elements
+              but tend to skip pattern contents, so keeping the grid in
+              the direct DOM path makes it invertable. Range covers a wide
+              box around the nodes; lines are step=24 SVG units. */}
+          {(() => {
+            const pts = Object.values(positions);
+            const minX = pts.length ? Math.min(...pts.map((p) => p.x)) - 300 : -400;
+            const maxX = pts.length ? Math.max(...pts.map((p) => p.x)) + 300 : 400;
+            const minY = pts.length ? Math.min(...pts.map((p) => p.y)) - 300 : -400;
+            const maxY = pts.length ? Math.max(...pts.map((p) => p.y)) + 300 : 400;
+            const step = 24;
+            const x0 = Math.floor(minX / step) * step;
+            const x1 = Math.ceil(maxX / step) * step;
+            const y0 = Math.floor(minY / step) * step;
+            const y1 = Math.ceil(maxY / step) * step;
+            const lines: JSX.Element[] = [];
+            for (let x = x0; x <= x1; x += step) {
+              lines.push(<line key={`v${x}`} x1={x} y1={y0} x2={x} y2={y1} className="hy-topo-grid-line" />);
+            }
+            for (let y = y0; y <= y1; y += step) {
+              lines.push(<line key={`h${y}`} x1={x0} y1={y} x2={x1} y2={y} className="hy-topo-grid-line" />);
+            }
+            return lines;
+          })()}
 
           {/* Edges */}
           {Array.from(edges.values()).map((e) => {
@@ -832,28 +846,34 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                     <path d="M -4 -4 L 4 4 M -4 4 L 4 -4" />
                   </g>
                 )}
-                {/* Labels always render horizontally. Each label is a pair
-                    of <text> nodes — a halo (wider stroke in the surface
-                    colour) drawn first, then the fill text on top. The two
-                    colours are independent so dark-mode extensions can
-                    flip the halo-to-surface relationship naturally via
-                    the `color` property on each class. */}
+                {/* Labels always render horizontally. Each label gets a
+                    solid <rect> backdrop behind the text so the label is
+                    readable against the edge line underneath. Backdrop
+                    fill uses a plain `color: #fff` + `fill: currentColor`
+                    pattern that dark-mode extensions invert reliably
+                    (stroke-based text halos often don't transform). Rect
+                    width is approximated from character count (5 px/ch). */}
                 {showLatency && (() => {
                   const latClass = e.segmentLatencyMs < 0 ? 'lat-na' : e.segmentLatencyMs < 80 ? 'lat-ok' : e.segmentLatencyMs < 200 ? 'lat-mid' : 'lat-bad';
                   const text = fmtLatency(e.segmentLatencyMs);
+                  const w = text.length * 5 + 6;
                   return (
                     <g>
-                      <text x={mx} y={my - 5} textAnchor="middle" className="hy-topo-edge-label-halo">{text}</text>
+                      <rect x={mx - w / 2} y={my - 12} width={w} height={10} rx={2} className="hy-topo-edge-label-bg" />
                       <text x={mx} y={my - 5} textAnchor="middle" className={`hy-topo-edge-label ${latClass}`}>{text}</text>
                     </g>
                   );
                 })()}
-                {showRate && (
-                  <g>
-                    <text x={mx} y={my + 11} textAnchor="middle" className="hy-topo-edge-label-halo">{fmtRate(e.currentRate)}</text>
-                    <text x={mx} y={my + 11} textAnchor="middle" className="hy-topo-edge-label rate">{fmtRate(e.currentRate)}</text>
-                  </g>
-                )}
+                {showRate && (() => {
+                  const text = fmtRate(e.currentRate);
+                  const w = text.length * 5 + 6;
+                  return (
+                    <g>
+                      <rect x={mx - w / 2} y={my + 4} width={w} height={10} rx={2} className="hy-topo-edge-label-bg" />
+                      <text x={mx} y={my + 11} textAnchor="middle" className="hy-topo-edge-label rate">{text}</text>
+                    </g>
+                  );
+                })()}
               </g>
             );
           })}
