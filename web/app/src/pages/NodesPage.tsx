@@ -440,11 +440,11 @@ export default function NodesPage() {
 
       <Card
         fill={1}
-        title={t('nodes.title')}
-        count={topology.length}
-        actions={
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        title={
+          <>
+            {t('nodes.title')}
             <IconTabs
+              className="hy-card-title-tabs"
               items={[
                 {
                   key: 'list',
@@ -477,6 +477,11 @@ export default function NodesPage() {
               activeKey={viewMode}
               onChange={(k) => setViewMode(k as 'list' | 'graph')}
             />
+          </>
+        }
+        count={topology.length}
+        actions={
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <BulkActionBar count={selection.count} onClear={selection.clear}>
               {(() => {
                 // Inspect selected nodes to decide which buttons to show
