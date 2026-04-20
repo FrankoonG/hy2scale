@@ -318,7 +318,11 @@ a.peer-link:hover{text-decoration:underline}
 .hy-topo-pathinfo-chain{display:inline-flex;align-items:center;flex-wrap:wrap;font-weight:600}
 .hy-topo-pathinfo-sep{color:var(--text-muted);margin:0 2px;font-weight:400}
 .hy-topo-pathinfo-hop{white-space:nowrap}
-.hy-topo-pathinfo-lat{color:var(--text-muted);font-size:11px;padding-left:6px;border-left:1px solid var(--border)}
+.hy-topo-pathinfo-lat{font-size:11px;font-weight:600;padding-left:6px;border-left:1px solid var(--border)}
+.hy-topo-pathinfo-lat.lat-ok{color:#22c55e}
+.hy-topo-pathinfo-lat.lat-mid{color:#d97706}
+.hy-topo-pathinfo-lat.lat-bad{color:#ef4444}
+.hy-topo-pathinfo-lat.lat-na{color:#6b7280}
 
 /* Topology graph palette — uses *literal* hex colours on the `color`
    property (not CSS vars) because dark-mode extensions (Dark Reader,
@@ -386,6 +390,13 @@ a.peer-link:hover{text-decoration:underline}
 .hy-topo-edge-flow{transition:stroke .28s ease-out, stroke-opacity .28s ease-out, stroke-width .28s ease-out}
 .hy-topo-edge.on-path .hy-topo-edge-base{color:#4361ee;stroke:currentColor;stroke-opacity:.85;stroke-width:5}
 .hy-topo-edge.on-path .hy-topo-edge-flow{color:#4361ee;stroke:currentColor;stroke-opacity:1;stroke-width:3.5}
+/* Path draw overlay — one-shot stroke that "paints in" from the self-side
+   endpoint. Coords for this line are flipped at render time so (x1,y1) is
+   always the nearer-self end; the dashoffset starts at full length and
+   animates to 0, revealing the blue stroke outward toward the target.
+   Rendered on top of the base so it reads as the dominant highlight. */
+.hy-topo-edge-draw{color:#4361ee;stroke:currentColor;stroke-width:5;stroke-linecap:round;fill:none;pointer-events:none;stroke-dasharray:var(--hy-path-len);stroke-dashoffset:var(--hy-path-len);animation:hy-topo-path-draw 320ms ease-out forwards}
+@keyframes hy-topo-path-draw{to{stroke-dashoffset:0}}
 
 /* Offline / disabled edges — red, dashed, no flow, × marker. */
 .hy-topo-edge.offline .hy-topo-edge-base{color:#ef4444;stroke:currentColor;stroke-opacity:.65}
