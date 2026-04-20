@@ -310,13 +310,17 @@ a.peer-link:hover{text-decoration:underline}
 .hy-topo-graph-svg{flex:1;min-height:0;width:100%;cursor:grab;user-select:none;-webkit-user-select:none}
 .hy-topo-graph-svg:active{cursor:grabbing}
 
-/* Graph palette — exposed as CSS vars so Dark Reader and similar dynamic
-   theming extensions can intercept and transform them (they rewrite var()
-   references but often skip raw hex baked into SVG fill/stroke attributes).
-   No prefers-color-scheme fallback: the app itself has no dark theme, so
-   swapping the palette when the OS happens to be dark would leave the
-   graph mismatched against the light chrome around it. Dark Reader (when
-   enabled) handles the inversion itself via its own transform pipeline. */
+/* Graph palette — exposed as CSS vars. To maximise cross-extension dark-
+   mode compatibility, every coloured SVG element routes its colour through
+   the CSS `color` property and paints via `fill: currentColor` /
+   `stroke: currentColor`. Extensions like Dark Reader, Chrome Auto Dark
+   Mode, and Midnight Lizard transform the `color` property with much
+   higher reliability than raw SVG `fill`/`stroke` attributes, so driving
+   every visual through currentColor inherits that transformation for free.
+   No @media (prefers-color-scheme) swap here — the app has no dark chrome,
+   so flipping just the graph to dark would mismatch the rest of the UI.
+   When a dark-mode extension is active it handles the inversion itself
+   via its own transform pipeline. */
 .hy-topo-graph{
   --topo-accent: #4D6EA3;
   --topo-accent-dark: #102545;
@@ -324,43 +328,55 @@ a.peer-link:hover{text-decoration:underline}
   --topo-halo: var(--surface);
 }
 
-/* Dot-style nodes: logo-inspired. No strokes — pure filled discs. Hubs
-   (self + degree ≥ 3) render concentric (pale outer + inner dot), leaves
-   render as a single pale disc. Colours come from the graph palette vars
-   above so dark-mode extensions can override them. */
-.hy-topo-dot-outer{fill:var(--topo-accent);fill-opacity:.38;stroke:none}
-.hy-topo-dot-inner{fill:var(--topo-accent-dark);fill-opacity:.92;stroke:none}
-.hy-topo-dot.self .hy-topo-dot-inner{fill:var(--primary);fill-opacity:1}
+/* Dot-style nodes: logo-inspired. Pure filled discs, no strokes. Outer
+   pale disc + (hubs only) dark-navy inner dot. Every circle uses
+   currentColor so dark-mode extensions propagate through. */
+.hy-topo-dot-outer{color:var(--topo-accent);fill:currentColor;fill-opacity:.38;stroke:none}
+.hy-topo-dot-inner{color:var(--topo-accent-dark);fill:currentColor;fill-opacity:.92;stroke:none}
+.hy-topo-dot.self .hy-topo-dot-inner{color:var(--primary);fill-opacity:1}
 .hy-topo-dot.disabled .hy-topo-dot-outer{fill-opacity:.12}
 .hy-topo-dot.disabled .hy-topo-dot-inner{fill-opacity:.25}
-.hy-topo-dot.bad .hy-topo-dot-inner{fill:var(--red)}
+.hy-topo-dot.bad .hy-topo-dot-inner{color:var(--red)}
 .hy-topo-dot-name{font-size:11px;font-weight:600;fill:currentColor;color:var(--text);font-family:var(--mono)}
 .hy-topo-dot.self .hy-topo-dot-name{color:var(--primary)}
 .hy-topo-dot-open{color:var(--text-muted);cursor:pointer;opacity:0;transition:opacity .15s}
 .hy-topo-dot:hover .hy-topo-dot-open{opacity:1}
 .hy-topo-dot-open:hover{color:var(--primary)}
 
-/* Edges: base line thickness encodes peak throughput (the "pipe width").
-   A flowing dashed overlay always runs along the direction of the edge,
-   speed scaled by current real-time rate — a still baseline for idle
-   links, a fast stream for heavy ones. */
-.hy-topo-edge-base{stroke:var(--topo-accent);stroke-opacity:.4;fill:none}
-.hy-topo-edge.disabled .hy-topo-edge-base{stroke-opacity:.22}
-/* Flow overlay — stroke-dashoffset is updated per-frame by a RAF loop in
-   the React component. Speed smoothly lerps between an idle baseline and
-   a rate-scaled peak so idle↔active transitions are continuous. */
-.hy-topo-edge-flow{stroke:var(--topo-accent);stroke-opacity:.95;stroke-width:2;fill:none;stroke-linecap:round;stroke-dasharray:2 14}
-/* Labels — `color` is what dark-mode extensions understand; the SVG text
-   element uses `fill: currentColor` so it follows. Halo stroke uses the
-   --topo-halo var so it flips to a dark colour when the theme inverts. */
-.hy-topo-edge-rate{font-size:9px;font-family:var(--mono);pointer-events:none;paint-order:stroke;stroke:var(--topo-halo);stroke-width:3;stroke-opacity:.9;fill:currentColor;color:var(--text-muted)}
-.hy-topo-edge-lat{font-size:9px;font-family:var(--mono);pointer-events:none;paint-order:stroke;stroke:var(--topo-halo);stroke-width:3;stroke-opacity:.9;fill:currentColor}
-.hy-topo-edge-lat.ok{color:var(--green)}
-.hy-topo-edge-lat.mid{color:#d97706}
-.hy-topo-edge-lat.bad{color:var(--red)}
-/* Background grid lines — stroke through the graph palette var so
-   dark-mode extensions and prefers-color-scheme both flip it. */
-.hy-topo-grid-line{stroke:var(--topo-grid);stroke-width:.6;fill:none}
+/* Edges: base line thickness encodes peak throughput. A flowing dashed
+   overlay expresses direction + real-time rate. Both route through
+   currentColor for dark-mode compat. */
+.hy-topo-edge-base{color:var(--topo-accent);stroke:currentColor;stroke-opacity:.4;fill:none}
+.hy-topo-edge-flow{color:var(--topo-accent);stroke:currentColor;stroke-opacity:.95;stroke-width:2;fill:none;stroke-linecap:round;stroke-dasharray:2 14}
+
+/* Labels — render as a halo+fill pair of <text> elements so the halo
+   colour can be transformed independently of the text colour (both use
+   currentColor anchored to their own `color` var). Applied in the
+   component: one <text className="hy-topo-edge-label-halo"> drawn first
+   at a wider stroke, then the fill <text className="hy-topo-edge-label">
+   on top. */
+.hy-topo-edge-label,.hy-topo-edge-label-halo{font-size:9px;font-family:var(--mono);pointer-events:none;user-select:none}
+.hy-topo-edge-label-halo{color:var(--topo-halo);fill:none;stroke:currentColor;stroke-width:3;stroke-linejoin:round}
+.hy-topo-edge-label{fill:currentColor;stroke:none}
+.hy-topo-edge-label.rate{color:var(--text-muted)}
+.hy-topo-edge-label.lat-ok{color:var(--green)}
+.hy-topo-edge-label.lat-mid{color:#d97706}
+.hy-topo-edge-label.lat-bad,.hy-topo-edge-label.lat-na{color:var(--text-muted)}
+
+/* Background grid — currentColor driven by the class below. */
+.hy-topo-grid-line{color:var(--topo-grid);stroke:currentColor;stroke-width:.6;fill:none}
+
+/* Selection / highlighted path — uses --primary so dark-mode extensions
+   pick it up from the app-wide primary token. */
+.hy-topo-dot.selected .hy-topo-dot-outer{color:var(--primary);stroke:currentColor;stroke-width:2;stroke-opacity:1}
+.hy-topo-edge-base{transition:color .28s ease-out, stroke-opacity .28s ease-out}
+.hy-topo-edge-flow{transition:color .28s ease-out, stroke-opacity .28s ease-out}
+.hy-topo-edge.on-path .hy-topo-edge-base{color:var(--primary);stroke-opacity:.78}
+.hy-topo-edge.on-path .hy-topo-edge-flow{color:var(--primary);stroke-opacity:1}
+
+/* Offline / disabled edges — red, dashed, no flow overlay, × at midpoint. */
+.hy-topo-edge.offline .hy-topo-edge-base{color:var(--red);stroke-opacity:.65}
+.hy-topo-edge-x{color:var(--red);stroke:currentColor;stroke-opacity:.9;stroke-width:1.6;fill:none;stroke-linecap:round}
 
 /* Selection & path highlight — clicking a node outlines ONLY the
    selected node (intermediate path nodes are not stroked). The route
