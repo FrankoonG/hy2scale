@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TopologyNode } from '@/api';
 import { fmtRate } from '@/hooks/useFormat';
@@ -277,6 +277,24 @@ function autoLayout(nodes: Map<string, GraphNode>): Record<string, Pos> {
   return positions;
 }
 
+/**
+ * Text-halo element that paints `stroke` with `!important` via ref, so
+ * dark-mode extensions that forcibly override inline SVG stroke via an
+ * injected CSS rule (e.g. Dark Reader's `--darkreader-inline-stroke`
+ * pattern) lose out — the !important on the inline style wins by CSS
+ * cascade rules regardless of the extension's own !important rules.
+ * Not a dark-reader-specific hack: this is just standard CSS priority.
+ */
+function HaloText({ x, y, stroke, children }: { x: number; y: number; stroke: string; children: ReactNode }) {
+  const ref = useRef<SVGTextElement | null>(null);
+  useLayoutEffect(() => {
+    if (ref.current) ref.current.style.setProperty('stroke', stroke, 'important');
+  }, [stroke]);
+  return (
+    <text ref={ref} x={x} y={y} textAnchor="middle" className="hy-topo-edge-label-halo">{children}</text>
+  );
+}
+
 function fmtLatency(ms: number): string {
   if (ms < 0) return 'offline';
   if (ms === 0) return '—';
@@ -350,6 +368,39 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
   const [pan, setPan] = useState<Pos>({ x: 400, y: 80 });
   const [zoom, setZoom] = useState(1);
+
+  // Reads the actually-painted background colour of the surrounding card.
+  // Dark-mode extensions (Dark Reader, Chrome Auto Dark Mode, Midnight
+  // Lizard, …) transform the card's background via their normal pipeline;
+  // by reading the *rendered* colour we can paint the text halo in
+  // whatever the current surface happens to be, so the halo always
+  // matches the bg and reads as a "cut-out" around labels. No extension-
+  // specific API is used — we just sample `getComputedStyle`.
+  const [surfaceColor, setSurfaceColor] = useState('#ffffff');
+  useEffect(() => {
+    const read = () => {
+      const svg = svgRef.current;
+      if (!svg) return;
+      // Walk up until we find an element with a non-transparent bg.
+      let el: HTMLElement | null = svg.closest('.hy-card-body') || svg.closest('.hy-card');
+      let found: string | null = null;
+      while (el) {
+        const bg = getComputedStyle(el).backgroundColor;
+        if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') { found = bg; break; }
+        el = el.parentElement;
+      }
+      if (found) setSurfaceColor((prev) => (prev === found ? prev : (found as string)));
+    };
+    read();
+    const id = window.setInterval(read, 1200);
+    const obs = new MutationObserver(read);
+    obs.observe(document.documentElement, {
+      attributes: true,
+      subtree: true,
+      attributeFilter: ['class', 'style', 'data-darkreader-scheme', 'data-darkreader-mode'],
+    });
+    return () => { window.clearInterval(id); obs.disconnect(); };
+  }, []);
 
   // Clamp pan so the positioned nodes' bounding box never leaves the viewport
   // entirely. Keeps at least CLAMP_VISIBLE px of the bbox on-screen on every
@@ -846,23 +897,23 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                     <path d="M -4 -4 L 4 4 M -4 4 L 4 -4" />
                   </g>
                 )}
-                {/* Labels — each rendered as two <text> nodes: a halo
-                    drawn first (wider stroke matching the surface
-                    colour) and the fill text on top. The halo uses a
-                    literal stroke colour that DR transforms reliably. */}
+                {/* Labels — halo+fill pair of <text> nodes. The halo's
+                    stroke is set via the <HaloText> helper below, which
+                    applies the sampled surface colour with `!important`
+                    so dark-mode extensions' CSS overrides can't win. */}
                 {showLatency && (() => {
                   const latClass = e.segmentLatencyMs < 0 ? 'lat-na' : e.segmentLatencyMs < 80 ? 'lat-ok' : e.segmentLatencyMs < 200 ? 'lat-mid' : 'lat-bad';
                   const text = fmtLatency(e.segmentLatencyMs);
                   return (
                     <g>
-                      <text x={mx} y={my - 5} textAnchor="middle" className="hy-topo-edge-label-halo">{text}</text>
+                      <HaloText x={mx} y={my - 5} stroke={surfaceColor}>{text}</HaloText>
                       <text x={mx} y={my - 5} textAnchor="middle" className={`hy-topo-edge-label ${latClass}`}>{text}</text>
                     </g>
                   );
                 })()}
                 {showRate && (
                   <g>
-                    <text x={mx} y={my + 11} textAnchor="middle" className="hy-topo-edge-label-halo">{fmtRate(e.currentRate)}</text>
+                    <HaloText x={mx} y={my + 11} stroke={surfaceColor}>{fmtRate(e.currentRate)}</HaloText>
                     <text x={mx} y={my + 11} textAnchor="middle" className="hy-topo-edge-label rate">{fmtRate(e.currentRate)}</text>
                   </g>
                 )}
