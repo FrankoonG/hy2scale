@@ -100,6 +100,14 @@ function findPathsToName(
   const paths: string[][] = [];
   const selfSet = new Set<string>([selfId, selfName || ''].filter(Boolean));
   function keyOf(n: TopologyNode): string { return n.is_self ? selfId : n.name; }
+  // Match the TreeTable key convention on NodesPage:
+  //   - inbound child of self → "selfId/peerName" (segments start with selfId
+  //     because the self entry is traversed first and adds its own key as
+  //     the first segment)
+  //   - outbound top-level peer → "peerName" alone (no self prefix)
+  // Keeping this layout means the qpath emitted by the graph matches the
+  // selection.toggle() keys that useSelection will accept, so clicking an
+  // outbound node in the graph selects the same row the TreeTable would.
   function walk(list: TopologyNode[], segments: string[]) {
     for (const n of list) {
       if (segments.length > 0 && selfSet.has(n.name)) continue;
@@ -275,7 +283,25 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
       }
     });
   }
-  walk(topo, null, 0, 0, '');
+
+  // The /api/topology response puts INBOUND peers as children of the self
+  // entry and OUTBOUND peers as sibling top-level entries. A naive walker
+  // with parentKey=null at the top level would never add an edge from self
+  // to any outbound peer, and they'd render as disconnected dots. Pull
+  // selfKey out and use it as the parent for every non-self top-level node
+  // so outbound and inbound peers both receive a self→peer edge.
+  const selfEntry = topo.find((n) => n.is_self);
+  const selfKey = selfEntry ? keyOf(selfEntry) : selfId;
+  if (selfEntry) addOrMergeNode(selfEntry, 0, selfKey);
+  topo.forEach((n) => {
+    if (n.is_self) {
+      if (n.children && n.children.length > 0) {
+        walk(n.children, selfKey, 0, 1, selfKey);
+      }
+    } else {
+      walk([n], selfKey, 0, 1, selfKey);
+    }
+  });
   return { nodes, edges };
 }
 
@@ -495,7 +521,17 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     const i = selectedPaths.findIndex((p) => p.join('/') === currentQPath);
     return i >= 0 ? i : 0;
   }, [currentQPath, selectedPaths]);
-  const activePath = selectedPaths[pathIdx] || null;
+  const rawActivePath = selectedPaths[pathIdx] || null;
+  // findPathsToName returns paths in TreeTable key format — inbound
+  // paths are prefixed with selfId, but outbound top-level peers arrive
+  // as a single [peerName]. For edge/overlay rendering we always want
+  // self as the origin so the animation can radiate outward, so prepend
+  // selfKey whenever the raw path doesn't already lead with it.
+  const activePath = useMemo(() => {
+    if (!rawActivePath) return null;
+    if (rawActivePath[0] === selfId) return rawActivePath;
+    return [selfId, ...rawActivePath];
+  }, [rawActivePath, selfId]);
   const activePathOrder = useMemo(() => {
     const m = new Map<string, number>();
     if (!activePath) return m;
