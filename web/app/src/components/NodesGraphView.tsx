@@ -1,85 +1,47 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TopologyNode } from '@/api';
+import { fmtRate } from '@/hooks/useFormat';
 
 interface Props {
   topology: TopologyNode[];
-  /** Local node_id — used to build qualified paths (matches list-view keys). */
+  /** Local node_id — used as the key for the self-node. */
   selfId: string;
   selfName?: string;
-  /** Called when user clicks on a node's name (remote view link, etc.). */
   onOpenRemote?: (qpath: string) => void;
-  /** Called when user clicks the edit icon on a node row. */
-  onEdit?: (qpath: string, name: string, ev: MouseEvent) => void;
-}
-
-interface FlatNode {
-  qpath: string;
-  name: string;
-  depth: number;
-  node: TopologyNode;
-  parentQpath: string | null;
 }
 
 interface Pos { x: number; y: number }
 
-const NODE_W = 150;
-const NODE_H = 56;
-const LEVEL_GAP = 120;
-const SIBLING_GAP = 30;
+interface GraphNode {
+  key: string;              // unique id across the mesh: self→node_id, others→name
+  name: string;             // display label
+  isSelf: boolean;
+  latencyMs: number;
+  disabled: boolean;
+  nested: boolean;
+  native: boolean;
+  incompatible: boolean;
+  depth: number;            // BFS depth from self
+  degree: number;           // number of adjacent edges (for concentric style)
+  qpath: string;            // first-reached qualified path (for /remote/ link)
+}
+
+interface GraphEdge {
+  key: string;              // order-independent unique id
+  from: string;             // dialer (source of arrow)
+  to: string;               // dialee (arrow head)
+  directionKnown: boolean;  // false → rendered as line without arrow (backward compat)
+  disabled: boolean;
+  currentRate: number;      // tx+rx observed this tick
+}
+
+const R_SINGLE = 11;
+const R_HUB_OUTER = 15;
+const R_HUB_INNER = 7;
+const LEVEL_GAP = 130;
+const SIBLING_GAP = 80;
 const LS_POS_KEY = 'scale:topology-graph-positions';
-
-/**
- * Flatten the nested topology tree into a list carrying each node's
- * qualified path ("self/au/au-r1-a") and parent qpath — the same key
- * scheme the list view uses, so a node keeps a stable identity no
- * matter how many times it appears via different parents (triangle etc.).
- */
-function flatten(topo: TopologyNode[], selfId: string, selfName?: string): FlatNode[] {
-  const out: FlatNode[] = [];
-  const selfSet = new Set<string>([selfId, selfName || '']);
-
-  function walk(nodes: TopologyNode[], depth: number, parentQpath: string | null, parentSegments: string[]) {
-    nodes.forEach((n) => {
-      const rootSeg = n.is_self ? selfId : n.name;
-      const segs = parentSegments.length === 0 ? [rootSeg] : [...parentSegments, n.name];
-      const qpath = segs.join('/');
-      // Ancestor-cycle guard — matches list view's buildChildNode rule:
-      // a descendant whose name matches any ancestor OR our self id/name is skipped.
-      if (depth > 0) {
-        const ancestors = new Set(parentSegments);
-        selfSet.forEach((s) => s && ancestors.add(s));
-        if (ancestors.has(n.name)) return;
-      }
-      out.push({ qpath, name: n.name, depth, node: n, parentQpath });
-      if (n.children && n.children.length > 0) {
-        walk(n.children, depth + 1, qpath, segs);
-      }
-    });
-  }
-  walk(topo, 0, null, []);
-  return out;
-}
-
-/**
- * Simple tiered layout: group by depth, center each level horizontally.
- * Called only for nodes that don't have a user-dragged override in LS.
- */
-function autoLayout(flat: FlatNode[]): Record<string, Pos> {
-  const byDepth: FlatNode[][] = [];
-  flat.forEach((n) => {
-    (byDepth[n.depth] ||= []).push(n);
-  });
-  const positions: Record<string, Pos> = {};
-  byDepth.forEach((row, depth) => {
-    const rowWidth = row.length * NODE_W + (row.length - 1) * SIBLING_GAP;
-    const startX = -rowWidth / 2 + NODE_W / 2;
-    row.forEach((n, i) => {
-      positions[n.qpath] = { x: startX + i * (NODE_W + SIBLING_GAP), y: depth * LEVEL_GAP };
-    });
-  });
-  return positions;
-}
 
 function loadPositions(): Record<string, Pos> {
   try {
@@ -87,46 +49,159 @@ function loadPositions(): Record<string, Pos> {
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object') return parsed;
-  } catch {
-    /* ignore */
-  }
+  } catch { /* ignore */ }
   return {};
 }
-
 function savePositions(p: Record<string, Pos>) {
-  try {
-    localStorage.setItem(LS_POS_KEY, JSON.stringify(p));
-  } catch {
-    /* ignore */
-  }
+  try { localStorage.setItem(LS_POS_KEY, JSON.stringify(p)); } catch { /* ignore */ }
 }
 
-export default function NodesGraphView({ topology, selfId, selfName, onOpenRemote, onEdit }: Props) {
+/**
+ * Build a deduped graph from the nested topology tree. A node that appears
+ * via multiple parents (e.g. triangle `au-r1` reachable both via `au` and
+ * via `au-r1-a`) collapses to a single vertex with multiple incident edges.
+ *
+ * Arrow orientation comes from the topoSubPeer's `direction`:
+ *   inbound  → child dialed parent → arrow child→parent
+ *   outbound → parent dialed child → arrow parent→child
+ *   unknown  → fallback tree order parent→child, arrow omitted
+ */
+function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
+  const nodes = new Map<string, GraphNode>();
+  const edges = new Map<string, GraphEdge>();
+  const selfSet = new Set<string>([selfId, selfName || ''].filter(Boolean));
+
+  function keyOf(n: TopologyNode): string {
+    return n.is_self ? selfId : n.name;
+  }
+
+  function addOrMergeNode(n: TopologyNode, depth: number, qpath: string) {
+    const k = keyOf(n);
+    const existing = nodes.get(k);
+    if (!existing) {
+      nodes.set(k, {
+        key: k,
+        name: n.is_self ? (selfName || n.name || 'self') : n.name,
+        isSelf: !!n.is_self,
+        latencyMs: n.latency_ms || 0,
+        disabled: !!n.disabled,
+        nested: !!n.nested,
+        native: !!n.native,
+        incompatible: !!n.incompatible || !!n.conflict,
+        depth,
+        degree: 0,
+        qpath,
+      });
+    } else if (depth < existing.depth) {
+      // Keep the shallowest depth so layout puts this node on its earliest
+      // reachable layer. Also prefer the first-seen qpath on that layer.
+      existing.depth = depth;
+      existing.qpath = qpath;
+    }
+  }
+
+  function addEdge(a: string, b: string, direction: string | undefined, disabled: boolean, rate: number) {
+    if (a === b) return;
+    const [lo, hi] = a < b ? [a, b] : [b, a];
+    const ekey = `${lo}|${hi}`;
+    let e = edges.get(ekey);
+    if (!e) {
+      let from = a, to = b, directionKnown = false;
+      if (direction === 'outbound') {
+        // `b` (child) is an outbound peer of `a` (parent) — a dialed b
+        from = a; to = b; directionKnown = true;
+      } else if (direction === 'inbound') {
+        // `b` dialed `a`
+        from = b; to = a; directionKnown = true;
+      }
+      e = { key: ekey, from, to, directionKnown, disabled, currentRate: rate };
+      edges.set(ekey, e);
+      const na = nodes.get(a); if (na) na.degree++;
+      const nb = nodes.get(b); if (nb) nb.degree++;
+    } else {
+      // If a later visit carries direction, upgrade the edge.
+      if (!e.directionKnown && direction) {
+        if (direction === 'outbound') { e.from = a; e.to = b; e.directionKnown = true; }
+        else if (direction === 'inbound') { e.from = b; e.to = a; e.directionKnown = true; }
+      }
+      // Merge rates (take the larger — two reports of the same edge)
+      if (rate > e.currentRate) e.currentRate = rate;
+      if (disabled) e.disabled = true;
+    }
+  }
+
+  function walk(list: TopologyNode[], parentKey: string | null, depth: number, parentQpath: string) {
+    list.forEach((n) => {
+      // Rule 1 (including self-identity): never descend into an ancestor
+      // or our own name/id. Matches list view's buildChildNode cycle guard.
+      if (depth > 0) {
+        if (selfSet.has(n.name)) return;
+      }
+      const segs = parentQpath ? parentQpath.split('/') : [];
+      if (depth > 0 && segs.includes(n.name)) return;
+      const qpath = parentQpath ? parentQpath + '/' + n.name : keyOf(n);
+      addOrMergeNode(n, depth, qpath);
+      if (parentKey) {
+        const rate = (n.tx_rate || 0) + (n.rx_rate || 0);
+        addEdge(parentKey, keyOf(n), n.direction, !!n.disabled, rate);
+      }
+      if (n.children && n.children.length > 0) {
+        walk(n.children, keyOf(n), depth + 1, qpath);
+      }
+    });
+  }
+  walk(topo, null, 0, '');
+  return { nodes, edges };
+}
+
+function autoLayout(nodes: Map<string, GraphNode>): Record<string, Pos> {
+  const byDepth: GraphNode[][] = [];
+  nodes.forEach((n) => {
+    (byDepth[n.depth] ||= []).push(n);
+  });
+  const positions: Record<string, Pos> = {};
+  byDepth.forEach((row, depth) => {
+    // Sort each row deterministically so reloads keep the same initial layout
+    row.sort((a, b) => a.name.localeCompare(b.name));
+    const width = (row.length - 1) * SIBLING_GAP;
+    row.forEach((n, i) => {
+      positions[n.key] = { x: -width / 2 + i * SIBLING_GAP, y: depth * LEVEL_GAP };
+    });
+  });
+  return positions;
+}
+
+export default function NodesGraphView({ topology, selfId, selfName, onOpenRemote }: Props) {
   const { t } = useTranslation();
   const svgRef = useRef<SVGSVGElement | null>(null);
 
-  const flat = useMemo(() => flatten(topology, selfId, selfName), [topology, selfId, selfName]);
-  const auto = useMemo(() => autoLayout(flat), [flat]);
+  const { nodes, edges } = useMemo(() => buildGraph(topology, selfId, selfName), [topology, selfId, selfName]);
 
-  // Merge auto-layout with user-dragged overrides. Stored overrides persist
-  // across topology changes — nodes that have been manually placed stay put.
+  // Per-edge running max-throughput (client-side). Resets on reload.
+  const maxByEdgeRef = useRef<Map<string, number>>(new Map());
+  useMemo(() => {
+    edges.forEach((e) => {
+      const prev = maxByEdgeRef.current.get(e.key) || 0;
+      if (e.currentRate > prev) maxByEdgeRef.current.set(e.key, e.currentRate);
+    });
+  }, [edges]);
+
+  // Layout — auto per-depth tier, with per-node user-drag overrides.
+  const auto = useMemo(() => autoLayout(nodes), [nodes]);
   const [overrides, setOverrides] = useState<Record<string, Pos>>(() => loadPositions());
   const positions = useMemo(() => {
     const m: Record<string, Pos> = { ...auto };
-    for (const k in overrides) {
-      if (k in auto) m[k] = overrides[k]; // only apply overrides for nodes still in topology
-    }
+    for (const k in overrides) if (k in auto) m[k] = overrides[k];
     return m;
   }, [auto, overrides]);
 
-  // Pan & zoom state
   const [pan, setPan] = useState<Pos>({ x: 400, y: 80 });
   const [zoom, setZoom] = useState(1);
 
-  // Drag state — either panning the canvas or a specific node
+  // Drag state
   const dragState = useRef<
     | { mode: 'pan'; startClient: Pos; startPan: Pos }
-    | { mode: 'node'; qpath: string; startSvg: Pos; startNodePos: Pos }
+    | { mode: 'node'; key: string; startSvg: Pos; startNodePos: Pos }
     | null
   >(null);
 
@@ -146,12 +221,12 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   const onMouseDown = useCallback(
     (ev: MouseEvent) => {
       const target = ev.target as SVGElement;
-      const nodeEl = target.closest('[data-node-qpath]') as SVGElement | null;
+      const nodeEl = target.closest('[data-node-key]') as SVGElement | null;
       if (nodeEl) {
-        const qpath = nodeEl.getAttribute('data-node-qpath') || '';
+        const key = nodeEl.getAttribute('data-node-key') || '';
         const startSvg = clientToSvg(ev.clientX, ev.clientY);
-        const startNodePos = positions[qpath] || { x: 0, y: 0 };
-        dragState.current = { mode: 'node', qpath, startSvg, startNodePos };
+        const startNodePos = positions[key] || { x: 0, y: 0 };
+        dragState.current = { mode: 'node', key, startSvg, startNodePos };
       } else {
         dragState.current = { mode: 'pan', startClient: { x: ev.clientX, y: ev.clientY }, startPan: pan };
       }
@@ -169,16 +244,12 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       } else {
         const cur = clientToSvg(ev.clientX, ev.clientY);
         const nextPos = { x: s.startNodePos.x + (cur.x - s.startSvg.x), y: s.startNodePos.y + (cur.y - s.startSvg.y) };
-        setOverrides((prev) => ({ ...prev, [s.qpath]: nextPos }));
+        setOverrides((prev) => ({ ...prev, [s.key]: nextPos }));
       }
     }
     function onUp() {
       if (dragState.current?.mode === 'node') {
-        // Persist overrides on drag-end — avoids thrashing LS every mousemove.
-        setOverrides((prev) => {
-          savePositions(prev);
-          return prev;
-        });
+        setOverrides((prev) => { savePositions(prev); return prev; });
       }
       dragState.current = null;
     }
@@ -190,8 +261,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     };
   }, [clientToSvg]);
 
-  // Wheel handler attached manually so we can use `{passive: false}` —
-  // React's synthetic wheel listener is passive and swallows preventDefault.
+  // Wheel attached natively so we can preventDefault (React's wheel is passive)
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
@@ -202,80 +272,67 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       const cy = ev.clientY - r.top;
       const factor = ev.deltaY < 0 ? 1.12 : 1 / 1.12;
       setZoom((z) => {
-        const newZoom = Math.max(0.3, Math.min(3, z * factor));
-        const scale = newZoom / z;
+        const nz = Math.max(0.3, Math.min(3, z * factor));
+        const scale = nz / z;
         setPan((p) => ({ x: cx - (cx - p.x) * scale, y: cy - (cy - p.y) * scale }));
-        return newZoom;
+        return nz;
       });
     };
     svg.addEventListener('wheel', handler, { passive: false });
     return () => svg.removeEventListener('wheel', handler);
   }, []);
 
-  // Auto-fit: compute pan/zoom that makes all nodes visible with some padding.
   const fitView = useCallback(() => {
     const svg = svgRef.current;
     if (!svg) return;
     const r = svg.getBoundingClientRect();
     if (r.width <= 0 || r.height <= 0) return;
-    const xs = Object.values(positions).map((p) => p.x);
-    const ys = Object.values(positions).map((p) => p.y);
-    if (xs.length === 0) return;
-    const minX = Math.min(...xs) - NODE_W / 2 - 20;
-    const maxX = Math.max(...xs) + NODE_W / 2 + 20;
-    const minY = Math.min(...ys) - NODE_H / 2 - 20;
-    const maxY = Math.max(...ys) + NODE_H / 2 + 20;
-    const w = maxX - minX;
-    const h = maxY - minY;
-    const z = Math.min(r.width / w, r.height / h, 1);
-    const panX = r.width / 2 - ((minX + maxX) / 2) * z;
-    const panY = r.height / 2 - ((minY + maxY) / 2) * z;
-    setPan({ x: panX, y: panY });
+    const pts = Object.values(positions);
+    if (pts.length === 0) return;
+    const minX = Math.min(...pts.map((p) => p.x)) - R_HUB_OUTER - 40;
+    const maxX = Math.max(...pts.map((p) => p.x)) + R_HUB_OUTER + 40;
+    const minY = Math.min(...pts.map((p) => p.y)) - R_HUB_OUTER - 40;
+    const maxY = Math.max(...pts.map((p) => p.y)) + R_HUB_OUTER + 40;
+    const z = Math.min(r.width / (maxX - minX), r.height / (maxY - minY), 1.2);
+    setPan({ x: r.width / 2 - ((minX + maxX) / 2) * z, y: r.height / 2 - ((minY + maxY) / 2) * z });
     setZoom(z);
   }, [positions]);
 
-  // Fit once after the graph mounts and has real dimensions.
-  const didInitialFit = useRef(false);
+  const didFit = useRef(false);
   useLayoutEffect(() => {
-    if (didInitialFit.current) return;
+    if (didFit.current) return;
     if (Object.keys(positions).length === 0) return;
     const svg = svgRef.current;
     if (!svg) return;
     const r = svg.getBoundingClientRect();
     if (r.width <= 0 || r.height <= 0) return;
-    didInitialFit.current = true;
+    didFit.current = true;
     fitView();
   }, [positions, fitView]);
-
-  const resetView = fitView;
 
   const resetLayout = () => {
     setOverrides({});
     savePositions({});
   };
 
-  // Edges: parent → child, draw Bezier from parent-bottom to child-top.
-  const edges = useMemo(() => {
-    const out: { from: Pos; to: Pos; id: string; disabled: boolean }[] = [];
-    flat.forEach((n) => {
-      if (!n.parentQpath) return;
-      const p = positions[n.parentQpath];
-      const c = positions[n.qpath];
-      if (!p || !c) return;
-      out.push({
-        from: { x: p.x, y: p.y + NODE_H / 2 },
-        to: { x: c.x, y: c.y - NODE_H / 2 },
-        id: `${n.parentQpath}->${n.qpath}`,
-        disabled: !!n.node.disabled,
-      });
-    });
-    return out;
-  }, [flat, positions]);
+  // Throughput → stroke width
+  const globalMaxRate = useMemo(() => {
+    let m = 0;
+    maxByEdgeRef.current.forEach((v) => { if (v > m) m = v; });
+    return m;
+  }, [edges]);
+
+  function edgeWidth(e: GraphEdge): number {
+    const peak = maxByEdgeRef.current.get(e.key) || 0;
+    if (globalMaxRate <= 0) return 1.2;
+    const t = peak / globalMaxRate;
+    return 1 + t * 4.5; // 1 .. 5.5 px
+  }
 
   return (
     <div className="hy-topo-graph">
       <div className="hy-topo-graph-toolbar">
-        <button type="button" className="hy-topo-btn" onClick={resetView} title={t('nodes.graph.resetView')}>
+        <button type="button" className="hy-topo-btn" onClick={fitView} title={t('nodes.graph.resetView')}>
           {t('nodes.graph.resetView')}
         </button>
         <button type="button" className="hy-topo-btn" onClick={resetLayout} title={t('nodes.graph.resetLayout')}>
@@ -283,93 +340,93 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         </button>
         <span className="hy-topo-graph-hint">{t('nodes.graph.hint')}</span>
       </div>
-      <svg
-        ref={svgRef}
-        className="hy-topo-graph-svg"
-        onMouseDown={onMouseDown}
-      >
+      <svg ref={svgRef} className="hy-topo-graph-svg" onMouseDown={onMouseDown}>
         <defs>
-          <marker id="hy-topo-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--border)" />
+          <marker id="hy-topo-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#4D6EA3" />
           </marker>
         </defs>
         <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
-          {/* Edges behind nodes */}
-          {edges.map((e) => {
-            const midY = (e.from.y + e.to.y) / 2;
-            const d = `M ${e.from.x} ${e.from.y} C ${e.from.x} ${midY}, ${e.to.x} ${midY}, ${e.to.x} ${e.to.y}`;
+          {/* Edges first so they sit below nodes. Shorten endpoints by node
+              radius so arrowheads don't overlap the circles. */}
+          {Array.from(edges.values()).map((e) => {
+            const p = positions[e.from];
+            const q = positions[e.to];
+            if (!p || !q) return null;
+            const dx = q.x - p.x;
+            const dy = q.y - p.y;
+            const d = Math.sqrt(dx * dx + dy * dy) || 1;
+            const ux = dx / d;
+            const uy = dy / d;
+            const rFrom = (nodes.get(e.from)?.degree || 1) >= 3 || nodes.get(e.from)?.isSelf ? R_HUB_OUTER : R_SINGLE;
+            const rTo = (nodes.get(e.to)?.degree || 1) >= 3 || nodes.get(e.to)?.isSelf ? R_HUB_OUTER : R_SINGLE;
+            const x1 = p.x + ux * rFrom;
+            const y1 = p.y + uy * rFrom;
+            const x2 = q.x - ux * (rTo + (e.directionKnown ? 2 : 0));
+            const y2 = q.y - uy * (rTo + (e.directionKnown ? 2 : 0));
+            const width = edgeWidth(e);
+            const peak = maxByEdgeRef.current.get(e.key) || 0;
             return (
-              <path
-                key={e.id}
-                d={d}
-                fill="none"
-                stroke={e.disabled ? 'var(--border-light)' : 'var(--border)'}
-                strokeWidth={1.5}
-                strokeDasharray={e.disabled ? '4 3' : undefined}
-                markerEnd="url(#hy-topo-arrow)"
-              />
-            );
-          })}
-          {/* Nodes */}
-          {flat.map((n) => {
-            const p = positions[n.qpath];
-            if (!p) return null;
-            const x = p.x - NODE_W / 2;
-            const y = p.y - NODE_H / 2;
-            const lat = n.node.latency_ms;
-            const latClass = n.node.is_self ? 'ok' : lat === -1 ? 'bad' : lat === 0 ? 'na' : lat < 80 ? 'ok' : lat < 200 ? 'mid' : 'bad';
-            const cls = [
-              'hy-topo-node',
-              n.node.is_self && 'self',
-              n.node.disabled && 'disabled',
-              n.node.nested && 'nested',
-              n.node.incompatible && 'bad',
-              n.node.conflict && 'bad',
-            ]
-              .filter(Boolean)
-              .join(' ');
-            return (
-              <g
-                key={n.qpath}
-                data-node-qpath={n.qpath}
-                transform={`translate(${x},${y})`}
-                className={cls}
-                style={{ cursor: 'grab' }}
-              >
-                <rect width={NODE_W} height={NODE_H} rx={8} className="hy-topo-node-box" />
-                <text x={12} y={22} className="hy-topo-node-name">{n.name}</text>
-                <text x={12} y={42} className={`hy-topo-node-meta lat-${latClass}`}>
-                  {n.node.is_self
-                    ? 'self'
-                    : lat === -1
-                    ? t('nodes.offline')
-                    : lat === 0
-                    ? '—'
-                    : `${lat}ms`}
-                </text>
-                {(n.node.tx_rate > 0 || n.node.rx_rate > 0) && (
-                  <text x={NODE_W - 12} y={42} textAnchor="end" className="hy-topo-node-rate">
-                    ↑{fmtRateShort(n.node.tx_rate)} ↓{fmtRateShort(n.node.rx_rate)}
+              <g key={e.key} className={e.disabled ? 'hy-topo-edge disabled' : 'hy-topo-edge'}>
+                <line
+                  x1={x1} y1={y1} x2={x2} y2={y2}
+                  stroke="#4D6EA3"
+                  strokeOpacity={e.disabled ? 0.3 : 0.55}
+                  strokeWidth={width}
+                  strokeDasharray={e.disabled ? '4 3' : undefined}
+                  markerEnd={e.directionKnown ? 'url(#hy-topo-arrow)' : undefined}
+                />
+                {peak > 0 && (
+                  <text
+                    x={(x1 + x2) / 2} y={(y1 + y2) / 2 - 4}
+                    textAnchor="middle"
+                    className="hy-topo-edge-rate"
+                  >
+                    {fmtRate(peak)}
                   </text>
                 )}
-                {!n.node.is_self && onOpenRemote && (
-                  <foreignObject x={NODE_W - 26} y={4} width={22} height={22} style={{ cursor: 'pointer' }}>
-                    <button
-                      type="button"
-                      className="hy-topo-node-open"
-                      title={t('app.open')}
-                      onClick={(ev) => {
-                        ev.stopPropagation();
-                        onOpenRemote(n.qpath);
-                      }}
-                    >
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                        <polyline points="15 3 21 3 21 9" />
-                        <line x1="10" y1="14" x2="21" y2="3" />
-                      </svg>
-                    </button>
-                  </foreignObject>
+              </g>
+            );
+          })}
+          {/* Nodes as dots (logo-inspired: hub-like = concentric, leaves = single circle) */}
+          {Array.from(nodes.values()).map((n) => {
+            const p = positions[n.key];
+            if (!p) return null;
+            const isHub = n.isSelf || n.degree >= 3;
+            const cls = [
+              'hy-topo-dot',
+              n.isSelf && 'self',
+              n.disabled && 'disabled',
+              n.nested && 'nested',
+              n.incompatible && 'bad',
+            ].filter(Boolean).join(' ');
+            return (
+              <g key={n.key} data-node-key={n.key} transform={`translate(${p.x},${p.y})`} className={cls} style={{ cursor: 'grab' }}>
+                {isHub ? (
+                  <>
+                    <circle r={R_HUB_OUTER} className="hy-topo-dot-outer" />
+                    <circle r={R_HUB_INNER} className="hy-topo-dot-inner" />
+                  </>
+                ) : (
+                  <circle r={R_SINGLE} className="hy-topo-dot-single" />
+                )}
+                <text y={(isHub ? R_HUB_OUTER : R_SINGLE) + 14} textAnchor="middle" className="hy-topo-dot-name">
+                  {n.name}
+                </text>
+                <text y={(isHub ? R_HUB_OUTER : R_SINGLE) + 27} textAnchor="middle" className={`hy-topo-dot-meta lat-${
+                  n.isSelf ? 'self' : n.latencyMs === -1 ? 'bad' : n.latencyMs === 0 ? 'na' : n.latencyMs < 80 ? 'ok' : n.latencyMs < 200 ? 'mid' : 'bad'
+                }`}>
+                  {n.isSelf ? 'self' : n.latencyMs === -1 ? t('nodes.offline') : n.latencyMs === 0 ? '—' : `${n.latencyMs}ms`}
+                </text>
+                {!n.isSelf && onOpenRemote && (
+                  <g transform={`translate(${(isHub ? R_HUB_OUTER : R_SINGLE) + 4},${-(isHub ? R_HUB_OUTER : R_SINGLE)})`} className="hy-topo-dot-open" onClick={(ev) => { ev.stopPropagation(); onOpenRemote(n.qpath); }}>
+                    <rect width={14} height={14} rx={3} fill="transparent" />
+                    <svg x={0} y={0} width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                      <polyline points="15 3 21 3 21 9" />
+                      <line x1="10" y1="14" x2="21" y2="3" />
+                    </svg>
+                  </g>
                 )}
               </g>
             );
@@ -378,10 +435,4 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       </svg>
     </div>
   );
-}
-
-function fmtRateShort(b: number): string {
-  if (!b || b < 1024) return '0';
-  if (b < 1048576) return (b / 1024).toFixed(0) + 'K';
-  return (b / 1048576).toFixed(1) + 'M';
 }

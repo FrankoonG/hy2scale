@@ -38,7 +38,10 @@
 .hy-card.no-pad{padding:0}
 .hy-card-header{display:flex;align-items:center;gap:8px;margin-bottom:16px}
 .hy-card.no-pad .hy-card-header{padding:16px 20px;margin-bottom:0;border-bottom:1px solid var(--border-light)}
-.hy-card-title{font-size:13px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.6px}
+.hy-card-title{font-size:13px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.6px;display:inline-flex;align-items:center;gap:8px}
+/* IconTabs embedded inline in a card title — reset the title's text styling
+   influence so the tab buttons keep their own look. */
+.hy-card-title .hy-card-title-tabs{text-transform:none;letter-spacing:0;color:var(--text-muted)}
 .hy-card-count{font-size:11px;background:var(--bg);color:var(--text-muted);padding:1px 8px;border-radius:10px}
 .hy-card-actions{display:flex;gap:8px;margin-left:auto}
 .hy-card-body{} /* no padding when card has padding */
@@ -301,22 +304,32 @@ a.peer-link:hover{text-decoration:underline}
 .hy-topo-graph-svg{flex:1;min-height:0;width:100%;cursor:grab;user-select:none;-webkit-user-select:none}
 .hy-topo-graph-svg:active{cursor:grabbing}
 
-.hy-topo-node-box{fill:var(--surface);stroke:var(--border);stroke-width:1}
-.hy-topo-node.self .hy-topo-node-box{stroke:var(--primary);stroke-width:1.5}
-.hy-topo-node.nested .hy-topo-node-box{fill:color-mix(in srgb,var(--primary-light) 40%,var(--surface))}
-.hy-topo-node.disabled .hy-topo-node-box{fill:var(--bg);stroke-dasharray:4 3}
-.hy-topo-node.bad .hy-topo-node-box{stroke:var(--red)}
-.hy-topo-node-name{font-size:12px;font-weight:600;fill:var(--text);font-family:var(--mono)}
-.hy-topo-node.self .hy-topo-node-name{fill:var(--primary)}
-.hy-topo-node-meta{font-size:10px;fill:var(--text-muted)}
-.hy-topo-node-meta.lat-ok{fill:var(--green)}
-.hy-topo-node-meta.lat-mid{fill:#d97706}
-.hy-topo-node-meta.lat-bad{fill:var(--red)}
-.hy-topo-node-meta.lat-na{fill:var(--text-muted)}
-.hy-topo-node-rate{font-size:9px;fill:var(--text-muted);font-family:var(--mono)}
-.hy-topo-node-open{width:22px;height:22px;padding:0;border:none;background:transparent;color:var(--text-muted);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;border-radius:4px}
-.hy-topo-node-open:hover{background:var(--primary-light);color:var(--primary)}
-.hy-topo-node-open svg{width:12px;height:12px}
+/* Dot-style nodes: logo-inspired (#4D6EA3 outer, #102545 inner). Hub-like
+   nodes (self or degree >= 3) get concentric rings, leaves get a single
+   filled disc. Labels live below the dot like annotations. */
+.hy-topo-dot-outer{fill:#4D6EA3;fill-opacity:.38;stroke:#4D6EA3;stroke-opacity:.6;stroke-width:1}
+.hy-topo-dot-inner{fill:#102545;fill-opacity:.82}
+.hy-topo-dot-single{fill:#4D6EA3;fill-opacity:.55;stroke:#4D6EA3;stroke-opacity:.9;stroke-width:1}
+.hy-topo-dot.self .hy-topo-dot-outer{fill:var(--primary);fill-opacity:.22;stroke:var(--primary);stroke-opacity:.9;stroke-width:1.4}
+.hy-topo-dot.self .hy-topo-dot-inner{fill:var(--primary);fill-opacity:.95}
+.hy-topo-dot.nested .hy-topo-dot-outer{stroke-width:1.6}
+.hy-topo-dot.disabled .hy-topo-dot-outer,.hy-topo-dot.disabled .hy-topo-dot-single{fill-opacity:.15;stroke-dasharray:3 3}
+.hy-topo-dot.disabled .hy-topo-dot-inner{fill-opacity:.25}
+.hy-topo-dot.bad .hy-topo-dot-outer,.hy-topo-dot.bad .hy-topo-dot-single{stroke:var(--red)}
+.hy-topo-dot-name{font-size:11px;font-weight:600;fill:var(--text);font-family:var(--mono)}
+.hy-topo-dot.self .hy-topo-dot-name{fill:var(--primary)}
+.hy-topo-dot-meta{font-size:9px;fill:var(--text-muted)}
+.hy-topo-dot-meta.lat-ok{fill:var(--green)}
+.hy-topo-dot-meta.lat-mid{fill:#d97706}
+.hy-topo-dot-meta.lat-bad{fill:var(--red)}
+.hy-topo-dot-meta.lat-na{fill:var(--text-muted)}
+.hy-topo-dot-meta.lat-self{fill:var(--primary)}
+.hy-topo-dot-open{color:var(--text-muted);cursor:pointer;opacity:0;transition:opacity .15s}
+.hy-topo-dot:hover .hy-topo-dot-open{opacity:1}
+.hy-topo-dot-open:hover{color:var(--primary)}
+
+/* Edge labels (peak throughput) — only shown when traffic was ever observed. */
+.hy-topo-edge-rate{font-size:9px;fill:var(--text-muted);font-family:var(--mono);pointer-events:none}
 
 /* Icon-only mini tabs — sized to fit inside a Card header's action area.
    Two or three compact buttons that read as a segmented toggle. */
