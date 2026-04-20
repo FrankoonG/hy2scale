@@ -310,25 +310,18 @@ a.peer-link:hover{text-decoration:underline}
 .hy-topo-graph-svg{flex:1;min-height:0;width:100%;cursor:grab;user-select:none;-webkit-user-select:none}
 .hy-topo-graph-svg:active{cursor:grabbing}
 
-/* Graph palette — exposed as CSS vars so dark-mode extensions (Dark Reader,
-   prefers-color-scheme) can intercept and invert them. SVG `fill`/`stroke`
-   on raw hex are often skipped by those tools; routing through CSS vars
-   and a `color` / currentColor chain lets them pick the values up.
-   Defaults are the logo-inspired light-theme colours; the dark-mode block
-   below substitutes inverted equivalents. */
+/* Graph palette — exposed as CSS vars so Dark Reader and similar dynamic
+   theming extensions can intercept and transform them (they rewrite var()
+   references but often skip raw hex baked into SVG fill/stroke attributes).
+   No prefers-color-scheme fallback: the app itself has no dark theme, so
+   swapping the palette when the OS happens to be dark would leave the
+   graph mismatched against the light chrome around it. Dark Reader (when
+   enabled) handles the inversion itself via its own transform pipeline. */
 .hy-topo-graph{
   --topo-accent: #4D6EA3;
   --topo-accent-dark: #102545;
   --topo-grid: #e5e7eb;
   --topo-halo: var(--surface);
-}
-@media (prefers-color-scheme: dark){
-  .hy-topo-graph{
-    --topo-accent: #7DA3D9;
-    --topo-accent-dark: #E5EBF5;
-    --topo-grid: #2a2e3a;
-    --topo-halo: #1a1d25;
-  }
 }
 
 /* Dot-style nodes: logo-inspired. No strokes — pure filled discs. Hubs
