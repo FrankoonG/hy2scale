@@ -363,11 +363,13 @@ func (a *App) findPathsTo(target string) []string {
 				}
 			} else if !sp.Native && len(item.chain) < 4 {
 				// Rule 1: sub-peer name must not appear anywhere on the
-				// chain (including the current node). Rule 2: to descend
-				// further, the new qualified prefix must also be
-				// nested=true on our side — otherwise paths below it are
-				// not authorised and we don't need the BFS state.
-				cycle := sp.Name == a.node.Name()
+				// chain (including the current node) — nor match our
+				// local node_id / display name (self identity). Rule 2:
+				// to descend further, the new qualified prefix must
+				// also be nested=true on our side — otherwise paths
+				// below it are not authorised and we don't need the
+				// BFS state.
+				cycle := sp.Name == a.node.Name() || sp.Name == cfg.NodeID
 				for _, c := range item.chain {
 					if c == sp.Name {
 						cycle = true

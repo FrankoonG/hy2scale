@@ -119,11 +119,13 @@ export default function NodesPage() {
     });
 
     const selfId = node?.node_id || '';
+    const selfName = node?.name || '';
     return sorted.map((n) => {
       const rootPath = n.is_self ? (node?.node_id || n.name) : n.name;
-      // Defensive: first-level children shouldn't contain self or the root itself
+      // Rule 1 (including self identity): strip any first-level child whose
+      // name matches our own node_id OR display name, plus the root itself.
       const safeChildren = n.children?.filter(
-        (c) => c.name !== selfId && c.name !== n.name
+        (c) => c.name !== selfId && c.name !== selfName && c.name !== n.name
       );
       return {
         key: n.is_self ? '__self__' : n.name,
@@ -139,8 +141,12 @@ export default function NodesPage() {
 
   const buildChildNode = (c: TopologyNode, parentPath: string): TreeNode<TopologyNode> => {
     const qp = `${parentPath}/${c.name}`;
+    // Ancestors always include our local node_id AND display name so that
+    // neither can ever re-appear deep in the tree, even if rootPath only
+    // contained one of them (Rule 1 — self identity).
     const ancestors = new Set(parentPath.split('/'));
-    // Defensive: filter out grand-children that would form a loop
+    if (node?.node_id) ancestors.add(node.node_id);
+    if (node?.name) ancestors.add(node.name);
     const safeChildren = c.children?.filter((cc) => !ancestors.has(cc.name) && cc.name !== c.name);
     return {
       key: qp,
