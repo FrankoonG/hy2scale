@@ -195,12 +195,16 @@ export default function NodesPage() {
         // paths stack double-proxy overhead and make auth/routing hard to
         // reason about; the user should drive from their own local UI.
         const isRemoteView = !!(window as any).__PROXY__;
+        const selfId = node?.node_id || '';
+        const chain = selfId && meta.nodeKey.startsWith(selfId + '/')
+          ? meta.nodeKey.slice(selfId.length + 1)
+          : meta.nodeKey;
         const nameEl = n.is_self ? (
           <span className="peer-name-cell" style={{ color: 'var(--primary)' }}>{n.name || node?.name || 'self'}</span>
         ) : isRemoteView ? (
           <span className="peer-name-cell">{n.name}</span>
         ) : (
-          <a className="peer-link peer-name-cell" href={`${basePath}/remote/${n.name}/scale/`} target="_blank" rel="noopener">
+          <a className="peer-link peer-name-cell" href={`${basePath}/remote/${chain}/scale/`} target="_blank" rel="noopener">
             {n.name}
           </a>
         );
