@@ -309,17 +309,18 @@ a.peer-link:hover{text-decoration:underline}
 .hy-topo-graph-svg{flex:1;min-height:0;width:100%;cursor:grab;user-select:none;-webkit-user-select:none}
 .hy-topo-graph-svg:active{cursor:grabbing}
 
-/* Dot-style nodes: logo-inspired. No strokes — pure filled discs. Hub-like
-   nodes (self or degree >= 3) get concentric rings (outer large light disc
-   + smaller dark inner disc); leaves get a single filled disc. */
+/* Dot-style nodes: logo-inspired. No strokes — pure filled discs. Every
+   node uses the same two-circle idiom (outer pale blue + inner dark navy);
+   hubs (self or degree ≥ 3) render at the full radius, leaves at a smaller
+   radius. The outer-disc colour is identical across all nodes so the
+   palette reads as a family. Self keeps the common outer tint and only
+   lifts the inner dot to primary blue to stand out. */
 .hy-topo-dot-outer{fill:#4D6EA3;fill-opacity:.38;stroke:none}
 .hy-topo-dot-inner{fill:#102545;fill-opacity:.92;stroke:none}
-.hy-topo-dot-single{fill:#4D6EA3;fill-opacity:.78;stroke:none}
-.hy-topo-dot.self .hy-topo-dot-outer{fill:var(--primary);fill-opacity:.25}
 .hy-topo-dot.self .hy-topo-dot-inner{fill:var(--primary);fill-opacity:1}
-.hy-topo-dot.disabled .hy-topo-dot-outer,.hy-topo-dot.disabled .hy-topo-dot-single{fill-opacity:.12}
+.hy-topo-dot.disabled .hy-topo-dot-outer{fill-opacity:.12}
 .hy-topo-dot.disabled .hy-topo-dot-inner{fill-opacity:.25}
-.hy-topo-dot.bad .hy-topo-dot-inner,.hy-topo-dot.bad .hy-topo-dot-single{fill:var(--red)}
+.hy-topo-dot.bad .hy-topo-dot-inner{fill:var(--red)}
 .hy-topo-dot-name{font-size:11px;font-weight:600;fill:var(--text);font-family:var(--mono)}
 .hy-topo-dot.self .hy-topo-dot-name{fill:var(--primary)}
 .hy-topo-dot-open{color:var(--text-muted);cursor:pointer;opacity:0;transition:opacity .15s}
