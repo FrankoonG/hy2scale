@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, Button, Badge, AlertBadge, useToast, useConfirm, useSelection } from '@hy2scale/ui';
 import type { UserConfig, Session, PasswordConflicts } from '@/api';
 import * as api from '@/api';
-import { fmtBytes } from '@/hooks/useFormat';
+import { fmtBytes, fmtDuration } from '@/hooks/useFormat';
 import { ExitViaCell } from '@/components/ExitViaCell';
 import UserModal from '@/components/UserModal';
 import UserDetailModal from '@/components/UserDetailModal';
@@ -132,9 +132,10 @@ export default function UsersPage() {
   }, [selection, confirm, queryClient, toast, t]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+    <div className="hy-page">
       {/* Users */}
       <Card
+        fill={1}
         title={t('users.title')}
         count={users.length}
         actions={
@@ -210,7 +211,11 @@ export default function UsersPage() {
                       </td>
                       <td><ExitViaCell exitVia={u.exit_via} exitPaths={u.exit_paths} exitMode={u.exit_mode} /></td>
                       <td style={{ textAlign: 'right' }}>
-                        <span style={{ fontSize: 12 }}>{usedGB} / {limitGB}</span>
+                        <span style={{ fontSize: 12 }}>
+                          <span style={{ color: pct > 90 ? 'var(--red)' : 'var(--primary)', fontWeight: 600 }}>{usedGB}</span>
+                          <span className="sep">/</span>
+                          <span style={{ color: 'var(--text-muted)' }}>{limitGB}</span>
+                        </span>
                         {u.traffic_limit > 0 && (
                           <div style={{ background: 'var(--border-light)', height: 3, borderRadius: 2, marginTop: 3 }}>
                             <div style={{ background: pct > 90 ? 'var(--red)' : 'var(--primary)', height: '100%', width: `${pct}%`, borderRadius: 2 }} />
@@ -235,7 +240,7 @@ export default function UsersPage() {
       </Card>
 
       {/* Active Devices */}
-      <Card title={t('devices.title')} count={sessions.length} noPadding>
+      <Card fill={1} title={t('devices.title')} count={sessions.length} noPadding>
         {sessions.length === 0 ? (
           <div className="hy-empty">{t('devices.noDevices')}</div>
         ) : (
@@ -255,13 +260,27 @@ export default function UsersPage() {
               <tbody>
                 {sessions.map((s) => (
                   <tr key={s.key}>
-                    <td><b>{s.user}</b></td>
-                    <td><span className="mono">{s.ip}</span></td>
-                    <td>{s.proxy}</td>
-                    <td>{s.conns}</td>
-                    <td><span className="mono">{fmtBytes(s.tx_bytes + s.rx_bytes)}</span></td>
-                    <td>{s.duration}</td>
-                    <td><Button size="sm" variant="danger" onClick={() => handleKick(s)}>{t('devices.kick')}</Button></td>
+                    <td><b>{s.username}</b></td>
+                    <td><span className="mono">{s.remote_ip}</span></td>
+                    <td>{s.protocol}</td>
+                    <td>{s.conn_count}</td>
+                    <td>
+                      <span className="mono" style={{ fontSize: 12 }}>
+                        <span className="stat-up">↑{fmtBytes(s.tx_bytes)}</span>
+                        <span className="sep">/</span>
+                        <span className="stat-down">↓{fmtBytes(s.rx_bytes)}</span>
+                      </span>
+                    </td>
+                    <td>{fmtDuration(s.duration)}</td>
+                    <td>
+                      <button className="hy-row-edit hy-row-kick" onClick={() => handleKick(s)} title={t('devices.kick')}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                          <polyline points="16 17 21 12 16 7"/>
+                          <line x1="21" y1="12" x2="9" y2="12"/>
+                        </svg>
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

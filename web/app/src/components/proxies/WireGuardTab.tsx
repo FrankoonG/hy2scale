@@ -233,9 +233,9 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
   ];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, flex: 1, minHeight: 0 }}>
       {/* Server Settings */}
-      <Card title={<>
+      <Card fill={2} title={<>
         {t('wg.title')}
         {wg?.running && <> <span style={{ color: 'var(--green)', fontSize: 12 }}>●</span> <Badge variant="green">{wg.connected ? t('wg.connectedStatus', { count: wg.connected }) : t('wg.runningStatus')}</Badge></>}
       </>}>
@@ -275,6 +275,7 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
 
       {/* Peers Table */}
       <Card
+        fill={1}
         title={t('wg.peers')}
         count={peers.length}
         actions={

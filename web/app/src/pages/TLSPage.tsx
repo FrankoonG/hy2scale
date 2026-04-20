@@ -188,8 +188,9 @@ export default function TLSPage() {
   ];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+    <div className="hy-page">
       <Card
+        fill={1}
         title={t('tls.title')}
         count={certs.length}
         actions={

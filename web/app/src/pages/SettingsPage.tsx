@@ -158,7 +158,7 @@ export default function SettingsPage() {
   ];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+    <div className="hy-page">
       <Tabs
         items={[
           { key: 'system', label: t('settings.system') },
@@ -169,7 +169,7 @@ export default function SettingsPage() {
         onChange={(key) => { if (!forcePasswordChange || key === 'system') setActiveTab(key as any); }}
       />
 
-      <TabPanel activeKey={activeTab} keys={['system', 'web', 'upgrade']}>
+      <TabPanel fill activeKey={activeTab} keys={['system', 'web', 'upgrade']}>
         {activeTab === 'system' ? (
           <>
             {forcePasswordChange && (
@@ -178,7 +178,7 @@ export default function SettingsPage() {
 
             {/* System: DNS — hidden during forced password change */}
             {!forcePasswordChange && (
-              <Card title={t('settings.system')}>
+              <Card fill={1} title={t('settings.system')}>
                 <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
                   <FormGroup label={t('settings.dns')}>
                     <Input value={dns} onChange={(e) => setDns(e.target.value)} placeholder="8.8.8.8,1.1.1.1" />
@@ -189,7 +189,7 @@ export default function SettingsPage() {
             )}
 
             {/* Credentials */}
-            <Card title={t('settings.changePassword')}>
+            <Card fill={2} title={t('settings.changePassword')}>
               <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <FormGroup label={t('settings.currentPassword')} required>
                   <PasswordInput value={curPw} onChange={(e) => setCurPw(e.target.value)} />
@@ -208,7 +208,7 @@ export default function SettingsPage() {
             </Card>
           </>
         ) : activeTab === 'web' ? (
-          <Card title={t('settings.webUi')}>
+          <Card fill={1} title={t('settings.webUi')}>
             <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
               <FormGroup label={t('settings.listenAddress')}>
                 <Input value={listen} onChange={(e) => setListen(e.target.value)} placeholder=":5565" />
@@ -232,7 +232,7 @@ export default function SettingsPage() {
         ) : (
           <>
             {/* Upgrade Binary — only in Docker */}
-            <Card title={t('settings.upgradeTitle')}>
+            <Card fill={1} title={t('settings.upgradeTitle')}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 {archInfo && (
                   <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -269,7 +269,7 @@ export default function SettingsPage() {
             </Card>
 
             {/* Backup & Restore */}
-            <Card title={t('settings.backup')}>
+            <Card fill={1} title={t('settings.backup')}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('settings.backupDesc')}</div>
                 <div style={{ display: 'flex', gap: 12 }}>

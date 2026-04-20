@@ -54,7 +54,7 @@ export default function L2TPTab({ limited }: { limited?: boolean }) {
           {l2tp?.host_network === false ? t('l2tp.warnHostNetwork') : t('l2tp.warnText')}
         </div>
       )}
-    <Card title={t('l2tp.title')}>
+    <Card fill={1} title={t('l2tp.title')}>
       <div style={{ maxWidth: 500, display: 'flex', flexDirection: 'column', gap: 14, ...(isLimited ? { opacity: 0.4, pointerEvents: 'none' as const } : {}) }}>
         <FormGroup label={t('app.enabled')}>
           <Toggle checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />

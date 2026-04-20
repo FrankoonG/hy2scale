@@ -1,4 +1,4 @@
-import { type ReactNode, useRef } from 'react';
+import { type ReactNode, type CSSProperties, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export interface TabPanelProps {
@@ -6,9 +6,15 @@ export interface TabPanelProps {
   children: ReactNode;
   /** Ordered list of tab keys — used to determine slide direction */
   keys?: string[];
+  /**
+   * When true, the panel (and its active child) flexes to fill remaining
+   * height inside a `.hy-page` container. Use together with `Card fill={…}`
+   * so the tabbed content scrolls internally.
+   */
+  fill?: boolean;
 }
 
-export function TabPanel({ activeKey, children, keys }: TabPanelProps) {
+export function TabPanel({ activeKey, children, keys, fill }: TabPanelProps) {
   const prevKey = useRef(activeKey);
   const dirRef = useRef(1);
 
@@ -26,8 +32,15 @@ export function TabPanel({ activeKey, children, keys }: TabPanelProps) {
 
   const dir = dirRef.current;
 
+  const rootStyle: CSSProperties = fill
+    ? { position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }
+    : { position: 'relative' };
+  const motionStyle: CSSProperties | undefined = fill
+    ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 20 }
+    : undefined;
+
   return (
-    <div style={{ position: 'relative' }}>
+    <div style={rootStyle}>
       <AnimatePresence initial={false} custom={dir}>
         <motion.div
           key={activeKey}
@@ -35,6 +48,7 @@ export function TabPanel({ activeKey, children, keys }: TabPanelProps) {
           initial="enter"
           animate="center"
           exit="exit"
+          style={motionStyle}
           variants={{
             enter: (d: number) => ({ opacity: 0, x: 20 * d }),
             center: { opacity: 1, x: 0, transition: { duration: 0.35, ease: 'easeOut' } },

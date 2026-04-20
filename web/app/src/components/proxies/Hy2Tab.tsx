@@ -24,7 +24,7 @@ export default function Hy2Tab() {
   };
 
   return (
-    <Card title={t('hy2.title')}>
+    <Card fill={1} title={t('hy2.title')}>
       <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
           <div style={{ flex: '0 0 auto' }}>

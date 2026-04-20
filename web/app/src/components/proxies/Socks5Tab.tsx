@@ -51,7 +51,7 @@ export default function Socks5Tab() {
   ];
 
   return (
-    <Card title={t('socks5.title')}>
+    <Card fill={1} title={t('socks5.title')}>
       <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
           <div style={{ flex: '0 0 auto' }}>

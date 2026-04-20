@@ -39,9 +39,9 @@ export default function ProxiesPage() {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+    <div className="hy-page">
       <Tabs items={tabs} activeKey={tab} onChange={setTab} />
-      <TabPanel activeKey={tab} keys={tabs.map(t => t.key)}>
+      <TabPanel fill activeKey={tab} keys={tabs.map(t => t.key)}>
         {renderTab()}
       </TabPanel>
     </div>
