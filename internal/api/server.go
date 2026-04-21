@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -226,6 +227,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Upgrade
 	authed.HandleFunc("GET /api/system/arch", s.getSystemArch)
+	authed.HandleFunc("GET /api/build-info", s.getBuildInfo)
 	authed.HandleFunc("POST /api/upgrade", s.uploadUpgrade)
 	authed.HandleFunc("GET /api/settings/ui", s.getUISettings)
 	authed.HandleFunc("PUT /api/settings/ui", s.updateUISettings)
@@ -2814,6 +2816,55 @@ func (s *Server) getSystemArch(w http.ResponseWriter, r *http.Request) {
 		"version":   Version,
 		"binary":    filepath.Base(self),
 		"in_docker": isRunningInDocker(),
+	})
+}
+
+// getBuildInfo returns the project's license metadata and the full
+// dependency list (Go module graph compiled in + the significant
+// native bundles that ship in the Docker image). Exposed to the web
+// UI so users can see exactly what third-party code is running and
+// under which licence, without having to inspect the binary.
+func (s *Server) getBuildInfo(w http.ResponseWriter, r *http.Request) {
+	type dep struct {
+		Path    string `json:"path"`
+		Version string `json:"version"`
+	}
+	type native struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+		License string `json:"license"`
+		Source  string `json:"source"`
+	}
+	goDeps := []dep{}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, m := range info.Deps {
+			// Skip replaced / anonymous — keep the resolved identity.
+			resolved := m
+			if m.Replace != nil {
+				resolved = m.Replace
+			}
+			if resolved.Path == "" || resolved.Version == "" {
+				continue
+			}
+			goDeps = append(goDeps, dep{Path: resolved.Path, Version: resolved.Version})
+		}
+	}
+	sort.Slice(goDeps, func(i, j int) bool { return goDeps[i].Path < goDeps[j].Path })
+	// Native components bundled into the Docker image but not tracked
+	// by the Go module graph. Kept short and hand-maintained — these
+	// are the pieces whose licences directly constrain the umbrella
+	// licence of this project.
+	natives := []native{
+		{Name: "strongSwan", Version: "5.8.4", License: "GPL-2.0-or-later", Source: "https://www.strongswan.org/"},
+		{Name: "iptables (nf_tables backend)", Version: "distro-packaged", License: "GPL-2.0-or-later", Source: "https://www.netfilter.org/projects/iptables/"},
+		{Name: "xl2tpd", Version: "distro-packaged", License: "GPL-2.0-or-later", Source: "https://www.xelerance.com/software/xl2tpd/"},
+	}
+	writeJSON(w, map[string]any{
+		"version":     Version,
+		"license":     "GPL-3.0-or-later",
+		"repository":  "https://github.com/FrankoonG/hy2scale",
+		"go_deps":     goDeps,
+		"natives":     natives,
 	})
 }
 
