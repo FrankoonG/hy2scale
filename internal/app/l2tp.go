@@ -63,13 +63,36 @@ func (s *pppSession) Unregister(ip string) {
 // iptCmd resolves the iptables command. If the container's iptables doesn't work
 // but host root is mounted at /host, use chroot to run the host's iptables.
 // This handles iKuai routers where container iptables is incompatible with the kernel.
+// iptVariant detects the correct iptables command at startup.
+// On standard Linux with nftables: "iptables" (maps to iptables-nft)
+// On iKuai or legacy systems: "iptables-legacy"
+var iptVariant = sync.OnceValue(func() string {
+	// Check if iptables (nftables backend) works — preferred on modern systems
+	if out, err := exec.Command("iptables", "-V").CombinedOutput(); err == nil {
+		v := string(out)
+		if strings.Contains(v, "nf_tables") {
+			log.Printf("[iptables] using iptables (nf_tables backend)")
+			return "iptables"
+		}
+	}
+	// Fall back to iptables-legacy
+	if _, err := exec.Command("iptables-legacy", "-L", "-n").CombinedOutput(); err == nil {
+		log.Printf("[iptables] using iptables-legacy")
+		return "iptables-legacy"
+	}
+	// Default
+	log.Printf("[iptables] falling back to iptables")
+	return "iptables"
+})
+
 var iptUseChroot = sync.OnceValue(func() bool {
-	// Test if native iptables-legacy works
-	if out, err := exec.Command("iptables-legacy", "-L", "-n").CombinedOutput(); err == nil {
-		debugLog("[iptables] native iptables-legacy works")
+	// Test if native iptables works
+	variant := iptVariant()
+	if out, err := exec.Command(variant, "-L", "-n").CombinedOutput(); err == nil {
+		debugLog("[iptables] native %s works", variant)
 		return false
 	} else {
-		debugLog("[iptables] native iptables-legacy failed: %v: %s", err, string(out))
+		debugLog("[iptables] native %s failed: %v: %s", variant, err, string(out))
 	}
 	// Check if host root is mounted and its iptables works
 	if _, err := os.Stat("/host/usr/sbin/iptables"); err == nil {
@@ -86,8 +109,11 @@ var iptUseChroot = sync.OnceValue(func() bool {
 })
 
 func iptExec(prog string, args ...string) *exec.Cmd {
+	// Platform adapter: iKuai, OpenWrt, etc. may provide custom iptables binary
+	if cmd := platformIPTExec(prog, args); cmd != nil {
+		return cmd
+	}
 	if iptUseChroot() {
-		// Map prog name to host path
 		hostProg := prog
 		switch prog {
 		case "iptables-legacy":
@@ -126,7 +152,7 @@ func iptRun(prog string, args ...string) {
 
 // testIptablesAvailable checks if iptables-legacy DNAT works (native or chroot).
 func testIptablesAvailable() bool {
-	cmd := iptExec("iptables-legacy", "-t", "nat", "-L", "-n")
+	cmd := iptExec(iptVariant(), "-t", "nat", "-L", "-n")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		debugLog("[iptables] NAT table test failed: %v: %s", err, string(out))
 		return false
@@ -136,12 +162,25 @@ func testIptablesAvailable() bool {
 }
 
 // cachedIptablesAvail caches iptables detection at startup.
+// If standard iptables fails, tries platform-specific fix before falling back to gvisor.
 var cachedIptablesAvail = sync.OnceValue(func() bool {
-	return testIptablesAvailable()
+	if testIptablesAvailable() {
+		return true
+	}
+	// Standard iptables failed. Try platform-specific compatibility fix.
+	initPlatformAdapter()
+	if platformFixIPTables() {
+		// Re-test with the platform-provided binary
+		if testIptablesAvailable() {
+			return true
+		}
+		log.Printf("[iptables] platform fix applied but iptables still failing")
+	}
+	return false
 })
 
-// IsCompatMode returns true when the node has NET_ADMIN but no working iptables
-// (e.g. iKuai minimal Linux). Detected once at startup.
+// IsCompatMode returns true when the node has NET_ADMIN but no working iptables.
+// This is now a last-resort fallback — iKuai with bundled host iptables runs normal mode.
 func IsCompatMode() bool {
 	capOK, _ := CheckCapability()
 	return capOK && !cachedIptablesAvail()
@@ -152,6 +191,11 @@ func DetectRuntimeMode() {
 	capOK, _ := CheckCapability()
 	hostNet := CheckHostNetwork()
 	iptOK := cachedIptablesAvail()
+	platform := DetectPlatform()
+
+	if platform != PlatformLinux {
+		log.Printf("[runtime] platform: %s", platform)
+	}
 
 	if !capOK {
 		log.Printf("[runtime] mode: limited (no NET_ADMIN)")
@@ -181,7 +225,7 @@ var cachedCapability = sync.OnceValues(func() (bool, string) {
 		return true, ""
 	}
 	debugLog("[cap] bridge creation failed, trying iptables")
-	if exec.Command("iptables-legacy", "-L", "-n").Run() == nil {
+	if exec.Command(iptVariant(), "-L", "-n").Run() == nil {
 		debugLog("[cap] NET_ADMIN confirmed via iptables-legacy")
 		return true, ""
 	}
@@ -200,8 +244,9 @@ func CheckCapability() (bool, string) {
 	return cachedCapability()
 }
 
-// CheckL2TPCapability tests if the runtime has NET_ADMIN and /dev/ppp.
-// Returns (ok, reason).
+// CheckL2TPCapability tests if the runtime can actually run L2TP/IPsec.
+// Checks NET_ADMIN, /dev/ppp, and kernel l2tp_ppp module.
+// Docker Desktop LinuxKit VM has PPP but lacks l2tp_ppp → L2TP rejected, IKEv2 still works.
 func CheckL2TPCapability() (bool, string) {
 	if ok, reason := CheckCapability(); !ok {
 		return false, reason
@@ -212,7 +257,32 @@ func CheckL2TPCapability() (bool, string) {
 			return false, "/dev/ppp not found and mknod failed (missing device or privileges)"
 		}
 	}
+	// Check if kernel L2TP module is available — xl2tpd needs l2tp_ppp.
+	// On Docker Desktop LinuxKit, this module is missing.
+	if _, err := os.Stat("/proc/net/pppol2tp"); err != nil {
+		// Module not loaded, try loading
+		exec.Command("modprobe", "l2tp_ppp").Run()
+		if _, err := os.Stat("/proc/net/pppol2tp"); err != nil {
+			return false, "L2TP kernel module not available (l2tp_ppp missing)"
+		}
+	}
 	return true, ""
+}
+
+// CheckIKEv2Capability tests if strongSwan/xfrm can run.
+// Docker Desktop LinuxKit VM supports xfrm → IKEv2 works.
+// Bare WSL2 without Docker Desktop may lack xfrm support.
+func CheckIKEv2Capability() bool {
+	if ok, _ := CheckCapability(); !ok {
+		return false
+	}
+	// Test xfrm subsystem availability.
+	out, err := exec.Command("ip", "xfrm", "state", "count").CombinedOutput()
+	if err != nil {
+		debugLog("[ikev2] xfrm not available: %v: %s", err, string(out))
+		return false
+	}
+	return true
 }
 
 // StartL2TP sets up xl2tpd, strongswan, iptables, and the transparent proxy.
@@ -378,21 +448,21 @@ conn l2tp-psk
 			log.Printf("[l2tp] mode: native iptables DNAT + transparent proxy")
 		}
 		portStr := fmt.Sprintf("%d", proxyPort)
-		iptRun("iptables-legacy", "-t", "nat", "-I", "PREROUTING",
+		iptRun(iptVariant(), "-t", "nat", "-I", "PREROUTING",
 			"-i", "ppp+", "-p", "tcp",
 			"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%s", gateway, portStr))
-		iptRun("iptables-legacy", "-t", "nat", "-A", "POSTROUTING",
+		iptRun(iptVariant(), "-t", "nat", "-A", "POSTROUTING",
 			"-s", subnet, "-o", "eth0", "-j", "MASQUERADE")
-		iptRun("iptables-legacy", "-I", "FORWARD", "-i", "ppp+", "-o", "eth0", "-j", "ACCEPT")
-		iptRun("iptables-legacy", "-I", "FORWARD", "-i", "eth0", "-o", "ppp+",
+		iptRun(iptVariant(), "-I", "FORWARD", "-i", "ppp+", "-o", "eth0", "-j", "ACCEPT")
+		iptRun(iptVariant(), "-I", "FORWARD", "-i", "eth0", "-o", "ppp+",
 			"-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
-		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", portStr,
+		iptRun(iptVariant(), "-A", "INPUT", "-p", "tcp", "--dport", portStr,
 			"-s", subnet, "-j", "ACCEPT")
-		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", portStr, "-j", "DROP")
+		iptRun(iptVariant(), "-A", "INPUT", "-p", "tcp", "--dport", portStr, "-j", "DROP")
 		hooksPortStr := fmt.Sprintf("%d", hooksPort)
-		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr,
+		iptRun(iptVariant(), "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr,
 			"-i", "lo", "-j", "ACCEPT")
-		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr, "-j", "DROP")
+		iptRun(iptVariant(), "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr, "-j", "DROP")
 		iptRun("iptables", "-I", "DOCKER-USER", "-s", subnet, "-j", "ACCEPT")
 		iptRun("iptables", "-I", "DOCKER-USER", "-d", subnet, "-j", "ACCEPT")
 		iptRun("iptables", "-t", "nat", "-A", "POSTROUTING",
@@ -606,9 +676,11 @@ func (a *App) handleTransparent(conn net.Conn) {
 
 	exitVia := ""
 	exitMode := ""
+	var exitPaths []string
 	if user != nil {
 		exitVia = user.ExitVia
 		exitMode = user.ExitMode
+		exitPaths = user.ExitPaths
 	}
 
 	var remote net.Conn
@@ -617,7 +689,7 @@ func (a *App) handleTransparent(conn net.Conn) {
 		remote, err = net.DialTimeout("tcp", origDst, 10*time.Second)
 	} else {
 		log.Printf("[l2tp] dial via %s to %s", exitVia, origDst)
-		remote, err = a.dialExitWithMode(context.Background(), exitVia, exitMode, origDst)
+		remote, err = a.dialExitWithPaths(context.Background(), exitVia, exitPaths, exitMode, origDst)
 	}
 	if err != nil {
 		log.Printf("[l2tp] dial error: %v", err)

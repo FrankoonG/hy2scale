@@ -1,0 +1,46 @@
+name: Trigger Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-tag:
+    name: Check for release trigger
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Check commit message for release trigger
+        id: check
+        run: |
+          MSG=$(git log -1 --pretty=%s)
+          echo "commit: ${MSG}"
+
+          # Match "release: vX.Y.Z" or "release: vX.Y.Z-beta1" etc.
+          if echo "${MSG}" | grep -qE '^release:\s*v[0-9]+\.[0-9]+\.[0-9]+'; then
+            TAG=$(echo "${MSG}" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+[a-zA-Z0-9._-]*')
+            echo "tag=${TAG}" >> $GITHUB_OUTPUT
+            echo "triggered=true" >> $GITHUB_OUTPUT
+            echo "::notice::Release triggered for ${TAG}"
+          else
+            echo "triggered=false" >> $GITHUB_OUTPUT
+            echo "::notice::No release trigger in commit message"
+          fi
+
+      - name: Create and push tag
+        if: steps.check.outputs.triggered == 'true'
+        env:
+          TAG: ${{ steps.check.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin "${TAG}"
+          echo "::notice::Pushed tag ${TAG} — release workflow will pick it up"

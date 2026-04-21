@@ -1,12 +1,14 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -46,12 +48,10 @@ type ClientEntry struct {
 	InitConnWindow   int `yaml:"init_conn_window,omitempty" json:"init_conn_window"`
 	MaxConnWindow    int `yaml:"max_conn_window,omitempty" json:"max_conn_window"`
 
-	// Connection mode for multi-IP: "" = direct (single IP), "quality", "aggregate"
-	ConnMode string `yaml:"conn_mode,omitempty" json:"conn_mode,omitempty"`
-
 	// Misc
-	FastOpen bool `yaml:"fast_open,omitempty" json:"fast_open"`
-	Disabled bool `yaml:"disabled,omitempty" json:"disabled"`
+	FastOpen   bool   `yaml:"fast_open,omitempty" json:"fast_open"`
+	BBRProfile string `yaml:"bbr_profile,omitempty" json:"bbr_profile,omitempty"` // "", "standard", "conservative", "aggressive"
+	Disabled   bool   `yaml:"disabled,omitempty" json:"disabled"`
 }
 
 // AllAddrs returns the effective address list. If Addrs is populated, returns it.
@@ -75,7 +75,8 @@ func (c ClientEntry) PrimaryAddr() string {
 }
 
 type PeerConfig struct {
-	Nested bool `yaml:"nested" json:"nested"`
+	Nested   bool `yaml:"nested" json:"nested"`
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
 }
 
 type ServerConfig struct {
@@ -115,6 +116,16 @@ type Config struct {
 	ForceHTTPS  bool                  `yaml:"force_https,omitempty" json:"force_https,omitempty"`
 	HTTPSCertID     string                `yaml:"https_cert_id,omitempty" json:"https_cert_id,omitempty"`
 	SessionTimeoutH int                   `yaml:"session_timeout_h,omitempty" json:"session_timeout_h,omitempty"` // hours, default 12
+	// Persisted topology-graph layout: node key → SVG coordinates. Stored
+	// server-side so the layout follows the user across browsers/devices
+	// and multiple concurrent sessions converge on a single source of truth.
+	GraphLayout map[string]GraphLayoutPos `yaml:"graph_layout,omitempty" json:"graph_layout,omitempty"`
+}
+
+// GraphLayoutPos stores a single node's coordinates in the topology graph.
+type GraphLayoutPos struct {
+	X float64 `yaml:"x" json:"x"`
+	Y float64 `yaml:"y" json:"y"`
 }
 
 type proxyHandle struct {
@@ -140,9 +151,11 @@ type App struct {
 	ssCancel     context.CancelFunc
 	l2tpCancel   context.CancelFunc
 	ikev2Cancel  context.CancelFunc
-	usersMu      sync.RWMutex
-	userIndex    map[string]*UserConfig // username → user (for fast auth lookup)
-	trafficDirty sync.Map              // username → true (needs flush)
+	usersMu       sync.RWMutex
+	userIndex     map[string]*UserConfig           // username → user (for fast auth lookup)
+	pwConflicted  map[string]map[string]bool       // username → proxy → conflicted
+	pwConflictAll map[string]map[string][]string   // proxy → password → []usernames (for API)
+	trafficDirty  sync.Map                         // username → true (needs flush)
 	Sessions     *SessionManager
 }
 
@@ -189,6 +202,24 @@ func (a *App) AllActivePaths() map[string]string {
 		cp[k] = v
 	}
 	return cp
+}
+
+// SetGraphLayout replaces the persisted graph-layout map with the supplied
+// one. A nil or empty map clears the layout (returns the UI to auto-layout).
+func (a *App) SetGraphLayout(pos map[string]GraphLayoutPos) error {
+	return a.store.Update(func(c *Config) {
+		if len(pos) == 0 {
+			c.GraphLayout = nil
+			return
+		}
+		// Defensive copy so future caller mutations don't leak into the
+		// persisted config.
+		cp := make(map[string]GraphLayoutPos, len(pos))
+		for k, v := range pos {
+			cp[k] = v
+		}
+		c.GraphLayout = cp
+	})
 }
 
 func (a *App) UpdateWebCredentials(username, passHash string) {
@@ -348,6 +379,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	// Start rule engine (host mode only)
 	a.StartRuleEngine()
+	a.StartRuleReconciler(ctx)
 
 	// Start clients (block disabled ones from inbound too)
 	for _, cl := range cfg.Clients {
@@ -538,8 +570,23 @@ func (a *App) StartProxy(pc ProxyConfig) {
 		cancel()
 		return
 	}
+	// TLS wrapping if cert specified
+	if pc.TLSCert != "" {
+		tlsCfg, tlsErr := a.tls.TLSConfig(pc.TLSCert)
+		if tlsErr != nil {
+			log.Printf("[%s] proxy %s: TLS cert %q: %v", a.node.Name(), pc.ID, pc.TLSCert, tlsErr)
+			ln.Close()
+			cancel()
+			return
+		}
+		ln = tls.NewListener(ln, tlsCfg)
+	}
 	a.proxyHandles[pc.ID] = &proxyHandle{listener: ln, cancel: cancel}
-	log.Printf("[%s] %s proxy %s on %s (exit_via=%q)", a.node.Name(), pc.Protocol, pc.ID, pc.Listen, pc.ExitVia)
+	tlsLabel := ""
+	if pc.TLSCert != "" {
+		tlsLabel = "+tls"
+	}
+	log.Printf("[%s] %s%s proxy %s on %s (exit_via=%q)", a.node.Name(), pc.Protocol, tlsLabel, pc.ID, pc.Listen, pc.ExitVia)
 	go a.serveProxy(ctx, ln, pc)
 }
 
@@ -599,9 +646,87 @@ func (a *App) rebuildUserIndex() {
 	for i := range cfg.Users {
 		index[cfg.Users[i].Username] = &cfg.Users[i]
 	}
+
+	// Build password conflict maps for password-only proxies.
+	// To add a new proxy type: add its key here AND in the frontend proxyRegistry.ts
+	proxyPwUsers := make(map[string]map[string][]string)
+	for _, proxy := range PasswordOnlyProxies {
+		proxyPwUsers[proxy] = make(map[string][]string)
+	}
+	for _, u := range cfg.Users {
+		if !u.Enabled {
+			continue
+		}
+		for _, proxy := range PasswordOnlyProxies {
+			pw := u.EffectivePassword(proxy)
+			proxyPwUsers[proxy][pw] = append(proxyPwUsers[proxy][pw], u.Username)
+		}
+	}
+	// Also check system password against hy2 users (relay/user ambiguity)
+	if cfg.Server.Password != "" {
+		if users, ok := proxyPwUsers["hy2"][cfg.Server.Password]; ok {
+			_ = users // system password collides; mark those users as conflicted
+		}
+	}
+
+	conflicted := make(map[string]map[string]bool)
+	for proxy, pwMap := range proxyPwUsers {
+		for _, usernames := range pwMap {
+			if len(usernames) > 1 {
+				for _, un := range usernames {
+					if conflicted[un] == nil {
+						conflicted[un] = make(map[string]bool)
+					}
+					conflicted[un][proxy] = true
+				}
+			}
+		}
+	}
+
 	a.usersMu.Lock()
 	a.userIndex = index
+	a.pwConflicted = conflicted
+	a.pwConflictAll = proxyPwUsers
 	a.usersMu.Unlock()
+}
+
+// IsPasswordConflicted returns true if the user has a password collision on the given proxy.
+func (a *App) IsPasswordConflicted(username, proxy string) bool {
+	a.usersMu.RLock()
+	defer a.usersMu.RUnlock()
+	if m, ok := a.pwConflicted[username]; ok {
+		return m[proxy]
+	}
+	return false
+}
+
+// GetPasswordConflicts returns a map of username → proxy → []conflicting usernames.
+// Only users with actual conflicts are included.
+func (a *App) GetPasswordConflicts() map[string]map[string][]string {
+	a.usersMu.RLock()
+	defer a.usersMu.RUnlock()
+	result := make(map[string]map[string][]string)
+	for proxy, pwMap := range a.pwConflictAll {
+		for _, usernames := range pwMap {
+			if len(usernames) <= 1 {
+				continue
+			}
+			for _, un := range usernames {
+				if result[un] == nil {
+					result[un] = make(map[string][]string)
+				}
+				// List the OTHER users this one conflicts with
+				others := make([]string, 0, len(usernames)-1)
+				for _, o := range usernames {
+					if o != un {
+						others = append(others, o)
+					}
+				}
+				result[un][proxy] = others
+			}
+		}
+	}
+	return result
 }
 
 func (a *App) LookupUser(username, password string) (*UserConfig, error) {
@@ -656,9 +781,15 @@ func (a *App) AddUser(u UserConfig) error {
 }
 
 func (a *App) UpdateUser(id string, u UserConfig) error {
+	var oldPassword string
+	var oldProxyPw map[string]string
+	var oldUsername string
 	err := a.store.Update(func(c *Config) {
 		for i, existing := range c.Users {
 			if existing.ID == id {
+				oldPassword = existing.Password
+				oldProxyPw = existing.ProxyPasswords
+				oldUsername = existing.Username
 				u.TrafficUsed = existing.TrafficUsed
 				c.Users[i] = u
 				return
@@ -668,6 +799,12 @@ func (a *App) UpdateUser(id string, u UserConfig) error {
 	if err == nil {
 		a.rebuildUserIndex()
 		a.syncVPNSecrets()
+		// If credentials changed, disconnect all active sessions for this user
+		if oldPassword != u.Password || fmt.Sprint(oldProxyPw) != fmt.Sprint(u.ProxyPasswords) || (oldUsername != u.Username && oldUsername != "") {
+			if n := a.Sessions.KickUser(oldUsername); n > 0 {
+				log.Printf("[users] credentials changed for %s, kicked %d sessions", u.Username, n)
+			}
+		}
 	}
 	return err
 }
@@ -770,6 +907,14 @@ func (a *App) StartTrafficFlusher(ctx context.Context) {
 // --- Nested discovery ---
 
 func (a *App) SetNested(peer string, enabled bool) error {
+	// Strip self prefix — inbound peers under self use selfID/name in UI paths
+	// but are direct peers in config (same as dialExit stripping). The UI
+	// may send either "<node_id>/peer" or "<name>/peer" depending on which
+	// the TreeTable happened to use as rootPath, so accept both.
+	cfg := a.store.Get()
+	if parts := strings.SplitN(peer, "/", 2); len(parts) == 2 && (parts[0] == a.node.Name() || parts[0] == cfg.NodeID) {
+		peer = parts[1]
+	}
 	a.node.SetNestedDiscovery(peer, enabled)
 	return a.store.Update(func(c *Config) {
 		if c.Peers == nil {
@@ -777,6 +922,35 @@ func (a *App) SetNested(peer string, enabled bool) error {
 		}
 		pc := c.Peers[peer]
 		pc.Nested = enabled
+		c.Peers[peer] = pc
+		// Cascade: disabling nested also clears all descendant nested configs
+		if !enabled {
+			prefix := peer + "/"
+			for key := range c.Peers {
+				if len(key) > len(prefix) && key[:len(prefix)] == prefix {
+					delete(c.Peers, key)
+				}
+			}
+		}
+	})
+}
+
+// SetPeerDisabled marks a peer (or qualified peer path) as disabled,
+// preventing it from being used as an exit hop without dropping the connection.
+func (a *App) SetPeerDisabled(peer string, disabled bool) error {
+	// Strip self prefix to match how SetNested handles it — accept both
+	// the display name and the node_id since the UI uses whichever it
+	// has cached first.
+	cfg := a.store.Get()
+	if parts := strings.SplitN(peer, "/", 2); len(parts) == 2 && (parts[0] == a.node.Name() || parts[0] == cfg.NodeID) {
+		peer = parts[1]
+	}
+	return a.store.Update(func(c *Config) {
+		if c.Peers == nil {
+			c.Peers = make(map[string]PeerConfig)
+		}
+		pc := c.Peers[peer]
+		pc.Disabled = disabled
 		c.Peers[peer] = pc
 	})
 }
@@ -960,6 +1134,9 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 				MaxConnectionReceiveWindow:     134217728,
 				DisablePathMTUDiscovery:        TunCaptureActive(), // only in compat mode where Docker bridge may drop large UDP
 			},
+			CongestionConfig: hyclient.CongestionConfig{
+				BBRProfile: cl.BBRProfile,
+			},
 			BandwidthConfig: hyclient.BandwidthConfig{
 				MaxTx: 125000000,
 				MaxRx: 125000000,
@@ -980,10 +1157,27 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 		a.node.AddPeerConn(peerName, c, extraAddr, status)
 		log.Printf("[%s] extra IP %s for %s: %s", a.node.Name(), extraAddr, peerName, status)
 
-		// Block until context cancelled or connection dies
-		<-ctx.Done()
-		c.Close()
-		return
+		// Monitor connection health — reconnect if it dies
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				c.Close()
+				return
+			case <-ticker.C:
+				// Probe: try opening a lightweight stream
+				probe, err := c.TCP("_relay_latency_:0")
+				if err != nil {
+					log.Printf("[%s] extra IP %s for %s: connection lost, reconnecting", a.node.Name(), extraAddr, peerName)
+					c.Close()
+					break // break select, continue outer for loop to reconnect
+				}
+				probe.Close()
+				continue // probe successful, keep monitoring
+			}
+			break // connection lost, reconnect
+		}
 	}
 }
 
@@ -1105,6 +1299,9 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 			MaxConnectionReceiveWindow:     mcw,
 			DisablePathMTUDiscovery:        TunCaptureActive(), // only in compat mode where Docker bridge may drop large UDP
 		},
+		CongestionConfig: hyclient.CongestionConfig{
+			BBRProfile: cl.BBRProfile,
+		},
 		BandwidthConfig: hyclient.BandwidthConfig{
 			MaxTx: maxTx,
 			MaxRx: maxRx,
@@ -1119,6 +1316,29 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 
 	// Try hy2scale relay protocol first
 	err = a.node.AttachTo(ctx, cl.Name, c, func(remoteID string) {
+		// Check for name conflict: another client with different addr has the same ID
+		if remoteID != "" {
+			isConflict := false
+			cfg := a.store.Get()
+			for _, other := range cfg.Clients {
+				if other.Addr != cl.Addr && other.Name == remoteID {
+					log.Printf("[%s] NAME CONFLICT: %s (%s) and %s both claim ID %q",
+						a.node.Name(), cl.Addr, cl.Name, other.Addr, remoteID)
+					isConflict = true
+					break
+				}
+			}
+			if remoteID == a.node.Name() {
+				log.Printf("[%s] NAME CONFLICT: peer %s claims our own ID %q", a.node.Name(), cl.Addr, remoteID)
+				isConflict = true
+			}
+			if isConflict {
+				a.node.SetPeerConflict(cl.Addr, remoteID)
+				return // don't rename
+			}
+			// No conflict — clear any previous conflict for this addr
+			a.node.SetPeerConflict(cl.Addr, "")
+		}
 		if remoteID != "" && remoteID != cl.Name {
 			log.Printf("[%s] peer %s actual ID: %s", a.node.Name(), cl.Addr, remoteID)
 			oldName := cl.Name
@@ -1129,10 +1349,29 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 						break
 					}
 				}
-				// Migrate Peers config (nested flag etc.) to new name
-				if pc, ok := cfg.Peers[oldName]; ok {
-					cfg.Peers[remoteID] = pc
-					delete(cfg.Peers, oldName)
+				// Rename all references to old peer ID throughout config
+				renamePeerRef := func(s string) string {
+					return strings.ReplaceAll(s, oldName, remoteID)
+				}
+				// Peers config (nested flags, path-based keys)
+				newPeers := make(map[string]PeerConfig)
+				for k, v := range cfg.Peers {
+					newPeers[renamePeerRef(k)] = v
+				}
+				cfg.Peers = newPeers
+				// Proxy exit_via and exit_paths
+				for i := range cfg.Proxies {
+					cfg.Proxies[i].ExitVia = renamePeerRef(cfg.Proxies[i].ExitVia)
+					for j := range cfg.Proxies[i].ExitPaths {
+						cfg.Proxies[i].ExitPaths[j] = renamePeerRef(cfg.Proxies[i].ExitPaths[j])
+					}
+				}
+				// User exit_via and exit_paths
+				for i := range cfg.Users {
+					cfg.Users[i].ExitVia = renamePeerRef(cfg.Users[i].ExitVia)
+					for j := range cfg.Users[i].ExitPaths {
+						cfg.Users[i].ExitPaths[j] = renamePeerRef(cfg.Users[i].ExitPaths[j])
+					}
 				}
 			})
 			// Clean up old name from relay
@@ -1156,6 +1395,9 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 				InitialConnectionReceiveWindow: icw,
 				MaxConnectionReceiveWindow:     mcw,
 			},
+			CongestionConfig: hyclient.CongestionConfig{
+				BBRProfile: cl.BBRProfile,
+			},
 			BandwidthConfig: hyclient.BandwidthConfig{MaxTx: maxTx, MaxRx: maxRx},
 			FastOpen:        cl.FastOpen,
 		})
@@ -1175,7 +1417,12 @@ func (a *App) serveProxy(ctx context.Context, ln net.Listener, pc ProxyConfig) {
 		if err != nil {
 			return
 		}
-		go a.handleSOCKS5(c, &pc)
+		switch pc.Protocol {
+		case "http":
+			go a.handleHTTP(c, &pc)
+		default:
+			go a.handleSOCKS5(c, &pc)
+		}
 	}
 }
 
@@ -1306,6 +1553,175 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 	}
 }
 
+// handleHTTP implements an HTTP CONNECT proxy (RFC 7231 §4.3.6).
+// Also supports plain HTTP forwarding for non-CONNECT requests.
+func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
+	defer conn.Close()
+	br := bufio.NewReader(conn)
+
+	// Read the HTTP request line
+	reqLine, err := br.ReadString('\n')
+	if err != nil {
+		return
+	}
+	parts := strings.SplitN(strings.TrimSpace(reqLine), " ", 3)
+	if len(parts) < 3 {
+		conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+		return
+	}
+	method, target := parts[0], parts[1]
+
+	// Read headers (we need Host and Proxy-Authorization)
+	headers := make(map[string]string)
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil || strings.TrimSpace(line) == "" {
+			break
+		}
+		if idx := strings.IndexByte(line, ':'); idx > 0 {
+			headers[strings.ToLower(strings.TrimSpace(line[:idx]))] = strings.TrimSpace(line[idx+1:])
+		}
+	}
+
+	// Auth: check Proxy-Authorization if users configured
+	cfg := a.store.Get()
+	hasUsers := len(cfg.Users) > 0
+	var user *UserConfig
+	username := ""
+	if hasUsers {
+		authHeader := headers["proxy-authorization"]
+		if authHeader == "" {
+			conn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"proxy\"\r\n\r\n"))
+			return
+		}
+		// Parse Basic auth: "Basic base64(user:pass)"
+		if !strings.HasPrefix(authHeader, "Basic ") {
+			conn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"proxy\"\r\n\r\n"))
+			return
+		}
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(authHeader, "Basic "))
+		if err != nil {
+			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+			return
+		}
+		creds := strings.SplitN(string(decoded), ":", 2)
+		if len(creds) != 2 {
+			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+			return
+		}
+		u, err := a.LookupUser(creds[0], creds[1])
+		if err != nil {
+			conn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"proxy\"\r\n\r\n"))
+			return
+		}
+		user = u
+		username = u.Username
+	}
+
+	// Resolve exit routing: proxy config overrides user config
+	exitVia := ""
+	exitMode := ""
+	var exitPaths []string
+	if user != nil {
+		exitVia = user.ExitVia
+		exitMode = user.ExitMode
+		exitPaths = user.ExitPaths
+	}
+	if pc != nil && pc.ExitVia != "" {
+		exitVia = pc.ExitVia
+		exitMode = pc.ExitMode
+		exitPaths = pc.ExitPaths
+	}
+
+	var addr string
+	if method == "CONNECT" {
+		// CONNECT method: tunnel mode
+		addr = target
+		if !strings.Contains(addr, ":") {
+			addr += ":443"
+		}
+	} else {
+		// Plain HTTP: extract host from URL or Host header
+		host := headers["host"]
+		if host == "" {
+			// Try extracting from absolute URL
+			if strings.HasPrefix(target, "http://") {
+				u := strings.TrimPrefix(target, "http://")
+				if idx := strings.IndexByte(u, '/'); idx > 0 {
+					host = u[:idx]
+				} else {
+					host = u
+				}
+			}
+		}
+		if host == "" {
+			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
+			return
+		}
+		if !strings.Contains(host, ":") {
+			host += ":80"
+		}
+		addr = host
+	}
+
+	// Dial remote
+	var remote net.Conn
+	if exitVia == "" {
+		remote, err = net.DialTimeout("tcp", addr, 10*time.Second)
+	} else {
+		remote, err = a.dialExitWithPaths(context.Background(), exitVia, exitPaths, exitMode, addr)
+	}
+	if err != nil {
+		conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+		return
+	}
+	defer remote.Close()
+
+	if method == "CONNECT" {
+		conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+	} else {
+		// Forward the original request to the remote
+		fmt.Fprintf(remote, "%s %s %s\r\n", method, target, parts[2])
+		for k, v := range headers {
+			if k != "proxy-authorization" && k != "proxy-connection" {
+				fmt.Fprintf(remote, "%s: %s\r\n", k, v)
+			}
+		}
+		fmt.Fprintf(remote, "\r\n")
+		// Forward any remaining buffered data
+		if br.Buffered() > 0 {
+			buffered := make([]byte, br.Buffered())
+			br.Read(buffered)
+			remote.Write(buffered)
+		}
+	}
+
+	// Session tracking
+	remoteIP := ""
+	if ta, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+		remoteIP = ta.IP.String()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	sid := a.Sessions.Connect(username, remoteIP, "http", cancel)
+
+	var up, down int64
+	done := make(chan struct{})
+	go func() {
+		n, _ := copyCtx(ctx, remote, conn)
+		atomic.AddInt64(&up, n)
+		remote.Close()
+		done <- struct{}{}
+	}()
+	n, _ := copyCtx(ctx, conn, remote)
+	atomic.AddInt64(&down, n)
+	cancel()
+	<-done
+	a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))
+	if username != "" {
+		a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))
+	}
+}
+
 // copyCtx copies data respecting context cancellation.
 func copyCtx(ctx context.Context, dst io.Writer, src io.Reader) (int64, error) {
 	done := make(chan struct{})
@@ -1361,39 +1777,72 @@ var localExitGateway = sync.OnceValue(func() string {
 	return ""
 })
 
-// rewriteLocalAddr replaces the host IP with the Docker gateway when available.
-// This ensures services on the host don't see connections from their own IP.
+// rewriteLocalAddr replaces loopback destinations with the Docker gateway.
+// Only rewrites 127.0.0.0/8 addresses — public IPs and hostnames pass through unchanged.
+// This fixes Docker NAT hairpin (container accessing host services via localhost)
+// without breaking relay exit traffic to the internet.
 func rewriteLocalAddr(addr string) string {
 	gw := localExitGateway()
 	if gw == "" {
 		return addr
 	}
-	_, port, err := net.SplitHostPort(addr)
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return addr
 	}
-	rewritten := net.JoinHostPort(gw, port)
-	log.Printf("[exit] rewriting local exit %s → %s", addr, rewritten)
-	return rewritten
+	ip := net.ParseIP(host)
+	if ip != nil && ip.IsLoopback() {
+		rewritten := net.JoinHostPort(gw, port)
+		log.Printf("[exit] rewriting loopback %s → %s", addr, rewritten)
+		return rewritten
+	}
+	return addr
 }
 
 // dialExit routes traffic through an exit path, stripping the local node name prefix.
 // dialExitWithMode routes traffic with the specified exit mode.
 // mode: "" = direct, "quality" = adaptive failover, "aggregate" = load balance
-// ValidateExitMode checks exit_mode compatibility. Mode only applies to
-// single-hop exits at dial time; path-based exits silently ignore the mode.
-func ValidateExitMode(exitVia, exitMode string) error {
-	return nil
+// SanitizeExitMode checks and sanitizes exit_mode.
+// - Clears mode if no meaningful exit paths exist
+// - Aggregate mode requires all paths to reach the same final exit node
+// Returns the (possibly corrected) mode and any validation error.
+func SanitizeExitMode(exitPaths []string, exitMode string) (string, error) {
+	if exitMode == "" {
+		return "", nil
+	}
+	// Filter empty paths
+	var filled []string
+	for _, p := range exitPaths {
+		if p != "" {
+			filled = append(filled, p)
+		}
+	}
+	// No paths → reset mode to direct
+	if len(filled) == 0 {
+		return "", nil
+	}
+	// Aggregate: all paths must end at the same node
+	if exitMode == "aggregate" || exitMode == "speed" {
+		if len(filled) > 1 {
+			var target string
+			for _, p := range filled {
+				parts := strings.Split(p, "/")
+				last := parts[len(parts)-1]
+				if target == "" {
+					target = last
+				} else if last != target {
+					return "", fmt.Errorf("aggregate mode requires all paths to reach the same exit node, but got %q and %q", target, last)
+				}
+			}
+		}
+	}
+	return exitMode, nil
 }
 
 func (a *App) dialExitWithMode(ctx context.Context, exitVia, exitMode, addr string) (net.Conn, error) {
 	// Reject traffic through disabled nodes
-	if exitVia != "" {
-		for _, hop := range strings.Split(exitVia, "/") {
-			if a.isNodeDisabled(hop) {
-				return nil, fmt.Errorf("exit node %q is disabled", hop)
-			}
-		}
+	if exitVia != "" && a.isExitPathDisabled(exitVia) {
+		return nil, fmt.Errorf("exit path %q is disabled", exitVia)
 	}
 	if exitMode != "" && exitVia != "" && !strings.Contains(exitVia, "/") {
 		var conn net.Conn
@@ -1405,7 +1854,7 @@ func (a *App) dialExitWithMode(ctx context.Context, exitVia, exitMode, addr stri
 			conn, err = a.dialBond(ctx, exitVia, addr)
 		}
 		if conn != nil {
-			return wrapIdleTimeout(conn), err
+			return wrapIdleTimeoutCtx(ctx, conn), err
 		}
 		if err != nil {
 			return nil, err
@@ -1428,17 +1877,10 @@ func (a *App) dialExitWithPaths(ctx context.Context, exitVia string, exitPaths [
 	case "aggregate", "speed":
 		return a.dialExitWithMode(ctx, exitVia, exitMode, addr)
 	}
-	// Filter out disabled paths
+	// Filter out disabled paths (checks both individual hops and qualified path prefixes)
 	var active []string
 	for _, p := range paths {
-		skip := false
-		for _, hop := range strings.Split(p, "/") {
-			if a.isNodeDisabled(hop) {
-				skip = true
-				break
-			}
-		}
-		if !skip {
+		if !a.isExitPathDisabled(p) {
 			active = append(active, p)
 		}
 	}
@@ -1524,15 +1966,64 @@ func (a *App) isNodeDisabled(name string) bool {
 			return true
 		}
 	}
+	// Also check Peers map for non-root nodes (e.g. inbound nested children)
+	if pc, ok := cfg.Peers[name]; ok && pc.Disabled {
+		return true
+	}
+	return false
+}
+
+// isExitPathDisabled checks if any hop along an exit path is disabled.
+// It checks both individual hop names and qualified path prefixes.
+func (a *App) isExitPathDisabled(exitVia string) bool {
+	cfg := a.store.Get()
+	parts := strings.Split(exitVia, "/")
+	// Check each progressively-longer prefix as a qualified path
+	for i := 1; i <= len(parts); i++ {
+		prefix := strings.Join(parts[:i], "/")
+		if pc, ok := cfg.Peers[prefix]; ok && pc.Disabled {
+			return true
+		}
+	}
+	// Also check individual hop names against Clients
+	for _, hop := range parts {
+		if a.isNodeDisabled(hop) {
+			return true
+		}
+	}
 	return false
 }
 
 // dialExit routes traffic through an exit path (direct mode, no adaptive/LB).
 func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, error) {
 	parts := splitPath(exitVia)
-	// Strip leading self name (e.g. "AUB/64e7c9f5" on node AUB → ["64e7c9f5"])
-	if len(parts) > 0 && parts[0] == a.node.Name() {
+	cfg := a.store.Get()
+	// Strip leading self label (either our display name or our node_id)
+	// so exit_via expressed as either "hub/au/…" or "188c762f/au/…" both
+	// normalize to the same remaining chain.
+	if len(parts) > 0 && (parts[0] == a.node.Name() || parts[0] == cfg.NodeID) {
 		parts = parts[1:]
+	}
+	// Rule 1 (including self identity): reject paths that revisit any node.
+	// Self identity covers BOTH the display name and node_id — neither may
+	// reappear mid-path or as a terminal hop, regardless of which one was
+	// used at the root. Matches the UI ancestor filter.
+	seen := map[string]bool{a.node.Name(): true, cfg.NodeID: true}
+	for _, h := range parts {
+		if seen[h] {
+			log.Printf("[exit] rejecting loop path %q (revisits %q)", exitVia, h)
+			return nil, fmt.Errorf("exit path %q loops back through %q", exitVia, h)
+		}
+		seen[h] = true
+	}
+	// Rule 2: every intermediate hop must have nested=true on our side
+	// before the path can be dialed. A single nested=false anywhere along
+	// the chain makes the exit unreachable, matching the UI — red node =
+	// undialable. This closes the "route bypasses nested gate" hole that
+	// pre-rule-3 findPathsTo left open.
+	if !isPathAuthorised(parts, cfg) {
+		log.Printf("[exit] rejecting unauthorised path %q (nested gate closed on an ancestor)", exitVia)
+		return nil, fmt.Errorf("exit path %q not authorised by local nested config", exitVia)
 	}
 	if len(parts) == 0 {
 		return net.DialTimeout("tcp", rewriteLocalAddr(addr), 10*time.Second)
@@ -1547,17 +2038,53 @@ func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, err
 				return a.dialExit(ctx, pick, addr)
 			}
 		}
-		conn, err := a.node.DialTCP(ctx, parts[0], addr)
-		if err != nil {
+		// Use bridged connection for single-hop: survives QUIC reconnects.
+		// Retry with backoff if peer is temporarily disconnected (up to 30s).
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			conn, _, err := a.node.DialTCPBridged(parts[0], addr)
+			if err == nil {
+				return conn, nil
+			}
+			// Fallback to non-bridged (e.g. inbound peer)
+			conn, err = a.node.DialTCP(ctx, parts[0], addr)
+			if err == nil {
+				peerCtx := a.node.PeerCtx(parts[0])
+				return wrapIdleTimeoutCtx(peerCtx, conn), nil
+			}
+			// If past deadline or context canceled, give up
+			if time.Now().After(deadline) {
+				return nil, err
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+		}
+	}
+	// Multi-hop: use bridged via connection for first-hop resilience, with retry
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		conn, _, err := a.node.DialViaBridged(ctx, parts, addr)
+		if err == nil {
+			return conn, nil
+		}
+		// Fallback to non-bridged
+		conn2, err2 := a.node.DialVia(ctx, parts, addr)
+		if err2 == nil {
+			peerCtx := a.node.PeerCtx(parts[0])
+			return wrapIdleTimeoutCtx(peerCtx, conn2), nil
+		}
+		if time.Now().After(deadline) {
 			return nil, err
 		}
-		return wrapIdleTimeout(conn), nil
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
 	}
-	conn, err := a.node.DialVia(ctx, parts, addr)
-	if err != nil {
-		return nil, err
-	}
-	return wrapIdleTimeout(conn), nil
 }
 
 // dialExitUDP opens a UDP connection through the specified exit node.
@@ -1620,12 +2147,28 @@ func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
 		}()
 		return c2, nil
 	}
-	// For native hy2 client users: their traffic is handled by hy2 server directly
-	// Route through their exit_via if they authenticated as a user
-	// Note: hy2 server doesn't pass user info to Outbound, so we can't do per-user
-	// routing here. Native hy2 client users exit directly (local network).
-	// Per-user exit routing works through SOCKS5/SS where we control the full flow.
-	return net.DialTimeout("tcp", rewriteLocalAddr(reqAddr), 10*time.Second)
+	// Parse bridge tag for stream rebind support: "addr#bridge=sb_X"
+	actualAddr, bridgeID, isBridged := relay.ParseBridgeAddr(reqAddr)
+
+	// Check if this is a rebind to an existing bridge
+	if isBridged {
+		if rebindConn := o.node.Bridges().TryRebind(bridgeID); rebindConn != nil {
+			log.Printf("[exit] rebind accepted: %s", bridgeID)
+			return rebindConn, nil
+		}
+	}
+
+	conn, err := net.DialTimeout("tcp", rewriteLocalAddr(actualAddr), 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+
+	// If bridge ID provided, wrap in a bridge for future rebinding
+	if isBridged {
+		return o.node.Bridges().CreateWithID(bridgeID, actualAddr, conn), nil
+	}
+
+	return conn, nil
 }
 
 func (o *nodeOutbound) UDP(addr string) (hyserver.UDPConn, error) {
@@ -1648,7 +2191,11 @@ func (a *hy2Auth) Authenticate(addr net.Addr, auth string, tx uint64) (bool, str
 	// Check user passwords first
 	cfg := a.app.store.Get()
 	for _, u := range cfg.Users {
-		if u.Password == auth && u.Enabled {
+		if u.EffectivePassword("hy2") == auth && u.Enabled {
+			// Skip if this user's hy2 password conflicts with another user
+			if a.app.IsPasswordConflicted(u.Username, "hy2") {
+				continue
+			}
 			// Check expiry
 			if u.ExpiryDate != "" {
 				if t, err := time.Parse("2006-01-02", u.ExpiryDate); err == nil && time.Now().After(t) {

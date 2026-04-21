@@ -1,0 +1,18 @@
+Hy2Scale - Decentralized Hysteria2 Relay Network
+
+Features:
+- Hysteria2 QUIC tunnel relay
+- L2TP/IPsec VPN server
+- IKEv2/MSCHAPv2 VPN server
+- WireGuard VPN server
+- IP/Domain routing rules engine
+- TUN mode IP packet forwarding
+- SOCKS5/Shadowsocks proxy
+- Web management UI
+
+Usage:
+1. Access http://<device-ip>:<web-port>/scale/ after installation
+2. Default username: admin, set password on first login
+3. Add relay nodes on the Nodes page
+4. Add VPN users on the Users page
+5. Enable L2TP/IKEv2/WireGuard on the Proxies page

@@ -13,6 +13,10 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"gvisor.dev/gvisor/pkg/buffer"
+	"gvisor.dev/gvisor/pkg/tcpip/header"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
 
 // TUN-based IP packet forwarding engine.
@@ -34,9 +38,10 @@ type ipfwdEngine struct {
 	tunFd  *tunDevice
 	cancel context.CancelFunc
 
-	// Per-peer QUIC IP tunnel streams (entry side)
-	streams   map[string]*ipfwdStream
-	streamsMu sync.Mutex
+	// Per-peer QUIC IP tunnel streams (entry side, full TUN capable exits)
+	streams      map[string]*ipfwdStream
+	reconnecting map[string]bool
+	streamsMu    sync.Mutex
 
 	// Dynamic target list (updated by hot rule changes)
 	targets   []ipfwdTarget
@@ -96,6 +101,12 @@ func (a *App) StartIPForwarding(targets []ipfwdTarget) error {
 	// Configure TUN interface — no IP address to avoid kernel using it as source
 	run("ip", "link", "set", ipfwdTunName, "up", "mtu", fmt.Sprintf("%d", ipfwdTunMTU))
 
+	// Disable reverse-path filter: gvisor compat mode writes SYN-ACK packets
+	// to the TUN with spoofed source IPs (e.g. 8.8.8.8) that aren't routable
+	// via this interface in the main table. rp_filter=1 (strict) drops them.
+	run("sysctl", "-w", "net.ipv4.conf."+ipfwdTunName+".rp_filter=0")
+	run("sysctl", "-w", "net.ipv4.conf.all.rp_filter=0")
+
 	// Default route in table 101 via TUN.
 	// Specify src to avoid kernel picking a local IP that may conflict on exit node.
 	mainIP := getMainIP()
@@ -107,10 +118,11 @@ func (a *App) StartIPForwarding(targets []ipfwdTarget) error {
 
 	ctx, cancel := context.WithCancel(a.appCtx)
 	eng := &ipfwdEngine{
-		app:     a,
-		tunFd:   &tunDevice{fd: rawFd, file: tunFile, name: ipfwdTunName},
-		cancel:  cancel,
-		streams: make(map[string]*ipfwdStream),
+		app:          a,
+		tunFd:        &tunDevice{fd: rawFd, file: tunFile, name: ipfwdTunName},
+		cancel:       cancel,
+		streams:      make(map[string]*ipfwdStream),
+		reconnecting: make(map[string]bool),
 	}
 
 	// Add routing rules for each target
@@ -191,6 +203,7 @@ func (a *App) StopIPForwarding() {
 type ipfwdTarget struct {
 	cidrs   []string
 	exitVia string
+	ruleID  string
 }
 
 // tunReadLoop reads raw IP packets from TUN, determines exit peer, sends through QUIC.
@@ -252,14 +265,27 @@ func (eng *ipfwdEngine) tunReadLoop(ctx context.Context) {
 			continue
 		}
 
-		// Get or create QUIC IP tunnel stream to exit peer
-		stream, err := eng.getStream(ctx, exitPeer)
-		if err != nil {
-			debugLog("[tun-ipfwd] stream to %s: %v", exitPeer, err)
+		// Decide compat vs full-TUN per packet by querying current peer
+		// capability — the answer can change as peers connect/disconnect, and
+		// caching at rule-apply time would freeze a wrong decision when peers
+		// hadn't registered yet.
+		if !eng.app.node.IsPeerTunCapable(exitPeer) {
+			// Compat mode: lazily start gvisor stack on first compat packet,
+			// then inject for L7 (TCP/UDP) extraction and relay proxying.
+			if !tunCaptureActive.Load() {
+				eng.ensureCompatStack()
+			}
+			debugLog("[tun-ipfwd] compat→ inject %d bytes dst=%s via=%s", len(pkt), dstIP, exitPeer)
+			eng.injectToNetstack(pkt)
 			continue
 		}
 
-		// Write framed packet: [2-byte length][packet]
+		// Full TUN mode: send raw IP frame to exit via QUIC stream
+		stream := eng.getStream(ctx, exitPeer)
+		if stream == nil {
+			continue
+		}
+
 		frame := make([]byte, 2+n)
 		binary.BigEndian.PutUint16(frame[:2], uint16(n))
 		copy(frame[2:], pkt)
@@ -273,36 +299,75 @@ func (eng *ipfwdEngine) tunReadLoop(ctx context.Context) {
 	}
 }
 
-// getStream returns or creates a QUIC IP tunnel stream to the exit peer.
-func (eng *ipfwdEngine) getStream(ctx context.Context, peerName string) (*ipfwdStream, error) {
+// getStream returns an existing healthy stream or nil (never blocks).
+// If no stream exists, kicks off async reconnect in the background.
+func (eng *ipfwdEngine) getStream(ctx context.Context, peerName string) *ipfwdStream {
 	eng.streamsMu.Lock()
 	defer eng.streamsMu.Unlock()
 
 	if s, ok := eng.streams[peerName]; ok && !s.closed {
-		return s, nil
+		return s
 	}
 
-	// Dial IP tunnel to peer (with timeout to avoid blocking read loop)
+	// No healthy stream — trigger async reconnect (if not already running)
+	if _, reconnecting := eng.reconnecting[peerName]; !reconnecting {
+		eng.reconnecting[peerName] = true
+		go eng.asyncConnect(ctx, peerName)
+	}
+	return nil
+}
+
+// asyncConnect dials the exit peer in the background and installs the stream.
+// It also monitors the first-hop peer's connection health: when the relay peer
+// disconnects (PeerCtx cancelled), the TUN stream is torn down immediately
+// instead of waiting for QUIC idle timeout. The next incoming packet will
+// trigger a fresh asyncConnect via getStream.
+func (eng *ipfwdEngine) asyncConnect(ctx context.Context, peerName string) {
+	defer func() {
+		eng.streamsMu.Lock()
+		delete(eng.reconnecting, peerName)
+		eng.streamsMu.Unlock()
+	}()
+
 	dialCtx, dialCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer dialCancel()
+
 	conn, err := eng.app.node.DialIPTun(dialCtx, peerName)
 	if err != nil {
-		return nil, err
+		debugLog("[tun-ipfwd] dial %s failed: %v", peerName, err)
+		return
 	}
 
 	s := &ipfwdStream{conn: conn}
+	eng.streamsMu.Lock()
 	eng.streams[peerName] = s
-
-	// Start reverse reader: exit peer → TUN
-	go func() {
-		defer func() {
-			eng.removeStream(peerName)
-		}()
-		eng.readFromStream(ctx, s)
-	}()
+	eng.streamsMu.Unlock()
 
 	log.Printf("[tun-ipfwd] IP tunnel to %s established", peerName)
-	return s, nil
+
+	// Watch first-hop peer liveness. When relay detects peer disconnect
+	// (3 failed pings → cancel peerCtx), tear down this stream immediately.
+	firstHop := peerName
+	if parts := strings.Split(peerName, "/"); len(parts) > 0 {
+		if parts[0] == eng.app.node.Name() && len(parts) > 1 {
+			firstHop = parts[1]
+		} else {
+			firstHop = parts[0]
+		}
+	}
+	peerCtx := eng.app.node.PeerCtx(firstHop)
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-peerCtx.Done():
+			log.Printf("[tun-ipfwd] first-hop %s disconnected, tearing down tunnel to %s", firstHop, peerName)
+			s.conn.Close()
+		}
+	}()
+
+	// Reverse reader: exit peer → TUN (blocks until stream dies)
+	eng.readFromStream(ctx, s)
+	eng.removeStream(peerName)
 }
 
 func (eng *ipfwdEngine) removeStream(peerName string) {
@@ -482,18 +547,128 @@ func (a *App) registerExitIPTunHandler(ctx context.Context) {
 	})
 }
 
-// addTargets adds new CIDR→exit mappings to the TUN forwarding table.
-func (eng *ipfwdEngine) addTargets(cidrs []string, exitVia string) {
+// addTargets adds or replaces CIDR→exit mappings in the TUN forwarding table.
+// Closes any TUN stream whose exit peer is no longer referenced by any target.
+func (eng *ipfwdEngine) addTargets(ruleID string, cidrs []string, exitVia string) {
 	eng.targetsMu.Lock()
-	defer eng.targetsMu.Unlock()
-	eng.targets = append(eng.targets, ipfwdTarget{cidrs: cidrs, exitVia: exitVia})
+	eng.targets = filterTargets(eng.targets, ruleID)
+	eng.targets = append(eng.targets, ipfwdTarget{cidrs: cidrs, exitVia: exitVia, ruleID: ruleID})
+	// Build set of all exits still in use
+	activeExits := make(map[string]bool)
+	for _, t := range eng.targets {
+		activeExits[t.exitVia] = true
+	}
+	eng.targetsMu.Unlock()
+
+	// Close streams whose exit is no longer referenced (forces reconnect to new exit)
+	eng.streamsMu.Lock()
+	for k, s := range eng.streams {
+		if s.closed || !activeExits[k] {
+			log.Printf("[tun-ipfwd] closing stale tunnel to %s (exit changed)", k)
+			s.closed = true
+			s.conn.Close()
+			delete(eng.streams, k)
+		}
+	}
+	eng.streamsMu.Unlock()
 }
 
-// removeTargetsForRule is a no-op placeholder; targets are rebuilt on rule changes.
-func (eng *ipfwdEngine) removeTargetsForRule(id string) {
-	// Targets are matched by CIDR, not rule ID. The ip rule removal handles routing.
-	// The target list is additive and doesn't need per-rule removal since
-	// packets that no longer match any ip rule won't reach the TUN.
+// removeTargetsForRule removes targets by rule ID.
+func (eng *ipfwdEngine) removeTargetsForRule(ruleID string) {
+	eng.targetsMu.Lock()
+	defer eng.targetsMu.Unlock()
+	eng.targets = filterTargets(eng.targets, ruleID)
+}
+
+// injectToNetstack feeds a raw IP packet into the gvisor capture stack
+// for L7 (TCP/UDP) extraction and relay proxy forwarding.
+func (eng *ipfwdEngine) injectToNetstack(pkt []byte) {
+	tunCaptureMu.Lock()
+	inst := tunCaptureInst
+	tunCaptureMu.Unlock()
+	if inst == nil || inst.ep == nil {
+		debugLog("[tun-ipfwd] compat inject: no capture stack yet")
+		return
+	}
+	pkb := stack.NewPacketBuffer(stack.PacketBufferOptions{
+		Payload: buffer.MakeWithData(append([]byte(nil), pkt...)),
+	})
+	switch pkt[0] >> 4 {
+	case 4:
+		inst.ep.InjectInbound(header.IPv4ProtocolNumber, pkb)
+	case 6:
+		inst.ep.InjectInbound(header.IPv6ProtocolNumber, pkb)
+	}
+	pkb.DecRef()
+}
+
+// ensureCompatStack starts the gvisor netstack + capture forwarders if not already running.
+// It also bridges gvisor output back to the kernel TUN so TCP handshakes complete.
+func (eng *ipfwdEngine) ensureCompatStack() {
+	if tunCaptureActive.Load() {
+		return
+	}
+	ep, gvStack, err := createCaptureStack(ipfwdTunMTU)
+	if err != nil {
+		log.Printf("[tun-ipfwd] compat stack creation failed: %v", err)
+		return
+	}
+
+	// Install forwarders BEFORE activating — prevents race where an injected
+	// SYN arrives before handlers are set (gvisor would RST it).
+	installCaptureForwarders(gvStack, eng.app)
+
+	tunCaptureMu.Lock()
+	tunCaptureInst = &tunCaptureState{tunFile: eng.tunFd.file, ep: ep, gvStack: gvStack}
+	tunCaptureActive.Store(true)
+	tunCaptureMu.Unlock()
+
+	// Bridge gvisor output → kernel TUN (SYN-ACK, data replies go back to host)
+	go func() {
+		for {
+			pkt := ep.Read()
+			if pkt == nil {
+				time.Sleep(time.Millisecond)
+				continue
+			}
+			view := pkt.ToView()
+			pkt.DecRef()
+			data := view.AsSlice()
+			if len(data) > 0 {
+				if len(data) >= 20 {
+					proto := data[9]
+					srcIP := net.IP(data[12:16])
+					dstIP := net.IP(data[16:20])
+					debugLog("[tun-ipfwd] compat← gvisor %d bytes proto=%d %s→%s",
+						len(data), proto, srcIP, dstIP)
+				}
+				eng.tunFd.Write(data)
+			}
+		}
+	}()
+
+	log.Printf("[tun-ipfwd] compat L7 proxy stack active")
+}
+
+// IsExitCompat returns true if the given exit peer cannot perform full TUN
+// forwarding (i.e. is "limited" — no NET_ADMIN/no /dev/net/tun on its side).
+// This indicates traffic to that exit must use L7 proxy semantics rather than
+// raw IP forwarding, regardless of whether THIS node is running TUN locally.
+func (a *App) IsExitCompat(exitVia string) bool {
+	if exitVia == "" {
+		return false
+	}
+	return !a.node.IsPeerTunCapable(exitVia)
+}
+
+func filterTargets(targets []ipfwdTarget, excludeRuleID string) []ipfwdTarget {
+	var kept []ipfwdTarget
+	for _, t := range targets {
+		if t.ruleID != excludeRuleID {
+			kept = append(kept, t)
+		}
+	}
+	return kept
 }
 
 // getMainIP returns the primary outgoing IP (for src hint in routes).

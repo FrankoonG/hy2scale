@@ -1,0 +1,36 @@
+services:
+  hy2scale:
+    image: hy2scale:ikuai
+    container_name: hy2scale-${NAME_NONCE}
+    deploy:
+      resources:
+        limits:
+          cpus: ${CPUS_LIMIT}
+          memory: ${MEMORY_LIMIT}
+    restart: ${RESTART}
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    device_cgroup_rules:
+      - 'c 10:200 rwm'
+    ports:
+      - ${HOST_IP}:${APP_PORT_WEB}:5565/tcp
+      - ${HOST_IP}:${APP_PORT_HY2}:5565/udp
+    volumes:
+      - ./data/hy2scale:/data
+    env_file:
+      - ./environment
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - doc_app_default
+    labels:
+      createdBy: "Hy2Scale"
+
+networks:
+  doc_app_default:
+    external: true
+    name: doc_app_default

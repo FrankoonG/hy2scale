@@ -12,11 +12,15 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"compress/gzip"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,17 +34,19 @@ import (
 )
 
 type topoSubPeer struct {
-	Name      string         `json:"name"`
-	ExitNode  bool           `json:"exit_node"`
-	Direction string         `json:"direction"`
-	Via       string         `json:"via"`
-	LatencyMs int            `json:"latency_ms"`
-	Nested    bool           `json:"nested"`
-	Native    bool           `json:"native,omitempty"`
-	Version   string         `json:"version,omitempty"`
-	TxRate    uint64         `json:"tx_rate"`
-	RxRate    uint64         `json:"rx_rate"`
-	Children  []topoSubPeer  `json:"children,omitempty"`
+	Name       string         `json:"name"`
+	ExitNode   bool           `json:"exit_node"`
+	Direction  string         `json:"direction"`
+	Via        string         `json:"via"`
+	LatencyMs  int            `json:"latency_ms"`
+	Nested     bool           `json:"nested"`
+	Disabled   bool           `json:"disabled,omitempty"`
+	Native     bool           `json:"native,omitempty"`
+	Version    string         `json:"version,omitempty"`
+	TunCapable bool           `json:"tun_capable,omitempty"`
+	TxRate     uint64         `json:"tx_rate"`
+	RxRate     uint64         `json:"rx_rate"`
+	Children   []topoSubPeer  `json:"children,omitempty"`
 }
 
 type Server struct {
@@ -57,6 +63,19 @@ type Server struct {
 	// Cached nested sub-peers (updated asynchronously)
 	subPeersMu    sync.RWMutex
 	subPeersCache map[string][]topoSubPeer
+	subPeersKick  chan struct{} // signal immediate refresh
+
+	// Graph-layout SSE subscribers. Each entry is a buffered channel
+	// receiving full-snapshot updates; slow consumers drop messages
+	// rather than blocking the PUT handler. Protected by layoutMu.
+	layoutMu     sync.Mutex
+	layoutSubs   map[uint64]chan map[string]app.GraphLayoutPos
+	layoutSubSeq uint64
+
+	// Build ID derived from the embedded index.html hash. Frontend polls
+	// /api/build-id and reloads on mismatch so a server rebuild doesn't
+	// leave long-lived tabs running stale code.
+	buildID string
 }
 
 // validAddrSpec checks "host:portspec" where portspec can be "5565", "1000,2000", "20000-30000"
@@ -112,6 +131,8 @@ func NewServer(a *app.App, addr, basePath string) *Server {
 		passHash:   passHash,
 		oldNodeIDs:    make(map[string]string),
 		subPeersCache: make(map[string][]topoSubPeer),
+		subPeersKick:  make(chan struct{}, 1),
+		layoutSubs:    make(map[uint64]chan map[string]app.GraphLayoutPos),
 		sessions: make(map[string]time.Time),
 	}
 }
@@ -123,6 +144,12 @@ func (s *Server) Start(ctx context.Context) error {
 	apiMux.HandleFunc("POST /api/login", s.login)
 	// Internal peer list (no auth, used for reverse nested discovery)
 	apiMux.HandleFunc("GET /api/internal/peers", s.internalPeers)
+	// Build-id probe (no auth) — a long-lived SPA tab polls this to detect
+	// server rebuild/redeploy and reload itself. Cheap and stateless.
+	apiMux.HandleFunc("GET /api/build-id", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		writeJSON(w, map[string]string{"build_id": s.buildID})
+	})
 
 	// Authed API routes
 	authed := http.NewServeMux()
@@ -131,8 +158,12 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("PUT /api/node", s.updateNode)
 	authed.HandleFunc("GET /api/peers", s.getPeers)
 	authed.HandleFunc("GET /api/topology", s.getTopology)
+	authed.HandleFunc("GET /api/graph-layout", s.getGraphLayout)
+	authed.HandleFunc("PUT /api/graph-layout", s.setGraphLayout)
+	authed.HandleFunc("GET /api/graph-layout/stream", s.streamGraphLayout)
 	authed.HandleFunc("GET /api/peers/{name}/peers", s.getNestedPeers)
 	authed.HandleFunc("PUT /api/peers/{name}/nested", s.setNested)
+	authed.HandleFunc("PUT /api/peers/{name}/disable", s.setPeerDisabled)
 	authed.HandleFunc("GET /api/clients", s.getClients)
 	authed.HandleFunc("GET /api/clients/{name}", s.getClient)
 	authed.HandleFunc("POST /api/clients", s.addClient)
@@ -171,8 +202,6 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("PUT /api/rules/{id}", s.updateRule)
 	authed.HandleFunc("DELETE /api/rules/{id}", s.deleteRule)
 	authed.HandleFunc("PUT /api/rules/{id}/toggle", s.toggleRule)
-	authed.HandleFunc("GET /api/rules/tun-mode", s.getTunMode)
-	authed.HandleFunc("PUT /api/rules/tun-mode", s.setTunMode)
 
 	// Port check
 	authed.HandleFunc("POST /api/check-ports", s.checkPorts)
@@ -187,6 +216,7 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("PUT /api/users/{id}", s.updateUserAPI)
 	authed.HandleFunc("DELETE /api/users/{id}", s.removeUserAPI)
 	authed.HandleFunc("PUT /api/users/{id}/toggle", s.toggleUserAPI)
+	authed.HandleFunc("GET /api/users/conflicts", s.getUserConflicts)
 	authed.HandleFunc("PUT /api/users/{id}/reset-traffic", s.resetUserTrafficAPI)
 
 	authed.HandleFunc("PUT /api/settings/password", s.changePassword)
@@ -194,6 +224,11 @@ func (s *Server) Start(ctx context.Context) error {
 	// Backup / Restore
 	authed.HandleFunc("GET /api/backup", s.downloadBackup)
 	authed.HandleFunc("POST /api/restore", s.uploadRestore)
+
+	// Upgrade
+	authed.HandleFunc("GET /api/system/arch", s.getSystemArch)
+	authed.HandleFunc("GET /api/build-info", s.getBuildInfo)
+	authed.HandleFunc("POST /api/upgrade", s.uploadUpgrade)
 	authed.HandleFunc("GET /api/settings/ui", s.getUISettings)
 	authed.HandleFunc("PUT /api/settings/ui", s.updateUISettings)
 
@@ -208,14 +243,18 @@ func (s *Server) Start(ctx context.Context) error {
 
 	apiMux.Handle("/api/", s.authMiddleware(authed))
 
-	// Static files with SPA fallback — inject basePath into index.html
+	// Static files with SPA fallback — inject basePath into index.html.
+	// A build-id derived from the sha256 of the raw index.html is also
+	// embedded on the page and exposed at /api/build-id so long-lived
+	// SPA sessions detect when they're running stale code after a
+	// server rebuild/redeploy and can reload themselves.
 	staticFS, _ := fs.Sub(web.Static, "static")
 	rawIndex, _ := fs.ReadFile(staticFS, "index.html")
-	cacheBust := fmt.Sprintf("?v=%s&t=%d", Version, time.Now().Unix())
-	baseScript := "<script>window.__BASE__=\"" + s.basePath + "\";</script><script src=\"i18n.js" + cacheBust + "\"></script><script src=\"xlsx.min.js" + cacheBust + "\"></script><script src=\"app.js" + cacheBust + "\"></script>"
-	indexHTML := strings.Replace(string(rawIndex), "<script src=\"i18n.js\"></script>", "", 1)
-	indexHTML = strings.Replace(indexHTML, "<script src=\"xlsx.min.js\"></script>", "", 1)
-	indexHTML = strings.Replace(indexHTML, "<script src=\"app.js\"></script>", baseScript, 1)
+	buildSum := sha256.Sum256(rawIndex)
+	buildID := hex.EncodeToString(buildSum[:8])
+	s.buildID = buildID
+	injected := `<script>window.__BASE__="` + s.basePath + `";window.__BUILD_ID__="` + buildID + `";</script>`
+	indexHTML := strings.Replace(string(rawIndex), "<head>", "<head>"+injected, 1)
 	indexBytes := []byte(indexHTML)
 
 	// Known frontend routes that should serve index.html
@@ -259,7 +298,7 @@ func (s *Server) Start(ctx context.Context) error {
 				case strings.HasSuffix(path, ".json"):
 					w.Header().Set("Content-Type", "application/json")
 				}
-				w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 				w.Write(data)
 				return
 			}
@@ -267,6 +306,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 		if frontendRoutes[path] {
 			w.Header().Set("Content-Type", "text/html")
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 			w.Write(indexBytes)
 			return
 		}
@@ -297,7 +337,61 @@ func (s *Server) Start(ctx context.Context) error {
 	} else {
 		log.Printf("API/UI on %s", s.addr)
 	}
+
+	// Relay incoming remote-proxy streams (_relay_api_) to the same HTTP
+	// handler by bridging the stream into an in-process listener.
+	apiBridge := newStreamListener()
+	s.app.Node().SetAPIHandler(func(stream net.Conn) {
+		apiBridge.push(stream)
+	})
+	go srv.Serve(apiBridge)
+
 	return srv.Serve(ln)
+}
+
+// streamListener is a net.Listener backed by a channel; each Accept returns a
+// net.Conn that was fed via push(). Used so relay-delivered API streams can
+// be served by the same *http.Server without a separate TCP socket.
+type streamListener struct {
+	ch     chan net.Conn
+	closed chan struct{}
+}
+
+func newStreamListener() *streamListener {
+	return &streamListener{ch: make(chan net.Conn, 16), closed: make(chan struct{})}
+}
+
+func (l *streamListener) push(c net.Conn) {
+	select {
+	case l.ch <- c:
+	case <-l.closed:
+		c.Close()
+	default:
+		// channel full — drop
+		c.Close()
+	}
+}
+
+func (l *streamListener) Accept() (net.Conn, error) {
+	select {
+	case c := <-l.ch:
+		return c, nil
+	case <-l.closed:
+		return nil, fmt.Errorf("listener closed")
+	}
+}
+
+func (l *streamListener) Close() error {
+	select {
+	case <-l.closed:
+	default:
+		close(l.closed)
+	}
+	return nil
+}
+
+func (l *streamListener) Addr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4zero, Port: 0}
 }
 
 // --- Auth ---
@@ -330,7 +424,9 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.sessions[token] = time.Now().Add(s.sessionTimeout())
 	s.mu.Unlock()
-	writeJSON(w, map[string]string{"token": token})
+	// Check if password is still the default (admin)
+	forceChange := body.Password == sha256Hex("admin")
+	writeJSON(w, map[string]any{"token": token, "force_password_change": forceChange})
 }
 
 func (s *Server) sessionTimeout() time.Duration {
@@ -346,6 +442,13 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		token := r.Header.Get("Authorization")
 		if len(token) > 7 && token[:7] == "Bearer " {
 			token = token[7:]
+		}
+		// EventSource and similar SSE clients can't set Authorization
+		// headers, so accept an equivalent ?token= query parameter as a
+		// fallback. Only the exact token value leaks into the URL, which
+		// is the same secret as the Bearer header.
+		if token == "" {
+			token = r.URL.Query().Get("token")
 		}
 		s.mu.RLock()
 		expiry, ok := s.sessions[token]
@@ -460,17 +563,19 @@ func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // Version is the application version. Update this on each release.
-const Version = "1.2.3"
+const Version = "1.3.0"
 
 func init() {
 	app.AppVersion = Version
 	relay.NodeVersion = Version
+	capOK, _ := app.CheckCapability()
+	relay.NodeTunCapable = capOK
 }
 
 func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
 	capOK, _ := app.CheckCapability()
-	limited := !capOK // NET_ADMIN+NET_RAW → L2TP/IKEv2 available
+	limited := !capOK
 	writeJSON(w, map[string]any{
 		"node_id":       cfg.NodeID,
 		"name":          cfg.Name,
@@ -602,6 +707,142 @@ func (s *Server) internalPeers(w http.ResponseWriter, r *http.Request) {
 }
 
 // getTopology returns a tree structure: direct peers with their nested sub-peers.
+// getGraphLayout returns the persisted topology-graph coordinates. Shape:
+// { "positions": { "<nodeKey>": { "x": number, "y": number } } }. An empty
+// map means "auto-layout" on the client side.
+func (s *Server) getGraphLayout(w http.ResponseWriter, r *http.Request) {
+	cfg := s.app.Store().Get()
+	pos := cfg.GraphLayout
+	if pos == nil {
+		pos = map[string]app.GraphLayoutPos{}
+	}
+	writeJSON(w, map[string]interface{}{"positions": pos})
+}
+
+// setGraphLayout persists a full snapshot of the graph layout. Callers
+// always send the complete map — partial updates would race with other
+// concurrent sessions (last-writer-wins is easier to reason about and
+// matches how the UI treats its local state today).
+func (s *Server) setGraphLayout(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Positions map[string]app.GraphLayoutPos `json:"positions"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if err := s.app.SetGraphLayout(body.Positions); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	// Fan out to every active SSE subscriber so other sessions pick up
+	// the change with ~no delay. Always broadcast the committed config
+	// snapshot (not the raw request body) so every listener sees the
+	// same authoritative map, including any defensive copies performed
+	// by SetGraphLayout.
+	committed := s.app.Store().Get().GraphLayout
+	if committed == nil {
+		committed = map[string]app.GraphLayoutPos{}
+	}
+	s.broadcastGraphLayout(committed)
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// broadcastGraphLayout sends the snapshot to every registered SSE
+// subscriber. Slow consumers with a full buffer simply drop the update —
+// each SSE frame carries the complete layout so a missed frame self-
+// heals on the next one. Never blocks the PUT path.
+func (s *Server) broadcastGraphLayout(positions map[string]app.GraphLayoutPos) {
+	s.layoutMu.Lock()
+	subs := make([]chan map[string]app.GraphLayoutPos, 0, len(s.layoutSubs))
+	for _, ch := range s.layoutSubs {
+		subs = append(subs, ch)
+	}
+	s.layoutMu.Unlock()
+	for _, ch := range subs {
+		select {
+		case ch <- positions:
+		default:
+		}
+	}
+}
+
+// streamGraphLayout pushes layout snapshots to the client as SSE events.
+// The first event after connect carries the current state so the client
+// doesn't have to also call GET on mount; subsequent events fire only
+// when SetGraphLayout runs (from any session).
+func (s *Server) streamGraphLayout(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	// Disable any buffering proxies that would defeat SSE.
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	ch := make(chan map[string]app.GraphLayoutPos, 4)
+	s.layoutMu.Lock()
+	s.layoutSubSeq++
+	id := s.layoutSubSeq
+	s.layoutSubs[id] = ch
+	s.layoutMu.Unlock()
+	defer func() {
+		s.layoutMu.Lock()
+		delete(s.layoutSubs, id)
+		s.layoutMu.Unlock()
+	}()
+
+	writeEvent := func(pos map[string]app.GraphLayoutPos) bool {
+		payload, err := json.Marshal(map[string]interface{}{"positions": pos})
+		if err != nil {
+			return false
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	// Initial snapshot so the client renders something before the first
+	// SetGraphLayout fires.
+	initial := s.app.Store().Get().GraphLayout
+	if initial == nil {
+		initial = map[string]app.GraphLayoutPos{}
+	}
+	if !writeEvent(initial) {
+		return
+	}
+
+	// Periodic keepalive so idle connections don't hit HTTP client or
+	// proxy timeouts. Nothing needs to be parsed from these, they just
+	// refresh the socket.
+	ping := time.NewTicker(20 * time.Second)
+	defer ping.Stop()
+
+	for {
+		select {
+		case pos, ok := <-ch:
+			if !ok {
+				return
+			}
+			if !writeEvent(pos) {
+				return
+			}
+		case <-ping.C:
+			if _, err := fmt.Fprintf(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
 func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	peers := s.app.Node().Peers()
 	cfg := s.app.Store().Get()
@@ -614,6 +855,8 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	connected := make(map[string]bool)
 	nativeMap := make(map[string]bool)
 	versionMap := make(map[string]string)
+	incompatMap := make(map[string]bool)
+	conflictMap := make(map[string]bool)
 	for _, p := range peers {
 		connected[p.Name] = true
 		if p.Native {
@@ -622,25 +865,34 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		if p.Version != "" {
 			versionMap[p.Name] = p.Version
 		}
+		if p.Incompatible {
+			incompatMap[p.Name] = true
+		}
+		if p.Conflict {
+			conflictMap[p.Name] = true
+		}
 	}
 
 	type treeNode struct {
-		Name       string            `json:"name"`
-		Addr       string            `json:"addr,omitempty"`
-		Addrs      []string          `json:"addrs,omitempty"`
-		IPStatuses []relay.IPStatus  `json:"ip_statuses,omitempty"`
-		ExitNode   bool              `json:"exit_node"`
-		Direction string          `json:"direction"`
-		Connected bool            `json:"connected"`
-		Disabled  bool            `json:"disabled"`
-		Nested    bool            `json:"nested"`
-		Native    bool            `json:"native,omitempty"`
-		Version   string          `json:"version,omitempty"`
-		LatencyMs int             `json:"latency_ms"`
-		TxRate    uint64          `json:"tx_rate"`
-		RxRate    uint64          `json:"rx_rate"`
-		IsSelf    bool            `json:"is_self,omitempty"`
-		Children  []topoSubPeer   `json:"children,omitempty"`
+		Name         string            `json:"name"`
+		Addr         string            `json:"addr,omitempty"`
+		Addrs        []string          `json:"addrs,omitempty"`
+		IPStatuses   []relay.IPStatus  `json:"ip_statuses,omitempty"`
+		ExitNode     bool              `json:"exit_node"`
+		Direction    string            `json:"direction"`
+		Connected    bool              `json:"connected"`
+		Disabled     bool              `json:"disabled"`
+		Nested       bool              `json:"nested"`
+		Native       bool              `json:"native,omitempty"`
+		Version      string            `json:"version,omitempty"`
+		Incompatible bool              `json:"incompatible,omitempty"`
+		Conflict     bool              `json:"conflict,omitempty"`
+		TunCapable   bool              `json:"tun_capable,omitempty"`
+		LatencyMs    int               `json:"latency_ms"`
+		TxRate       uint64            `json:"tx_rate"`
+		RxRate       uint64            `json:"rx_rate"`
+		IsSelf       bool              `json:"is_self,omitempty"`
+		Children     []topoSubPeer     `json:"children,omitempty"`
 	}
 
 	disabledMap := make(map[string]bool)
@@ -681,20 +933,27 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		if p.Direction == "inbound" {
 			inboundNames[p.Name] = true
 			child := topoSubPeer{
-				Name:      p.Name,
-				ExitNode:  p.ExitNode,
-				Direction: "inbound",
-				Via:       cfg.NodeID,
-				LatencyMs: latencyCache[p.Name],
-				Version:   p.Version,
+				Name:       p.Name,
+				ExitNode:   p.ExitNode,
+				Direction:  "inbound",
+				Via:        cfg.NodeID,
+				LatencyMs:  latencyCache[p.Name],
+				Version:    p.Version,
+				TunCapable: p.TunCapable,
 			}
-			if pc, ok := cfg.Peers[p.Name]; ok && pc.Nested {
-				child.Nested = true // explicitly enabled
+			if pc, ok := cfg.Peers[p.Name]; ok {
+				if pc.Nested {
+					child.Nested = true // explicitly enabled
+				}
+				if pc.Disabled {
+					child.Disabled = true
+				}
 			}
 			selfChildren = append(selfChildren, child)
 		}
 	}
 	peerRates := s.app.Node().PeerRates()
+	pathRates := s.app.Node().PathRates()
 
 	// Add per-peer traffic and sub-peers for inbound children
 	for i, c := range selfChildren {
@@ -703,21 +962,24 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			selfChildren[i].RxRate = pr.RxRate
 		}
 		if c.Nested {
-			selfChildren[i].Children = s.getCachedSubPeers(c.Name)
+			ancestors := selfAncestors(cfg, c.Name)
+			children := filterAncestorPaths(s.getCachedSubPeers(c.Name), ancestors)
+			selfChildren[i].Children = s.filterChildrenByNestedConfig(children, c.Name, cfg, ancestors, pathRates)
 		}
 	}
 	sort.Slice(selfChildren, func(i, j int) bool { return selfChildren[i].Name < selfChildren[j].Name })
 
 	result := make([]treeNode, 0, len(names)+1)
 	result = append(result, treeNode{
-		Name:      cfg.NodeID,
-		Addr:      selfServer,
-		Direction: "local",
-		Connected: true,
-		Disabled:  selfDisabled,
-		IsSelf:    true,
-		LatencyMs: 0,
-		Children:  selfChildren,
+		Name:       cfg.NodeID,
+		Addr:       selfServer,
+		Direction:  "local",
+		Connected:  true,
+		Disabled:   selfDisabled,
+		IsSelf:     true,
+		LatencyMs:  0,
+		TunCapable: relay.NodeTunCapable,
+		Children:   selfChildren,
 	})
 
 	for _, name := range names {
@@ -730,7 +992,28 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			tn.Addr = cl.PrimaryAddr()
 			addrs := cl.AllAddrs()
 			if len(addrs) > 1 {
-				tn.IPStatuses = s.app.Node().PeerIPStatuses(name)
+				ipStatuses := s.app.Node().PeerIPStatuses(name)
+				addrLats := s.app.Node().GetAddrLatencies(name)
+				primaryAddr := cl.PrimaryAddr()
+				// Ensure primary addr is included
+				hasPrimary := false
+				for _, s := range ipStatuses {
+					if s.Addr == primaryAddr {
+						hasPrimary = true
+						break
+					}
+				}
+				if !hasPrimary {
+					primaryLat := latencyCache[name]
+					ipStatuses = append([]relay.IPStatus{{Addr: primaryAddr, Status: "online", LatencyMs: primaryLat}}, ipStatuses...)
+				}
+				// Enrich with per-addr latency
+				for i := range ipStatuses {
+					if ms, ok := addrLats[ipStatuses[i].Addr]; ok {
+						ipStatuses[i].LatencyMs = ms
+					}
+				}
+				tn.IPStatuses = ipStatuses
 				tn.Addrs = addrs
 			}
 			tn.Direction = "outbound"
@@ -739,15 +1022,20 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			if p.Name == name {
 				tn.ExitNode = p.ExitNode
 				tn.Direction = p.Direction
+				tn.TunCapable = p.TunCapable
 				break
 			}
 		}
 		tn.Native = nativeMap[name]
 		tn.Version = versionMap[name]
-		if tn.Native {
+		tn.Incompatible = incompatMap[name]
+		tn.Conflict = conflictMap[name]
+		if tn.Incompatible || tn.Conflict {
+			tn.Nested = false // incompatible/conflicting peers cannot use nested
+		} else if tn.Native {
 			tn.Nested = false
 		} else if pc, ok := cfg.Peers[name]; ok && pc.Nested {
-			tn.Nested = true // explicitly enabled
+			tn.Nested = true
 		}
 		if tn.Connected && tn.Direction == "outbound" {
 			tn.LatencyMs = latencyCache[name]
@@ -760,9 +1048,10 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Load sub-peers from background cache only (never blocks)
-		// Nested config controls DISPLAY only, not path discovery cache
-		if tn.Nested && tn.Connected && !tn.Native {
-			tn.Children = filterChildrenByNestedConfig(s.getCachedSubPeers(name), name, cfg)
+		if tn.Nested && tn.Connected && !tn.Native && !tn.Incompatible && !tn.Conflict {
+			ancestors := selfAncestors(cfg, name)
+			children := filterAncestorPaths(s.getCachedSubPeers(name), ancestors)
+			tn.Children = s.filterChildrenByNestedConfig(children, name, cfg, ancestors, pathRates)
 		}
 		// Also load children for inbound peers nested under self
 		// (they can have outbound connections visible if nested is enabled)
@@ -779,7 +1068,48 @@ func (s *Server) getCachedSubPeers(name string) []topoSubPeer {
 }
 
 // StartSubPeersUpdater runs in background, periodically refreshes nested peer data.
+// Uses relay streamListPeers for both outbound and inbound peers (same mechanism).
 func (s *Server) StartSubPeersUpdater(ctx context.Context) {
+	// Register the rich listPeers handler used by remote nodes' SubPeersUpdater.
+	//
+	// Per docs/nested-rules.md, the response:
+	//   - Rule 2: for each direct peer P, only embed sub-peers if we have
+	//     explicitly authorised P as nested on OUR side. Non-nested peers
+	//     ship with no Children.
+	//   - Rule 3: what we embed is OUR flat cache of P's direct peers,
+	//     strictly one level deep. We never walk into grandchildren — the
+	//     caller learns deeper paths by chaining their own fetches through
+	//     their direct peer, never by bypassing a hop.
+	// Together these prevent the exponential feedback loop that made
+	// AUB↔CN peers saturate the link (docs/nested-discovery-explosion.md):
+	// the payload never exceeds O(direct peers × one-hop descendants),
+	// and cycles like A → B → A collapse the second A via rule 1 at the
+	// decoder side.
+	s.app.Node().SetListPeersFunc(func() []byte {
+		peers := s.app.Node().Peers()
+		cfg := s.app.Store().Get()
+		type peerWithChildren struct {
+			relay.PeerInfo
+			Children []topoSubPeer `json:"children,omitempty"`
+		}
+		result := make([]peerWithChildren, 0, len(peers))
+		for _, p := range peers {
+			pc := peerWithChildren{PeerInfo: p}
+			if pcfg, ok := cfg.Peers[p.Name]; ok && pcfg.Nested {
+				cached := s.getCachedSubPeers(p.Name)
+				flat := make([]topoSubPeer, 0, len(cached))
+				for _, c := range cached {
+					c.Children = nil // flat — rule 3
+					flat = append(flat, c)
+				}
+				pc.Children = flat
+			}
+			result = append(result, pc)
+		}
+		data, _ := json.Marshal(result)
+		return data
+	})
+
 	time.Sleep(2 * time.Second) // offset from prober
 	t := time.NewTicker(7 * time.Second)
 	defer t.Stop()
@@ -788,131 +1118,273 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			newCache := make(map[string][]topoSubPeer)
-			// Collect all connected non-native outbound peers
-			connectedPeers := s.app.Node().ConnectedPeerNames()
-			nativeMap := s.app.Node().NativeMap()
-			for _, name := range connectedPeers {
-				if nativeMap[name] {
-					continue
-				}
-				// Only fetch sub-peers for peers with nested enabled
-				cfg := s.app.Store().Get()
-				if pc, ok := cfg.Peers[name]; !ok || !pc.Nested {
-					continue
-				}
-				ch := make(chan []topoSubPeer, 1)
-				go func(n string) {
-					ch <- s.fetchSubPeersViaHTTP(n)
-				}(name)
-				select {
-				case children := <-ch:
-					if children != nil {
-						newCache[name] = children
-					}
-				case <-time.After(10 * time.Second):
-				}
-			}
-			s.subPeersMu.Lock()
-			s.subPeersCache = newCache
-			s.subPeersMu.Unlock()
+		case <-s.subPeersKick:
+		}
 
-			// Feed sub-peer data into relay's peersOfCache for path discovery
-			// Recursively cache all levels of nested children
-			// Feed ALL nested topology into relay cache.
-			// Walk the subPeersCache tree and for each node, record its children.
-			// Also walk children recursively to get deeper levels.
-			visited := make(map[string]bool)
-			var walkAndCache func(parentName string, children []topoSubPeer)
-			walkAndCache = func(parentName string, children []topoSubPeer) {
-				if visited[parentName] {
-					return
+		newCache := make(map[string][]topoSubPeer)
+		connectedPeers := s.app.Node().ConnectedPeerNames()
+		nativeMap := s.app.Node().NativeMap()
+		cfg := s.app.Store().Get()
+
+		// Per docs/nested-rules.md rule 3, we only query DIRECT peers.
+		// The response already carries one level of flat cached grandchildren
+		// per direct peer that the remote has authorised — that's our source
+		// of qualified-path data. Deeper paths extend through chained hops:
+		// the remote's own SubPeersUpdater populated its cache from its own
+		// direct peers the same way, so what it embeds is exactly "B's
+		// current view of its B/C level", never an arbitrarily-deep tree.
+		var fetchNames []string
+		for _, name := range connectedPeers {
+			if nativeMap[name] {
+				continue
+			}
+			pc, ok := cfg.Peers[name]
+			if !ok || !pc.Nested {
+				continue
+			}
+			// Only direct (unqualified) peer names here.
+			if strings.Contains(name, "/") {
+				continue
+			}
+			fetchNames = append(fetchNames, name)
+		}
+
+		type fetchResult struct {
+			name     string
+			children []topoSubPeer
+		}
+		resultCh := make(chan fetchResult, len(fetchNames))
+		for _, n := range fetchNames {
+			go func(name string) {
+				resultCh <- fetchResult{name, s.fetchSubPeersViaStream(name)}
+			}(n)
+		}
+		for range fetchNames {
+			select {
+			case r := <-resultCh:
+				if r.children == nil {
+					break
 				}
-				visited[parentName] = true
-				var infos []relay.PeerInfo
-				for _, c := range children {
-					infos = append(infos, relay.PeerInfo{
-						Name:     c.Name,
-						ExitNode: c.ExitNode,
-						Native:   c.Native,
-					})
+				// Populate newCache at the direct-peer key as a flat list
+				// (UI's filterChildrenByNestedConfig recurses into Children
+				// separately by pulling from subPeersCache at qualified
+				// keys — which is what the inner loop below fills).
+				flatDirect := make([]topoSubPeer, len(r.children))
+				for i, c := range r.children {
+					c2 := c
+					c2.Children = nil
+					flatDirect[i] = c2
 				}
-				if len(infos) > 0 {
-					s.app.Node().SetPeersOfCache(parentName, infos)
+				newCache[r.name] = flatDirect
+				// Each direct peer whose remote authorised as nested will
+				// have its own flat list of grandchildren attached — cache
+				// it under the qualified key. This is the one and only
+				// way we learn about qualified paths per rule 3.
+				for _, c := range r.children {
+					if len(c.Children) == 0 {
+						continue
+					}
+					qkey := r.name + "/" + c.Name
+					flatGrand := make([]topoSubPeer, len(c.Children))
+					for i, gc := range c.Children {
+						gc2 := gc
+						gc2.Children = nil
+						flatGrand[i] = gc2
+					}
+					newCache[qkey] = flatGrand
 				}
-				// Recurse into children that have their own children
-				for _, c := range children {
-					if len(c.Children) > 0 {
-						walkAndCache(c.Name, c.Children)
-					} else {
-						// For leaf children, try to get their sub-peers from the cache too
-						if cached, ok := newCache[c.Name]; ok && len(cached) > 0 {
-							walkAndCache(c.Name, cached)
+			case <-time.After(6 * time.Second):
+			}
+		}
+
+		// Detect nested peer renames by comparing old and new caches.
+		// If a parent had child "X" and now has child "Y" at the same position,
+		// rename all config references from X to Y.
+		s.subPeersMu.RLock()
+		oldCache := s.subPeersCache
+		s.subPeersMu.RUnlock()
+		for parentName, newChildren := range newCache {
+			oldChildren, ok := oldCache[parentName]
+			if !ok || len(oldChildren) == 0 {
+				continue
+			}
+			// Log for debugging
+			if len(oldChildren) != len(newChildren) {
+				log.Printf("[topology] %s children changed: %d → %d", parentName, len(oldChildren), len(newChildren))
+			}
+			// Build old name set
+			oldNames := make(map[string]bool)
+			for _, c := range oldChildren {
+				oldNames[c.Name] = true
+			}
+			// Build new name set
+			newNames := make(map[string]bool)
+			for _, c := range newChildren {
+				newNames[c.Name] = true
+			}
+			// Find names that disappeared and appeared
+			for _, c := range newChildren {
+				if oldNames[c.Name] {
+					continue // name unchanged
+				}
+				// New name appeared. Check if an old name disappeared (rename).
+				for _, oc := range oldChildren {
+					if newNames[oc.Name] {
+						continue // old name still exists
+					}
+					// oc.Name disappeared, c.Name appeared → likely rename
+					log.Printf("[topology] nested peer rename detected: %s → %s (via %s)", oc.Name, c.Name, parentName)
+					s.app.Store().Update(func(cfg *app.Config) {
+						rename := func(s string) string {
+							return strings.ReplaceAll(s, oc.Name, c.Name)
 						}
+						newPeers := make(map[string]app.PeerConfig)
+						for k, v := range cfg.Peers {
+							newPeers[rename(k)] = v
+						}
+						cfg.Peers = newPeers
+						for i := range cfg.Proxies {
+							cfg.Proxies[i].ExitVia = rename(cfg.Proxies[i].ExitVia)
+							for j := range cfg.Proxies[i].ExitPaths {
+								cfg.Proxies[i].ExitPaths[j] = rename(cfg.Proxies[i].ExitPaths[j])
+							}
+						}
+						for i := range cfg.Users {
+							cfg.Users[i].ExitVia = rename(cfg.Users[i].ExitVia)
+							for j := range cfg.Users[i].ExitPaths {
+								cfg.Users[i].ExitPaths[j] = rename(cfg.Users[i].ExitPaths[j])
+							}
+						}
+					})
+					break // only one rename per new name
+				}
+			}
+		}
+
+		s.subPeersMu.Lock()
+		s.subPeersCache = newCache
+		s.subPeersMu.Unlock()
+
+		// Feed sub-peer data into relay's peersOfCache for path discovery.
+		// Cache at BOTH qualified path (e.g. "cn-xinchang/2400" — unambiguous
+		// for multi-hop TUN capability lookup) AND at bare last-segment name
+		// (backward-compat for adaptive BFS).
+		//
+		// Cycle-safety: `visitedBare` tracks bare peer NAMES we've already
+		// expanded. A cyclic reference (e.g. A→B→A) would otherwise generate
+		// unbounded qualified paths because the fallback lookup via newCache
+		// keeps finding more children under the same node name — previously
+		// this caused demo-au to run away to 7.5GB RSS in ~30s.
+		visitedBare := make(map[string]bool)
+		var walkAndCache func(qualifiedPath string, children []topoSubPeer)
+		walkAndCache = func(qualifiedPath string, children []topoSubPeer) {
+			parts := strings.Split(qualifiedPath, "/")
+			bare := parts[len(parts)-1]
+			if visitedBare[bare] {
+				return
+			}
+			visitedBare[bare] = true
+
+			var infos []relay.PeerInfo
+			for _, c := range children {
+				infos = append(infos, relay.PeerInfo{
+					Name:       c.Name,
+					ExitNode:   c.ExitNode,
+					Native:     c.Native,
+					Version:    c.Version,
+					TunCapable: c.TunCapable,
+				})
+			}
+			if len(infos) > 0 {
+				s.app.Node().SetPeersOfCache(qualifiedPath, infos)
+				if strings.Contains(qualifiedPath, "/") {
+					if _, exists := s.app.Node().PeersOfCached(bare); !exists {
+						s.app.Node().SetPeersOfCache(bare, infos)
 					}
 				}
 			}
-			for peerName, children := range newCache {
-				walkAndCache(peerName, children)
+			for _, c := range children {
+				if visitedBare[c.Name] {
+					continue
+				}
+				if len(c.Children) > 0 {
+					walkAndCache(qualifiedPath+"/"+c.Name, c.Children)
+				} else if cached, ok := newCache[c.Name]; ok && len(cached) > 0 {
+					walkAndCache(qualifiedPath+"/"+c.Name, cached)
+				}
 			}
+		}
+		for peerName, children := range newCache {
+			walkAndCache(peerName, children)
 		}
 	}
 }
 
-// fetchSubPeersViaHTTP queries an inbound peer's topology via HTTP reverse tunnel.
-// The peer returns its peers with pre-cached children, so no recursion is needed.
-func (s *Server) fetchSubPeersViaHTTP(peerName string) []topoSubPeer {
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
-	defer cancel()
-	conn, err := s.app.Node().DialTCP(ctx, peerName, "127.0.0.1:5565")
-	if err != nil {
-		return nil
-	}
-	defer conn.Close()
-	fmt.Fprintf(conn, "GET /scale/api/internal/peers HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
-	if err != nil {
-		return nil
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+// fetchSubPeersViaStream queries a peer's topology via relay streamListPeers.
+// Preserves the one-level-of-grandchildren structure the remote embeds per
+// rule 3 in docs/nested-rules.md. The caller (StartSubPeersUpdater) walks
+// the result once to populate subPeersCache flat at every qualified key it
+// observes, and hands the tree to walkAndCache for the relay-side
+// peersOfCache population.
+//
+// No multi-hop query variant exists. Per rule 3 we never bypass a direct
+// peer with PeersOfVia to inspect a descendant — the descendant's info
+// must come from the direct peer's own cache as embedded in its listPeers
+// reply, or not at all.
+func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
+	data, err := s.app.Node().PeersOfRaw(peerName)
 	if err != nil {
 		return nil
 	}
 	type peerWithChildren struct {
-		Name      string        `json:"name"`
-		ExitNode  bool          `json:"exit_node"`
-		Direction string        `json:"direction"`
-		Native    bool          `json:"native"`
-		Nested    bool          `json:"nested"`
-		LatencyMs int           `json:"latency_ms"`
-		Children  []topoSubPeer `json:"children,omitempty"`
+		Name       string        `json:"name"`
+		ExitNode   bool          `json:"exit_node"`
+		Direction  string        `json:"direction"`
+		Native     bool          `json:"native"`
+		LatencyMs  int           `json:"latency_ms"`
+		Version    string        `json:"version,omitempty"`
+		TunCapable bool          `json:"tun_capable,omitempty"`
+		Children   []topoSubPeer `json:"children,omitempty"`
 	}
 	var remotePeers []peerWithChildren
 	if err := json.Unmarshal(data, &remotePeers); err != nil {
 		return nil
 	}
-	cfg := s.app.Store().Get()
-	myID := cfg.NodeID
 	parentLatency := s.app.Node().GetLatency(peerName)
+	cfg := s.app.Store().Get()
+	selfNames := map[string]bool{cfg.NodeID: true, cfg.Name: true, peerName: true}
 	children := make([]topoSubPeer, 0, len(remotePeers))
 	for _, rp := range remotePeers {
-		if rp.Name == myID {
-			continue
-		}
 		childLatency := rp.LatencyMs
 		if childLatency > 0 && parentLatency > 0 {
 			childLatency += parentLatency
 		}
+		// Rule 1 at the grandchildren level: drop any grandchild whose name
+		// already appears in {local self, direct peer}. Guards against
+		// paths like AUB/cn-xinchang/au-kbv looping back to us. Deeper
+		// cycle detection within embedded children isn't needed here —
+		// they are flat (rule 3) so at most one level of descendant.
+		var embedded []topoSubPeer
+		if len(rp.Children) > 0 {
+			embedded = make([]topoSubPeer, 0, len(rp.Children))
+			for _, gc := range rp.Children {
+				if selfNames[gc.Name] || gc.Name == rp.Name {
+					continue
+				}
+				gc.Children = nil // defense-in-depth flatten
+				embedded = append(embedded, gc)
+			}
+		}
 		child := topoSubPeer{
-			Name:      rp.Name,
-			ExitNode:  rp.ExitNode,
-			Direction: rp.Direction,
-			Via:       peerName,
-			LatencyMs: childLatency,
-			Nested:    rp.Nested,
-			Native:    rp.Native,
-			Children:  truncateAndFilter(rp.Children, parentLatency, myID, 4),
+			Name:       rp.Name,
+			ExitNode:   rp.ExitNode,
+			Direction:  rp.Direction,
+			Via:        peerName,
+			LatencyMs:  childLatency,
+			Native:     rp.Native,
+			Version:    rp.Version,
+			TunCapable: rp.TunCapable,
+			Children:   embedded,
 		}
 		children = append(children, child)
 	}
@@ -950,17 +1422,47 @@ func doTruncate(children []topoSubPeer, parentLatency int, selfID string, depth 
 
 // filterChildrenByNestedConfig strips deeper children unless local nested config allows them.
 // Uses path-qualified keys (parent/child) so same-name peers have independent nested state.
-func filterChildrenByNestedConfig(children []topoSubPeer, parentName string, cfg app.Config) []topoSubPeer {
+// When c.Nested is enabled but c.Children is empty, pulls the flat child list
+// from subPeersCache[qualifiedKey] — StartSubPeersUpdater populates one cache
+// entry per user-declared qualified path via explicit PeersOfVia queries.
+//
+// Rule 1 (including self identity): a descendant whose name matches any
+// ancestor on the path — OR matches our local node_id / name — is dropped.
+// `ancestors` is mutated on descent and restored on backtrack so identical
+// names on parallel sibling branches remain legal.
+//
+// Path-qualified traffic rates are attached per node so the Nodes UI can
+// attribute relayed bytes to the specific nested descendant they're destined
+// for, not only to the first-hop direct peer that physically carries them.
+func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName string, cfg app.Config, ancestors map[string]bool, pathRates map[string]relay.PeerTraffic) []topoSubPeer {
 	if len(children) == 0 {
 		return children
 	}
 	result := make([]topoSubPeer, 0, len(children))
 	for _, c := range children {
+		if ancestors[c.Name] {
+			continue
+		}
 		qualifiedKey := parentName + "/" + c.Name
 		pc, hasPC := cfg.Peers[qualifiedKey]
 		c.Nested = hasPC && pc.Nested
-		if c.Nested && len(c.Children) > 0 {
-			c.Children = filterChildrenByNestedConfig(c.Children, qualifiedKey, cfg)
+		c.Disabled = hasPC && pc.Disabled
+		if pr, ok := pathRates[qualifiedKey]; ok {
+			c.TxRate = pr.TxRate
+			c.RxRate = pr.RxRate
+		}
+		if c.Nested {
+			if len(c.Children) == 0 {
+				// Pull one level from the per-qualified-path cache populated
+				// by the updater. This is how depth > 2 gets displayed now
+				// that single-hop listPeers responses are flat.
+				c.Children = s.getCachedSubPeers(qualifiedKey)
+			}
+			if len(c.Children) > 0 {
+				ancestors[c.Name] = true
+				c.Children = s.filterChildrenByNestedConfig(c.Children, qualifiedKey, cfg, ancestors, pathRates)
+				delete(ancestors, c.Name)
+			}
 		} else {
 			c.Children = nil
 		}
@@ -969,17 +1471,38 @@ func filterChildrenByNestedConfig(children []topoSubPeer, parentName string, cfg
 	return result
 }
 
-// filterSelfFromChildren recursively removes self node ID from all levels of children.
-func filterSelfFromChildren(children []topoSubPeer, selfID string) []topoSubPeer {
+// selfAncestors returns the baseline ancestor set used for Rule 1 filtering.
+// Always contains the local node's ID and name so neither can ever appear as
+// a sub-peer at any depth.
+func selfAncestors(cfg app.Config, extra ...string) map[string]bool {
+	a := map[string]bool{cfg.NodeID: true, cfg.Name: true}
+	for _, e := range extra {
+		if e != "" {
+			a[e] = true
+		}
+	}
+	return a
+}
+
+// filterAncestorPaths recursively removes any descendant whose name already
+// appears in the ancestor path (including self). This prevents loops like
+// "AUB/tz-cm-temp/2400/tz-cm-temp" where a descendant's peer list legitimately
+// includes the upstream node, since routing through a node already in the path
+// would just bounce the traffic back.
+// `ancestors` is mutated during recursion (add on descent, remove on backtrack)
+// so the same name IS allowed in parallel sibling branches.
+func filterAncestorPaths(children []topoSubPeer, ancestors map[string]bool) []topoSubPeer {
 	if len(children) == 0 {
 		return children
 	}
 	filtered := make([]topoSubPeer, 0, len(children))
 	for _, c := range children {
-		if c.Name == selfID {
+		if ancestors[c.Name] {
 			continue
 		}
-		c.Children = filterSelfFromChildren(c.Children, selfID)
+		ancestors[c.Name] = true
+		c.Children = filterAncestorPaths(c.Children, ancestors)
+		delete(ancestors, c.Name)
 		filtered = append(filtered, c)
 	}
 	return filtered
@@ -1079,6 +1602,22 @@ func (s *Server) getNestedPeers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, peers)
 }
 
+func (s *Server) setPeerDisabled(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var body struct {
+		Disabled bool `json:"disabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if err := s.app.SetPeerDisabled(name, body.Disabled); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
 func (s *Server) setNested(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	var body struct {
@@ -1091,6 +1630,11 @@ func (s *Server) setNested(w http.ResponseWriter, r *http.Request) {
 	if err := s.app.SetNested(name, body.Enabled); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
+	}
+	// Signal immediate cache refresh (non-blocking)
+	select {
+	case s.subPeersKick <- struct{}{}:
+	default:
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }
@@ -1222,7 +1766,14 @@ func (s *Server) removeClient(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getProxies(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
-	writeJSON(w, cfg.Proxies)
+	// A nil slice JSON-marshals to null, which the UI's useQuery
+	// default value doesn't replace (the `= []` shorthand only
+	// matches undefined). Always return a concrete empty array.
+	list := cfg.Proxies
+	if list == nil {
+		list = []app.ProxyConfig{}
+	}
+	writeJSON(w, list)
 }
 
 func (s *Server) addProxy(w http.ResponseWriter, r *http.Request) {
@@ -1360,8 +1911,7 @@ func (s *Server) updateL2TPConfig(w http.ResponseWriter, r *http.Request) {
 // --- IKEv2 ---
 
 func (s *Server) getIKEv2Config(w http.ResponseWriter, r *http.Request) {
-	capOK, _ := app.CheckCapability()
-	capable := capOK
+	capable := app.CheckIKEv2Capability()
 	hostNet := app.CheckHostNetwork()
 	cfg := s.app.Store().Get()
 	result := map[string]any{
@@ -1653,7 +2203,15 @@ func (s *Server) kickSession(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getUsers(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
-	writeJSON(w, cfg.Users)
+	users := cfg.Users
+	if users == nil {
+		users = []app.UserConfig{}
+	}
+	writeJSON(w, users)
+}
+
+func (s *Server) getUserConflicts(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, s.app.GetPasswordConflicts())
 }
 
 func (s *Server) addUserAPI(w http.ResponseWriter, r *http.Request) {
@@ -1671,9 +2229,11 @@ func (s *Server) addUserAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "username and password required", 400)
 		return
 	}
-	if err := app.ValidateExitMode(u.ExitVia, u.ExitMode); err != nil {
+	if sanitized, err := app.SanitizeExitMode(u.ExitPaths, u.ExitMode); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
+	} else {
+		u.ExitMode = sanitized
 	}
 	if u.ID == "" {
 		b := make([]byte, 4)
@@ -1700,9 +2260,11 @@ func (s *Server) updateUserAPI(w http.ResponseWriter, r *http.Request) {
 	} else if u.ExitVia != "" {
 		u.ExitPaths = []string{u.ExitVia}
 	}
-	if err := app.ValidateExitMode(u.ExitVia, u.ExitMode); err != nil {
+	if sanitized, err := app.SanitizeExitMode(u.ExitPaths, u.ExitMode); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
+	} else {
+		u.ExitMode = sanitized
 	}
 	if err := s.app.UpdateUser(id, u); err != nil {
 		http.Error(w, err.Error(), 500)
@@ -1749,9 +2311,21 @@ func (s *Server) resetUserTrafficAPI(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getRules(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
+	// Annotate each rule with its live TUN status: true only when UseTun is
+	// requested AND the exit peer is TUN-capable AND the target is routable
+	// (i.e. the rule is really running on the TUN path, not the proxy fallback).
+	type ruleWithTun struct {
+		app.RoutingRule
+		TunActive bool `json:"tun_active,omitempty"`
+	}
+	rules := make([]ruleWithTun, len(cfg.Rules))
+	for i, rr := range cfg.Rules {
+		rules[i] = ruleWithTun{RoutingRule: rr}
+		rules[i].TunActive = s.app.RuleUsesTun(rr)
+	}
 	result := map[string]any{
 		"available": app.RuleEngineAvailable(),
-		"rules":     cfg.Rules,
+		"rules":     rules,
 	}
 	writeJSON(w, result)
 }
@@ -1775,9 +2349,11 @@ func (s *Server) addRule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "type must be 'ip' or 'domain'", 400)
 		return
 	}
-	if err := app.ValidateExitMode(rule.ExitVia, rule.ExitMode); err != nil {
+	if sanitized, err := app.SanitizeExitMode(rule.ExitPaths, rule.ExitMode); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
+	} else {
+		rule.ExitMode = sanitized
 	}
 	s.app.AddRule(rule)
 	writeJSON(w, map[string]string{"status": "ok"})
@@ -1796,9 +2372,11 @@ func (s *Server) updateRule(w http.ResponseWriter, r *http.Request) {
 	} else if rule.ExitVia != "" {
 		rule.ExitPaths = []string{rule.ExitVia}
 	}
-	if err := app.ValidateExitMode(rule.ExitVia, rule.ExitMode); err != nil {
+	if sanitized, err := app.SanitizeExitMode(rule.ExitPaths, rule.ExitMode); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
+	} else {
+		rule.ExitMode = sanitized
 	}
 	s.app.UpdateRule(id, rule)
 	writeJSON(w, map[string]string{"status": "ok"})
@@ -1820,43 +2398,6 @@ func (s *Server) toggleRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.app.ToggleRule(id, body.Enabled)
-	writeJSON(w, map[string]string{"status": "ok"})
-}
-
-func (s *Server) getTunMode(w http.ResponseWriter, r *http.Request) {
-	cfg := s.app.Store().Get()
-	tm := cfg.TunMode
-	if tm == nil {
-		tm = &app.TunModeConfig{}
-	}
-	result := map[string]any{
-		"enabled": tm.Enabled,
-		"mode":    tm.Mode,
-		"active":  app.TunModeActive(),
-	}
-	writeJSON(w, result)
-}
-
-func (s *Server) setTunMode(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Enabled bool   `json:"enabled"`
-		Mode    string `json:"mode"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, err.Error(), 400)
-		return
-	}
-	if body.Mode == "" {
-		body.Mode = "mixed"
-	}
-	if body.Enabled {
-		if err := s.app.EnableTunMode(body.Mode); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-	} else {
-		s.app.DisableTunMode()
-	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
@@ -2029,10 +2570,13 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 	// Split into chain + remaining. Chain = contiguous peer names (no dots, no slashes in names).
 	// First segment with a dot or known as a file extension ends the chain.
 	segments := strings.Split(strings.TrimSuffix(raw, "/"), "/")
-	// Known path prefixes that mark the end of the peer chain
+	// Known path prefixes that mark the end of the peer chain.
+	// The frontend builds links like "/scale/remote/{peer}/scale/..." so
+	// "scale" must be recognized as a base-path sentinel, not a peer name.
 	notPeer := map[string]bool{
 		"api": true, "login": true, "nodes": true, "proxies": true,
 		"tls": true, "settings": true, "remote": true,
+		"scale": true, "users": true, "rules": true, "assets": true,
 	}
 	chainLen := 0
 	for _, seg := range segments {
@@ -2055,12 +2599,18 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.mu.RUnlock()
-	remaining := strings.Join(segments[chainLen:], "/")
+	// Frontend emits /scale/remote/{chain}/scale/{remaining}. The literal
+	// "scale" sentinel after the chain is the remote's base-path marker;
+	// strip it so we don't end up with /scale/scale/... after prepending.
+	rest := segments[chainLen:]
+	if len(rest) > 0 && rest[0] == "scale" {
+		rest = rest[1:]
+	}
+	remaining := strings.Join(rest, "/")
 	// The remote's actual path: prepend their base path (/scale)
 	// /remote/vm/ → remote /scale/
-	// /remote/vm/login → remote /scale/login
-	// /remote/vm/api/node → remote /scale/api/node
-	// /remote/vm/style.css → remote /scale/style.css
+	// /remote/vm/scale/login → remote /scale/login
+	// /remote/vm/scale/api/node → remote /scale/api/node
 	remotePath := "/scale/" + remaining
 
 	// Proxy base: what the remote's __BASE__ should point to
@@ -2072,9 +2622,9 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 	var conn net.Conn
 	var err error
 	if len(chain) == 1 {
-		conn, err = s.app.Node().DialTCP(ctx, chain[0], "127.0.0.1:5565")
+		conn, err = s.app.Node().DialTCP(ctx, chain[0], relay.StreamAPI)
 	} else {
-		conn, err = s.app.Node().DialVia(ctx, chain, "127.0.0.1:5565")
+		conn, err = s.app.Node().DialVia(ctx, chain, relay.StreamAPI)
 	}
 	if err != nil {
 		http.Error(w, fmt.Sprintf("tunnel to %s failed: %v", strings.Join(chain, "/"), err), 502)
@@ -2082,17 +2632,39 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// Construct proxied request using http.Request.Write for correctness
+	// Construct proxied request. Use a fresh header so we don't forward the
+	// local API token (remote node authenticates independently) or Hop-by-Hop
+	// headers that confuse it. Force HTTP/1.1 with Connection: close so the
+	// remote sends a complete response-with-body and closes cleanly.
 	outReq, _ := http.NewRequest(r.Method, "http://127.0.0.1:5565"+remotePath, r.Body)
 	outReq.URL.RawQuery = r.URL.RawQuery
-	outReq.Header = r.Header.Clone()
-	outReq.Header.Set("Host", "127.0.0.1:5565")
-	outReq.Header.Set("Connection", "close")
+	outReq.Proto = "HTTP/1.1"
+	outReq.ProtoMajor = 1
+	outReq.ProtoMinor = 1
+	outReq.Host = "127.0.0.1:5565"
+	// Copy request headers. Forward Authorization so the client's remote
+	// session token (stored in localStorage after the user logs into the
+	// remote UI) reaches the target — the local node's token is never
+	// used here because the frontend scopes tokens per __BASE__. Drop
+	// hop-by-hop headers that can corrupt the proxied request.
+	for k, vv := range r.Header {
+		lk := strings.ToLower(k)
+		if lk == "connection" || lk == "proxy-connection" ||
+			lk == "keep-alive" || lk == "te" || lk == "trailers" || lk == "transfer-encoding" {
+			continue
+		}
+		outReq.Header[k] = vv
+	}
 	outReq.Header.Set("X-Hy2scale-Proxy", "true")
+	outReq.Close = true // force Connection: close in serialization
 	outReq.ContentLength = r.ContentLength
-	outReq.Write(conn)
 
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err := outReq.Write(conn); err != nil {
+		http.Error(w, "write to remote failed: "+err.Error(), 502)
+		return
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(conn), outReq)
 	if err != nil {
 		http.Error(w, "bad response from remote: "+err.Error(), 502)
 		return
@@ -2104,8 +2676,22 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 	isHTML := strings.Contains(ct, "text/html")
 
 	for k, vv := range resp.Header {
+		lk := strings.ToLower(k)
+		// Drop hop-by-hop headers and framing headers. Content-Length and
+		// Transfer-Encoding from upstream are invalidated because:
+		//   (a) we rewrite HTML bodies (length changes), and
+		//   (b) we serve on a different HTTP/1.1 connection with its own
+		//       framing that Go's net/http decides based on what we write.
+		// Keeping the upstream Content-Length causes Go to reject Write()
+		// calls that exceed it with "wrote more than the declared
+		// Content-Length" and send zero body bytes to the client.
+		if lk == "content-length" || lk == "transfer-encoding" ||
+			lk == "connection" || lk == "keep-alive" ||
+			lk == "proxy-connection" || lk == "trailer" || lk == "te" {
+			continue
+		}
 		// Rewrite Location header for redirects
-		if strings.EqualFold(k, "Location") {
+		if lk == "location" {
 			for i, v := range vv {
 				// Rewrite /scale/... → /scale/remote/{chain}/...
 				if strings.HasPrefix(v, "/scale/") {
@@ -2212,5 +2798,188 @@ func (s *Server) uploadRestore(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		time.Sleep(500 * time.Millisecond)
 		os.Exit(0) // container/systemd will restart the process
+	}()
+}
+
+func isRunningInDocker() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	// Fallback: check cgroup for docker/containerd
+	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		s := string(data)
+		if strings.Contains(s, "docker") || strings.Contains(s, "containerd") || strings.Contains(s, "/lxc/") {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) getSystemArch(w http.ResponseWriter, r *http.Request) {
+	self, _ := os.Executable()
+	writeJSON(w, map[string]any{
+		"os":        runtime.GOOS,
+		"arch":      runtime.GOARCH,
+		"version":   Version,
+		"binary":    filepath.Base(self),
+		"in_docker": isRunningInDocker(),
+	})
+}
+
+// getBuildInfo returns the project's license metadata and the full
+// dependency list (Go module graph compiled in + the significant
+// native bundles that ship in the Docker image). Exposed to the web
+// UI so users can see exactly what third-party code is running and
+// under which licence, without having to inspect the binary.
+func (s *Server) getBuildInfo(w http.ResponseWriter, r *http.Request) {
+	type dep struct {
+		Path    string `json:"path"`
+		Version string `json:"version"`
+	}
+	type native struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+		License string `json:"license"`
+		Source  string `json:"source"`
+	}
+	goDeps := []dep{}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		for _, m := range info.Deps {
+			// Skip replaced / anonymous — keep the resolved identity.
+			resolved := m
+			if m.Replace != nil {
+				resolved = m.Replace
+			}
+			if resolved.Path == "" || resolved.Version == "" {
+				continue
+			}
+			goDeps = append(goDeps, dep{Path: resolved.Path, Version: resolved.Version})
+		}
+	}
+	sort.Slice(goDeps, func(i, j int) bool { return goDeps[i].Path < goDeps[j].Path })
+	// Native components bundled into the Docker image but not tracked
+	// by the Go module graph. Kept short and hand-maintained — these
+	// are the pieces whose licences directly constrain the umbrella
+	// licence of this project.
+	natives := []native{
+		{Name: "strongSwan", Version: "5.8.4", License: "GPL-2.0-or-later", Source: "https://www.strongswan.org/"},
+		{Name: "iptables (nf_tables backend)", Version: "distro-packaged", License: "GPL-2.0-or-later", Source: "https://www.netfilter.org/projects/iptables/"},
+		{Name: "xl2tpd", Version: "distro-packaged", License: "GPL-2.0-or-later", Source: "https://www.xelerance.com/software/xl2tpd/"},
+	}
+	writeJSON(w, map[string]any{
+		"version":     Version,
+		"license":     "GPL-3.0-or-later",
+		"repository":  "https://github.com/FrankoonG/hy2scale",
+		"go_deps":     goDeps,
+		"natives":     natives,
+	})
+}
+
+func (s *Server) uploadUpgrade(w http.ResponseWriter, r *http.Request) {
+	if !isRunningInDocker() {
+		http.Error(w, "upgrade via web is only available in Docker deployments", 403)
+		return
+	}
+	// Limit to 200MB
+	r.Body = http.MaxBytesReader(w, r.Body, 200<<20)
+
+	gr, err := gzip.NewReader(r.Body)
+	if err != nil {
+		http.Error(w, "invalid gzip: "+err.Error(), 400)
+		return
+	}
+	defer gr.Close()
+
+	tr := tar.NewReader(gr)
+	expectedArch := runtime.GOOS + "-" + runtime.GOARCH
+	// Also accept just the binary name without arch suffix
+	expectedBin := "hy2scale"
+
+	var found bool
+	var tmpPath string
+
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			http.Error(w, "invalid tar: "+err.Error(), 400)
+			return
+		}
+		name := filepath.Base(hdr.Name)
+		// Match: hy2scale, hy2scale-linux-amd64, hy2scale-linux-arm64, etc.
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		isMatch := name == expectedBin ||
+			name == expectedBin+"-"+expectedArch ||
+			name == expectedBin+"_"+expectedArch
+		if !isMatch {
+			continue
+		}
+
+		// Extract to temp file
+		tmp, err := os.CreateTemp("", "hy2scale-upgrade-*")
+		if err != nil {
+			http.Error(w, "temp file: "+err.Error(), 500)
+			return
+		}
+		if _, err := io.Copy(tmp, tr); err != nil {
+			tmp.Close()
+			os.Remove(tmp.Name())
+			http.Error(w, "extract: "+err.Error(), 500)
+			return
+		}
+		tmp.Close()
+		os.Chmod(tmp.Name(), 0755)
+		tmpPath = tmp.Name()
+		found = true
+		break
+	}
+
+	if !found {
+		http.Error(w, fmt.Sprintf("no matching binary for %s found in archive", expectedArch), 400)
+		return
+	}
+
+	// Verify it's a real binary by trying to run --version or just checking it's executable
+	out, err := exec.Command(tmpPath, "--version").CombinedOutput()
+	_ = out // ignore output, just check it runs
+	// Some binaries may not support --version, so we don't require success
+
+	// Replace current binary
+	self, err := os.Executable()
+	if err != nil {
+		os.Remove(tmpPath)
+		http.Error(w, "cannot find self: "+err.Error(), 500)
+		return
+	}
+	self, _ = filepath.EvalSymlinks(self)
+
+	// Rename current binary as backup
+	bakPath := self + ".bak"
+	os.Remove(bakPath)
+	if err := os.Rename(self, bakPath); err != nil {
+		os.Remove(tmpPath)
+		http.Error(w, "backup old binary: "+err.Error(), 500)
+		return
+	}
+
+	// Move new binary into place
+	if err := os.Rename(tmpPath, self); err != nil {
+		// Restore backup
+		os.Rename(bakPath, self)
+		http.Error(w, "install new binary: "+err.Error(), 500)
+		return
+	}
+	os.Chmod(self, 0755)
+
+	log.Printf("[upgrade] binary upgraded from upload, restarting...")
+	writeJSON(w, map[string]string{"status": "ok", "message": "upgrade successful, restarting"})
+
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
 	}()
 }

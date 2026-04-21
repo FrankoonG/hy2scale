@@ -206,14 +206,37 @@ func (a *App) dialAdaptive(ctx context.Context, target, addr string) (net.Conn, 
 
 // dialPath dials through a specific path string.
 func (a *App) dialPath(ctx context.Context, path, addr string) (net.Conn, error) {
+	return a.dialPathIdx(ctx, path, addr, -1)
+}
+
+// dialPathIdx dials with a specific QUIC client index (for bond path pinning).
+func (a *App) dialPathIdx(ctx context.Context, path, addr string, clientIdx int) (net.Conn, error) {
 	parts := splitPath(path)
 	if len(parts) == 0 {
 		return net.DialTimeout("tcp", addr, 10*time.Second)
 	}
 	if len(parts) == 1 {
-		return a.node.DialTCP(ctx, parts[0], addr)
+		return a.node.DialTCPIdx(ctx, parts[0], addr, clientIdx)
 	}
 	return a.node.DialVia(ctx, parts, addr)
+}
+
+// isPathAuthorised returns true when every qualified prefix along `parts`,
+// from the direct peer up to but NOT including the final segment (which is
+// the exit itself), has `nested=true` in cfg.Peers. This is the iron-rule-2
+// predicate: a single nested=false at any intermediate hop makes the path
+// unusable, mirroring the UI's filterChildrenByNestedConfig recursion.
+// A single-segment path (direct peer target) is always authorised — nested
+// gates sub-exits, not the direct peer itself.
+func isPathAuthorised(parts []string, cfg Config) bool {
+	for i := 1; i < len(parts); i++ {
+		prefix := strings.Join(parts[:i], "/")
+		pc, ok := cfg.Peers[prefix]
+		if !ok || !pc.Nested {
+			return false
+		}
+	}
+	return true
 }
 
 // findPathsTo discovers all available paths to a target node.
@@ -240,6 +263,7 @@ func (a *App) findPathsTo(target string) []string {
 
 	var paths []string
 	peers := a.node.Peers()
+	cfg := a.store.Get()
 	seen := make(map[string]bool) // avoid duplicate paths
 
 	// Direct path — multiply by number of QUIC connections to target
@@ -257,9 +281,13 @@ func (a *App) findPathsTo(target string) []string {
 		}
 	}
 
-	// Via intermediate peers (depth 1): check direct peers' sub-peers
+	// Via intermediate peers (depth 1): check direct peers' sub-peers.
+	// Rule 2: intermediate must have nested=true on our side.
 	for _, p := range peers {
 		if p.Name == target || p.Native {
+			continue
+		}
+		if !isPathAuthorised([]string{p.Name, target}, cfg) {
 			continue
 		}
 		subPeers, err := a.node.PeersOf(p.Name)
@@ -283,16 +311,24 @@ func (a *App) findPathsTo(target string) []string {
 		}
 	}
 
-	// Via intermediate peers (depth 2+): use cached topology
-	// BFS over cached peer lists — no real-time relay queries
+	// Via intermediate peers (depth 2+): BFS over cached peer lists.
+	// Rule 2: every intermediate hop along the resulting path needs
+	// nested=true on our side. Rule 1: the descent drops any sub-peer
+	// whose name already appears on the current chain (no path-local
+	// cycles). Seed the queue only with direct peers whose nested is
+	// enabled — otherwise nothing beneath them can legitimately count.
 	type bfsItem struct {
 		chain []string // peer names from hub
 	}
 	bfsQueue := []bfsItem{}
 	for _, p := range peers {
-		if p.Name != target && !p.Native {
-			bfsQueue = append(bfsQueue, bfsItem{chain: []string{p.Name}})
+		if p.Name == target || p.Native {
+			continue
 		}
+		if pc, ok := cfg.Peers[p.Name]; !ok || !pc.Nested {
+			continue
+		}
+		bfsQueue = append(bfsQueue, bfsItem{chain: []string{p.Name}})
 	}
 	for len(bfsQueue) > 0 {
 		item := bfsQueue[0]
@@ -303,13 +339,18 @@ func (a *App) findPathsTo(target string) []string {
 		lastPeer := item.chain[len(item.chain)-1]
 		subPeers, ok := a.node.PeersOfCached(lastPeer)
 		if !ok {
-			log.Printf("[findPathsTo] BFS: no cache for %s", lastPeer)
 			continue
 		}
-		log.Printf("[findPathsTo] BFS: cache[%s] = %d peers", lastPeer, len(subPeers))
 		for _, sp := range subPeers {
 			if sp.Name == target {
-				pathStr := strings.Join(append(item.chain, target), "/")
+				// Final admissibility: every ancestor prefix along the
+				// full path must be nested-authorised on our side.
+				fullPath := append([]string{}, item.chain...)
+				fullPath = append(fullPath, target)
+				if !isPathAuthorised(fullPath, cfg) {
+					continue
+				}
+				pathStr := strings.Join(fullPath, "/")
 				if !seen[pathStr] {
 					seen[pathStr] = true
 					k := a.node.PeerConnCount(item.chain[0])
@@ -321,20 +362,33 @@ func (a *App) findPathsTo(target string) []string {
 					}
 				}
 			} else if !sp.Native && len(item.chain) < 4 {
-				// Avoid cycles (including back to self)
-				cycle := sp.Name == a.node.Name()
+				// Rule 1: sub-peer name must not appear anywhere on the
+				// chain (including the current node) — nor match our
+				// local node_id / display name (self identity). Rule 2:
+				// to descend further, the new qualified prefix must
+				// also be nested=true on our side — otherwise paths
+				// below it are not authorised and we don't need the
+				// BFS state.
+				cycle := sp.Name == a.node.Name() || sp.Name == cfg.NodeID
 				for _, c := range item.chain {
 					if c == sp.Name {
 						cycle = true
 						break
 					}
 				}
-				if !cycle {
-					newChain := make([]string, len(item.chain)+1)
-					copy(newChain, item.chain)
-					newChain[len(item.chain)] = sp.Name
-					bfsQueue = append(bfsQueue, bfsItem{chain: newChain})
+				if cycle {
+					continue
 				}
+				newChain := make([]string, len(item.chain)+1)
+				copy(newChain, item.chain)
+				newChain[len(item.chain)] = sp.Name
+				if !isPathAuthorised(append(append([]string{}, newChain...), "_sentinel"), cfg) {
+					// isPathAuthorised checks every prefix up to but not
+					// including the last segment. Using a sentinel final
+					// token makes it check every prefix of newChain itself.
+					continue
+				}
+				bfsQueue = append(bfsQueue, bfsItem{chain: newChain})
 			}
 		}
 	}
