@@ -393,7 +393,12 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // cross-tab layout polls don't clobber the node being dragged. Keyed
   // on node key so a remote update to any OTHER node can still apply
   // live.
-  const activeDragKeyRef = useRef<string | null>(null);
+  // Keys currently "busy" — either being dragged right now, or still
+  // mid post-drop animation (which takes ~260 ms and ends with the PUT).
+  // Reconcile skips any key in this set, so a remote SSE update can't
+  // yank a dot back toward a stale server value while we're still in
+  // the process of committing the user's drop.
+  const activeDragKeysRef = useRef<Set<string>>(new Set());
 
   // Server-pushed layout via SSE — concurrent sessions on other browsers
   // see edits within ~one network RTT instead of waiting for a poll. The
@@ -506,7 +511,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     for (const [k, v] of pendingWriteRef.current) {
       if (nowTs - v.at > 3000) pendingWriteRef.current.delete(k);
     }
-    const dragKey = activeDragKeyRef.current;
+    const dragKeys = activeDragKeysRef.current;
     // Compute authoritative base: remote values, except drag-locked node
     // (preserve local) and keys still awaiting our own PUT echo.
     const base: Record<string, Pos> = {};
@@ -516,7 +521,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       if (!k) continue;
       const r = remote[k];
       if (!r || typeof r.x !== 'number' || typeof r.y !== 'number') continue;
-      if (k === dragKey) {
+      if (dragKeys.has(k)) {
         if (cur[k]) base[k] = cur[k];
         continue;
       }
@@ -530,7 +535,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       if (pending) pendingWriteRef.current.delete(k);
       base[k] = { x: r.x, y: r.y };
     }
-    if (dragKey && cur[dragKey] && !(dragKey in base)) base[dragKey] = cur[dragKey];
+    for (const dk of dragKeys) {
+      if (cur[dk] && !(dk in base)) base[dk] = cur[dk];
+    }
     // Auto-fill missing nodes PURELY LOCALLY — do NOT save these back to
     // the server. Server state is strictly user-authored: drag release
     // and layout reset are the only paths that write. If we auto-saved
@@ -566,7 +573,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
           continue;
         }
         if (Math.abs(local.x - target.x) < 0.5 && Math.abs(local.y - target.y) < 0.5) continue;
-        if (k === dragKey) continue;
+        if (dragKeys.has(k)) continue;
         // Enqueue an animation. Leave the current override in place so
         // the RAF loop interpolates smoothly; it will update next[k]
         // over the 300 ms window.
@@ -574,7 +581,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       }
       // Drop any local keys that remote and auto both no longer have.
       for (const k in prev) {
-        if (k === dragKey) continue;
+        if (dragKeys.has(k)) continue;
         if (!(k in base)) { delete next[k]; changed = true; animRef.current.delete(k); }
       }
       return changed ? next : prev;
@@ -864,9 +871,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       const startSvg = clientToSvg(ev.clientX, ev.clientY);
       const startNodePos = positions[key] || { x: 0, y: 0 };
       dragState.current = { mode: 'node', key, startSvg, startNodePos, moved: false };
-      // Lock this node against remote-layout poll clobbers until the
-      // gesture ends (pointerup / pointercancel clear it below).
-      activeDragKeyRef.current = key;
+      // Lock this key against remote-layout clobbers until both the
+      // gesture ends AND the post-drop animation + save finishes. A
+      // previous incarnation released the lock on pointerup, which
+      // left a ~260 ms window where a remote echo could yank the dot
+      // back toward the stale server value (the "rebound on fast drag"
+      // the user reported).
+      activeDragKeysRef.current.add(key);
     } else {
       dragState.current = { mode: 'pan', startClient: { x: ev.clientX, y: ev.clientY }, startPan: pan, moved: false };
     }
@@ -897,6 +908,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
     if (Math.abs(to.x - from.x) < 0.5 && Math.abs(to.y - from.y) < 0.5) {
       setOverrides((prev) => { saveLayoutToServer(prev); return prev; });
+      activeDragKeysRef.current.delete(key);
       return;
     }
     const start = performance.now();
@@ -912,6 +924,10 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       } else {
         setOverrides((prev) => ({ ...prev, [key]: to }));
         setOverrides((prev) => { saveLayoutToServer(prev); return prev; });
+        // Release the lock AFTER saveLayoutToServer has recorded the
+        // pending-write entry. Any SSE echo that arrives from this
+        // point on is matched against pendingWriteRef, so no rebound.
+        activeDragKeysRef.current.delete(key);
       }
     };
     requestAnimationFrame(step);
@@ -982,20 +998,25 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       // the earlier pan/drag since dragState was cleared on pinch start.
       if (pinchRef.current) {
         if (pointersRef.current.size < 2) pinchRef.current = null;
-        activeDragKeyRef.current = null;
+        activeDragKeysRef.current.clear();
         return;
       }
       const s = dragState.current;
       dragState.current = null;
-      activeDragKeyRef.current = null;
       if (s?.mode === 'node') {
         if (!s.moved) {
+          // Simple click — release lock immediately.
+          activeDragKeysRef.current.delete(s.key);
           handleNodeClick(s.key);
         } else {
-          // Drag-drop pipeline: snap → collision-bounce → animate.
+          // Drag-drop pipeline: snap → collision-bounce → animate. Keep
+          // the lock on s.key set; animateToFinal releases it at the
+          // end of its animation, after saveLayoutToServer records the
+          // pending-write entry.
           setOverrides((prev) => {
             const pos = prev[s.key];
             if (pos) animateToFinal(s.key, pos);
+            else activeDragKeysRef.current.delete(s.key);
             return prev;
           });
         }
