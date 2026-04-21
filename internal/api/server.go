@@ -1766,7 +1766,14 @@ func (s *Server) removeClient(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getProxies(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
-	writeJSON(w, cfg.Proxies)
+	// A nil slice JSON-marshals to null, which the UI's useQuery
+	// default value doesn't replace (the `= []` shorthand only
+	// matches undefined). Always return a concrete empty array.
+	list := cfg.Proxies
+	if list == nil {
+		list = []app.ProxyConfig{}
+	}
+	writeJSON(w, list)
 }
 
 func (s *Server) addProxy(w http.ResponseWriter, r *http.Request) {
