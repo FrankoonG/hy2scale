@@ -367,7 +367,8 @@ a.peer-link:hover{text-decoration:underline}
 .hy-topo-edge-label.rate{color:#6b7280}
 .hy-topo-edge-label.lat-ok{color:#22c55e}
 .hy-topo-edge-label.lat-mid{color:#d97706}
-.hy-topo-edge-label.lat-bad,.hy-topo-edge-label.lat-na{color:#6b7280}
+.hy-topo-edge-label.lat-bad{color:#ef4444}
+.hy-topo-edge-label.lat-na{color:#6b7280}
 
 /* Background grid — medium-grey stroke at low opacity. DR keeps middle
    greys roughly mid-grey so opacity alone keeps this subtle in both
