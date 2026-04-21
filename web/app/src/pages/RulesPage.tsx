@@ -9,7 +9,7 @@ import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from '
 import { TargetList } from '@/components/TargetList';
 import { ExitViaCell } from '@/components/ExitViaCell';
 import ImportExportButton from '@/components/ImportExportButton';
-import BulkActionBar from '@/components/BulkActionBar';
+import ResponsiveActions from '@/components/ResponsiveActions';
 import { useExitPaths } from '@/hooks/useExitPaths';
 import type { RoutingRule } from '@/api';
 import * as api from '@/api';
@@ -172,23 +172,25 @@ export default function RulesPage() {
           title={tabTitle}
           count={currentRules.length}
           actions={
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <BulkActionBar count={selection.count} onClear={selection.clear}>
-                {(() => {
-                  const sel = [...selection.selected];
-                  const items = sel.map((id) => currentRules.find((r) => r.id === id)).filter(Boolean);
-                  const hasDisabled = items.some((r) => !r!.enabled);
-                  const hasEnabled = items.some((r) => r!.enabled);
-                  return <>
-                    {hasDisabled && <Button size="sm" onClick={() => bulkToggle(true)}>{t('app.bulkEnable')}</Button>}
-                    {hasEnabled && <Button size="sm" onClick={() => bulkToggle(false)}>{t('app.bulkDisable')}</Button>}
-                    <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>
-                  </>;
-                })()}
-              </BulkActionBar>
+            <ResponsiveActions
+              selectedCount={selection.count}
+              onClearSelection={selection.clear}
+              selectedLabel={t('app.selected', { count: selection.count })}
+            >
+              {(() => {
+                const sel = [...selection.selected];
+                const items = sel.map((id) => currentRules.find((r) => r.id === id)).filter(Boolean);
+                const hasDisabled = items.some((r) => !r!.enabled);
+                const hasEnabled = items.some((r) => r!.enabled);
+                return <>
+                  {hasDisabled && <Button size="sm" onClick={() => bulkToggle(true)}>{t('app.bulkEnable')}</Button>}
+                  {hasEnabled && <Button size="sm" onClick={() => bulkToggle(false)}>{t('app.bulkDisable')}</Button>}
+                  {selection.count > 0 && <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>}
+                </>;
+              })()}
               <ImportExportButton target="rules" />
               <Button size="sm" variant="primary" onClick={openAdd}>{t('rules.newRule')}</Button>
-            </div>
+            </ResponsiveActions>
           }
           noPadding
         >

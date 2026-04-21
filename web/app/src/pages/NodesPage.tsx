@@ -14,7 +14,7 @@ import { useHistory } from '@/hooks/useHistory';
 import { getBasePath } from '@/api/client';
 import NodeModal from '@/components/NodeModal';
 import EditSelfModal from '@/components/EditSelfModal';
-import BulkActionBar from '@/components/BulkActionBar';
+import ResponsiveActions from '@/components/ResponsiveActions';
 import ImportExportButton from '@/components/ImportExportButton';
 import NodesGraphView from '@/components/NodesGraphView';
 
@@ -530,43 +530,42 @@ export default function NodesPage() {
         }
         count={topology.length}
         actions={
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <BulkActionBar count={selection.count} onClear={selection.clear}>
-              {(() => {
-                // Inspect selected nodes to decide which buttons to show
-                const sel = [...selection.selected];
-                const findData = (key: string): TopologyNode | undefined => {
-                  const search = (nodes: TreeNode<TopologyNode>[]): TopologyNode | undefined => {
-                    for (const n of nodes) {
-                      if (n.key === key) return n.data;
-                      if (n.children) { const r = search(n.children); if (r) return r; }
-                    }
-                    return undefined;
-                  };
-                  return search(treeNodes);
+          <ResponsiveActions
+            selectedCount={selection.count}
+            onClearSelection={selection.clear}
+            selectedLabel={t('app.selected', { count: selection.count })}
+          >
+            {(() => {
+              // Inspect selected nodes to decide which bulk buttons to show.
+              const sel = [...selection.selected];
+              const findData = (key: string): TopologyNode | undefined => {
+                const search = (nodes: TreeNode<TopologyNode>[]): TopologyNode | undefined => {
+                  for (const n of nodes) {
+                    if (n.key === key) return n.data;
+                    if (n.children) { const r = search(n.children); if (r) return r; }
+                  }
+                  return undefined;
                 };
-                const items = sel.map(findData).filter(Boolean) as TopologyNode[];
-                const rootKeys = sel.filter((k) => !k.includes('/'));
-                // Enable/Disable applies to all nodes:
-                // - Root nodes: disableClient (stops QUIC connection)
-                // - Sub-rows: setPeerDisabled (keeps connection, blocks as exit hop)
-                const hasDisabled = items.some((n) => n.disabled);
-                const hasEnabled = items.some((n) => !n.disabled);
-                const hasNested = items.some((n) => n.nested);
-                const hasUnnested = items.some((n) => !n.nested);
-                const hasRoot = rootKeys.length > 0;
-                return <>
-                  {hasDisabled && <Button size="sm" onClick={() => bulkToggleNodes(false)}>{t('app.bulkEnable')}</Button>}
-                  {hasEnabled && <Button size="sm" onClick={() => bulkToggleNodes(true)}>{t('app.bulkDisable')}</Button>}
-                  {hasUnnested && <Button size="sm" onClick={() => bulkNested(true)}>{t('nodes.bulkEnableNested')}</Button>}
-                  {hasNested && <Button size="sm" onClick={() => bulkNested(false)}>{t('nodes.bulkDisableNested')}</Button>}
-                  {hasRoot && <Button size="sm" variant="danger" onClick={bulkDeleteNodes}>{t('app.bulkDelete')}</Button>}
-                </>;
-              })()}
-            </BulkActionBar>
+                return search(treeNodes);
+              };
+              const items = sel.map(findData).filter(Boolean) as TopologyNode[];
+              const rootKeys = sel.filter((k) => !k.includes('/'));
+              const hasDisabled = items.some((n) => n.disabled);
+              const hasEnabled = items.some((n) => !n.disabled);
+              const hasNested = items.some((n) => n.nested);
+              const hasUnnested = items.some((n) => !n.nested);
+              const hasRoot = rootKeys.length > 0;
+              return <>
+                {hasDisabled && <Button size="sm" onClick={() => bulkToggleNodes(false)}>{t('app.bulkEnable')}</Button>}
+                {hasEnabled && <Button size="sm" onClick={() => bulkToggleNodes(true)}>{t('app.bulkDisable')}</Button>}
+                {hasUnnested && <Button size="sm" onClick={() => bulkNested(true)}>{t('nodes.bulkEnableNested')}</Button>}
+                {hasNested && <Button size="sm" onClick={() => bulkNested(false)}>{t('nodes.bulkDisableNested')}</Button>}
+                {hasRoot && <Button size="sm" variant="danger" onClick={bulkDeleteNodes}>{t('app.bulkDelete')}</Button>}
+              </>;
+            })()}
             <ImportExportButton target="nodes" />
             <Button size="sm" variant="primary" onClick={openAdd}>{t('nodes.addNode')}</Button>
-          </div>
+          </ResponsiveActions>
         }
         noPadding
       >

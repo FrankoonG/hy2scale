@@ -7,7 +7,7 @@ import {
 } from '@hy2scale/ui';
 import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
 import { ExitViaCell } from '@/components/ExitViaCell';
-import BulkActionBar from '@/components/BulkActionBar';
+import ResponsiveActions from '@/components/ResponsiveActions';
 import ImportExportButton from '@/components/ImportExportButton';
 import * as api from '@/api';
 import type { WireGuardPeer } from '@/api';
@@ -279,13 +279,15 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
         title={t('wg.peers')}
         count={peers.length}
         actions={
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <BulkActionBar count={peerSelection.count} onClear={peerSelection.clear}>
-              <Button size="sm" variant="danger" onClick={bulkDeletePeers}>{t('app.bulkDelete')}</Button>
-            </BulkActionBar>
+          <ResponsiveActions
+            selectedCount={peerSelection.count}
+            onClearSelection={peerSelection.clear}
+            selectedLabel={t('app.selected', { count: peerSelection.count })}
+          >
+            {peerSelection.count > 0 && <Button size="sm" variant="danger" onClick={bulkDeletePeers}>{t('app.bulkDelete')}</Button>}
             <ImportExportButton target="wg-peers" />
             <Button size="sm" variant="primary" onClick={openAddPeer}>{t('wg.addPeer')}</Button>
-          </div>
+          </ResponsiveActions>
         }
         noPadding
       >

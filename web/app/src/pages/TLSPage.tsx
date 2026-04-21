@@ -5,7 +5,7 @@ import {
   Card, Button, Badge, Tabs, Table, Modal, Input, Textarea, Select,
   FormGroup, FormGrid, TabPanel, useToast, useConfirm, useSelection, type Column,
 } from '@hy2scale/ui';
-import BulkActionBar from '@/components/BulkActionBar';
+import ResponsiveActions from '@/components/ResponsiveActions';
 import * as api from '@/api';
 import type { CertInfo } from '@/api';
 
@@ -194,12 +194,14 @@ export default function TLSPage() {
         title={t('tls.title')}
         count={certs.length}
         actions={
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <BulkActionBar count={selection.count} onClear={selection.clear}>
-              <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>
-            </BulkActionBar>
+          <ResponsiveActions
+            selectedCount={selection.count}
+            onClearSelection={selection.clear}
+            selectedLabel={t('app.selected', { count: selection.count })}
+          >
+            {selection.count > 0 && <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>}
             <Button size="sm" variant="primary" onClick={openNew}>{t('tls.new')}</Button>
-          </div>
+          </ResponsiveActions>
         }
         noPadding
       >
