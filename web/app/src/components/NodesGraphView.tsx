@@ -1122,70 +1122,126 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     return Math.sqrt(dx * dx + dy * dy) * zoom;
   }
 
-  // Adaptive label placement: default is at the edge's midpoint, but when
-  // the midpoint is near another node or another edge's midpoint (which
-  // happens with crossing lines), push the label perpendicular to this
-  // edge by a fixed amount, on whichever side is farther from the
-  // obstacle. Without this, labels on crossing lines would overlap each
-  // other or land on top of a dot. Memoised against edges / positions so
-  // it doesn't recompute every frame.
-  const LABEL_PERP_MAG = 14;
-  const LABEL_AVOID_RANGE = 42;
-  const edgeLabelOffsets = useMemo(() => {
-    const map = new Map<string, { ox: number; oy: number }>();
+  // Adaptive label placement.
+  //
+  // The previous midpoint-plus-perpendicular scheme couldn't handle the
+  // common case where an edge passes *through* the area occupied by a
+  // non-endpoint dot (e.g. the line from jp to 446f1f2b running past the
+  // au dot). A fixed 14-unit perpendicular nudge doesn't clear a 30-unit
+  // tall dot + label text, and nothing moved the label off the conflict
+  // zone *along* the edge.
+  //
+  // New algorithm:
+  //   1. For every non-endpoint node whose perpendicular distance to the
+  //      line is within a label's reach, mark an interval of the edge
+  //      parameter t ∈ [0,1] that the label must avoid. The interval
+  //      width scales with the node's radius so larger dots claim a
+  //      larger keep-out zone.
+  //   2. Also mark the zones claimed by other edges' already-chosen
+  //      labels so two crossing-edge labels don't overlap each other.
+  //   3. Walk t values near 0.5 (midpoint) looking for a sample that
+  //      isn't in any keep-out zone. If found, use it. If the midpoint
+  //      itself was already clear, prefer it (avoids shuffling labels
+  //      when nothing is blocking).
+  //   4. Stack a per-edge side choice: for the chosen t, pick the
+  //      perpendicular side (above/below the line) farther from any
+  //      remaining nearby dots. Keeps labels off the line itself so the
+  //      halo cut-out still reads cleanly.
+  //
+  // Returns absolute SVG coordinates for each edge's label anchor point.
+  // Memoised against edges / positions so it doesn't recompute per frame.
+  const edgeLabelAnchors = useMemo(() => {
+    const map = new Map<string, { x: number; y: number; nx: number; ny: number; side: number }>();
     const nodeList = Array.from(nodes.values());
     const edgeList = Array.from(edges.values());
-    const mids = edgeList.map((e) => {
+    // Precompute per-edge geometry.
+    const geom = edgeList.map((e) => {
       const p = positions[e.from];
       const q = positions[e.to];
       if (!p || !q) return null;
-      return { key: e.key, mx: (p.x + q.x) / 2, my: (p.y + q.y) / 2 };
-    });
-    for (let i = 0; i < edgeList.length; i++) {
-      const e = edgeList[i];
-      const p = positions[e.from];
-      const q = positions[e.to];
-      if (!p || !q) continue;
       const dx = q.x - p.x;
       const dy = q.y - p.y;
-      const d = Math.sqrt(dx * dx + dy * dy) || 1;
-      const ux = dx / d;
-      const uy = dy / d;
-      const mx = (p.x + q.x) / 2;
-      const my = (p.y + q.y) / 2;
-      // Perpendicular unit vector; sign chosen to push labels away from
-      // the nearest obstacle found.
-      const nx = -uy;
-      const ny = ux;
-      let best: { dist: number; projN: number } | null = null;
-      // Non-endpoint nodes near the midpoint.
+      const len = Math.hypot(dx, dy) || 1;
+      return { e, p, q, dx, dy, len, ux: dx / len, uy: dy / len, nx: -dy / len, ny: dx / len };
+    });
+    // Track already-placed label anchors so later edges avoid them too.
+    const placed: Array<{ x: number; y: number }> = [];
+    const PERP_REACH = 16;  // perpendicular distance at which a node still collides with a label
+    const LABEL_PERP = 8;   // how far off the line the label sits
+    const T_LO = 0.18, T_HI = 0.82;
+
+    for (const g of geom) {
+      if (!g) continue;
+      const { e, p, len, ux, uy, nx, ny } = g;
+      // Build keep-out intervals on t.
+      const forbidden: Array<[number, number]> = [];
       for (const n of nodeList) {
         if (n.key === e.from || n.key === e.to) continue;
-        const pos = positions[n.key];
-        if (!pos) continue;
-        const ddx = pos.x - mx;
-        const ddy = pos.y - my;
-        const dist = Math.sqrt(ddx * ddx + ddy * ddy);
-        if (dist > LABEL_AVOID_RANGE) continue;
-        if (!best || dist < best.dist) best = { dist, projN: ddx * nx + ddy * ny };
+        const np = positions[n.key];
+        if (!np) continue;
+        const vx = np.x - p.x, vy = np.y - p.y;
+        const tNode = (vx * ux + vy * uy) / len;
+        if (tNode < -0.1 || tNode > 1.1) continue;
+        const perpDist = Math.abs(vx * nx + vy * ny);
+        const rNode = isTransit(n) ? R_HUB_OUTER : R_SINGLE;
+        if (perpDist > rNode + PERP_REACH) continue;
+        // How far along t we need to clear the node horizontally. The
+        // keep-out width shrinks as perpendicular distance grows (a dot
+        // slightly off-axis needs less along-axis clearance).
+        const clearDist = rNode + 14 - Math.max(0, perpDist - rNode) * 0.5;
+        const clearT = Math.max(0.02, clearDist / len);
+        forbidden.push([tNode - clearT, tNode + clearT]);
       }
-      // Other edges' midpoints — crossing-line label collisions.
-      for (let j = 0; j < mids.length; j++) {
-        if (j === i) continue;
-        const m = mids[j];
-        if (!m) continue;
-        const ddx = m.mx - mx;
-        const ddy = m.my - my;
-        const dist = Math.sqrt(ddx * ddx + ddy * ddy);
-        if (dist > LABEL_AVOID_RANGE || dist < 1) continue;
-        if (!best || dist < best.dist) best = { dist, projN: ddx * nx + ddy * ny };
+      // Also mark previously-placed labels' positions along this edge.
+      for (const pl of placed) {
+        const vx = pl.x - p.x, vy = pl.y - p.y;
+        const tPl = (vx * ux + vy * uy) / len;
+        if (tPl < -0.1 || tPl > 1.1) continue;
+        const perpDist = Math.abs(vx * nx + vy * ny);
+        if (perpDist > 18) continue;
+        const clearT = 16 / len;
+        forbidden.push([tPl - clearT, tPl + clearT]);
       }
-      if (best) {
-        const sign = best.projN >= 0 ? -1 : 1;
-        map.set(e.key, { ox: nx * sign * LABEL_PERP_MAG, oy: ny * sign * LABEL_PERP_MAG });
-      } else {
-        map.set(e.key, { ox: 0, oy: 0 });
+      // Pick t: start at midpoint, then step outward until open.
+      const isBlocked = (t: number) => {
+        for (const [a, b] of forbidden) if (t >= a && t <= b) return true;
+        return false;
+      };
+      let pickT = 0.5;
+      if (isBlocked(pickT)) {
+        let found = false;
+        for (let step = 1; step <= 12 && !found; step++) {
+          const delta = step * 0.05;
+          for (const cand of [0.5 + delta, 0.5 - delta]) {
+            if (cand < T_LO || cand > T_HI) continue;
+            if (!isBlocked(cand)) { pickT = cand; found = true; break; }
+          }
+        }
+        // If every sample is blocked, keep midpoint as a last resort.
       }
+      const ax = p.x + (g.dx) * pickT;
+      const ay = p.y + (g.dy) * pickT;
+      // Choose perpendicular side that's farther from any remaining
+      // nearby node. Default to +perp if no obstacle.
+      let side = 1;
+      let bestClearance = -Infinity;
+      for (const cand of [1, -1]) {
+        const cx = ax + nx * LABEL_PERP * cand;
+        const cy = ay + ny * LABEL_PERP * cand;
+        let minDist = Infinity;
+        for (const n of nodeList) {
+          if (n.key === e.from || n.key === e.to) continue;
+          const np = positions[n.key];
+          if (!np) continue;
+          const dd = Math.hypot(np.x - cx, np.y - cy);
+          if (dd < minDist) minDist = dd;
+        }
+        if (minDist > bestClearance) { bestClearance = minDist; side = cand; }
+      }
+      const finalX = ax + nx * LABEL_PERP * side;
+      const finalY = ay + ny * LABEL_PERP * side;
+      map.set(e.key, { x: finalX, y: finalY, nx, ny, side });
+      placed.push({ x: finalX, y: finalY });
     }
     return map;
   }, [edges, nodes, positions]);
@@ -1366,14 +1422,16 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                     stroke is set via the <HaloText> helper below, which
                     applies the sampled surface colour with `!important`
                     so dark-mode extensions' CSS overrides can't win.
-                    Adaptive position: offset perpendicular to the edge
-                    when the midpoint would collide with another node or
-                    a crossing edge's label (see edgeLabelOffsets memo);
-                    otherwise labels stay at midpoint as before. */}
+                    The edgeLabelAnchors memo slides the anchor along the
+                    edge (past non-endpoint dots the line passes through)
+                    and offsets it perpendicular to the line on the side
+                    with the most clearance. Within that anchor, the two
+                    labels stack vertically in screen space as before:
+                    latency slightly above, rate slightly below. */}
                 {(() => {
-                  const off = edgeLabelOffsets.get(e.key) || { ox: 0, oy: 0 };
-                  const lx = mx + off.ox;
-                  const ly = my + off.oy;
+                  const anchor = edgeLabelAnchors.get(e.key);
+                  const lx = anchor?.x ?? mx;
+                  const ly = anchor?.y ?? my;
                   return (
                     <>
                       {showLatency && (() => {
