@@ -776,36 +776,40 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     return m;
   }, [activePath, edges]);
 
-  // Sequentially "draw" the path after a selection change — each edge
-  // fades in one step at a time. The TOTAL highlight duration is kept
-  // constant regardless of hop count, so a 5-hop selection feels just
-  // as snappy as a 1-hop selection (divides PATH_TOTAL_MS by step
-  // count; clamped to a minimum so no single step blinks by too fast
-  // to see). On deselect the counter drops to 0 instantly so all
-  // edges un-highlight simultaneously.
+  // Continuous sweep animation for the selected-path highlight. The
+  // whole path is treated as one stroke being drawn at constant speed
+  // from self to target — total duration PATH_TOTAL_MS regardless of
+  // hop count. Per edge, we compute an animation-delay and duration
+  // proportional to that edge's length within the path total length,
+  // so a short first hop and a long second hop feel like one wave
+  // moving at the same pixels-per-second rate. All edges on the path
+  // are marked `.on-path` immediately at selection time; each edge's
+  // draw overlay plays its CSS animation with the computed timing.
   const PATH_TOTAL_MS = 520;
-  const PATH_STEP_MIN = 60;
-  const PATH_STEP_MAX = 280;
-  const [pathProgress, setPathProgress] = useState(0);
-  const [pathStepMs, setPathStepMs] = useState(PATH_STEP_MAX);
-  useEffect(() => {
-    if (!activePath) { setPathProgress(0); return; }
-    const total = Math.max(0, activePath.length - 1);
-    if (total === 0) { setPathProgress(0); return; }
-    setPathProgress(1);
-    const stepMs = Math.min(PATH_STEP_MAX, Math.max(PATH_STEP_MIN, Math.round(PATH_TOTAL_MS / total)));
-    setPathStepMs(stepMs);
-    let step = 1;
-    const id = window.setInterval(() => {
-      step += 1;
-      setPathProgress(step);
-      if (step >= total) window.clearInterval(id);
-    }, stepMs);
-    return () => window.clearInterval(id);
-    // Lock on the qpath text so a topology refresh that reshuffles the paths
-    // array but keeps this route intact doesn't re-trigger the animation.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePath ? activePath.join('/') : null]);
+  const pathEdgeSchedule = useMemo(() => {
+    const map = new Map<string, { delayMs: number; durationMs: number }>();
+    if (!activePath || activePath.length < 2) return map;
+    const segs: Array<{ key: string; len: number }> = [];
+    for (let i = 0; i < activePath.length - 1; i++) {
+      const a = activePath[i], b = activePath[i + 1];
+      const p = positions[a], q = positions[b];
+      if (!p || !q) continue;
+      const candidates = [`${a}→${b}`, `${b}→${a}`, `?${a < b ? a : b}|${a < b ? b : a}`];
+      let key = '';
+      for (const c of candidates) if (edges.has(c)) { key = c; break; }
+      if (!key) continue;
+      segs.push({ key, len: Math.hypot(q.x - p.x, q.y - p.y) });
+    }
+    const totalLen = segs.reduce((acc, s) => acc + s.len, 0) || 1;
+    let cum = 0;
+    for (const s of segs) {
+      const delayMs = (cum / totalLen) * PATH_TOTAL_MS;
+      const durationMs = Math.max(60, (s.len / totalLen) * PATH_TOTAL_MS);
+      map.set(s.key, { delayMs, durationMs });
+      cum += s.len;
+    }
+    return map;
+  }, [activePath, edges, positions]);
 
   const handleNodeClick = useCallback((key: string) => {
     const paths = findPathsToName(topology, key, selfId, selfName);
@@ -1133,9 +1137,26 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // the glyphs along the edge.
   const flowPathRefs = useRef<Map<string, SVGPathElement>>(new Map());
   const flowStateRef = useRef<Map<string, { phase: number; speed: number }>>(new Map());
-  const flowGeomRef = useRef<Map<string, { x1: number; y1: number; x2: number; y2: number; len: number; ux: number; uy: number; nx: number; ny: number }>>(new Map());
   const edgesRef = useRef(edges);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
+  // Stable ref-callback per edge key — new inline closures would be
+  // torn down + re-attached on every render, briefly removing the
+  // path element from the map and freezing the chevron animation
+  // whenever anything else in the graph re-rendered (selection, drag,
+  // rate change). Memoising the callbacks means React only calls them
+  // at true mount / unmount.
+  const flowRefCbs = useRef<Map<string, (el: SVGPathElement | null) => void>>(new Map());
+  const getFlowRefCb = useCallback((key: string) => {
+    let cb = flowRefCbs.current.get(key);
+    if (!cb) {
+      cb = (el: SVGPathElement | null) => {
+        if (el) flowPathRefs.current.set(key, el);
+        else flowPathRefs.current.delete(key);
+      };
+      flowRefCbs.current.set(key, cb);
+    }
+    return cb;
+  }, []);
 
   // Chevron sizing in SVG units. Kept tight so adding the arrowhead
   // doesn't visually thicken the edge — a 4-unit-long tip on a
@@ -1160,6 +1181,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       let globalPeak = 0;
       maxs.forEach((v) => { if (v > globalPeak) globalPeak = v; });
       const denom = Math.max(globalPeak, REF_MAX);
+      const curPositions = positionsRef.current;
+      const curNodes = nodesRef.current;
       curEdges.forEach((e) => {
         if (!e.directionKnown) return;
         const t = Math.min(1, e.currentRate / denom);
@@ -1170,10 +1193,32 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         state.phase = ((state.phase + state.speed * dt) % CHEV_SPACING + CHEV_SPACING) % CHEV_SPACING;
         flowStateRef.current.set(e.key, state);
         const el = flowPathRefs.current.get(e.key);
-        const geom = flowGeomRef.current.get(e.key);
-        if (!el || !geom) return;
-        // Rebuild the chevron path for this edge.
-        const { x1, y1, len, ux, uy, nx, ny } = geom;
+        if (!el) return;
+        // Compute geometry on the fly so the chevrons stay accurate as
+        // the user drags nodes or pans the view; no stale cache to get
+        // out of sync with the React render.
+        const p = curPositions[e.from];
+        const q = curPositions[e.to];
+        if (!p || !q) return;
+        // Shrink the chevron-path start/end by the node radius so
+        // chevrons don't start inside a dot or cover its outline.
+        const rFrom = isTransit(curNodes.get(e.from)) ? R_HUB_OUTER : R_SINGLE;
+        const rTo = isTransit(curNodes.get(e.to)) ? R_HUB_OUTER : R_SINGLE;
+        const dxAll = q.x - p.x;
+        const dyAll = q.y - p.y;
+        const fullLen = Math.hypot(dxAll, dyAll) || 1;
+        const ux = dxAll / fullLen;
+        const uy = dyAll / fullLen;
+        const nx = -uy;
+        const ny = ux;
+        const hasOpposite = edgesRef.current.has(`${e.to}→${e.from}`);
+        const offX = hasOpposite ? uy * 5 : 0;
+        const offY = hasOpposite ? -ux * 5 : 0;
+        const x1 = p.x + ux * rFrom + offX;
+        const y1 = p.y + uy * rFrom + offY;
+        const x2 = q.x - ux * rTo + offX;
+        const y2 = q.y - uy * rTo + offY;
+        const len = Math.hypot(x2 - x1, y2 - y1) || 1;
         const count = Math.ceil(len / CHEV_SPACING) + 1;
         let d = '';
         for (let i = 0; i < count; i++) {
@@ -1425,12 +1470,16 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             const showRate = screenLen > 110;
             const width = edgeWidth(e);
 
-            // Path highlight animation: each edge on the active path has
-            // its own index 0..n-1. `pathProgress` is a counter that ticks
-            // up once per ~160 ms after a selection change, so the route
-            // "draws" sequentially from self to the selected node.
+            // Path highlight animation: all edges on the active path go
+            // `on-path` immediately, and each draw overlay plays its CSS
+            // animation with a delay + duration computed from the edge's
+            // proportion of the total path length. That produces one
+            // continuous wave sweeping from self to target at a constant
+            // speed (total duration PATH_TOTAL_MS no matter the hop
+            // count), instead of discrete per-hop flashes.
             const edgeIdx = activePathOrder.get(e.key);
-            const onPath = edgeIdx !== undefined && edgeIdx < pathProgress;
+            const onPath = edgeIdx !== undefined;
+            const sched = pathEdgeSchedule.get(e.key);
             // An edge is offline/down when the edge itself is disabled OR
             // either endpoint reports offline. Such edges turn red, lose
             // the flow-dot animation, and carry an × marker at their
@@ -1480,7 +1529,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                     className="hy-topo-edge-draw"
                     style={{
                       ['--hy-path-len' as any]: drawLen,
-                      ['--hy-path-draw-ms' as any]: `${pathStepMs}ms`,
+                      ['--hy-path-draw-ms' as any]: `${sched?.durationMs ?? PATH_TOTAL_MS}ms`,
+                      ['--hy-path-draw-delay' as any]: `${sched?.delayMs ?? 0}ms`,
                     }}
                   />
                 )}
@@ -1489,29 +1539,12 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                     RAF loop above. The chevron shape makes direction
                     readable even in a still screenshot. Offline edges
                     have no flow; the × marker speaks for their state. */}
-                {e.directionKnown && !offline && (() => {
-                  const edx = x2 - x1;
-                  const edy = y2 - y1;
-                  const elen = Math.hypot(edx, edy) || 1;
-                  const eux = edx / elen;
-                  const euy = edy / elen;
-                  // Register this edge's geometry so the RAF loop can
-                  // rebuild its chevron path each frame without the
-                  // component having to re-render.
-                  const key = e.key;
-                  flowGeomRef.current.set(key, {
-                    x1, y1, x2, y2, len: elen, ux: eux, uy: euy, nx: -euy, ny: eux,
-                  });
-                  return (
-                    <path
-                      className="hy-topo-edge-flow"
-                      ref={(el) => {
-                        if (el) flowPathRefs.current.set(key, el);
-                        else { flowPathRefs.current.delete(key); flowGeomRef.current.delete(key); }
-                      }}
-                    />
-                  );
-                })()}
+                {e.directionKnown && !offline && (
+                  <path
+                    className="hy-topo-edge-flow"
+                    ref={getFlowRefCb(e.key)}
+                  />
+                )}
                 {/* Offline × marker — small red cross at the midpoint,
                     constant size independent of edge thickness. */}
                 {offline && (
