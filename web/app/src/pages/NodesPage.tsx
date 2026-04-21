@@ -29,13 +29,17 @@ export default function NodesPage() {
   const [editSelfOpen, setEditSelfOpen] = useState(false);
   const [editingName, setEditingName] = useState<string | null>(null);
   const [clickPos, setClickPos] = useState<{ x: number; y: number } | undefined>();
+  // Default to graph view on first visit (no stored preference) since the
+  // topology graph is the more informative presentation; list view remains
+  // a one-click toggle away. localStorage remembers the user's last pick
+  // explicitly — but the fallback when no preference exists is 'graph',
+  // not 'list', so fresh installs don't land on the denser table.
   const [viewMode, setViewMode] = useState<'list' | 'graph'>(() => {
     try {
       const v = localStorage.getItem('scale:nodes-view');
-      return v === 'graph' ? 'graph' : 'list';
-    } catch {
-      return 'list';
-    }
+      if (v === 'list' || v === 'graph') return v;
+    } catch { /* ignore */ }
+    return 'graph';
   });
   useEffect(() => {
     try { localStorage.setItem('scale:nodes-view', viewMode); } catch { /* ignore */ }

@@ -5,6 +5,7 @@ import * as api from '@/api';
 import { getBasePath } from '@/api/client';
 import { fmtRate } from '@/hooks/useFormat';
 import { useExitPaths } from '@/hooks/useExitPaths';
+import { useConfirm } from '@hy2scale/ui';
 
 interface Props {
   topology: TopologyNode[];
@@ -71,7 +72,6 @@ const R_HUB_INNER = 7;
 const LEVEL_GAP = 130;
 const SIBLING_GAP = 85;
 const NODE_PADDING = 8;           // extra px between two nodes' edges
-const LS_POS_KEY = 'scale:topology-graph-positions';
 /** 1000 Mbps ≡ 1 Gbps ≡ 125 000 000 bytes/sec. Used as the absolute ceiling
  *  for edge-thickness scaling so line width is comparable across deployments
  *  instead of being relative to whatever the local mesh happens to have
@@ -184,24 +184,6 @@ function resolveOverlap(
     if (!moved) break;
   }
   return { x, y };
-}
-
-// Legacy localStorage positions — only used as an offline fallback when
-// the server layout hasn't been fetched yet (initial mount, or the user
-// has no network). Writes go to the server via the React Query mutation
-// below; localStorage is kept in sync as a warm cache so the next mount
-// shows familiar positions before the fetch completes.
-function loadPositions(): Record<string, Pos> {
-  try {
-    const raw = localStorage.getItem(LS_POS_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object') return parsed;
-  } catch { /* ignore */ }
-  return {};
-}
-function cachePositions(p: Record<string, Pos>) {
-  try { localStorage.setItem(LS_POS_KEY, JSON.stringify(p)); } catch { /* ignore */ }
 }
 
 function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
@@ -397,7 +379,11 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   //      weren't in storage yet (new hot-created / newly-seen inbound).
   //   2. During drag-move — the dragged node's position tracks the cursor.
   //   3. On drag release — snap + collision-resolved final position.
-  const [overrides, setOverrides] = useState<Record<string, Pos>>(() => loadPositions());
+  // Overrides start empty. The SSE layout stream is the single source of
+  // truth; no localStorage warm cache is used because it caused stale
+  // positions to render briefly on reload, which then slid to the real
+  // server state and looked like a reset.
+  const [overrides, setOverrides] = useState<Record<string, Pos>>({});
   const overridesRef = useRef(overrides);
   useEffect(() => { overridesRef.current = overrides; }, [overrides]);
   const nodesRef = useRef(nodes);
@@ -455,7 +441,6 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // snapshot that predated our PUT) doesn't rebound the UI back to the
   // server's old state.
   const saveLayoutToServer = useCallback((positions: Record<string, Pos>) => {
-    cachePositions(positions);
     const now = performance.now();
     for (const k in positions) {
       pendingWriteRef.current.set(k, { x: positions[k].x, y: positions[k].y, at: now });
@@ -480,7 +465,6 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             changed = true;
             if (t >= 1) animRef.current.delete(key);
           }
-          if (changed) cachePositions(next);
           return changed ? next : prev;
         });
       }
@@ -574,7 +558,6 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         if (k === dragKey) continue;
         if (!(k in base)) { delete next[k]; changed = true; animRef.current.delete(k); }
       }
-      if (changed) cachePositions(next);
       return changed ? next : prev;
     });
     if (filledFromAuto) saveLayoutToServer(base);
@@ -1065,7 +1048,19 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     fitView();
   }, [positions, fitView]);
 
-  const resetLayout = () => { setOverrides({}); saveLayoutToServer({}); };
+  const confirm = useConfirm();
+  const resetLayout = useCallback(async () => {
+    const ok = await confirm({
+      title: t('nodes.graph.resetLayout'),
+      message: t('nodes.graph.resetLayoutConfirm'),
+      confirmText: t('app.reset'),
+      cancelText: t('app.cancel'),
+      danger: true,
+    });
+    if (!ok) return;
+    setOverrides({});
+    saveLayoutToServer({});
+  }, [confirm, t, saveLayoutToServer]);
 
   // Edge stroke width — scaled against an ABSOLUTE 0–1000 Mbps reference
   // so a line's thickness means the same thing regardless of what else
