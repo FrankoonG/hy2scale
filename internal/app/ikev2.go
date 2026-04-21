@@ -88,7 +88,6 @@ pools {
 `, localID, remoteID, ipRange, strings.ReplaceAll(dns, " ", ", "))
 
 	case "mschapv2":
-		// Server identity = localID (matches auto-generated cert CN/SAN)
 		conf = fmt.Sprintf(`connections {
     ikev2-mschapv2 {
         version = 2
@@ -99,7 +98,6 @@ pools {
         local-1 {
             auth = pubkey
             certs = ikev2-server.cert.pem
-            id = %s
         }
         remote-1 {
             auth = eap-mschapv2
@@ -126,7 +124,7 @@ pools {
         dns = %s
     }
 }
-`, localID, ipRange, strings.ReplaceAll(dns, " ", ", "))
+`, ipRange, strings.ReplaceAll(dns, " ", ", "))
 	}
 
 	os.WriteFile("/etc/swanctl/conf.d/ikev2.conf", []byte(conf), 0644)
@@ -159,6 +157,38 @@ pools {
 	os.WriteFile("/etc/swanctl/swanctl.conf", []byte("include conf.d/*.conf\ninclude secrets.d/*.conf\n"), 0644)
 
 	log.Printf("[ikev2] swanctl config written with if_id for xfrm interface mode")
+}
+
+// writeSwanctlSecrets writes only the secrets file (for native iptables mode where
+// the connection is defined via ipsec.conf/stroke, but swanctl --load-all still
+// needs the secrets in swanctl format).
+func (a *App) writeSwanctlSecrets(cfg IKEv2Config) {
+	os.MkdirAll("/etc/swanctl/secrets.d", 0755)
+
+	var secrets string
+	switch cfg.Mode {
+	case "psk":
+		if cfg.PSK != "" {
+			secrets = fmt.Sprintf("secrets {\n    ike-psk {\n        secret = \"%s\"\n    }\n}\n", cfg.PSK)
+		}
+	case "mschapv2":
+		var sb strings.Builder
+		sb.WriteString("secrets {\n")
+		sb.WriteString("    rsa-key {\n        file = ikev2-server.key.pem\n    }\n")
+		cfgStore := a.store.Get()
+		for i, u := range cfgStore.Users {
+			if u.Enabled {
+				sb.WriteString(fmt.Sprintf("    eap-user%d {\n        id = %s\n        secret = \"%s\"\n    }\n", i, u.Username, u.Password))
+			}
+		}
+		sb.WriteString("}\n")
+		secrets = sb.String()
+	}
+	if secrets != "" {
+		os.WriteFile("/etc/swanctl/secrets.d/ikev2.conf", []byte(secrets), 0644)
+	}
+	// Ensure base swanctl.conf exists
+	os.WriteFile("/etc/swanctl/swanctl.conf", []byte("include conf.d/*.conf\ninclude secrets.d/*.conf\n"), 0644)
 }
 
 // getDNS returns DNS servers from the global config, space-separated for strongswan.
@@ -394,32 +424,34 @@ conn ikev2-mschapv2
 	// Setup iptables (same dual-stack approach as L2TP)
 	os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
 
-	if testIptablesAvailable() {
+	if iptablesOK {
 		if iptUseChroot() {
 			log.Printf("[ikev2] mode: iptables via chroot /host (host kernel compat)")
 		} else {
 			log.Printf("[ikev2] mode: native iptables DNAT + transparent proxy")
 		}
 		portStr := fmt.Sprintf("%d", proxyPort)
-		iptRun("iptables-legacy", "-t", "nat", "-I", "PREROUTING",
+		iptRun(iptVariant(), "-t", "nat", "-I", "PREROUTING",
 			"-s", subnet, "-p", "tcp",
 			"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%s", gateway, portStr))
-		iptRun("iptables-legacy", "-t", "nat", "-A", "POSTROUTING",
+		iptRun(iptVariant(), "-t", "nat", "-A", "POSTROUTING",
 			"-s", subnet, "-o", "eth0", "-j", "MASQUERADE")
-		iptRun("iptables-legacy", "-I", "FORWARD", "-s", subnet, "-o", "eth0", "-j", "ACCEPT")
-		iptRun("iptables-legacy", "-I", "FORWARD", "-d", subnet,
+		iptRun(iptVariant(), "-I", "FORWARD", "-s", subnet, "-o", "eth0", "-j", "ACCEPT")
+		iptRun(iptVariant(), "-I", "FORWARD", "-d", subnet,
 			"-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
-		iptRun("iptables-legacy", "-I", "INPUT", "-p", "tcp", "--dport", portStr,
+		iptRun(iptVariant(), "-I", "INPUT", "-p", "tcp", "--dport", portStr,
 			"-s", subnet, "-j", "ACCEPT")
-		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", portStr, "-j", "DROP")
+		iptRun(iptVariant(), "-A", "INPUT", "-p", "tcp", "--dport", portStr, "-j", "DROP")
 		hooksPortStr := fmt.Sprintf("%d", hooksPort)
-		iptRun("iptables-legacy", "-I", "INPUT", "-p", "tcp", "--dport", hooksPortStr,
+		iptRun(iptVariant(), "-I", "INPUT", "-p", "tcp", "--dport", hooksPortStr,
 			"-i", "lo", "-j", "ACCEPT")
-		iptRun("iptables-legacy", "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr, "-j", "DROP")
+		iptRun(iptVariant(), "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr, "-j", "DROP")
 		iptRun("iptables", "-I", "DOCKER-USER", "-s", subnet, "-j", "ACCEPT")
 		iptRun("iptables", "-I", "DOCKER-USER", "-d", subnet, "-j", "ACCEPT")
 		iptRun("iptables", "-t", "nat", "-A", "POSTROUTING",
 			"-s", subnet, "-j", "MASQUERADE")
+		// Write swanctl secrets for native mode (swanctl --load-all reloads secrets)
+		a.writeSwanctlSecrets(cfg)
 		go a.runIKEv2Proxy(ikev2Ctx, gateway, proxyPort, hooksPort, cfg)
 	} else {
 		// Compat mode: xfrm interface + TUN capture (swanctl with if_id)
@@ -788,6 +820,7 @@ func (a *App) handleIKEv2Transparent(conn net.Conn, cfg IKEv2Config) {
 	// Determine exit_via
 	exitVia := ""
 	exitMode := ""
+	var exitPaths []string
 	if ok && username != "__psk__" {
 		// User mode: look up user's exit_via
 		user, err := a.LookupUser(username, "")
@@ -803,6 +836,7 @@ func (a *App) handleIKEv2Transparent(conn net.Conn, cfg IKEv2Config) {
 		if user != nil {
 			exitVia = user.ExitVia
 			exitMode = user.ExitMode
+			exitPaths = user.ExitPaths
 		}
 	} else if cfg.Mode == "psk" && !cfg.PSKUserMode {
 		exitVia = cfg.DefaultExit
@@ -817,7 +851,7 @@ func (a *App) handleIKEv2Transparent(conn net.Conn, cfg IKEv2Config) {
 		remote, err = net.DialTimeout("tcp", origDst, 10*time.Second)
 	} else {
 		log.Printf("[ikev2] dial via %s to %s", exitVia, origDst)
-		remote, err = a.dialExitWithMode(context.Background(), exitVia, exitMode, origDst)
+		remote, err = a.dialExitWithPaths(context.Background(), exitVia, exitPaths, exitMode, origDst)
 	}
 	if err != nil {
 		log.Printf("[ikev2] dial error: %v", err)

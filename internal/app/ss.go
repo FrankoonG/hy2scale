@@ -77,54 +77,68 @@ func (a *App) handleSS(conn net.Conn, method string) {
 		return
 	}
 
-	// SS server needs to try each user's password to decrypt
+	// Read salt and the first length-encrypted frame ONCE from the wire.
+	// Salt length and AEAD overhead are determined by the method, not by the
+	// user, so these bytes are the same for every candidate user. Buffering
+	// them lets us retry each enabled user's key against the same bytes —
+	// before rc10's fix, the loop below consumed the salt on the first
+	// iteration and could never try a second user's key, effectively
+	// locking out every user except the first enabled one.
 	cfg := a.store.Get()
+	saltLen := keySize(method)
+	probeKey := make([]byte, saltLen)
+	probeAEAD, err := newAEAD(method, probeKey)
+	if err != nil {
+		log.Printf("[ss] unsupported method: %s", method)
+		return
+	}
+	nonceSize := probeAEAD.NonceSize()
+	overhead := probeAEAD.Overhead()
+
+	salt := make([]byte, saltLen)
+	if _, err := io.ReadFull(conn, salt); err != nil {
+		return
+	}
+	lenBuf := make([]byte, 2+overhead)
+	if _, err := io.ReadFull(conn, lenBuf); err != nil {
+		return
+	}
+
+	// Try each user's key against the buffered salt + first frame.
 	for _, u := range cfg.Users {
 		if !u.Enabled {
 			continue
 		}
-		// Try this user's password as the key
-		key := evpBytesToKey(u.Password, keySize(method))
-		aead, err := newAEAD(method, key)
-		if err != nil {
+		// Skip if this user's SS password conflicts with another user
+		if a.IsPasswordConflicted(u.Username, "ss") {
 			continue
 		}
+		key := evpBytesToKey(u.EffectivePassword("ss"), keySize(method))
 
-		// Read salt
-		salt := make([]byte, aead.NonceSize()+keySize(method))
-		saltLen := keySize(method)
-		salt = salt[:saltLen]
-
-		// Peek salt from connection
-		n, err := io.ReadFull(conn, salt)
-		if err != nil || n != saltLen {
-			return
-		}
-
-		// Derive session key
+		// Derive session key from this user's master key + connection salt
 		sessionKey := make([]byte, keySize(method))
 		hkdfReader := hkdf.New(sha1.New, key, salt, []byte("ss-subkey"))
 		hkdfReader.Read(sessionKey)
 		sessionAEAD, err := newAEAD(method, sessionKey)
 		if err != nil {
-			return
+			continue
 		}
 
-		// Try to decrypt first chunk (2-byte length + tag)
-		nonce := make([]byte, sessionAEAD.NonceSize())
-		lenBuf := make([]byte, 2+sessionAEAD.Overhead())
-		if _, err := io.ReadFull(conn, lenBuf); err != nil {
-			return
-		}
-		plainLen, err := sessionAEAD.Open(lenBuf[:0], nonce, lenBuf, nil)
+		// AEAD.Open may modify the ciphertext buffer (docs allow it), so we
+		// must feed it a copy — otherwise a failed first attempt would
+		// corrupt the bytes and the next user's attempt would see garbage.
+		nonce := make([]byte, nonceSize)
+		lenBufCopy := make([]byte, len(lenBuf))
+		copy(lenBufCopy, lenBuf)
+		plainLen, err := sessionAEAD.Open(lenBufCopy[:0], nonce, lenBufCopy, nil)
 		if err != nil {
-			// Wrong password — but we already consumed bytes, can't retry
-			return
+			continue
 		}
 		increment(nonce)
 
+		// This user's key decrypted the first frame — lock it in.
 		payloadLen := int(binary.BigEndian.Uint16(plainLen))
-		payload := make([]byte, payloadLen+sessionAEAD.Overhead())
+		payload := make([]byte, payloadLen+overhead)
 		if _, err := io.ReadFull(conn, payload); err != nil {
 			return
 		}
@@ -143,13 +157,14 @@ func (a *App) handleSS(conn net.Conn, method string) {
 		// User identified! Route via their exit_via
 		exitVia := u.ExitVia
 		exitMode := u.ExitMode
+		exitPaths := u.ExitPaths
 		username := u.Username
 
 		var remote net.Conn
 		if exitVia == "" {
 			remote, err = net.DialTimeout("tcp", addr, 10*time.Second)
 		} else {
-			remote, err = a.dialExitWithMode(a.appCtx, exitVia, exitMode, addr)
+			remote, err = a.dialExitWithPaths(a.appCtx, exitVia, exitPaths, exitMode, addr)
 		}
 		if err != nil {
 			return
@@ -253,10 +268,12 @@ func (a *App) handleSSNone(conn net.Conn) {
 	cfg := a.store.Get()
 	var exitVia, username string
 	exitMode := ""
+	var exitPaths []string
 	for _, u := range cfg.Users {
 		if u.Enabled {
 			exitVia = u.ExitVia
 			exitMode = u.ExitMode
+			exitPaths = u.ExitPaths
 			username = u.Username
 			break
 		}
@@ -266,7 +283,7 @@ func (a *App) handleSSNone(conn net.Conn) {
 	if exitVia == "" {
 		remote, err = net.DialTimeout("tcp", addr, 10*time.Second)
 	} else {
-		remote, err = a.dialExitWithMode(a.appCtx, exitVia, exitMode, addr)
+		remote, err = a.dialExitWithPaths(a.appCtx, exitVia, exitPaths, exitMode, addr)
 	}
 	if err != nil {
 		return

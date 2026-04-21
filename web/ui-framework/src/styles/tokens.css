@@ -1,0 +1,29 @@
+/* hy2scale design tokens — exact match of old style.css :root */
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#f5f6fa;--surface:#fff;--surface-hover:#f8f9fc;
+  --border:#e4e7ed;--border-light:#eef0f5;
+  --text:#1e2330;--text-secondary:#5a6070;--text-muted:#9098a8;
+  --primary:#4361ee;--primary-light:#eef1fd;--primary-dark:#3451d1;
+  --green:#22c55e;--green-bg:#ecfdf5;
+  --red:#ef4444;--red-bg:#fee2e2;
+  --orange:#f59e0b;--orange-bg:#fffbeb;
+  --blue:#3b82f6;--blue-bg:#eff6ff;
+  --radius:10px;--radius-sm:6px;
+  --shadow:0 1px 3px rgba(0,0,0,.06),0 1px 2px rgba(0,0,0,.04);
+  --shadow-md:0 4px 12px rgba(0,0,0,.07);
+  --font:-apple-system,BlinkMacSystemFont,'Segoe UI','Inter',sans-serif;
+  --mono:'SF Mono','Cascadia Code','Consolas',monospace;
+  --sidebar-w:220px;
+}
+html,body{height:100%;overflow:hidden;overscroll-behavior:none}
+body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6}
+
+a{color:var(--primary);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* scrollbar */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--text-muted)}

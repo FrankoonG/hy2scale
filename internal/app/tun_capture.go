@@ -230,12 +230,14 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 			// Determine exit_via and exit_mode
 			exitVia := ""
 			exitMode := ""
+			var exitPaths []string
 			if ok && username != "" && username != "__psk__" {
 				cfg := a.store.Get()
 				for _, u := range cfg.Users {
 					if u.Username == username && u.Enabled {
 						exitVia = u.ExitVia
 						exitMode = u.ExitMode
+						exitPaths = u.ExitPaths
 						break
 					}
 				}
@@ -244,19 +246,25 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 					exitVia = v.(string)
 				}
 			}
+			// Fallback: check rules engine for TUN compat mode routing
+			if exitVia == "" && ruleEng != nil {
+				exitVia, exitMode = ruleEng.lookupExit(id.LocalAddress.String())
+			}
 
-			debugLog("[tun-fwd] TCP %s(%s/%s) → %s exit=%q mode=%s",
-				srcIP, username, protocol, dstAddr, exitVia, exitMode)
+			log.Printf("[tun-fwd] TCP %s:%d → %s exit=%q mode=%s",
+				srcIP, id.RemotePort, dstAddr, exitVia, exitMode)
 
 			var remote net.Conn
 			var err error
+			dialCtx, dialCancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer dialCancel()
 			if exitVia == "" {
 				remote, err = net.DialTimeout("tcp", dstAddr, 10*time.Second)
 			} else {
-				remote, err = a.dialExitWithMode(context.Background(), exitVia, exitMode, dstAddr)
+				remote, err = a.dialExitWithPaths(dialCtx, exitVia, exitPaths, exitMode, dstAddr)
 			}
 			if err != nil {
-				debugLog("[tun-fwd] dial error: %s → %s: %v", srcIP, dstAddr, err)
+				log.Printf("[tun-fwd] dial error: %s → %s: %v", srcIP, dstAddr, err)
 				return
 			}
 			defer remote.Close()

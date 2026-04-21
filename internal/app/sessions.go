@@ -1,6 +1,7 @@
 package app
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -152,6 +153,22 @@ func (m *SessionManager) Kick(key string) bool {
 	delete(m.devices, key)
 	m.mu.Unlock()
 	return true
+}
+
+// KickUser disconnects all active sessions for a given username.
+func (m *SessionManager) KickUser(username string) int {
+	m.mu.RLock()
+	var keys []string
+	for key := range m.devices {
+		if strings.HasPrefix(key, username+"|") {
+			keys = append(keys, key)
+		}
+	}
+	m.mu.RUnlock()
+	for _, key := range keys {
+		m.Kick(key)
+	}
+	return len(keys)
 }
 
 // List returns all active devices.
