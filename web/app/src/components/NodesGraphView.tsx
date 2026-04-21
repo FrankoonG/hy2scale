@@ -1566,25 +1566,35 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                   const anchor = edgeLabelAnchors.get(e.key);
                   const lx = anchor?.x ?? mx;
                   const ly = anchor?.y ?? my;
+                  // Position the label pair via a CSS translate on the
+                  // wrapping <g> rather than x/y attributes on the text
+                  // elements. SVG presentation attributes don't animate
+                  // through CSS transitions; `transform` on an <g> does,
+                  // so when edgeLabelAnchors picks a new anchor (e.g.
+                  // after a dot is dragged nearby) the labels glide to
+                  // the new spot instead of teleporting.
                   return (
-                    <>
+                    <g
+                      className="hy-topo-edge-label-group"
+                      style={{ transform: `translate(${lx}px, ${ly}px)` }}
+                    >
                       {showLatency && (() => {
                         const latClass = e.segmentLatencyMs < 0 ? 'lat-na' : e.segmentLatencyMs < 80 ? 'lat-ok' : e.segmentLatencyMs < 200 ? 'lat-mid' : 'lat-bad';
                         const text = fmtLatency(e.segmentLatencyMs);
                         return (
                           <g>
-                            <HaloText x={lx} y={ly - 5} stroke={surfaceColor}>{text}</HaloText>
-                            <text x={lx} y={ly - 5} textAnchor="middle" className={`hy-topo-edge-label ${latClass}`}>{text}</text>
+                            <HaloText x={0} y={-5} stroke={surfaceColor}>{text}</HaloText>
+                            <text x={0} y={-5} textAnchor="middle" className={`hy-topo-edge-label ${latClass}`}>{text}</text>
                           </g>
                         );
                       })()}
                       {showRate && (
                         <g>
-                          <HaloText x={lx} y={ly + 11} stroke={surfaceColor}>{fmtRate(e.currentRate)}</HaloText>
-                          <text x={lx} y={ly + 11} textAnchor="middle" className="hy-topo-edge-label rate">{fmtRate(e.currentRate)}</text>
+                          <HaloText x={0} y={11} stroke={surfaceColor}>{fmtRate(e.currentRate)}</HaloText>
+                          <text x={0} y={11} textAnchor="middle" className="hy-topo-edge-label rate">{fmtRate(e.currentRate)}</text>
                         </g>
                       )}
-                    </>
+                    </g>
                   );
                 })()}
               </g>
