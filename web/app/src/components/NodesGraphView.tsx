@@ -12,8 +12,9 @@ interface Props {
   onOpenRemote?: (qpath: string) => void;
   /** Invoked with the bare node name (or '__self__' for the local node)
    *  when the user clicks the edit button in the selected-path overlay.
-   *  Parent maps to the same edit modal the list view uses. */
-  onEditNode?: (key: string) => void;
+   *  The click coords let the parent anchor the edit-modal enter animation
+   *  at the button position. */
+  onEditNode?: (key: string, clickPos: { x: number; y: number }) => void;
   /** Current qpath selected from the list view (keyed path from self). When
    *  the user clicks a node in the graph, we notify the parent to update
    *  this — selection state is shared with the list so the card-header
@@ -1243,7 +1244,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                 type="button"
                 className="hy-topo-pathinfo-btn"
                 title={t('app.edit') || 'Edit'}
-                onClick={(e) => { e.stopPropagation(); onEditNode!(editKey); }}
+                onClick={(e) => { e.stopPropagation(); onEditNode!(editKey, { x: e.clientX, y: e.clientY }); }}
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
                   <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
