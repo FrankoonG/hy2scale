@@ -70,6 +70,11 @@ type Server struct {
 	layoutMu     sync.Mutex
 	layoutSubs   map[uint64]chan map[string]app.GraphLayoutPos
 	layoutSubSeq uint64
+
+	// Build ID derived from the embedded index.html hash. Frontend polls
+	// /api/build-id and reloads on mismatch so a server rebuild doesn't
+	// leave long-lived tabs running stale code.
+	buildID string
 }
 
 // validAddrSpec checks "host:portspec" where portspec can be "5565", "1000,2000", "20000-30000"
@@ -138,6 +143,12 @@ func (s *Server) Start(ctx context.Context) error {
 	apiMux.HandleFunc("POST /api/login", s.login)
 	// Internal peer list (no auth, used for reverse nested discovery)
 	apiMux.HandleFunc("GET /api/internal/peers", s.internalPeers)
+	// Build-id probe (no auth) — a long-lived SPA tab polls this to detect
+	// server rebuild/redeploy and reload itself. Cheap and stateless.
+	apiMux.HandleFunc("GET /api/build-id", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		writeJSON(w, map[string]string{"build_id": s.buildID})
+	})
 
 	// Authed API routes
 	authed := http.NewServeMux()
@@ -230,11 +241,18 @@ func (s *Server) Start(ctx context.Context) error {
 
 	apiMux.Handle("/api/", s.authMiddleware(authed))
 
-	// Static files with SPA fallback — inject basePath into index.html
+	// Static files with SPA fallback — inject basePath into index.html.
+	// A build-id derived from the sha256 of the raw index.html is also
+	// embedded on the page and exposed at /api/build-id so long-lived
+	// SPA sessions detect when they're running stale code after a
+	// server rebuild/redeploy and can reload themselves.
 	staticFS, _ := fs.Sub(web.Static, "static")
 	rawIndex, _ := fs.ReadFile(staticFS, "index.html")
-	baseTag := `<script>window.__BASE__="` + s.basePath + `";</script>`
-	indexHTML := strings.Replace(string(rawIndex), "<head>", "<head>"+baseTag, 1)
+	buildSum := sha256.Sum256(rawIndex)
+	buildID := hex.EncodeToString(buildSum[:8])
+	s.buildID = buildID
+	injected := `<script>window.__BASE__="` + s.basePath + `";window.__BUILD_ID__="` + buildID + `";</script>`
+	indexHTML := strings.Replace(string(rawIndex), "<head>", "<head>"+injected, 1)
 	indexBytes := []byte(indexHTML)
 
 	// Known frontend routes that should serve index.html
