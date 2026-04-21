@@ -67,6 +67,7 @@
   "nodes.graph.snap": "Snap to grid",
   "nodes.graph.selectedPath": "Selected path",
   "nodes.graph.unreachable": "unreachable",
+  "nodes.openRemote": "Open remote",
   "nodes.addrPassRequired": "Address and password are required",
   "nodes.updated": "Updated {{name}}",
   "nodes.connectedTo": "Connected to {{name}}",

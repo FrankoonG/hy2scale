@@ -10,6 +10,10 @@ interface Props {
   selfId: string;
   selfName?: string;
   onOpenRemote?: (qpath: string) => void;
+  /** Invoked with the bare node name (or '__self__' for the local node)
+   *  when the user clicks the edit button in the selected-path overlay.
+   *  Parent maps to the same edit modal the list view uses. */
+  onEditNode?: (key: string) => void;
   /** Current qpath selected from the list view (keyed path from self). When
    *  the user clicks a node in the graph, we notify the parent to update
    *  this — selection state is shared with the list so the card-header
@@ -38,6 +42,10 @@ interface GraphNode {
   /** Cumulative latency from self, in ms (as reported by the topology).
    *  0 when unknown, -1 when offline. */
   totalLatencyMs: number;
+  /** True when this node is configured locally (self or a direct/top-level
+   *  client) and therefore editable via the same modal the list view uses.
+   *  Nested descendants discovered via peer-introspection are read-only. */
+  editable: boolean;
 }
 
 interface GraphEdge {
@@ -197,7 +205,7 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
     return n.is_self ? selfId : n.name;
   }
 
-  function addOrMergeNode(n: TopologyNode, depth: number, qpath: string) {
+  function addOrMergeNode(n: TopologyNode, depth: number, qpath: string, editable: boolean) {
     const k = keyOf(n);
     const existing = nodes.get(k);
     if (!existing) {
@@ -217,6 +225,7 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
         degree: 0,
         qpath,
         totalLatencyMs: n.is_self ? 0 : (typeof n.latency_ms === 'number' ? n.latency_ms : 0),
+        editable,
       });
     } else if (depth < existing.depth) {
       existing.depth = depth;
@@ -224,6 +233,9 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
       if (!n.is_self && typeof n.latency_ms === 'number' && n.latency_ms > 0) {
         existing.totalLatencyMs = n.latency_ms;
       }
+      // If we now see the node at a shallower depth it must be the
+      // top-level entry for that name — promote it to editable.
+      if (editable) existing.editable = true;
     }
   }
 
@@ -254,13 +266,15 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
     }
   }
 
-  function walk(list: TopologyNode[], parentKey: string | null, parentCumulativeLat: number, depth: number, parentQpath: string) {
+  function walk(list: TopologyNode[], parentKey: string | null, parentCumulativeLat: number, depth: number, parentQpath: string, editableRoot: boolean) {
     list.forEach((n) => {
       if (depth > 0 && selfSet.has(n.name)) return;
       const segs = parentQpath ? parentQpath.split('/') : [];
       if (depth > 0 && segs.includes(n.name)) return;
       const qpath = parentQpath ? parentQpath + '/' + n.name : keyOf(n);
-      addOrMergeNode(n, depth, qpath);
+      // Only the initial hop handed to walk() carries the editableRoot flag —
+      // anything deeper is a discovered descendant and stays read-only.
+      addOrMergeNode(n, depth, qpath, editableRoot && depth === 1);
       if (parentKey) {
         const rate = (n.tx_rate || 0) + (n.rx_rate || 0);
         const childLat = n.latency_ms;
@@ -279,7 +293,7 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
         addEdge(parentKey, keyOf(n), n.direction, !!n.disabled, rate, segLat);
       }
       if (n.children && n.children.length > 0) {
-        walk(n.children, keyOf(n), n.latency_ms || 0, depth + 1, qpath);
+        walk(n.children, keyOf(n), n.latency_ms || 0, depth + 1, qpath, false);
       }
     });
   }
@@ -290,16 +304,22 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
   // to any outbound peer, and they'd render as disconnected dots. Pull
   // selfKey out and use it as the parent for every non-self top-level node
   // so outbound and inbound peers both receive a self→peer edge.
+  //
+  // Editability mirrors the list view's openEdit gating: self AND top-level
+  // outbound entries (the ones user-configured via POST /api/clients or the
+  // config file) are editable; inbound peers that appear as children of
+  // self come from remote dials and the deeper descendants are discovered
+  // via nested peer lists, both read-only.
   const selfEntry = topo.find((n) => n.is_self);
   const selfKey = selfEntry ? keyOf(selfEntry) : selfId;
-  if (selfEntry) addOrMergeNode(selfEntry, 0, selfKey);
+  if (selfEntry) addOrMergeNode(selfEntry, 0, selfKey, true);
   topo.forEach((n) => {
     if (n.is_self) {
       if (n.children && n.children.length > 0) {
-        walk(n.children, selfKey, 0, 1, selfKey);
+        walk(n.children, selfKey, 0, 1, selfKey, false);
       }
     } else {
-      walk([n], selfKey, 0, 1, selfKey);
+      walk([n], selfKey, 0, 1, selfKey, true);
     }
   });
   return { nodes, edges };
@@ -344,7 +364,7 @@ function fmtLatency(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export default function NodesGraphView({ topology, selfId, selfName, onOpenRemote, selectedQPath, onSelectQPath }: Props) {
+export default function NodesGraphView({ topology, selfId, selfName, onOpenRemote, onEditNode, selectedQPath, onSelectQPath }: Props) {
   const { t } = useTranslation();
   const { isReachableAt } = useExitPaths();
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -527,9 +547,16 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // order of equivalent paths — never cause the highlighted route to drift:
   // we look up the same qpath text in each fresh paths list.
   const [currentQPath, setCurrentQPath] = useState<string | null>(selectedQPath ?? null);
+  // Track the last prop value so we only resync when the prop itself
+  // actually changes — this lets the graph keep a self-only selection
+  // active without the effect immediately clearing it back to null on
+  // a same-value parent re-render.
+  const prevSelectedPropRef = useRef<string | null>(selectedQPath ?? null);
   useEffect(() => {
-    if ((selectedQPath ?? null) !== currentQPath) {
-      setCurrentQPath(selectedQPath ?? null);
+    const next = selectedQPath ?? null;
+    if (next !== prevSelectedPropRef.current) {
+      prevSelectedPropRef.current = next;
+      setCurrentQPath(next);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedQPath]);
@@ -603,17 +630,23 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   const handleNodeClick = useCallback((key: string) => {
     const paths = findPathsToName(topology, key, selfId, selfName);
     if (paths.length === 0) return;
+    // Self is deliberately excluded from the TreeTable's selectableKeys
+    // (self can't be disabled/deleted in bulk), so forwarding a self-
+    // select via onSelectQPath would be immediately pruned by useSelection.
+    // Keep the selection local to the graph for self, so the overlay can
+    // still surface the edit button and latency chain.
+    const forwardToParent = key !== selfId;
     if (selectedKey === key) {
       // Same node → cycle paths (wrap around; deselect happens only when
       // the user clicks the empty canvas).
       const next = (pathIdx + 1) % paths.length;
       const q = paths[next].join('/');
       setCurrentQPath(q);
-      onSelectQPath?.(q);
+      if (forwardToParent) onSelectQPath?.(q);
     } else {
       const q = paths[0].join('/');
       setCurrentQPath(q);
-      onSelectQPath?.(q);
+      if (forwardToParent) onSelectQPath?.(q); else onSelectQPath?.(null);
     }
   }, [topology, selfId, selfName, selectedKey, pathIdx, onSelectQPath]);
 
@@ -1159,16 +1192,6 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                 <text y={rOuter + 14} textAnchor="middle" className="hy-topo-dot-name">
                   {n.name}
                 </text>
-                {!n.isSelf && onOpenRemote && (
-                  <g transform={`translate(${rOuter + 4},${-rOuter})`} className="hy-topo-dot-open" onClick={(ev) => { ev.stopPropagation(); onOpenRemote(n.qpath); }}>
-                    <rect width={14} height={14} rx={3} fill="transparent" />
-                    <svg x={0} y={0} width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
-                      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                      <polyline points="15 3 21 3 21 9" />
-                      <line x1="10" y1="14" x2="21" y2="3" />
-                    </svg>
-                  </g>
-                )}
               </g>
             );
           })}
@@ -1180,6 +1203,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         const offline = !!selNode?.offline || totalLat < 0;
         const hops = displayPath.map((k) => nodes.get(k)?.name || k);
         const latClass = offline ? 'lat-bad' : totalLat <= 0 ? 'lat-na' : totalLat < 80 ? 'lat-ok' : totalLat < 200 ? 'lat-mid' : 'lat-bad';
+        const showOpen = !!selNode && !selNode.isSelf && !!onOpenRemote;
+        const showEdit = !!selNode && !!selNode.editable && !!onEditNode;
+        const editKey = selNode?.isSelf ? '__self__' : (selNode?.key || '');
         return (
           <div className="hy-topo-graph-pathinfo" role="status" aria-live="polite">
             <span className="hy-topo-pathinfo-label">{t('nodes.graph.selectedPath')}</span>
@@ -1198,6 +1224,33 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             <span className={`hy-topo-pathinfo-lat ${latClass}`}>
               {offline ? t('nodes.graph.unreachable') : fmtLatency(totalLat)}
             </span>
+            {showOpen && (
+              <button
+                type="button"
+                className="hy-topo-pathinfo-btn"
+                title={t('nodes.openRemote') || 'Open remote'}
+                onClick={(e) => { e.stopPropagation(); if (selNode) onOpenRemote!(selNode.qpath); }}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" width="14" height="14">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                  <polyline points="15 3 21 3 21 9" />
+                  <line x1="10" y1="14" x2="21" y2="3" />
+                </svg>
+              </button>
+            )}
+            {showEdit && (
+              <button
+                type="button"
+                className="hy-topo-pathinfo-btn"
+                title={t('app.edit') || 'Edit'}
+                onClick={(e) => { e.stopPropagation(); onEditNode!(editKey); }}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
+                  <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+                  <path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                </svg>
+              </button>
+            )}
           </div>
         );
       })()}
