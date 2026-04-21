@@ -441,11 +441,21 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // snapshot that predated our PUT) doesn't rebound the UI back to the
   // server's old state.
   const saveLayoutToServer = useCallback((positions: Record<string, Pos>) => {
-    const now = performance.now();
+    // Filter out empty-string / invalid entries so a stale UI state
+    // (e.g. selfId hadn't loaded yet when a node was added to the map)
+    // never corrupts the server-persisted config.
+    const clean: Record<string, Pos> = {};
     for (const k in positions) {
-      pendingWriteRef.current.set(k, { x: positions[k].x, y: positions[k].y, at: now });
+      if (!k) continue;
+      const p = positions[k];
+      if (!p || typeof p.x !== 'number' || typeof p.y !== 'number' || Number.isNaN(p.x) || Number.isNaN(p.y)) continue;
+      clean[k] = p;
     }
-    api.setGraphLayout(positions).catch(() => { /* best-effort; next save retries */ });
+    const now = performance.now();
+    for (const k in clean) {
+      pendingWriteRef.current.set(k, { x: clean[k].x, y: clean[k].y, at: now });
+    }
+    api.setGraphLayout(clean).catch(() => { /* best-effort; next save retries */ });
   }, []);
 
   useEffect(() => {
@@ -501,11 +511,15 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     // (preserve local) and keys still awaiting our own PUT echo.
     const base: Record<string, Pos> = {};
     for (const k in remote) {
+      // Defensive: ignore bogus entries (bad data from a prior buggy
+      // save — e.g. empty-string key with null coords).
+      if (!k) continue;
+      const r = remote[k];
+      if (!r || typeof r.x !== 'number' || typeof r.y !== 'number') continue;
       if (k === dragKey) {
         if (cur[k]) base[k] = cur[k];
         continue;
       }
-      const r = remote[k];
       const pending = pendingWriteRef.current.get(k);
       if (pending && (Math.abs(pending.x - r.x) > 0.5 || Math.abs(pending.y - r.y) > 0.5)) {
         // Our PUT hasn't arrived back on the stream yet — keep local so
@@ -517,15 +531,20 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       base[k] = { x: r.x, y: r.y };
     }
     if (dragKey && cur[dragKey] && !(dragKey in base)) base[dragKey] = cur[dragKey];
-    // Auto-fill missing nodes.
-    let filledFromAuto = false;
+    // Auto-fill missing nodes PURELY LOCALLY — do NOT save these back to
+    // the server. Server state is strictly user-authored: drag release
+    // and layout reset are the only paths that write. If we auto-saved
+    // here, an empty server snapshot would cause every viewer to save
+    // their own auto-layout (clobbering any custom positions that get
+    // persisted later), and the first-to-save would freeze auto-layout
+    // as the canonical state.
     for (const key in auto) {
+      if (!key) continue; // skip empty-string artefacts
       if (!(key in base)) {
         const initial = auto[key];
         const existing: Record<string, Pos> = {};
         for (const k in base) if (k !== key) existing[k] = base[k];
         base[key] = resolveOverlap(key, initial, existing, nodes);
-        filledFromAuto = true;
       }
     }
     const firstApply = !firstSnapshotAppliedRef.current;
@@ -560,8 +579,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       }
       return changed ? next : prev;
     });
-    if (filledFromAuto) saveLayoutToServer(base);
-  }, [auto, nodes, remoteLayout, saveLayoutToServer]);
+  }, [auto, nodes, remoteLayout]);
 
   const positions = useMemo(() => {
     // Position comes from overrides if known, otherwise the freshly computed
