@@ -67,6 +67,7 @@
   "nodes.graph.snap": "그리드에 맞추기",
   "nodes.graph.selectedPath": "선택된 경로",
   "nodes.graph.unreachable": "연결 불가",
+  "nodes.openRemote": "원격 열기",
   "nodes.addrPassRequired": "주소와 비밀번호는 필수입니다",
   "nodes.updated": "{{name}} 업데이트됨",
   "nodes.connectedTo": "{{name}}에 연결됨",

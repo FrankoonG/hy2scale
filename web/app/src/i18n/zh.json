@@ -67,6 +67,7 @@
   "nodes.graph.snap": "对齐到网格",
   "nodes.graph.selectedPath": "当前路径",
   "nodes.graph.unreachable": "不可达",
+  "nodes.openRemote": "打开远程",
   "nodes.addrPassRequired": "地址和密码为必填项",
   "nodes.updated": "已更新 {{name}}",
   "nodes.connectedTo": "已连接到 {{name}}",

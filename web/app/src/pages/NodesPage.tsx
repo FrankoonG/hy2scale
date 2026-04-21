@@ -540,6 +540,13 @@ export default function NodesPage() {
               const chain = selfId && qpath.startsWith(selfId + '/') ? qpath.slice(selfId.length + 1) : qpath;
               window.open(`${basePath}/remote/${chain}/scale/`, '_blank', 'noopener');
             }}
+            onEditNode={(key) => {
+              // Graph emits '__self__' for the local node, bare peer name
+              // otherwise — same convention the TreeTable row uses.
+              const fakeEv = { clientX: window.innerWidth / 2, clientY: window.innerHeight / 2 } as MouseEvent;
+              if (key === '__self__') openEditSelf(fakeEv);
+              else openEdit(key, fakeEv);
+            }}
           />
         ) : (
           <TreeTable
