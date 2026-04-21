@@ -23,6 +23,15 @@ export const getStats = () => api<Stats>('/stats');
 // Topology
 export const getTopology = () => api<TopologyNode[]>('/topology');
 
+// Graph layout — persisted per-node positions for the Nodes graph view.
+// Stored on the server so the layout follows the user across browsers
+// and multiple concurrent sessions converge on a single source of truth.
+export type GraphLayoutMap = Record<string, { x: number; y: number }>;
+export const getGraphLayout = () =>
+  api<{ positions: GraphLayoutMap }>('/graph-layout');
+export const setGraphLayout = (positions: GraphLayoutMap) =>
+  api('/graph-layout', { method: 'PUT', body: JSON.stringify({ positions }) });
+
 // Clients (Peers)
 export const getClients = () => api<ClientEntry[]>('/clients');
 export const createClient = (data: ClientEntry) =>

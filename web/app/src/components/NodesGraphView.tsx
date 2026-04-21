@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useQuery } from '@tanstack/react-query';
 import type { TopologyNode } from '@/api';
+import * as api from '@/api';
 import { fmtRate } from '@/hooks/useFormat';
 import { useExitPaths } from '@/hooks/useExitPaths';
 
@@ -184,6 +186,11 @@ function resolveOverlap(
   return { x, y };
 }
 
+// Legacy localStorage positions — only used as an offline fallback when
+// the server layout hasn't been fetched yet (initial mount, or the user
+// has no network). Writes go to the server via the React Query mutation
+// below; localStorage is kept in sync as a warm cache so the next mount
+// shows familiar positions before the fetch completes.
 function loadPositions(): Record<string, Pos> {
   try {
     const raw = localStorage.getItem(LS_POS_KEY);
@@ -193,7 +200,7 @@ function loadPositions(): Record<string, Pos> {
   } catch { /* ignore */ }
   return {};
 }
-function savePositions(p: Record<string, Pos>) {
+function cachePositions(p: Record<string, Pos>) {
   try { localStorage.setItem(LS_POS_KEY, JSON.stringify(p)); } catch { /* ignore */ }
 }
 
@@ -396,28 +403,92 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   const nodesRef = useRef(nodes);
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
 
-  // When the topology adds a new node that has no persisted position, use
-  // the auto-layout slot as its initial spot and nudge it out of the way
-  // of any existing node that happens to be sitting there. Immediately
-  // persist so next render treats it as user-placed and survives reload.
+  // Track whether the user is currently mid-drag on a specific node so
+  // cross-tab layout polls don't clobber the node being dragged. Keyed
+  // on node key so a remote update to any OTHER node can still apply
+  // live.
+  const activeDragKeyRef = useRef<string | null>(null);
+
+  // Server-persisted layout, polled every 5 s so concurrent sessions on
+  // other browsers/devices converge on the same layout. The local
+  // `overrides` state is still what React renders; this query just
+  // reconciles it with the authoritative server-side map.
+  const layoutQuery = useQuery({
+    queryKey: ['graph-layout'],
+    queryFn: api.getGraphLayout,
+    refetchInterval: 5000,
+    refetchOnWindowFocus: true,
+  });
+  // Fire-and-forget PUT; we don't wrap in useMutation because the hook's
+  // returned object identity changes per render and would destabilise the
+  // useCallback below, creating a useEffect dependency that re-fires each
+  // save → save loop. Call api directly instead and let the poll confirm.
+  const saveLayoutToServer = useCallback((positions: Record<string, Pos>) => {
+    cachePositions(positions);
+    api.setGraphLayout(positions).catch(() => { /* best-effort; next save retries */ });
+  }, []);
+
+  // Unified reconcile step. Runs whenever the topology (auto layout) or
+  // the server's persisted layout changes. In one pass:
+  //   1. Start from current local overrides (what React is rendering).
+  //   2. Fold in remote positions — remote wins so concurrent edits from
+  //      another session become visible. Skip the node the user is
+  //      actively dragging to avoid snapping mid-gesture.
+  //   3. Drop any local keys the remote no longer has (handles "reset
+  //      layout" propagating from elsewhere).
+  //   4. For any node still missing (new hot-created / newly-seen
+  //      inbound), fall back to its auto-layout slot, nudged clear of
+  //      neighbours so it doesn't stack on an existing dot.
+  //   5. If step 4 added any slots, push the augmented map back to the
+  //      server so the new node's position is durably remembered.
+  //
+  // Keeping everything in a single effect avoids the "merge state not
+  // yet committed when auto-fill runs" race that made the first fetch
+  // sometimes get clobbered by default auto-layout coords.
   useEffect(() => {
+    if (!layoutQuery.isFetched) return;
+    const remote = layoutQuery.data?.positions || {};
     const cur = overridesRef.current;
-    let changed = false;
-    const next: Record<string, Pos> = { ...cur };
+    const next: Record<string, Pos> = {};
+    let changedVsLocal = false;
+    let filledFromAuto = false;
+    // Remote wins for every key it has (except the one being dragged).
+    for (const k in remote) {
+      if (k === activeDragKeyRef.current) {
+        if (cur[k]) next[k] = cur[k];
+        continue;
+      }
+      const r = remote[k];
+      next[k] = { x: r.x, y: r.y };
+      const p = cur[k];
+      if (!p || Math.abs(p.x - r.x) > 0.5 || Math.abs(p.y - r.y) > 0.5) changedVsLocal = true;
+    }
+    // Preserve local entry for drag-locked node even if remote lacks it.
+    if (activeDragKeyRef.current && cur[activeDragKeyRef.current] && !(activeDragKeyRef.current in next)) {
+      next[activeDragKeyRef.current] = cur[activeDragKeyRef.current];
+    }
+    // Drop local keys that remote no longer has.
+    for (const k in cur) {
+      if (k === activeDragKeyRef.current) continue;
+      if (!(k in remote)) changedVsLocal = true;
+    }
+    // Fall back to auto-layout for nodes neither side knows.
     for (const key in auto) {
-      if (!(key in cur)) {
+      if (!(key in next)) {
         const initial = auto[key];
         const existing: Record<string, Pos> = {};
         for (const k in next) if (k !== key) existing[k] = next[k];
         next[key] = resolveOverlap(key, initial, existing, nodes);
-        changed = true;
+        changedVsLocal = true;
+        filledFromAuto = true;
       }
     }
-    if (changed) {
+    if (changedVsLocal) {
       setOverrides(next);
-      savePositions(next);
+      cachePositions(next);
     }
-  }, [auto, nodes]);
+    if (filledFromAuto) saveLayoutToServer(next);
+  }, [auto, nodes, layoutQuery.data, layoutQuery.isFetched, saveLayoutToServer]);
 
   const positions = useMemo(() => {
     // Position comes from overrides if known, otherwise the freshly computed
@@ -702,6 +773,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       const startSvg = clientToSvg(ev.clientX, ev.clientY);
       const startNodePos = positions[key] || { x: 0, y: 0 };
       dragState.current = { mode: 'node', key, startSvg, startNodePos, moved: false };
+      // Lock this node against remote-layout poll clobbers until the
+      // gesture ends (pointerup / pointercancel clear it below).
+      activeDragKeyRef.current = key;
     } else {
       dragState.current = { mode: 'pan', startClient: { x: ev.clientX, y: ev.clientY }, startPan: pan, moved: false };
     }
@@ -731,7 +805,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     to = resolveOverlap(key, to, others, nodesRef.current);
 
     if (Math.abs(to.x - from.x) < 0.5 && Math.abs(to.y - from.y) < 0.5) {
-      setOverrides((prev) => { savePositions(prev); return prev; });
+      setOverrides((prev) => { saveLayoutToServer(prev); return prev; });
       return;
     }
     const start = performance.now();
@@ -746,7 +820,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         requestAnimationFrame(step);
       } else {
         setOverrides((prev) => ({ ...prev, [key]: to }));
-        setOverrides((prev) => { savePositions(prev); return prev; });
+        setOverrides((prev) => { saveLayoutToServer(prev); return prev; });
       }
     };
     requestAnimationFrame(step);
@@ -817,10 +891,12 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       // the earlier pan/drag since dragState was cleared on pinch start.
       if (pinchRef.current) {
         if (pointersRef.current.size < 2) pinchRef.current = null;
+        activeDragKeyRef.current = null;
         return;
       }
       const s = dragState.current;
       dragState.current = null;
+      activeDragKeyRef.current = null;
       if (s?.mode === 'node') {
         if (!s.moved) {
           handleNodeClick(s.key);
@@ -899,7 +975,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     fitView();
   }, [positions, fitView]);
 
-  const resetLayout = () => { setOverrides({}); savePositions({}); };
+  const resetLayout = () => { setOverrides({}); saveLayoutToServer({}); };
 
   // Edge stroke width — scaled against an ABSOLUTE 0–1000 Mbps reference
   // so a line's thickness means the same thing regardless of what else

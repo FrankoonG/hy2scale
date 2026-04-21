@@ -116,6 +116,16 @@ type Config struct {
 	ForceHTTPS  bool                  `yaml:"force_https,omitempty" json:"force_https,omitempty"`
 	HTTPSCertID     string                `yaml:"https_cert_id,omitempty" json:"https_cert_id,omitempty"`
 	SessionTimeoutH int                   `yaml:"session_timeout_h,omitempty" json:"session_timeout_h,omitempty"` // hours, default 12
+	// Persisted topology-graph layout: node key → SVG coordinates. Stored
+	// server-side so the layout follows the user across browsers/devices
+	// and multiple concurrent sessions converge on a single source of truth.
+	GraphLayout map[string]GraphLayoutPos `yaml:"graph_layout,omitempty" json:"graph_layout,omitempty"`
+}
+
+// GraphLayoutPos stores a single node's coordinates in the topology graph.
+type GraphLayoutPos struct {
+	X float64 `yaml:"x" json:"x"`
+	Y float64 `yaml:"y" json:"y"`
 }
 
 type proxyHandle struct {
@@ -192,6 +202,24 @@ func (a *App) AllActivePaths() map[string]string {
 		cp[k] = v
 	}
 	return cp
+}
+
+// SetGraphLayout replaces the persisted graph-layout map with the supplied
+// one. A nil or empty map clears the layout (returns the UI to auto-layout).
+func (a *App) SetGraphLayout(pos map[string]GraphLayoutPos) error {
+	return a.store.Update(func(c *Config) {
+		if len(pos) == 0 {
+			c.GraphLayout = nil
+			return
+		}
+		// Defensive copy so future caller mutations don't leak into the
+		// persisted config.
+		cp := make(map[string]GraphLayoutPos, len(pos))
+		for k, v := range pos {
+			cp[k] = v
+		}
+		c.GraphLayout = cp
+	})
 }
 
 func (a *App) UpdateWebCredentials(username, passHash string) {
