@@ -375,7 +375,7 @@ a.peer-link:hover{text-decoration:underline}
    modes (very-light colours like #e5e7eb stayed near-white after DR's
    brightness-preserving inversion, producing visible bright lines on
    the dark background). */
-.hy-topo-grid-line{color:#9ca3af;stroke:currentColor;stroke-width:.6;opacity:.18;fill:none}
+.hy-topo-grid-line{color:#9ca3af;stroke:currentColor;stroke-width:1;opacity:.22;fill:none;vector-effect:non-scaling-stroke}
 
 /* Selection & path highlight — clicking a node outlines only the selected
    node; the route is communicated entirely through edge highlights that

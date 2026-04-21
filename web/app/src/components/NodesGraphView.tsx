@@ -477,6 +477,25 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     return { x, y };
   }, []);
 
+  // Track the SVG's on-screen size so grid rendering can extend to
+  // whatever portion of SVG space is currently visible under the active
+  // pan/zoom. Without this the grid would only cover the nodes' bounding
+  // box plus a fixed padding, leaving blank margins when the user pans
+  // far from the nodes or zooms out.
+  const [svgSize, setSvgSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const ro = new ResizeObserver(() => {
+      const r = svg.getBoundingClientRect();
+      setSvgSize((prev) => (prev.w === r.width && prev.h === r.height ? prev : { w: r.width, h: r.height }));
+    });
+    ro.observe(svg);
+    const r = svg.getBoundingClientRect();
+    setSvgSize({ w: r.width, h: r.height });
+    return () => ro.disconnect();
+  }, []);
+
   // Snap-to-grid: when on, dragging a node rounds its position to the
   // nearest grid intersection (grid spacing matches the visual pattern).
   const [snap, setSnap] = useState<boolean>(() => {
@@ -940,21 +959,36 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
               the direct DOM path makes it invertable. Range covers a wide
               box around the nodes; lines are step=24 SVG units. */}
           {(() => {
-            const pts = Object.values(positions);
-            const minX = pts.length ? Math.min(...pts.map((p) => p.x)) - 300 : -400;
-            const maxX = pts.length ? Math.max(...pts.map((p) => p.x)) + 300 : 400;
-            const minY = pts.length ? Math.min(...pts.map((p) => p.y)) - 300 : -400;
-            const maxY = pts.length ? Math.max(...pts.map((p) => p.y)) + 300 : 400;
+            // Render the grid across the entire visible viewport in SVG
+            // space. Convert screen-space viewport corners back to SVG
+            // coords via the inverse of the transform(translate(pan) scale(z))
+            // applied by the parent <g>, then snap to the grid step so the
+            // lines align on the integer grid regardless of pan offset.
             const step = 24;
-            const x0 = Math.floor(minX / step) * step;
-            const x1 = Math.ceil(maxX / step) * step;
-            const y0 = Math.floor(minY / step) * step;
-            const y1 = Math.ceil(maxY / step) * step;
+            const vw = svgSize.w || 1000;
+            const vh = svgSize.h || 600;
+            const z = zoom || 1;
+            const pad = 2 * step;
+            const svMinX = -pan.x / z - pad;
+            const svMaxX = (vw - pan.x) / z + pad;
+            const svMinY = -pan.y / z - pad;
+            const svMaxY = (vh - pan.y) / z + pad;
+            const x0 = Math.floor(svMinX / step) * step;
+            const x1 = Math.ceil(svMaxX / step) * step;
+            const y0 = Math.floor(svMinY / step) * step;
+            const y1 = Math.ceil(svMaxY / step) * step;
+            // Safety cap: at extreme zoom-outs the span could balloon.
+            // Hard-limit the line count so we never iterate unboundedly.
+            const MAX_LINES = 400;
+            const xCount = Math.min(MAX_LINES, Math.ceil((x1 - x0) / step) + 1);
+            const yCount = Math.min(MAX_LINES, Math.ceil((y1 - y0) / step) + 1);
             const lines: JSX.Element[] = [];
-            for (let x = x0; x <= x1; x += step) {
+            for (let i = 0; i < xCount; i++) {
+              const x = x0 + i * step;
               lines.push(<line key={`v${x}`} x1={x} y1={y0} x2={x} y2={y1} className="hy-topo-grid-line" />);
             }
-            for (let y = y0; y <= y1; y += step) {
+            for (let i = 0; i < yCount; i++) {
+              const y = y0 + i * step;
               lines.push(<line key={`h${y}`} x1={x0} y1={y} x2={x1} y2={y} className="hy-topo-grid-line" />);
             }
             return lines;
