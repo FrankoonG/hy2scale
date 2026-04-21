@@ -16,7 +16,7 @@
   --mono:'SF Mono','Cascadia Code','Consolas',monospace;
   --sidebar-w:220px;
 }
-html,body{height:100%}
+html,body{height:100%;overflow:hidden;overscroll-behavior:none}
 body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6}
 
 a{color:var(--primary);text-decoration:none}
