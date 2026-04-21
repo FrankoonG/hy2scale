@@ -415,6 +415,12 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // subsequent SetGraphLayout, so we don't need a separate GET on mount.
   const [remoteLayout, setRemoteLayout] = useState<Record<string, Pos> | null>(null);
   const remoteLayoutReadyRef = useRef(false);
+  // Tracks whether we've already applied one remote snapshot for this
+  // component lifetime. The FIRST snapshot should teleport — it's just
+  // catching up to the authoritative server state, and any visible slide
+  // looks like the graph is being reset on page load. Subsequent changes
+  // (another session dragging a dot) still animate.
+  const firstSnapshotAppliedRef = useRef(false);
   useEffect(() => {
     const token = sessionStorage.getItem('token:' + getBasePath()) || '';
     const url = getBasePath() + '/api/graph-layout/stream?token=' + encodeURIComponent(token);
@@ -538,6 +544,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         filledFromAuto = true;
       }
     }
+    const firstApply = !firstSnapshotAppliedRef.current;
+    firstSnapshotAppliedRef.current = true;
     // Diff against current render positions.
     setOverrides((prev) => {
       const next: Record<string, Pos> = { ...prev };
@@ -545,10 +553,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       for (const k in base) {
         const target = base[k];
         const local = prev[k];
-        if (!local) {
-          // Brand-new node — appear directly at target, no animation.
+        if (!local || firstApply) {
+          // Brand-new node OR first-time catch-up to server authority —
+          // appear directly at target, no animation. Animating on first
+          // load would look like the graph is resetting before settling.
           next[k] = target;
           changed = true;
+          animRef.current.delete(k);
           continue;
         }
         if (Math.abs(local.x - target.x) < 0.5 && Math.abs(local.y - target.y) < 0.5) continue;
