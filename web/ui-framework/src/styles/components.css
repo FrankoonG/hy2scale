@@ -30,7 +30,9 @@
 .hy-topbar-left{display:flex;align-items:center;gap:12px}
 .hy-topbar h1{font-size:15px;font-weight:600}
 .hy-topbar-right{display:flex;align-items:center;gap:12px;margin-left:auto}
-.hy-hamburger{display:none;align-items:center;justify-content:center;width:36px;height:36px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);cursor:pointer;flex-shrink:0;padding:0}
+.hy-hamburger{display:none;align-items:center;justify-content:center;width:36px;height:36px;border:none;border-radius:var(--radius-sm);background:transparent;color:var(--text-secondary);cursor:pointer;flex-shrink:0;padding:0}
+.hy-hamburger:hover{background:var(--primary-light);color:var(--primary)}
+.hy-hamburger:active{background:var(--bg)}
 .hy-hamburger svg{width:75%;height:75%}
 
 /* ====== Cards ====== */
@@ -382,6 +384,12 @@ a.peer-link:hover{text-decoration:underline}
    (data-darkreader-inline-stroke) from overriding our inline stroke,
    so the halo always equals the actual bg. */
 .hy-topo-edge-label,.hy-topo-edge-label-halo{font-size:9px;font-family:var(--mono);pointer-events:none;user-select:none}
+/* Wrapping group that owns the label pair's screen position. Using
+   CSS transform (not SVG x/y attrs) lets the adaptive re-anchor
+   animate: when the anchor memo switches an edge's label from one
+   side/spot to another the labels glide there over 300 ms instead of
+   teleporting. */
+.hy-topo-edge-label-group{transition:transform .3s cubic-bezier(.25,1,.5,1)}
 .hy-topo-edge-label-halo{stroke-width:3;stroke-linejoin:round;fill:none}
 .hy-topo-edge-label{fill:currentColor;stroke:none}
 .hy-topo-edge-label.rate{color:#6b7280}
