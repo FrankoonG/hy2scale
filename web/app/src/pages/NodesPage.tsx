@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, type MouseEvent } from 'react';
+import { useState, useCallback, useEffect, useRef, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -44,6 +44,47 @@ export default function NodesPage() {
   useEffect(() => {
     try { localStorage.setItem('scale:nodes-view', viewMode); } catch { /* ignore */ }
   }, [viewMode]);
+
+  // On short or narrow viewports the 4-stat row squeezes the Network
+  // Topology card below half-screen — at narrow widths the cards wrap
+  // to 2×2 and eat 300+ px of height before topology gets any. Measure
+  // actual element heights and hide the stats row whenever showing it
+  // would leave topology at <50 % of the viewport. Uses hysteresis
+  // against viewport height rather than current topo height so the
+  // decision doesn't thrash when toggling stats.
+  const [showStats, setShowStats] = useState(true);
+  const pageRef = useRef<HTMLDivElement | null>(null);
+  const statsRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const evaluate = () => {
+      const vh = window.innerHeight;
+      const pageEl = pageRef.current;
+      const statsEl = statsRef.current;
+      if (!pageEl) return;
+      // Everything that competes for vertical space inside the page
+      // area: topbar above + this page's top offset + the card gap.
+      const pageTop = pageEl.getBoundingClientRect().top;
+      // Measure the stats row height if it's currently rendered. When
+      // it's hidden, estimate based on a fresh paint would be fragile —
+      // so we only flip hidden→shown when the math works even with a
+      // conservative overestimate of the stats height.
+      const statsH = statsEl ? statsEl.getBoundingClientRect().height : 320;
+      const STATS_GAP = 20; // gap between page children
+      const CARD_HEADER = 60; // network topology card header + padding
+      const nonTopo = pageTop + statsH + STATS_GAP + CARD_HEADER;
+      const topoIfStats = vh - nonTopo;
+      const shouldShow = topoIfStats >= 0.5 * vh;
+      setShowStats((prev) => (prev === shouldShow ? prev : shouldShow));
+    };
+    // Run after layout settles; ResizeObserver on the stats row
+    // catches the narrow-width re-wrap that changes its height.
+    evaluate();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(evaluate) : null;
+    if (ro && statsRef.current) ro.observe(statsRef.current);
+    if (ro && pageRef.current) ro.observe(pageRef.current);
+    window.addEventListener('resize', evaluate);
+    return () => { window.removeEventListener('resize', evaluate); ro?.disconnect(); };
+  }, [showStats]);
 
   // Poll topology every 2s
   useQuery({
@@ -402,7 +443,9 @@ export default function NodesPage() {
   }, [selection, confirm, queryClient, toast, t]);
 
   return (
-    <div className="hy-page">
+    <div className="hy-page" ref={pageRef}>
+      {showStats && (
+      <div ref={statsRef}>
       <StatsGrid
         items={[
           {
@@ -441,6 +484,8 @@ export default function NodesPage() {
           },
         ]}
       />
+      </div>
+      )}
 
       <Card
         fill={1}
