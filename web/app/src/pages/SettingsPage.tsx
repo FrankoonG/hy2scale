@@ -9,6 +9,59 @@ import * as api from '@/api';
 import { useAuthStore } from '@/store/auth';
 import { sha256 } from '@/hooks/useAuth';
 
+/**
+ * LicensePanel — renders the project's umbrella licence, the two
+ * hand-maintained native components (strongSwan + friends) that
+ * constrain our licence choice, and the full Go module dependency
+ * list pulled from debug.BuildInfo on the server. Lives inside the
+ * Upgrade card so the compliance-relevant info sits alongside the
+ * "what version am I running" display.
+ */
+function LicensePanel() {
+  const { t } = useTranslation();
+  const { data } = useQuery({ queryKey: ['buildInfo'], queryFn: api.getBuildInfo, staleTime: 60_000 });
+  if (!data) return null;
+  return (
+    <div className="hy-license-panel">
+      <div className="hy-license-header">
+        <span className="hy-license-label">{t('settings.license')}</span>
+        <code className="hy-license-value">{data.license}</code>
+        {data.repository && (
+          <a className="hy-license-link" href={data.repository} target="_blank" rel="noopener noreferrer">{t('settings.sourceCode')}</a>
+        )}
+      </div>
+      <div className="hy-license-hint">{t('settings.licenseHint')}</div>
+      {data.natives && data.natives.length > 0 && (
+        <details open>
+          <summary className="hy-license-summary">{t('settings.nativeComponents')} · {data.natives.length}</summary>
+          <div className="hy-license-table">
+            {data.natives.map((n) => (
+              <div key={n.name} className="hy-license-row">
+                <span className="hy-license-name">{n.source ? <a href={n.source} target="_blank" rel="noopener noreferrer">{n.name}</a> : n.name}</span>
+                <span className="hy-license-ver">{n.version}</span>
+                <span className="hy-license-lic">{n.license}</span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+      {data.go_deps && data.go_deps.length > 0 && (
+        <details>
+          <summary className="hy-license-summary">{t('settings.goDependencies')} · {data.go_deps.length}</summary>
+          <div className="hy-license-table hy-license-table--compact">
+            {data.go_deps.map((d) => (
+              <div key={d.path} className="hy-license-row">
+                <span className="hy-license-name">{d.path}</span>
+                <span className="hy-license-ver">{d.version}</span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
 export default function SettingsPage() {
   const { t } = useTranslation();
   const toast = useToast();
@@ -231,8 +284,10 @@ export default function SettingsPage() {
           </Card>
         ) : (
           <>
-            {/* Upgrade Binary — only in Docker */}
-            <Card fill={1} title={t('settings.upgradeTitle')}>
+            {/* Upgrade Binary — only in Docker. Shares 2:1 height ratio
+                with the Backup card below so the licence + dependency
+                list has room to breathe on taller viewports. */}
+            <Card fill={2} title={t('settings.upgradeTitle')}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 {archInfo && (
                   <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -265,6 +320,7 @@ export default function SettingsPage() {
                 ) : (
                   <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('settings.upgradeNotAvailable')}</div>
                 )}
+                <LicensePanel />
               </div>
             </Card>
 

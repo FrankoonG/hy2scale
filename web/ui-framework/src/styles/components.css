@@ -588,6 +588,26 @@ body.dragging-active,body.dragging-active *{user-select:none!important;-webkit-u
 .addr-add-row{border:2px dashed var(--border);border-radius:var(--radius-sm);padding:10px;text-align:center;color:var(--text-muted);font-size:13px;cursor:pointer;transition:all .15s;margin-top:8px}
 .addr-add-row:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-light)}
 
+/* ====== License panel (Settings → Upgrade) ====== */
+.hy-license-panel{margin-top:4px;display:flex;flex-direction:column;gap:10px;padding-top:14px;border-top:1px solid var(--border-light)}
+.hy-license-header{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.hy-license-label{font-size:13px;color:var(--text-secondary)}
+.hy-license-value{font-size:12px;font-family:var(--mono);font-weight:600;color:var(--primary);background:var(--primary-light);padding:2px 8px;border-radius:4px}
+.hy-license-link{font-size:12px;color:var(--text-muted)}
+.hy-license-link:hover{color:var(--primary)}
+.hy-license-hint{font-size:11px;color:var(--text-muted);line-height:1.5}
+.hy-license-summary{font-size:12px;color:var(--text-secondary);cursor:pointer;padding:4px 0;user-select:none}
+.hy-license-summary:hover{color:var(--primary)}
+.hy-license-table{display:flex;flex-direction:column;gap:2px;margin-top:6px;max-height:240px;overflow-y:auto;background:var(--bg);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:6px 8px}
+.hy-license-table--compact{max-height:200px}
+.hy-license-row{display:flex;gap:10px;align-items:baseline;font-size:11px;font-family:var(--mono);padding:2px 0;border-bottom:1px solid transparent}
+.hy-license-row:hover{background:var(--surface-hover);border-radius:3px}
+.hy-license-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.hy-license-name a{color:var(--text);text-decoration:none}
+.hy-license-name a:hover{color:var(--primary);text-decoration:underline}
+.hy-license-ver{color:var(--text-muted);flex-shrink:0}
+.hy-license-lic{color:var(--text-secondary);flex-shrink:0;font-weight:500}
+
 /* ====== Misc ====== */
 .spacer{flex:1}
 .msg-error{color:var(--red);font-size:13px;min-height:16px}

@@ -23,6 +23,20 @@ export const getStats = () => api<Stats>('/stats');
 // Topology
 export const getTopology = () => api<TopologyNode[]>('/topology');
 
+// Build info — project licence + full compiled-in dependency list.
+// Rendered on the Settings → Upgrade page so users can audit what's
+// running and under which licence.
+export interface BuildInfoDep { path: string; version: string }
+export interface BuildInfoNative { name: string; version: string; license: string; source: string }
+export interface BuildInfo {
+  version: string;
+  license: string;
+  repository: string;
+  go_deps: BuildInfoDep[];
+  natives: BuildInfoNative[];
+}
+export const getBuildInfo = () => api<BuildInfo>('/build-info');
+
 // Graph layout — persisted per-node positions for the Nodes graph view.
 // Stored on the server so the layout follows the user across browsers
 // and multiple concurrent sessions converge on a single source of truth.
