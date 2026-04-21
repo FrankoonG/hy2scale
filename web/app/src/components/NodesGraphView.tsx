@@ -777,20 +777,30 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   }, [activePath, edges]);
 
   // Sequentially "draw" the path after a selection change — each edge
-  // fades in one step at a time. On deselect the counter drops to 0
-  // instantly so all edges un-highlight simultaneously.
+  // fades in one step at a time. The TOTAL highlight duration is kept
+  // constant regardless of hop count, so a 5-hop selection feels just
+  // as snappy as a 1-hop selection (divides PATH_TOTAL_MS by step
+  // count; clamped to a minimum so no single step blinks by too fast
+  // to see). On deselect the counter drops to 0 instantly so all
+  // edges un-highlight simultaneously.
+  const PATH_TOTAL_MS = 520;
+  const PATH_STEP_MIN = 60;
+  const PATH_STEP_MAX = 280;
   const [pathProgress, setPathProgress] = useState(0);
+  const [pathStepMs, setPathStepMs] = useState(PATH_STEP_MAX);
   useEffect(() => {
     if (!activePath) { setPathProgress(0); return; }
     const total = Math.max(0, activePath.length - 1);
     if (total === 0) { setPathProgress(0); return; }
     setPathProgress(1);
+    const stepMs = Math.min(PATH_STEP_MAX, Math.max(PATH_STEP_MIN, Math.round(PATH_TOTAL_MS / total)));
+    setPathStepMs(stepMs);
     let step = 1;
     const id = window.setInterval(() => {
       step += 1;
       setPathProgress(step);
       if (step >= total) window.clearInterval(id);
-    }, 280);
+    }, stepMs);
     return () => window.clearInterval(id);
     // Lock on the qpath text so a topology refresh that reshuffles the paths
     // array but keeps this route intact doesn't re-trigger the animation.
@@ -1111,33 +1121,41 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   }
 
   // Unified RAF-driven flow: a single animation mechanism expresses both
-  // direction AND real-time speed. Each edge's dashoffset advances by
+  // direction AND real-time speed. Each edge's flow-phase advances by
   // `speed * dt` each frame; `speed` is smoothed toward a rate-derived
   // target so transitions between idle and active are gradual, not
   // jump-cuts. An idle baseline speed keeps direction always readable.
-  const flowLineRefs = useRef<Map<string, SVGLineElement>>(new Map());
-  const flowStateRef = useRef<Map<string, { offset: number; speed: number }>>(new Map());
+  //
+  // Rendered as a series of small chevron glyphs (">") along the edge
+  // pointing in the flow direction, so even a static screenshot shows
+  // where traffic is headed. Chevrons are drawn as a single <path>
+  // per edge (cheap) and each frame rewrites that path's `d` to slide
+  // the glyphs along the edge.
+  const flowPathRefs = useRef<Map<string, SVGPathElement>>(new Map());
+  const flowStateRef = useRef<Map<string, { phase: number; speed: number }>>(new Map());
+  const flowGeomRef = useRef<Map<string, { x1: number; y1: number; x2: number; y2: number; len: number; ux: number; uy: number; nx: number; ny: number }>>(new Map());
   const edgesRef = useRef(edges);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
+
+  // Chevron sizing in SVG units. Kept tight so adding the arrowhead
+  // doesn't visually thicken the edge — a 4-unit-long tip on a
+  // stroke-width:1.5 line reads as an obvious arrow but doesn't
+  // dominate the line itself.
+  const CHEV_HALF_LEN = 3;     // along-edge distance from arm to tip
+  const CHEV_HALF_WID = 2.4;   // perpendicular half-width
+  const CHEV_SPACING = 18;     // chevrons are this far apart along the edge
 
   useEffect(() => {
     let raf = 0;
     let last = performance.now();
-    const BASE_SPEED = 24;   // px/sec at idle
-    const MAX_SPEED = 180;   // px/sec when current reaches the global max
-    const LERP = 0.08;        // per-frame smoothing toward target speed
+    const BASE_SPEED = 24;
+    const MAX_SPEED = 180;
+    const LERP = 0.08;
     const loop = (now: number) => {
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
       const curEdges = edgesRef.current;
       const maxs = maxByEdgeRef.current;
-      // Denominator for the flow-speed percentage is max(globalPeak, REF).
-      // - globalPeak: largest per-edge peak ever observed across the mesh.
-      //   Once heavy traffic has been seen, it anchors 100 % for everyone.
-      // - REF: a floor reference (10 MB/s). Before any heavy traffic has
-      //   been seen, a single edge at 100 KB/s reads as ~1 % and only
-      //   nudges above baseline — avoids the "first-burst instantly
-      //   saturates" pathology of using the observed-peak-only denominator.
       const REF_MAX = 10 * 1024 * 1024;
       let globalPeak = 0;
       maxs.forEach((v) => { if (v > globalPeak) globalPeak = v; });
@@ -1146,12 +1164,33 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         if (!e.directionKnown) return;
         const t = Math.min(1, e.currentRate / denom);
         const target = BASE_SPEED + t * (MAX_SPEED - BASE_SPEED);
-        const state = flowStateRef.current.get(e.key) || { offset: 0, speed: BASE_SPEED };
+        const state = flowStateRef.current.get(e.key) || { phase: 0, speed: BASE_SPEED };
         state.speed += (target - state.speed) * LERP;
-        state.offset -= state.speed * dt;
+        // phase advances in the same direction as the edge (start → end).
+        state.phase = ((state.phase + state.speed * dt) % CHEV_SPACING + CHEV_SPACING) % CHEV_SPACING;
         flowStateRef.current.set(e.key, state);
-        const el = flowLineRefs.current.get(e.key);
-        if (el) el.style.strokeDashoffset = String(state.offset);
+        const el = flowPathRefs.current.get(e.key);
+        const geom = flowGeomRef.current.get(e.key);
+        if (!el || !geom) return;
+        // Rebuild the chevron path for this edge.
+        const { x1, y1, len, ux, uy, nx, ny } = geom;
+        const count = Math.ceil(len / CHEV_SPACING) + 1;
+        let d = '';
+        for (let i = 0; i < count; i++) {
+          const s = i * CHEV_SPACING + state.phase;
+          if (s < CHEV_HALF_LEN || s > len - CHEV_HALF_LEN) continue;
+          const tipX = x1 + ux * s;
+          const tipY = y1 + uy * s;
+          // Arms trail behind the tip along -u direction, splayed by ±n.
+          const backX = tipX - ux * CHEV_HALF_LEN;
+          const backY = tipY - uy * CHEV_HALF_LEN;
+          const a1x = backX + nx * CHEV_HALF_WID;
+          const a1y = backY + ny * CHEV_HALF_WID;
+          const a2x = backX - nx * CHEV_HALF_WID;
+          const a2y = backY - ny * CHEV_HALF_WID;
+          d += `M${a1x.toFixed(1)} ${a1y.toFixed(1)}L${tipX.toFixed(1)} ${tipY.toFixed(1)}L${a2x.toFixed(1)} ${a2y.toFixed(1)}`;
+        }
+        el.setAttribute('d', d);
       });
       raf = requestAnimationFrame(loop);
     };
@@ -1439,23 +1478,40 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                     key={activePath ? activePath.join('/') + ':' + edgeIdx : 'draw'}
                     x1={dx1} y1={dy1} x2={dx2} y2={dy2}
                     className="hy-topo-edge-draw"
-                    style={{ ['--hy-path-len' as any]: drawLen }}
-                  />
-                )}
-                {/* Flow overlay — dashoffset is driven by the RAF loop
-                    above; speed smoothly interpolates between the idle
-                    baseline and a rate-scaled peak. Offline edges have
-                    no flow: the × marker speaks for their state. */}
-                {e.directionKnown && !offline && (
-                  <line
-                    x1={x1} y1={y1} x2={x2} y2={y2}
-                    className="hy-topo-edge-flow"
-                    ref={(el) => {
-                      if (el) flowLineRefs.current.set(e.key, el);
-                      else flowLineRefs.current.delete(e.key);
+                    style={{
+                      ['--hy-path-len' as any]: drawLen,
+                      ['--hy-path-draw-ms' as any]: `${pathStepMs}ms`,
                     }}
                   />
                 )}
+                {/* Flow overlay — a path of small chevrons (>) pointing
+                    in the flow direction, slid along the edge by the
+                    RAF loop above. The chevron shape makes direction
+                    readable even in a still screenshot. Offline edges
+                    have no flow; the × marker speaks for their state. */}
+                {e.directionKnown && !offline && (() => {
+                  const edx = x2 - x1;
+                  const edy = y2 - y1;
+                  const elen = Math.hypot(edx, edy) || 1;
+                  const eux = edx / elen;
+                  const euy = edy / elen;
+                  // Register this edge's geometry so the RAF loop can
+                  // rebuild its chevron path each frame without the
+                  // component having to re-render.
+                  const key = e.key;
+                  flowGeomRef.current.set(key, {
+                    x1, y1, x2, y2, len: elen, ux: eux, uy: euy, nx: -euy, ny: eux,
+                  });
+                  return (
+                    <path
+                      className="hy-topo-edge-flow"
+                      ref={(el) => {
+                        if (el) flowPathRefs.current.set(key, el);
+                        else { flowPathRefs.current.delete(key); flowGeomRef.current.delete(key); }
+                      }}
+                    />
+                  );
+                })()}
                 {/* Offline × marker — small red cross at the midpoint,
                     constant size independent of edge thickness. */}
                 {offline && (

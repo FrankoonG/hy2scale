@@ -353,7 +353,7 @@ a.peer-link:hover{text-decoration:underline}
 /* Edges: base line thickness encodes peak throughput. Flowing dashed
    overlay runs along direction, speed scaled by current rate. */
 .hy-topo-edge-base{color:#4D6EA3;stroke:currentColor;stroke-opacity:.4;fill:none;transition:color .28s ease-out, stroke-opacity .28s ease-out}
-.hy-topo-edge-flow{color:#4D6EA3;stroke:currentColor;stroke-opacity:.95;stroke-width:2;fill:none;stroke-linecap:round;stroke-dasharray:2 14;transition:color .28s ease-out, stroke-opacity .28s ease-out}
+.hy-topo-edge-flow{color:#4D6EA3;stroke:currentColor;stroke-opacity:.95;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;transition:color .28s ease-out, stroke-opacity .28s ease-out}
 
 /* Labels — halo+fill pair of <text>s. The halo's stroke colour is set
    INLINE from the JS-sampled surface colour (see NodesGraphView's
@@ -392,13 +392,13 @@ a.peer-link:hover{text-decoration:underline}
 .hy-topo-edge-base{transition:stroke .28s ease-out, stroke-opacity .28s ease-out, stroke-width .28s ease-out}
 .hy-topo-edge-flow{transition:stroke .28s ease-out, stroke-opacity .28s ease-out, stroke-width .28s ease-out}
 .hy-topo-edge.on-path .hy-topo-edge-base{color:#4361ee;stroke:currentColor;stroke-opacity:.85;stroke-width:5}
-.hy-topo-edge.on-path .hy-topo-edge-flow{color:#4361ee;stroke:currentColor;stroke-opacity:1;stroke-width:3.5}
+.hy-topo-edge.on-path .hy-topo-edge-flow{color:#4361ee;stroke:currentColor;stroke-opacity:1;stroke-width:2.5}
 /* Path draw overlay — one-shot stroke that "paints in" from the self-side
    endpoint. Coords for this line are flipped at render time so (x1,y1) is
    always the nearer-self end; the dashoffset starts at full length and
    animates to 0, revealing the blue stroke outward toward the target.
    Rendered on top of the base so it reads as the dominant highlight. */
-.hy-topo-edge-draw{color:#4361ee;stroke:currentColor;stroke-width:5;stroke-linecap:round;fill:none;pointer-events:none;stroke-dasharray:var(--hy-path-len);stroke-dashoffset:var(--hy-path-len);animation:hy-topo-path-draw 320ms ease-out forwards}
+.hy-topo-edge-draw{color:#4361ee;stroke:currentColor;stroke-width:5;stroke-linecap:round;fill:none;pointer-events:none;stroke-dasharray:var(--hy-path-len);stroke-dashoffset:var(--hy-path-len);animation:hy-topo-path-draw var(--hy-path-draw-ms, 320ms) ease-out forwards}
 @keyframes hy-topo-path-draw{to{stroke-dashoffset:0}}
 
 /* Offline / disabled edges — red, dashed, no flow, × marker. */
