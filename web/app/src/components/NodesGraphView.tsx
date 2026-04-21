@@ -522,16 +522,21 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     return i >= 0 ? i : 0;
   }, [currentQPath, selectedPaths]);
   const rawActivePath = selectedPaths[pathIdx] || null;
-  // findPathsToName returns paths in TreeTable key format — inbound
-  // paths are prefixed with selfId, but outbound top-level peers arrive
-  // as a single [peerName]. For edge/overlay rendering we always want
-  // self as the origin so the animation can radiate outward, so prepend
-  // selfKey whenever the raw path doesn't already lead with it.
+  // findPathsToName preserves the TreeTable key convention — inbound
+  // paths are prefixed with selfId while outbound top-level peers arrive
+  // as a single [peerName]. For EDGE ANIMATION we always need self as
+  // the origin so the radiate-from-self draw animation works, so prepend
+  // selfId when it isn't already there. For the OVERLAY DISPLAY we keep
+  // the raw form: outbound lookups render as just the peer name (no
+  // implicit self-prefix) because, as seen by the local node, an
+  // outbound connection is a direct one-hop link rather than a traversal
+  // through self.
   const activePath = useMemo(() => {
     if (!rawActivePath) return null;
     if (rawActivePath[0] === selfId) return rawActivePath;
     return [selfId, ...rawActivePath];
   }, [rawActivePath, selfId]);
+  const displayPath = rawActivePath;
   const activePathOrder = useMemo(() => {
     const m = new Map<string, number>();
     if (!activePath) return m;
@@ -1047,11 +1052,11 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
           })}
         </g>
       </svg>
-      {activePath && activePath.length > 0 && (() => {
-        const selNode = nodes.get(activePath[activePath.length - 1]);
+      {displayPath && displayPath.length > 0 && (() => {
+        const selNode = nodes.get(displayPath[displayPath.length - 1]);
         const totalLat = selNode?.totalLatencyMs ?? 0;
         const offline = !!selNode?.offline || totalLat < 0;
-        const hops = activePath.map((k) => nodes.get(k)?.name || k);
+        const hops = displayPath.map((k) => nodes.get(k)?.name || k);
         const latClass = offline ? 'lat-bad' : totalLat <= 0 ? 'lat-na' : totalLat < 80 ? 'lat-ok' : totalLat < 200 ? 'lat-mid' : 'lat-bad';
         return (
           <div className="hy-topo-graph-pathinfo" role="status" aria-live="polite">
