@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TopologyNode } from '@/api';
 import { fmtRate } from '@/hooks/useFormat';
@@ -606,7 +606,15 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     [pan.x, pan.y, zoom]
   );
 
-  const onMouseDown = useCallback((ev: MouseEvent) => {
+  // Pointer events unify mouse, touch, and pen input — one code path
+  // handles desktop dragging, touchscreen taps/drags, and stylus input
+  // without forking per device. setPointerCapture ensures the SVG keeps
+  // receiving pointermove/pointerup even if the finger slides outside
+  // the element, so touch drags never lose tracking mid-gesture.
+  const onPointerDown = useCallback((ev: ReactPointerEvent<SVGSVGElement>) => {
+    // Secondary/middle buttons on mouse should not start a drag; a touch
+    // contact has button=-1 on pointerdown which we do want to handle.
+    if (ev.pointerType === 'mouse' && ev.button !== 0) return;
     const target = ev.target as SVGElement;
     const nodeEl = target.closest('[data-node-key]') as SVGElement | null;
     if (nodeEl) {
@@ -617,6 +625,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     } else {
       dragState.current = { mode: 'pan', startClient: { x: ev.clientX, y: ev.clientY }, startPan: pan, moved: false };
     }
+    try { (ev.currentTarget as SVGSVGElement).setPointerCapture(ev.pointerId); } catch { /* ignore */ }
     ev.preventDefault();
   }, [clientToSvg, positions, pan]);
 
@@ -664,7 +673,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   }
 
   useEffect(() => {
-    function onMove(ev: globalThis.MouseEvent) {
+    function onMove(ev: PointerEvent) {
       const s = dragState.current;
       if (!s) return;
       if (s.mode === 'pan') {
@@ -678,7 +687,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         const dy = cur.y - s.startSvg.y;
         // Treat as drag only when the cursor has moved past a small
         // threshold (in SVG coords), otherwise the up-event is a click.
-        if (!s.moved && Math.abs(dx) + Math.abs(dy) > 3 / zoom) s.moved = true;
+        // Slightly larger threshold for touch to tolerate fingertip jitter.
+        const slop = ev.pointerType === 'touch' ? 8 : 3;
+        if (!s.moved && Math.abs(dx) + Math.abs(dy) > slop / zoom) s.moved = true;
         if (s.moved) {
           const nextPos = { x: s.startNodePos.x + dx, y: s.startNodePos.y + dy };
           setOverrides((prev) => ({ ...prev, [s.key]: nextPos }));
@@ -704,9 +715,17 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         handleBlankClick();
       }
     }
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+    // Listen on window for pointer events so a touch/mouse drag that
+    // leaves the SVG keeps tracking. pointercancel also clears state —
+    // browsers fire it when a touch is pre-empted by a system gesture.
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientToSvg, handleNodeClick, handleBlankClick, clampPan, zoom]);
 
@@ -843,7 +862,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
           <span>{t('nodes.graph.snap')}</span>
         </label>
       </div>
-      <svg ref={svgRef} className="hy-topo-graph-svg" onMouseDown={onMouseDown}>
+      <svg ref={svgRef} className="hy-topo-graph-svg" onPointerDown={onPointerDown}>
         <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
           {/* Background grid — rendered as real <line> elements in the main
               transformed group (not via <pattern>/<defs>). Dark-mode
