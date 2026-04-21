@@ -9,8 +9,13 @@ export default function Socks5Tab() {
   const toast = useToast();
   const queryClient = useQueryClient();
 
-  const { data: proxies = [] } = useQuery({ queryKey: ['proxies'], queryFn: api.getProxies });
-  const { data: certs = [] } = useQuery({ queryKey: ['certs'], queryFn: api.getCerts });
+  // `= []` only defaults when data is undefined — the server returns
+  // literal null on a fresh install, which would make proxies.find()
+  // explode. Coalesce explicitly.
+  const { data: proxiesRaw } = useQuery({ queryKey: ['proxies'], queryFn: api.getProxies });
+  const { data: certsRaw } = useQuery({ queryKey: ['certs'], queryFn: api.getCerts });
+  const proxies = proxiesRaw ?? [];
+  const certs = certsRaw ?? [];
 
   const socks5 = proxies.find((p) => p.protocol === 'socks5');
 
