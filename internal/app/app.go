@@ -880,8 +880,11 @@ func (a *App) StartTrafficFlusher(ctx context.Context) {
 
 func (a *App) SetNested(peer string, enabled bool) error {
 	// Strip self prefix — inbound peers under self use selfID/name in UI paths
-	// but are direct peers in config (same as dialExit stripping)
-	if parts := strings.SplitN(peer, "/", 2); len(parts) == 2 && parts[0] == a.node.Name() {
+	// but are direct peers in config (same as dialExit stripping). The UI
+	// may send either "<node_id>/peer" or "<name>/peer" depending on which
+	// the TreeTable happened to use as rootPath, so accept both.
+	cfg := a.store.Get()
+	if parts := strings.SplitN(peer, "/", 2); len(parts) == 2 && (parts[0] == a.node.Name() || parts[0] == cfg.NodeID) {
 		peer = parts[1]
 	}
 	a.node.SetNestedDiscovery(peer, enabled)
@@ -907,8 +910,11 @@ func (a *App) SetNested(peer string, enabled bool) error {
 // SetPeerDisabled marks a peer (or qualified peer path) as disabled,
 // preventing it from being used as an exit hop without dropping the connection.
 func (a *App) SetPeerDisabled(peer string, disabled bool) error {
-	// Strip self prefix to match how SetNested handles it
-	if parts := strings.SplitN(peer, "/", 2); len(parts) == 2 && parts[0] == a.node.Name() {
+	// Strip self prefix to match how SetNested handles it — accept both
+	// the display name and the node_id since the UI uses whichever it
+	// has cached first.
+	cfg := a.store.Get()
+	if parts := strings.SplitN(peer, "/", 2); len(parts) == 2 && (parts[0] == a.node.Name() || parts[0] == cfg.NodeID) {
 		peer = parts[1]
 	}
 	return a.store.Update(func(c *Config) {
