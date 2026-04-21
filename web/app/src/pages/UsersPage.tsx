@@ -9,7 +9,7 @@ import { ExitViaCell } from '@/components/ExitViaCell';
 import UserModal from '@/components/UserModal';
 import UserDetailModal from '@/components/UserDetailModal';
 import ImportExportButton from '@/components/ImportExportButton';
-import BulkActionBar from '@/components/BulkActionBar';
+import ResponsiveActions from '@/components/ResponsiveActions';
 
 export default function UsersPage() {
   const { t } = useTranslation();
@@ -139,24 +139,26 @@ export default function UsersPage() {
         title={t('users.title')}
         count={users.length}
         actions={
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <BulkActionBar count={selection.count} onClear={selection.clear}>
-              {(() => {
-                const sel = [...selection.selected];
-                const items = sel.map((id) => users.find((u) => u.id === id)).filter(Boolean);
-                const hasDisabled = items.some((u) => !u!.enabled);
-                const hasEnabled = items.some((u) => u!.enabled);
-                return <>
-                  {hasDisabled && <Button size="sm" onClick={() => bulkToggle(true)}>{t('app.bulkEnable')}</Button>}
-                  {hasEnabled && <Button size="sm" onClick={() => bulkToggle(false)}>{t('app.bulkDisable')}</Button>}
-                  <Button size="sm" onClick={bulkReset}>{t('users.bulkResetTraffic')}</Button>
-                  <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>
-                </>;
-              })()}
-            </BulkActionBar>
+          <ResponsiveActions
+            selectedCount={selection.count}
+            onClearSelection={selection.clear}
+            selectedLabel={t('app.selected', { count: selection.count })}
+          >
+            {(() => {
+              const sel = [...selection.selected];
+              const items = sel.map((id) => users.find((u) => u.id === id)).filter(Boolean);
+              const hasDisabled = items.some((u) => !u!.enabled);
+              const hasEnabled = items.some((u) => u!.enabled);
+              return <>
+                {hasDisabled && <Button size="sm" onClick={() => bulkToggle(true)}>{t('app.bulkEnable')}</Button>}
+                {hasEnabled && <Button size="sm" onClick={() => bulkToggle(false)}>{t('app.bulkDisable')}</Button>}
+                {selection.count > 0 && <Button size="sm" onClick={bulkReset}>{t('users.bulkResetTraffic')}</Button>}
+                {selection.count > 0 && <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>}
+              </>;
+            })()}
             <ImportExportButton target="users" />
             <Button size="sm" variant="primary" onClick={openAdd}>{t('users.addUser')}</Button>
-          </div>
+          </ResponsiveActions>
         }
         noPadding
       >

@@ -131,6 +131,23 @@
 .hy-bulk-bar .hy-bulk-count{font-size:12px;font-weight:600;color:var(--primary);padding:2px 8px;background:var(--primary-light);border-radius:10px}
 .hy-bulk-bar .hy-bulk-clear{border:none;background:none;color:var(--text-muted);cursor:pointer;font-size:12px;padding:2px 6px}
 .hy-bulk-bar .hy-bulk-clear:hover{color:var(--text)}
+
+/* ResponsiveActions — wide layout is a plain flex row of buttons
+   indistinguishable from writing them inline. Narrow layout shows a
+   tiny bulk-count pill + a ⋯ overflow button that opens a popover
+   containing the same buttons stacked vertically. */
+.hy-actions-row{display:flex;align-items:center;gap:8px}
+.hy-actions-row--narrow{position:relative;gap:6px}
+.hy-actions-count{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 6px;font-size:12px;font-weight:700;color:var(--primary);background:var(--primary-light);border:none;border-radius:11px;cursor:pointer}
+.hy-actions-count:hover{background:var(--primary);color:#fff}
+.hy-actions-overflow{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-secondary);cursor:pointer;transition:background .12s,color .12s}
+.hy-actions-overflow:hover,.hy-actions-overflow.open{background:var(--primary-light);color:var(--primary);border-color:var(--primary)}
+.hy-actions-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:50;min-width:180px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-md);padding:6px;display:flex;flex-direction:column;gap:4px;animation:bulkFadeIn .15s ease}
+.hy-actions-menu>*{width:100%;justify-content:flex-start}
+.hy-actions-menu button{text-align:left}
+/* ImportExportButton / similar wrappers contain multiple buttons inside
+   a flex container — make them stack inside the menu too. */
+.hy-actions-menu>div{display:flex;flex-direction:column;gap:4px;width:100%}
 @keyframes bulkFadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 
 /* Self row */
