@@ -967,6 +967,74 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     return Math.sqrt(dx * dx + dy * dy) * zoom;
   }
 
+  // Adaptive label placement: default is at the edge's midpoint, but when
+  // the midpoint is near another node or another edge's midpoint (which
+  // happens with crossing lines), push the label perpendicular to this
+  // edge by a fixed amount, on whichever side is farther from the
+  // obstacle. Without this, labels on crossing lines would overlap each
+  // other or land on top of a dot. Memoised against edges / positions so
+  // it doesn't recompute every frame.
+  const LABEL_PERP_MAG = 14;
+  const LABEL_AVOID_RANGE = 42;
+  const edgeLabelOffsets = useMemo(() => {
+    const map = new Map<string, { ox: number; oy: number }>();
+    const nodeList = Array.from(nodes.values());
+    const edgeList = Array.from(edges.values());
+    const mids = edgeList.map((e) => {
+      const p = positions[e.from];
+      const q = positions[e.to];
+      if (!p || !q) return null;
+      return { key: e.key, mx: (p.x + q.x) / 2, my: (p.y + q.y) / 2 };
+    });
+    for (let i = 0; i < edgeList.length; i++) {
+      const e = edgeList[i];
+      const p = positions[e.from];
+      const q = positions[e.to];
+      if (!p || !q) continue;
+      const dx = q.x - p.x;
+      const dy = q.y - p.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const ux = dx / d;
+      const uy = dy / d;
+      const mx = (p.x + q.x) / 2;
+      const my = (p.y + q.y) / 2;
+      // Perpendicular unit vector; sign chosen to push labels away from
+      // the nearest obstacle found.
+      const nx = -uy;
+      const ny = ux;
+      let best: { dist: number; projN: number } | null = null;
+      // Non-endpoint nodes near the midpoint.
+      for (const n of nodeList) {
+        if (n.key === e.from || n.key === e.to) continue;
+        const pos = positions[n.key];
+        if (!pos) continue;
+        const ddx = pos.x - mx;
+        const ddy = pos.y - my;
+        const dist = Math.sqrt(ddx * ddx + ddy * ddy);
+        if (dist > LABEL_AVOID_RANGE) continue;
+        if (!best || dist < best.dist) best = { dist, projN: ddx * nx + ddy * ny };
+      }
+      // Other edges' midpoints — crossing-line label collisions.
+      for (let j = 0; j < mids.length; j++) {
+        if (j === i) continue;
+        const m = mids[j];
+        if (!m) continue;
+        const ddx = m.mx - mx;
+        const ddy = m.my - my;
+        const dist = Math.sqrt(ddx * ddx + ddy * ddy);
+        if (dist > LABEL_AVOID_RANGE || dist < 1) continue;
+        if (!best || dist < best.dist) best = { dist, projN: ddx * nx + ddy * ny };
+      }
+      if (best) {
+        const sign = best.projN >= 0 ? -1 : 1;
+        map.set(e.key, { ox: nx * sign * LABEL_PERP_MAG, oy: ny * sign * LABEL_PERP_MAG });
+      } else {
+        map.set(e.key, { ox: 0, oy: 0 });
+      }
+    }
+    return map;
+  }, [edges, nodes, positions]);
+
   return (
     <div className="hy-topo-graph">
       <div className="hy-topo-graph-toolbar">
@@ -1142,23 +1210,36 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                 {/* Labels — halo+fill pair of <text> nodes. The halo's
                     stroke is set via the <HaloText> helper below, which
                     applies the sampled surface colour with `!important`
-                    so dark-mode extensions' CSS overrides can't win. */}
-                {showLatency && (() => {
-                  const latClass = e.segmentLatencyMs < 0 ? 'lat-na' : e.segmentLatencyMs < 80 ? 'lat-ok' : e.segmentLatencyMs < 200 ? 'lat-mid' : 'lat-bad';
-                  const text = fmtLatency(e.segmentLatencyMs);
+                    so dark-mode extensions' CSS overrides can't win.
+                    Adaptive position: offset perpendicular to the edge
+                    when the midpoint would collide with another node or
+                    a crossing edge's label (see edgeLabelOffsets memo);
+                    otherwise labels stay at midpoint as before. */}
+                {(() => {
+                  const off = edgeLabelOffsets.get(e.key) || { ox: 0, oy: 0 };
+                  const lx = mx + off.ox;
+                  const ly = my + off.oy;
                   return (
-                    <g>
-                      <HaloText x={mx} y={my - 5} stroke={surfaceColor}>{text}</HaloText>
-                      <text x={mx} y={my - 5} textAnchor="middle" className={`hy-topo-edge-label ${latClass}`}>{text}</text>
-                    </g>
+                    <>
+                      {showLatency && (() => {
+                        const latClass = e.segmentLatencyMs < 0 ? 'lat-na' : e.segmentLatencyMs < 80 ? 'lat-ok' : e.segmentLatencyMs < 200 ? 'lat-mid' : 'lat-bad';
+                        const text = fmtLatency(e.segmentLatencyMs);
+                        return (
+                          <g>
+                            <HaloText x={lx} y={ly - 5} stroke={surfaceColor}>{text}</HaloText>
+                            <text x={lx} y={ly - 5} textAnchor="middle" className={`hy-topo-edge-label ${latClass}`}>{text}</text>
+                          </g>
+                        );
+                      })()}
+                      {showRate && (
+                        <g>
+                          <HaloText x={lx} y={ly + 11} stroke={surfaceColor}>{fmtRate(e.currentRate)}</HaloText>
+                          <text x={lx} y={ly + 11} textAnchor="middle" className="hy-topo-edge-label rate">{fmtRate(e.currentRate)}</text>
+                        </g>
+                      )}
+                    </>
                   );
                 })()}
-                {showRate && (
-                  <g>
-                    <HaloText x={mx} y={my + 11} stroke={surfaceColor}>{fmtRate(e.currentRate)}</HaloText>
-                    <text x={mx} y={my + 11} textAnchor="middle" className="hy-topo-edge-label rate">{fmtRate(e.currentRate)}</text>
-                  </g>
-                )}
               </g>
             );
           })}
