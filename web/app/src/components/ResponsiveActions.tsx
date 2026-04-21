@@ -93,7 +93,13 @@ export default function ResponsiveActions({ selectedCount = 0, onClearSelection,
         </svg>
       </button>
       {open && (
-        <div className="hy-actions-menu" onClick={() => setOpen(false)}>
+        // Intentionally NOT closing the menu on inner clicks. Some
+        // children (e.g. ImportExportButton) own their own portal
+        // dialog and rely on still being mounted when the user
+        // triggers it — unmounting here would tear down the button's
+        // state before the modal could open. Close via outside click
+        // or Escape, handled by the effect above.
+        <div className="hy-actions-menu">
           {children}
         </div>
       )}
