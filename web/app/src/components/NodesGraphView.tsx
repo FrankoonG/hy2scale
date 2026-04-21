@@ -495,6 +495,14 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     | null
   >(null);
 
+  // Active pointers — keyed by pointerId. A second pointer going down
+  // upgrades any in-progress single-pointer drag into a pinch-to-zoom
+  // gesture; when either finger lifts the gesture ends and the remaining
+  // pointer (if any) does NOT resume the earlier pan/drag (would feel
+  // jarring on mobile), it simply becomes the seed for the next gesture.
+  const pointersRef = useRef<Map<number, Pos>>(new Map());
+  const pinchRef = useRef<{ startDist: number; startZoom: number; startPan: Pos; anchor: Pos } | null>(null);
+
   // Selection is stored as a single currentQPath string. The node key and
   // pathIdx are derived from it so topology refreshes — which can change the
   // order of equivalent paths — never cause the highlighted route to drift:
@@ -615,6 +623,25 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     // Secondary/middle buttons on mouse should not start a drag; a touch
     // contact has button=-1 on pointerdown which we do want to handle.
     if (ev.pointerType === 'mouse' && ev.button !== 0) return;
+    pointersRef.current.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+
+    // Second finger down → start pinch gesture. Cancel any in-progress
+    // single-pointer drag (node move / pan) cleanly: a node that was
+    // being moved snaps back without finalising, since the gesture
+    // meaningful to the user is now "zoom", not "drag".
+    if (pointersRef.current.size === 2) {
+      const pts = Array.from(pointersRef.current.values());
+      const dx = pts[0].x - pts[1].x;
+      const dy = pts[0].y - pts[1].y;
+      const dist = Math.max(1, Math.hypot(dx, dy));
+      const anchor = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+      pinchRef.current = { startDist: dist, startZoom: zoom, startPan: pan, anchor };
+      dragState.current = null;
+      try { (ev.currentTarget as SVGSVGElement).setPointerCapture(ev.pointerId); } catch { /* ignore */ }
+      ev.preventDefault();
+      return;
+    }
+
     const target = ev.target as SVGElement;
     const nodeEl = target.closest('[data-node-key]') as SVGElement | null;
     if (nodeEl) {
@@ -627,7 +654,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     }
     try { (ev.currentTarget as SVGSVGElement).setPointerCapture(ev.pointerId); } catch { /* ignore */ }
     ev.preventDefault();
-  }, [clientToSvg, positions, pan]);
+  }, [clientToSvg, positions, pan, zoom]);
 
   // Eased drop handler: runs snap-to-grid (optional) and collision-bounce
   // in sequence, then animates the node from its release point to the
@@ -674,6 +701,40 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
   useEffect(() => {
     function onMove(ev: PointerEvent) {
+      // Keep tracked pointer positions fresh — pinch math reads them.
+      if (pointersRef.current.has(ev.pointerId)) {
+        pointersRef.current.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+      }
+
+      // Pinch gesture active: compute current finger-spread distance,
+      // scale zoom by the ratio to startDist, and move pan so the
+      // anchor (midpoint between the two initial touch points) stays
+      // fixed in SVG space as the zoom level changes.
+      const pinch = pinchRef.current;
+      if (pinch && pointersRef.current.size >= 2) {
+        const pts = Array.from(pointersRef.current.values()).slice(0, 2);
+        const dx = pts[0].x - pts[1].x;
+        const dy = pts[0].y - pts[1].y;
+        const dist = Math.max(1, Math.hypot(dx, dy));
+        const ratio = dist / pinch.startDist;
+        const nz = Math.max(0.3, Math.min(3, pinch.startZoom * ratio));
+        const scale = nz / pinch.startZoom;
+        // Anchor-preserving pan: translate so the original midpoint in
+        // screen space still maps to the same SVG point under new zoom.
+        const svg = svgRef.current;
+        if (!svg) return;
+        const r = svg.getBoundingClientRect();
+        const ax = pinch.anchor.x - r.left;
+        const ay = pinch.anchor.y - r.top;
+        const nextPan = clampPan({
+          x: ax - (ax - pinch.startPan.x) * scale,
+          y: ay - (ay - pinch.startPan.y) * scale,
+        }, nz);
+        setZoom(nz);
+        setPan(nextPan);
+        return;
+      }
+
       const s = dragState.current;
       if (!s) return;
       if (s.mode === 'pan') {
@@ -696,7 +757,15 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         }
       }
     }
-    function onUp() {
+    function onUp(ev: PointerEvent) {
+      pointersRef.current.delete(ev.pointerId);
+      // End pinch as soon as either finger lifts. Any remaining pointer
+      // is treated as a fresh potential gesture seed — it won't resume
+      // the earlier pan/drag since dragState was cleared on pinch start.
+      if (pinchRef.current) {
+        if (pointersRef.current.size < 2) pinchRef.current = null;
+        return;
+      }
       const s = dragState.current;
       dragState.current = null;
       if (s?.mode === 'node') {
