@@ -58,6 +58,11 @@ const ConfirmContext = createContext<ConfirmContextValue | null>(null);
 
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<(ConfirmOptions & { resolve: (v: boolean) => void; origin?: { x: number; y: number } }) | null>(null);
+  // Separate open flag: toggled to false on resolve so the ConfirmDialog
+  // stays mounted long enough for the Modal's AnimatePresence to play
+  // the exit animation. Content (state) is cleared only after the exit
+  // finishes so the last-shown title/message/origin aren't lost mid-fade.
+  const [open, setOpen] = useState(false);
 
   // Track the last pointerdown coordinates at the window level. Since
   // confirm() is typically invoked synchronously inside a click handler,
@@ -71,16 +76,28 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('pointerdown', h, true);
   }, []);
 
+  const closeTimerRef = useRef<number | null>(null);
   const confirm = useCallback((opts: ConfirmOptions): Promise<boolean> => {
     return new Promise((resolve) => {
+      if (closeTimerRef.current) { window.clearTimeout(closeTimerRef.current); closeTimerRef.current = null; }
       const origin = opts.animateFrom || lastPointerPosRef.current || undefined;
       setState({ ...opts, resolve, origin });
+      setOpen(true);
     });
   }, []);
 
   const handleResult = (result: boolean) => {
     state?.resolve(result);
-    setState(null);
+    setOpen(false);
+    // Clear state after the Modal's exit animation completes (Modal
+    // uses 0.47s default, bumped by a small safety margin). Until then
+    // the ConfirmDialog keeps rendering the last title/message so the
+    // close animation has something to fade away.
+    if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current);
+    closeTimerRef.current = window.setTimeout(() => {
+      setState(null);
+      closeTimerRef.current = null;
+    }, 550);
   };
 
   return (
@@ -88,7 +105,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
       {children}
       {state && (
         <ConfirmDialog
-          open
+          open={open}
           title={state.title}
           message={state.message}
           confirmText={state.confirmText}
