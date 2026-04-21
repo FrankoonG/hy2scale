@@ -785,7 +785,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // moving at the same pixels-per-second rate. All edges on the path
   // are marked `.on-path` immediately at selection time; each edge's
   // draw overlay plays its CSS animation with the computed timing.
-  const PATH_TOTAL_MS = 520;
+  const PATH_TOTAL_MS = 260;
   const pathEdgeSchedule = useMemo(() => {
     const map = new Map<string, { delayMs: number; durationMs: number }>();
     if (!activePath || activePath.length < 2) return map;
