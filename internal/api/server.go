@@ -63,6 +63,13 @@ type Server struct {
 	subPeersMu    sync.RWMutex
 	subPeersCache map[string][]topoSubPeer
 	subPeersKick  chan struct{} // signal immediate refresh
+
+	// Graph-layout SSE subscribers. Each entry is a buffered channel
+	// receiving full-snapshot updates; slow consumers drop messages
+	// rather than blocking the PUT handler. Protected by layoutMu.
+	layoutMu     sync.Mutex
+	layoutSubs   map[uint64]chan map[string]app.GraphLayoutPos
+	layoutSubSeq uint64
 }
 
 // validAddrSpec checks "host:portspec" where portspec can be "5565", "1000,2000", "20000-30000"
@@ -119,6 +126,7 @@ func NewServer(a *app.App, addr, basePath string) *Server {
 		oldNodeIDs:    make(map[string]string),
 		subPeersCache: make(map[string][]topoSubPeer),
 		subPeersKick:  make(chan struct{}, 1),
+		layoutSubs:    make(map[uint64]chan map[string]app.GraphLayoutPos),
 		sessions: make(map[string]time.Time),
 	}
 }
@@ -140,6 +148,7 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("GET /api/topology", s.getTopology)
 	authed.HandleFunc("GET /api/graph-layout", s.getGraphLayout)
 	authed.HandleFunc("PUT /api/graph-layout", s.setGraphLayout)
+	authed.HandleFunc("GET /api/graph-layout/stream", s.streamGraphLayout)
 	authed.HandleFunc("GET /api/peers/{name}/peers", s.getNestedPeers)
 	authed.HandleFunc("PUT /api/peers/{name}/nested", s.setNested)
 	authed.HandleFunc("PUT /api/peers/{name}/disable", s.setPeerDisabled)
@@ -413,6 +422,13 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		token := r.Header.Get("Authorization")
 		if len(token) > 7 && token[:7] == "Bearer " {
 			token = token[7:]
+		}
+		// EventSource and similar SSE clients can't set Authorization
+		// headers, so accept an equivalent ?token= query parameter as a
+		// fallback. Only the exact token value leaks into the URL, which
+		// is the same secret as the Bearer header.
+		if token == "" {
+			token = r.URL.Query().Get("token")
 		}
 		s.mu.RLock()
 		expiry, ok := s.sessions[token]
@@ -699,7 +715,112 @@ func (s *Server) setGraphLayout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	// Fan out to every active SSE subscriber so other sessions pick up
+	// the change with ~no delay. Always broadcast the committed config
+	// snapshot (not the raw request body) so every listener sees the
+	// same authoritative map, including any defensive copies performed
+	// by SetGraphLayout.
+	committed := s.app.Store().Get().GraphLayout
+	if committed == nil {
+		committed = map[string]app.GraphLayoutPos{}
+	}
+	s.broadcastGraphLayout(committed)
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// broadcastGraphLayout sends the snapshot to every registered SSE
+// subscriber. Slow consumers with a full buffer simply drop the update —
+// each SSE frame carries the complete layout so a missed frame self-
+// heals on the next one. Never blocks the PUT path.
+func (s *Server) broadcastGraphLayout(positions map[string]app.GraphLayoutPos) {
+	s.layoutMu.Lock()
+	subs := make([]chan map[string]app.GraphLayoutPos, 0, len(s.layoutSubs))
+	for _, ch := range s.layoutSubs {
+		subs = append(subs, ch)
+	}
+	s.layoutMu.Unlock()
+	for _, ch := range subs {
+		select {
+		case ch <- positions:
+		default:
+		}
+	}
+}
+
+// streamGraphLayout pushes layout snapshots to the client as SSE events.
+// The first event after connect carries the current state so the client
+// doesn't have to also call GET on mount; subsequent events fire only
+// when SetGraphLayout runs (from any session).
+func (s *Server) streamGraphLayout(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	// Disable any buffering proxies that would defeat SSE.
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	ch := make(chan map[string]app.GraphLayoutPos, 4)
+	s.layoutMu.Lock()
+	s.layoutSubSeq++
+	id := s.layoutSubSeq
+	s.layoutSubs[id] = ch
+	s.layoutMu.Unlock()
+	defer func() {
+		s.layoutMu.Lock()
+		delete(s.layoutSubs, id)
+		s.layoutMu.Unlock()
+	}()
+
+	writeEvent := func(pos map[string]app.GraphLayoutPos) bool {
+		payload, err := json.Marshal(map[string]interface{}{"positions": pos})
+		if err != nil {
+			return false
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", payload); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	// Initial snapshot so the client renders something before the first
+	// SetGraphLayout fires.
+	initial := s.app.Store().Get().GraphLayout
+	if initial == nil {
+		initial = map[string]app.GraphLayoutPos{}
+	}
+	if !writeEvent(initial) {
+		return
+	}
+
+	// Periodic keepalive so idle connections don't hit HTTP client or
+	// proxy timeouts. Nothing needs to be parsed from these, they just
+	// refresh the socket.
+	ping := time.NewTicker(20 * time.Second)
+	defer ping.Stop()
+
+	for {
+		select {
+		case pos, ok := <-ch:
+			if !ok {
+				return
+			}
+			if !writeEvent(pos) {
+				return
+			}
+		case <-ping.C:
+			if _, err := fmt.Fprintf(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
