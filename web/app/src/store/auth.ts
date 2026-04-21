@@ -65,6 +65,15 @@ export const useAuthStore = create<AuthState>((set) => ({
     clearToken();
     if (!isProxy()) clearSessionHash();
     set({ token: null, forcePasswordChange: false });
+    // Hard-reload rather than a soft react-router navigation: picks up
+    // any new JS bundle deployed since this tab was first opened, so a
+    // subsequent login lands on the current build instead of continuing
+    // to run stale code. Cheaper than a separate version-probe and
+    // guaranteed to clear in-memory React state too.
+    try {
+      const base = (window as any).__BASE__ || '';
+      window.location.replace(base + '/login');
+    } catch { /* ignore */ }
   },
 
   restoreSession: () => {

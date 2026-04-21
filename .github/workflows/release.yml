@@ -163,6 +163,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Resolve version
         id: version
@@ -174,6 +176,38 @@ jobs:
           fi
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+
+          # Find the most recent tag strictly before this one. When the
+          # workflow is triggered by a tag push, HEAD == TAG, so HEAD^
+          # skips past the tag commit itself.
+          PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+
+          if [ -n "${PREV}" ]; then
+            RANGE="${PREV}..HEAD"
+            HEADER="Changelog since ${PREV}"
+          else
+            RANGE=""
+            HEADER="Full commit history"
+          fi
+          echo "Previous tag: ${PREV:-<none>}"
+          echo "Range: ${RANGE:-<full history>}"
+
+          {
+            echo "header=${HEADER}"
+            echo "changelog<<CHANGELOG_EOF"
+            if [ -z "${RANGE}" ]; then
+              git log --pretty=format:"- %s (%h)" --no-merges
+            else
+              git log "${RANGE}" --pretty=format:"- %s (%h)" --no-merges
+            fi
+            echo ""
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -220,12 +254,19 @@ jobs:
 
             ### iKuai Package
 
-            `hy2scale-${{ steps.version.outputs.version }}.ipkg` — install via iKuai web UI (高级应用 → 应用市场 → 本地安装)
+            `hy2scale-${{ steps.version.outputs.version }}.ipkg` — install via the iKuai web UI (Advanced Apps → App Market → Local Install).
 
             ### Verify checksums
             ```
             sha256sum -c checksums-sha256.txt
             ```
+
+            <details>
+            <summary>${{ steps.changelog.outputs.header }}</summary>
+
+            ${{ steps.changelog.outputs.changelog }}
+
+            </details>
           files: |
             release/*
           draft: false
