@@ -323,7 +323,8 @@ a.peer-link:hover{text-decoration:underline}
 .hy-topo-snap input{accent-color:var(--primary);cursor:pointer;margin:0}
 .hy-topo-btn{border:1px solid var(--border);background:var(--surface);color:var(--text-secondary);padding:4px 10px;border-radius:var(--radius-sm);cursor:pointer;font-size:11px}
 .hy-topo-btn:hover{background:var(--primary-light);color:var(--primary);border-color:var(--primary-light)}
-.hy-topo-graph-hint{color:var(--text-muted);font-size:10px;margin-left:4px}
+.hy-topo-graph-hint{color:var(--text-muted);font-size:10px;margin-left:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+@media(max-width:640px){.hy-topo-graph-hint{display:none}}
 .hy-topo-graph-svg{flex:1;min-height:0;width:100%;cursor:grab;user-select:none;-webkit-user-select:none;touch-action:none;-webkit-touch-callout:none}
 .hy-topo-graph-svg:active{cursor:grabbing}
 
