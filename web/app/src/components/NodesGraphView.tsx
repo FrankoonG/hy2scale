@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useQuery } from '@tanstack/react-query';
 import type { TopologyNode } from '@/api';
 import * as api from '@/api';
+import { getBasePath } from '@/api/client';
 import { fmtRate } from '@/hooks/useFormat';
 import { useExitPaths } from '@/hooks/useExitPaths';
 
@@ -409,86 +409,165 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // live.
   const activeDragKeyRef = useRef<string | null>(null);
 
-  // Server-persisted layout, polled every 5 s so concurrent sessions on
-  // other browsers/devices converge on the same layout. The local
-  // `overrides` state is still what React renders; this query just
-  // reconciles it with the authoritative server-side map.
-  const layoutQuery = useQuery({
-    queryKey: ['graph-layout'],
-    queryFn: api.getGraphLayout,
-    refetchInterval: 5000,
-    refetchOnWindowFocus: true,
-  });
-  // Fire-and-forget PUT; we don't wrap in useMutation because the hook's
-  // returned object identity changes per render and would destabilise the
-  // useCallback below, creating a useEffect dependency that re-fires each
-  // save → save loop. Call api directly instead and let the poll confirm.
+  // Server-pushed layout via SSE — concurrent sessions on other browsers
+  // see edits within ~one network RTT instead of waiting for a poll. The
+  // stream endpoint sends the current snapshot on connect and every
+  // subsequent SetGraphLayout, so we don't need a separate GET on mount.
+  const [remoteLayout, setRemoteLayout] = useState<Record<string, Pos> | null>(null);
+  const remoteLayoutReadyRef = useRef(false);
+  useEffect(() => {
+    const token = sessionStorage.getItem('token:' + getBasePath()) || '';
+    const url = getBasePath() + '/api/graph-layout/stream?token=' + encodeURIComponent(token);
+    const es = new EventSource(url);
+    es.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data);
+        if (data && data.positions) {
+          remoteLayoutReadyRef.current = true;
+          setRemoteLayout(data.positions as Record<string, Pos>);
+        }
+      } catch { /* ignore malformed */ }
+    };
+    // EventSource auto-reconnects on error; no manual retry needed.
+    return () => es.close();
+  }, []);
+  // Pending-write tracker — records positions we just PUT so the remote
+  // snapshot that echoes our own write doesn't get treated as a "remote
+  // edit" needing an animation; we already have the value locally.
+  // Entries auto-expire after 3 s in case the server diverges.
+  const pendingWriteRef = useRef<Map<string, { x: number; y: number; at: number }>>(new Map());
+  // Animations in flight — each entry interpolates a node's on-screen
+  // position from the point it was at when the remote update arrived to
+  // the remote target, over 300 ms with a cubic ease-out. Visible effect:
+  // when another session moves a dot, it slides to its new spot instead
+  // of teleporting.
+  const animRef = useRef<Map<string, { from: Pos; to: Pos; start: number }>>(new Map());
+  const ANIM_MS = 300;
+
+  // Fire-and-forget PUT. Records every key in the payload as a pending
+  // write so the SSE echo of our own update (and any in-flight remote
+  // snapshot that predated our PUT) doesn't rebound the UI back to the
+  // server's old state.
   const saveLayoutToServer = useCallback((positions: Record<string, Pos>) => {
     cachePositions(positions);
+    const now = performance.now();
+    for (const k in positions) {
+      pendingWriteRef.current.set(k, { x: positions[k].x, y: positions[k].y, at: now });
+    }
     api.setGraphLayout(positions).catch(() => { /* best-effort; next save retries */ });
   }, []);
 
-  // Unified reconcile step. Runs whenever the topology (auto layout) or
-  // the server's persisted layout changes. In one pass:
-  //   1. Start from current local overrides (what React is rendering).
-  //   2. Fold in remote positions — remote wins so concurrent edits from
-  //      another session become visible. Skip the node the user is
-  //      actively dragging to avoid snapping mid-gesture.
-  //   3. Drop any local keys the remote no longer has (handles "reset
-  //      layout" propagating from elsewhere).
-  //   4. For any node still missing (new hot-created / newly-seen
-  //      inbound), fall back to its auto-layout slot, nudged clear of
-  //      neighbours so it doesn't stack on an existing dot.
-  //   5. If step 4 added any slots, push the augmented map back to the
-  //      server so the new node's position is durably remembered.
-  //
-  // Keeping everything in a single effect avoids the "merge state not
-  // yet committed when auto-fill runs" race that made the first fetch
-  // sometimes get clobbered by default auto-layout coords.
   useEffect(() => {
-    if (!layoutQuery.isFetched) return;
-    const remote = layoutQuery.data?.positions || {};
+    let raf = 0;
+    const loop = (now: number) => {
+      if (animRef.current.size > 0) {
+        setOverrides((prev) => {
+          const next: Record<string, Pos> = { ...prev };
+          let changed = false;
+          for (const [key, anim] of animRef.current) {
+            const t = Math.min(1, (now - anim.start) / ANIM_MS);
+            const k = 1 - Math.pow(1 - t, 3);
+            next[key] = {
+              x: anim.from.x + (anim.to.x - anim.from.x) * k,
+              y: anim.from.y + (anim.to.y - anim.from.y) * k,
+            };
+            changed = true;
+            if (t >= 1) animRef.current.delete(key);
+          }
+          if (changed) cachePositions(next);
+          return changed ? next : prev;
+        });
+      }
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  // Unified reconcile step. Runs whenever the topology (auto layout) or
+  // the server-pushed layout changes.
+  //   1. For every key the server has: if it differs from the local
+  //      rendered position AND it isn't a stale echo of our own recent
+  //      write, enqueue an animation from current → remote.
+  //   2. Drop any local keys the server no longer has (handles "reset
+  //      layout" propagating from another session).
+  //   3. For any node still missing (new hot-created / newly-seen
+  //      inbound), fall back to its auto-layout slot and push the
+  //      augmented map back to the server so the new node's position
+  //      is durably remembered across sessions.
+  // The node currently under drag is left alone until pointerup so a
+  // remote update can't snap the cursor mid-gesture.
+  useEffect(() => {
+    if (!remoteLayoutReadyRef.current) return;
+    const remote = remoteLayout || {};
     const cur = overridesRef.current;
-    const next: Record<string, Pos> = {};
-    let changedVsLocal = false;
-    let filledFromAuto = false;
-    // Remote wins for every key it has (except the one being dragged).
+    const nowTs = performance.now();
+    // Expire pending writes older than 3 s.
+    for (const [k, v] of pendingWriteRef.current) {
+      if (nowTs - v.at > 3000) pendingWriteRef.current.delete(k);
+    }
+    const dragKey = activeDragKeyRef.current;
+    // Compute authoritative base: remote values, except drag-locked node
+    // (preserve local) and keys still awaiting our own PUT echo.
+    const base: Record<string, Pos> = {};
     for (const k in remote) {
-      if (k === activeDragKeyRef.current) {
-        if (cur[k]) next[k] = cur[k];
+      if (k === dragKey) {
+        if (cur[k]) base[k] = cur[k];
         continue;
       }
       const r = remote[k];
-      next[k] = { x: r.x, y: r.y };
-      const p = cur[k];
-      if (!p || Math.abs(p.x - r.x) > 0.5 || Math.abs(p.y - r.y) > 0.5) changedVsLocal = true;
+      const pending = pendingWriteRef.current.get(k);
+      if (pending && (Math.abs(pending.x - r.x) > 0.5 || Math.abs(pending.y - r.y) > 0.5)) {
+        // Our PUT hasn't arrived back on the stream yet — keep local so
+        // the dot doesn't rebound to whatever the server had before.
+        if (cur[k]) base[k] = cur[k];
+        continue;
+      }
+      if (pending) pendingWriteRef.current.delete(k);
+      base[k] = { x: r.x, y: r.y };
     }
-    // Preserve local entry for drag-locked node even if remote lacks it.
-    if (activeDragKeyRef.current && cur[activeDragKeyRef.current] && !(activeDragKeyRef.current in next)) {
-      next[activeDragKeyRef.current] = cur[activeDragKeyRef.current];
-    }
-    // Drop local keys that remote no longer has.
-    for (const k in cur) {
-      if (k === activeDragKeyRef.current) continue;
-      if (!(k in remote)) changedVsLocal = true;
-    }
-    // Fall back to auto-layout for nodes neither side knows.
+    if (dragKey && cur[dragKey] && !(dragKey in base)) base[dragKey] = cur[dragKey];
+    // Auto-fill missing nodes.
+    let filledFromAuto = false;
     for (const key in auto) {
-      if (!(key in next)) {
+      if (!(key in base)) {
         const initial = auto[key];
         const existing: Record<string, Pos> = {};
-        for (const k in next) if (k !== key) existing[k] = next[k];
-        next[key] = resolveOverlap(key, initial, existing, nodes);
-        changedVsLocal = true;
+        for (const k in base) if (k !== key) existing[k] = base[k];
+        base[key] = resolveOverlap(key, initial, existing, nodes);
         filledFromAuto = true;
       }
     }
-    if (changedVsLocal) {
-      setOverrides(next);
-      cachePositions(next);
-    }
-    if (filledFromAuto) saveLayoutToServer(next);
-  }, [auto, nodes, layoutQuery.data, layoutQuery.isFetched, saveLayoutToServer]);
+    // Diff against current render positions.
+    setOverrides((prev) => {
+      const next: Record<string, Pos> = { ...prev };
+      let changed = false;
+      for (const k in base) {
+        const target = base[k];
+        const local = prev[k];
+        if (!local) {
+          // Brand-new node — appear directly at target, no animation.
+          next[k] = target;
+          changed = true;
+          continue;
+        }
+        if (Math.abs(local.x - target.x) < 0.5 && Math.abs(local.y - target.y) < 0.5) continue;
+        if (k === dragKey) continue;
+        // Enqueue an animation. Leave the current override in place so
+        // the RAF loop interpolates smoothly; it will update next[k]
+        // over the 300 ms window.
+        animRef.current.set(k, { from: local, to: target, start: nowTs });
+      }
+      // Drop any local keys that remote and auto both no longer have.
+      for (const k in prev) {
+        if (k === dragKey) continue;
+        if (!(k in base)) { delete next[k]; changed = true; animRef.current.delete(k); }
+      }
+      if (changed) cachePositions(next);
+      return changed ? next : prev;
+    });
+    if (filledFromAuto) saveLayoutToServer(base);
+  }, [auto, nodes, remoteLayout, saveLayoutToServer]);
 
   const positions = useMemo(() => {
     // Position comes from overrides if known, otherwise the freshly computed
