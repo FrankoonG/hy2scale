@@ -138,6 +138,8 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("PUT /api/node", s.updateNode)
 	authed.HandleFunc("GET /api/peers", s.getPeers)
 	authed.HandleFunc("GET /api/topology", s.getTopology)
+	authed.HandleFunc("GET /api/graph-layout", s.getGraphLayout)
+	authed.HandleFunc("PUT /api/graph-layout", s.setGraphLayout)
 	authed.HandleFunc("GET /api/peers/{name}/peers", s.getNestedPeers)
 	authed.HandleFunc("PUT /api/peers/{name}/nested", s.setNested)
 	authed.HandleFunc("PUT /api/peers/{name}/disable", s.setPeerDisabled)
@@ -669,6 +671,37 @@ func (s *Server) internalPeers(w http.ResponseWriter, r *http.Request) {
 }
 
 // getTopology returns a tree structure: direct peers with their nested sub-peers.
+// getGraphLayout returns the persisted topology-graph coordinates. Shape:
+// { "positions": { "<nodeKey>": { "x": number, "y": number } } }. An empty
+// map means "auto-layout" on the client side.
+func (s *Server) getGraphLayout(w http.ResponseWriter, r *http.Request) {
+	cfg := s.app.Store().Get()
+	pos := cfg.GraphLayout
+	if pos == nil {
+		pos = map[string]app.GraphLayoutPos{}
+	}
+	writeJSON(w, map[string]interface{}{"positions": pos})
+}
+
+// setGraphLayout persists a full snapshot of the graph layout. Callers
+// always send the complete map — partial updates would race with other
+// concurrent sessions (last-writer-wins is easier to reason about and
+// matches how the UI treats its local state today).
+func (s *Server) setGraphLayout(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Positions map[string]app.GraphLayoutPos `json:"positions"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if err := s.app.SetGraphLayout(body.Positions); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
 func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	peers := s.app.Node().Peers()
 	cfg := s.app.Store().Get()
