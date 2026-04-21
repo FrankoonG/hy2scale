@@ -540,12 +540,14 @@ export default function NodesPage() {
               const chain = selfId && qpath.startsWith(selfId + '/') ? qpath.slice(selfId.length + 1) : qpath;
               window.open(`${basePath}/remote/${chain}/scale/`, '_blank', 'noopener');
             }}
-            onEditNode={(key) => {
+            onEditNode={(key, clickPos) => {
               // Graph emits '__self__' for the local node, bare peer name
-              // otherwise — same convention the TreeTable row uses.
-              const fakeEv = { clientX: window.innerWidth / 2, clientY: window.innerHeight / 2 } as MouseEvent;
-              if (key === '__self__') openEditSelf(fakeEv);
-              else openEdit(key, fakeEv);
+              // otherwise — same convention the TreeTable row uses. Coords
+              // come from the overlay's edit button so the modal animation
+              // anchors at the button, not at screen center.
+              const ev = { clientX: clickPos.x, clientY: clickPos.y } as MouseEvent;
+              if (key === '__self__') openEditSelf(ev);
+              else openEdit(key, ev);
             }}
           />
         ) : (
