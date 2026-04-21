@@ -391,14 +391,20 @@ a.peer-link:hover{text-decoration:underline}
 .hy-topo-dot.selected .hy-topo-dot-single{color:#4361ee;stroke:currentColor;stroke-width:3;stroke-opacity:1}
 .hy-topo-edge-base{transition:stroke .28s ease-out, stroke-opacity .28s ease-out, stroke-width .28s ease-out}
 .hy-topo-edge-flow{transition:stroke .28s ease-out, stroke-opacity .28s ease-out, stroke-width .28s ease-out}
-.hy-topo-edge.on-path .hy-topo-edge-base{color:#4361ee;stroke:currentColor;stroke-opacity:.85;stroke-width:5}
-.hy-topo-edge.on-path .hy-topo-edge-flow{color:#4361ee;stroke:currentColor;stroke-opacity:1;stroke-width:2.5}
+/* On-path highlight is carried entirely by the .hy-topo-edge-draw
+   overlay, whose animation sweeps a blue stroke from self to target
+   at constant speed across the whole path. Base and flow are left
+   at default styling so the overlay IS the wave — if we also tinted
+   the base here, every edge would flash blue at once and defeat the
+   continuous-sweep illusion. After the wave completes, the overlay
+   sits at full 5 px blue over the base, giving the final uniformly
+   highlighted look. */
 /* Path draw overlay — one-shot stroke that "paints in" from the self-side
    endpoint. Coords for this line are flipped at render time so (x1,y1) is
    always the nearer-self end; the dashoffset starts at full length and
    animates to 0, revealing the blue stroke outward toward the target.
    Rendered on top of the base so it reads as the dominant highlight. */
-.hy-topo-edge-draw{color:#4361ee;stroke:currentColor;stroke-width:5;stroke-linecap:round;fill:none;pointer-events:none;stroke-dasharray:var(--hy-path-len);stroke-dashoffset:var(--hy-path-len);animation:hy-topo-path-draw var(--hy-path-draw-ms, 320ms) ease-out forwards}
+.hy-topo-edge-draw{color:#4361ee;stroke:currentColor;stroke-width:5;stroke-linecap:round;fill:none;pointer-events:none;stroke-dasharray:var(--hy-path-len);stroke-dashoffset:var(--hy-path-len);animation:hy-topo-path-draw var(--hy-path-draw-ms, 320ms) linear var(--hy-path-draw-delay, 0ms) forwards}
 @keyframes hy-topo-path-draw{to{stroke-dashoffset:0}}
 
 /* Offline / disabled edges — red, dashed, no flow, × marker. */
