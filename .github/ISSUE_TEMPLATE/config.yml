@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or general discussion
+    url: https://github.com/FrankoonG/hy2scale/discussions
+    about: Not sure if it's a bug? Asking how to configure something? Please start a Discussion instead — the issue tracker is reserved for confirmed bugs, feature requests, and protocol problems.
+  - name: Documentation (Wiki)
+    url: https://github.com/FrankoonG/hy2scale/wiki
+    about: Installation, configuration, API reference, iKuai v4 guide, router-system compatibility notes.
+  - name: Docker Hub
+    url: https://hub.docker.com/r/frankoong/hy2scale
+    about: Image tags, pull commands, platform support.

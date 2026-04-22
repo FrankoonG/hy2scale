@@ -1,0 +1,168 @@
+name: Bug report
+description: Report a confirmed defect (not a question — use Discussions for those).
+title: "[bug] "
+labels:
+  - "🐛 bug"
+  - "🔍 needs investigation"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug.
+
+        Before submitting, please:
+        - search the existing [issues](https://github.com/FrankoonG/hy2scale/issues?q=is%3Aissue) and closed ones to make sure it is not already reported.
+        - skim the [Wiki](https://github.com/FrankoonG/hy2scale/wiki) for the protocol you are using.
+        - if you are unsure whether this is a bug, please open a [Discussion](https://github.com/FrankoonG/hy2scale/discussions) first.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I have searched the existing issues (open and closed) and this is not a duplicate.
+          required: true
+        - label: I am running the latest release from [Docker Hub](https://hub.docker.com/r/frankoong/hy2scale) or a recent build from `main` (please state the version below).
+          required: true
+        - label: This is a bug report, not a question — questions belong in [Discussions](https://github.com/FrankoonG/hy2scale/discussions).
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: HY2 SCALE version
+      description: |
+        Shown under the logo in the sidebar (e.g. `v1.3.0`) or in **Settings → Upgrade → Current Version**.
+        You can also run `docker exec <container> hy2scale --version`.
+      placeholder: "e.g. v1.3.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: runtime_mode
+    attributes:
+      label: Runtime mode
+      description: |
+        The badge next to the version in the sidebar. Auto-detected at startup — reflects network / capability state.
+      options:
+        - Normal (host network, iptables OK)
+        - Bridge (bridge network, iptables OK)
+        - Compat (NET_ADMIN but iptables unavailable — iKuai / stripped kernels)
+        - Limited (no NET_ADMIN)
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment method
+      options:
+        - Docker — host network (`--network host`)
+        - Docker — bridge network + port mapping
+        - iKuai v4 ipkg
+        - Bare binary from Releases
+        - Built from source
+        - Other (describe below)
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Host platform
+      description: OS / kernel / arch. For iKuai, include the iKuai version (e.g. `v4.0.5`).
+      placeholder: "e.g. Debian 12, Linux 6.1.0, amd64"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Component
+      multiple: true
+      options:
+        - Mesh / node discovery
+        - Nested discovery
+        - Graph topology view
+        - Hysteria 2 server / relay
+        - SOCKS5
+        - HTTP proxy
+        - Shadowsocks
+        - L2TP/IPsec
+        - IKEv2/IPsec
+        - WireGuard
+        - Routing rules (IP / domain)
+        - TLS / certificates
+        - Users / sessions
+        - Settings / upgrade / backup
+        - Web UI (frontend)
+        - API
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What went wrong
+      description: A clear description of the bug. One or two sentences is fine.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal, ordered steps we can follow on a clean install.
+      placeholder: |
+        1. `docker run ... frankoong/hy2scale:latest`
+        2. Open /scale/ in the browser.
+        3. Add a peer …
+        4. Observe …
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour (include error messages)
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Container / server logs
+      description: |
+        Please attach logs captured with `DEBUG=true` — it exposes iptables probes, capability checks, TUN / xfrm packet flow, and strongSwan verbose output.
+
+        ```bash
+        # Recreate with DEBUG and capture ~60 s of logs while reproducing
+        docker run -d --name hy2scale -e DEBUG=true [other flags] frankoong/hy2scale:latest
+        docker logs --since 60s hy2scale > hy2scale.log 2>&1
+        ```
+
+        Paste the relevant section below (or attach as a file). **Redact passwords, TLS keys, and anything sensitive** before posting.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots (optional)
+      description: Drag-and-drop into this field. Especially useful for UI / graph-view issues.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context (optional)
+      description: Mesh shape, peer list, any custom docker-compose, recent config changes — anything else relevant.
