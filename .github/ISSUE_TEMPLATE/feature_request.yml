@@ -1,0 +1,77 @@
+name: Feature request
+description: Suggest a new capability or an enhancement to an existing one.
+title: "[feature] "
+labels:
+  - "✨ feature"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Please make sure:
+        - it is not already requested (search [issues](https://github.com/FrankoonG/hy2scale/issues?q=is%3Aissue)),
+        - and it is not a question or a "how do I do X" — those belong in [Discussions](https://github.com/FrankoonG/hy2scale/discussions).
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I searched the existing issues (open and closed) and this is not a duplicate.
+          required: true
+        - label: This is a feature request, not a question.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do that is currently hard or impossible?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How would you like HY2 SCALE to behave? UI mock-ups / API shape welcome.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Component
+      multiple: true
+      options:
+        - Mesh / node discovery
+        - Nested discovery
+        - Graph topology view
+        - Hysteria 2 server / relay
+        - SOCKS5
+        - HTTP proxy
+        - Shadowsocks
+        - L2TP/IPsec
+        - IKEv2/IPsec
+        - WireGuard
+        - Routing rules (IP / domain)
+        - TLS / certificates
+        - Users / sessions
+        - Settings / upgrade / backup
+        - Web UI (frontend)
+        - API
+        - iKuai v4 integration
+        - Router systems (OpenWrt, etc.)
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried, related tools, or other approaches.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context (optional)

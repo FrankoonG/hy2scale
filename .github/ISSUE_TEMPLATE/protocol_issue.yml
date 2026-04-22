@@ -1,0 +1,156 @@
+name: Protocol issue (L2TP / IKEv2 / WireGuard / Hysteria 2)
+description: Problems with a specific VPN / proxy protocol — connection refused, handshake failures, wrong IP pool, auth errors, etc.
+title: "[protocol] "
+labels:
+  - "🐛 bug"
+  - "🔑 vpn"
+  - "🔍 needs investigation"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Protocol issues need more context than a generic bug report (runtime mode, client OS, tcpdump / strongSwan output, etc.). Filling everything in below makes debugging much faster.
+
+        If you are unsure whether it is a bug or a config mistake, please open a [Discussion](https://github.com/FrankoonG/hy2scale/discussions) first.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I have read the [Proxies wiki](https://github.com/FrankoonG/hy2scale/wiki/Proxies) for this protocol.
+          required: true
+        - label: I have confirmed the same issue is not already reported.
+          required: true
+
+  - type: dropdown
+    id: protocol
+    attributes:
+      label: Protocol
+      options:
+        - Hysteria 2
+        - SOCKS5
+        - HTTP
+        - Shadowsocks
+        - L2TP/IPsec
+        - IKEv2/IPsec
+        - WireGuard
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: HY2 SCALE version
+      placeholder: "e.g. v1.3.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: runtime_mode
+    attributes:
+      label: Runtime mode
+      description: Shown in the sidebar next to the version.
+      options:
+        - Normal
+        - Bridge
+        - Compat
+        - Limited
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Docker host-network
+        - Docker bridge + port mapping
+        - iKuai v4 ipkg
+        - Other (describe below)
+    validations:
+      required: true
+
+  - type: input
+    id: client
+    attributes:
+      label: Client OS / app
+      description: Which device is trying to connect? Include OS version.
+      placeholder: "e.g. iOS 17 native IKEv2, or WireGuard Android 1.0.20231208, or Hysteria 2 app v2.6"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: auth_mode
+    attributes:
+      label: Auth mode (IKEv2 / L2TP only)
+      description: Skip this if the protocol does not have an auth-mode switch.
+      options:
+        - "N/A"
+        - IKEv2 — EAP-MSCHAPv2 (with CA signing)
+        - IKEv2 — PSK
+        - IKEv2 — PSK + user mode
+        - L2TP — MSCHAPv2
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Symptom
+      description: What happens (or does not happen) when the client tries to connect?
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config
+      description: |
+        Paste the relevant portion of `/data/config.yaml` (Proxies tab → this protocol's section), with secrets redacted. For WireGuard, include the server block and the offending peer (private keys can be replaced with `...redacted...`).
+      render: yaml
+    validations:
+      required: true
+
+  - type: textarea
+    id: server_logs
+    attributes:
+      label: Server logs (DEBUG=true)
+      description: |
+        Please start the container with `DEBUG=true` and capture logs covering the connection attempt:
+
+        ```bash
+        docker run -d --name hy2scale -e DEBUG=true [other flags] frankoong/hy2scale:latest
+        docker logs --since 120s hy2scale > hy2scale.log 2>&1
+        ```
+
+        For strongSwan-backed protocols (L2TP / IKEv2) the verbose strongSwan output is essential — it reports IKE_SA failures, selector mismatches, cert errors, etc.
+
+        **Redact passwords, PSKs, and TLS private keys before posting.**
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: client_logs
+    attributes:
+      label: Client-side evidence (optional but helpful)
+      description: |
+        Error banners, system log excerpts, or `wg show` / `ipsec status` output on the client.
+
+  - type: textarea
+    id: wireshark
+    attributes:
+      label: Packet capture (optional)
+      description: |
+        For handshake issues, a short pcap of the attempt is very helpful:
+
+        ```bash
+        # on the host running hy2scale
+        tcpdump -i any -n -s 0 -w hy2.pcap 'port 500 or port 4500 or port 1701 or port 51820 or port 5565'
+        ```
+
+        Attach the `.pcap` by drag-and-drop. Redact any sensitive payload first.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context (optional)
