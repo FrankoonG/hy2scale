@@ -69,12 +69,32 @@ type RebindOpts struct {
 }
 
 // defaultTriggers returns the trigger set installed on every bridgedConn
-// created in 1.3.1. Today: bidirectional idle only. Future versions may
-// add path-quality triggers without changing the call site.
+// created in 1.3.1.
+//
+// Empty by default. The earlier "no Read while Writing for 8 s" rule
+// (and its bidirectional successor) cannot distinguish "stream is
+// stuck" from "upstream is rate-limited and the chain has nothing to
+// flush right now" — both look like silence on the wire. Once the
+// trigger fires it tears down the stream, breaking otherwise-healthy
+// long slow transfers.
+//
+// Liveness for v1.3.1 is enforced by three other layers, all of which
+// stay in place:
+//
+//   1. QUIC's own connection-level idle timeout (30 s) drops a
+//      truly dead transport.
+//   2. idleTimeoutConn (10 min) catches application-level dead
+//      streams when QUIC misses them.
+//   3. The traffic-aware health-check disconnect (this commit's
+//      sibling change) tears down a peer whose probes fail AND whose
+//      byte counters haven't moved.
+//
+// The RebindTrigger interface remains as the integration point for
+// future, smarter triggers (path-quality migration, BBR-aware
+// stalling, etc.), so opting into one is one constructor argument
+// away — but the bug-prone universal default goes.
 func defaultTriggers() []RebindTrigger {
-	return []RebindTrigger{
-		BidirectionalIdleTrigger{Timeout: bridgeCongestionTO},
-	}
+	return nil
 }
 
 // bridgeState represents the lifecycle of a stream bridge.
