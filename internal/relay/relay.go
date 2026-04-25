@@ -186,9 +186,15 @@ type peer struct {
 	waiting   map[string]chan net.Conn
 	txBytes   atomic.Uint64
 	rxBytes   atomic.Uint64
-	failCount atomic.Int32 // consecutive ping failures
-	ctx       context.Context    // canceled when peer disconnects
-	cancel    context.CancelFunc
+	failCount atomic.Int32 // consecutive ping failures (reset on success or active traffic)
+	// Snapshot of tx/rx at last completed probe; used to spot peers whose
+	// probe stream is starved by their data stream (saturated bottleneck
+	// link) so we don't disconnect a link that is, by every other metric,
+	// healthy and actively transferring.
+	lastProbeTx atomic.Uint64
+	lastProbeRx atomic.Uint64
+	ctx         context.Context // canceled when peer disconnects
+	cancel      context.CancelFunc
 
 	// Multi-IP: additional outbound QUIC connections
 	extraConns   []hyclient.Client // extra clients (index 0 = second IP, etc.)
@@ -542,15 +548,35 @@ func (n *Node) StartLatencyProber(ctx context.Context) {
 							}
 						} else {
 							n.SetLatency(name, -1)
-							fails := p.failCount.Add(1)
-							if fails >= 3 && p.cancel != nil {
-								log.Printf("[relay] %s: %d consecutive ping failures, disconnecting for reconnect", name, fails)
-								p.cancel()
+							// If the peer pushed/pulled bytes since the last probe,
+							// the link is alive — the ping just got queued behind
+							// data on a saturated QUIC connection (e.g. long upload
+							// through a rate-limited downstream hop). Treat as
+							// "probe starved by congestion", reset failCount, do
+							// not disconnect. Active byte counters are a stronger
+							// liveness signal than a stuck control stream.
+							curTx := p.txBytes.Load()
+							curRx := p.rxBytes.Load()
+							prevTx := p.lastProbeTx.Load()
+							prevRx := p.lastProbeRx.Load()
+							if curTx > prevTx || curRx > prevRx {
+								p.failCount.Store(0)
+								log.Printf("[relay] %s: ping failed but link active (Δtx=%d Δrx=%d) — congestion, not disconnect",
+									name, curTx-prevTx, curRx-prevRx)
+							} else {
+								fails := p.failCount.Add(1)
+								if fails >= 3 && p.cancel != nil {
+									log.Printf("[relay] %s: %d consecutive ping failures (no traffic), disconnecting for reconnect", name, fails)
+									p.cancel()
+								}
 							}
 							if len(p.connAddrs) > 0 {
 								n.setAddrLatency(name, p.connAddrs[0], -1)
 							}
 						}
+						// Snapshot tx/rx for next probe's congestion-vs-dead disambiguation.
+						p.lastProbeTx.Store(p.txBytes.Load())
+						p.lastProbeRx.Store(p.rxBytes.Load())
 						// Probe extra connections for per-addr latency
 						n.probeExtraConns(name, p)
 					}
@@ -2201,6 +2227,7 @@ func (n *Node) DialViaBridged(ctx context.Context, path []string, addr string) (
 		node:     n,
 		peerName: firstPeer,
 		stream:   n.wrapConnPath(firstPeer, strings.Join(path, "/"), stream),
+		triggers: defaultTriggers(),
 	}
 	// Store the via address template for rebind
 	bc.viaPath = path
