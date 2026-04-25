@@ -1012,10 +1012,18 @@ func (a *App) startServer(ctx context.Context, sc *ServerConfig) error {
 			Certificates: []tls.Certificate{cert},
 		},
 		QUICConfig: hyserver.QUICConfig{
-			InitialStreamReceiveWindow:     67108864,
-			MaxStreamReceiveWindow:         67108864,
-			InitialConnectionReceiveWindow: 134217728,
-			MaxConnectionReceiveWindow:     134217728,
+			// 8 MB stream / 16 MB connection. Smaller than upstream hy2's
+			// 64 MB / 128 MB on purpose: in a multi-hop relay chain, each
+			// hop holds an independent receive window, so 64 MB × 3 hops
+			// pre-acknowledges 192 MB of data before the slowest link
+			// shows back-pressure to the client. 8 MB / hop keeps a
+			// 3-hop chain to ~24 MB of pre-ACK buffer — small enough
+			// that legitimate slow uploads stay aligned with real wire
+			// speed rather than fake-completing in <1s.
+			InitialStreamReceiveWindow:     8388608,
+			MaxStreamReceiveWindow:         8388608,
+			InitialConnectionReceiveWindow: 16777216,
+			MaxConnectionReceiveWindow:     16777216,
 			MaxIncomingStreams:              4096,
 		},
 		Authenticator: &hy2Auth{app: a, sysPassword: sc.Password},
@@ -1128,10 +1136,15 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 			Auth:       cl.Password,
 			TLSConfig:  tlsCfg,
 			QUICConfig: hyclient.QUICConfig{
-				InitialStreamReceiveWindow:     67108864,
-				MaxStreamReceiveWindow:         67108864,
-				InitialConnectionReceiveWindow: 134217728,
-				MaxConnectionReceiveWindow:     134217728,
+				// See server-side comment at NewServer for why these are 8/16 MB
+				// rather than 64/128 MB. The client side must match: a small
+				// receive window on the server is only useful if the *peer's*
+				// (i.e. our outbound) receive window is also small, otherwise
+				// the chain still over-buffers in the other direction.
+				InitialStreamReceiveWindow:     8388608,
+				MaxStreamReceiveWindow:         8388608,
+				InitialConnectionReceiveWindow: 16777216,
+				MaxConnectionReceiveWindow:     16777216,
 				DisablePathMTUDiscovery:        TunCaptureActive(), // only in compat mode where Docker bridge may drop large UDP
 			},
 			CongestionConfig: hyclient.CongestionConfig{
@@ -1270,11 +1283,15 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 		maxRx = uint64(cl.MaxRx)
 	}
 
-	// QUIC windows
-	isw := uint64(67108864)  // 64MB
-	msw := uint64(67108864)
-	icw := uint64(134217728) // 128MB
-	mcw := uint64(134217728)
+	// QUIC windows. Defaults match the server-side hy2 listener
+	// (8 MB stream / 16 MB connection) — see the comment on
+	// hyserver.QUICConfig above. Per-peer overrides via cl.InitStreamWindow
+	// etc. let an operator restore the old 64 MB behaviour for a
+	// specific high-BDP link if needed.
+	isw := uint64(8388608)  // 8MB
+	msw := uint64(8388608)
+	icw := uint64(16777216) // 16MB
+	mcw := uint64(16777216)
 	if cl.InitStreamWindow > 0 {
 		isw = uint64(cl.InitStreamWindow)
 	}
