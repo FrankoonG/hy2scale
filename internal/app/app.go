@@ -1562,15 +1562,16 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 		// FIN downstream so the exit/target sees a clean end-of-request.
 		// Do NOT cancel the response direction — server reply may still
 		// be draining back, and aborting it would lose buffered bytes.
-		halfCloseWriteOrClose(remote)
+		halfCloseAndBound(remote)
 		done <- struct{}{}
 	}()
 	// Download: remote → client.
 	n2, _ := copyCtx(ctx, conn, remote)
 	atomic.AddInt64(&down, n2)
 	// Download ended (server FIN or client write failed). Forward FIN to
-	// client.
-	halfCloseWriteOrClose(conn)
+	// client AND bound the goroutine's remaining read on conn so a hung
+	// client doesn't leak this session.
+	halfCloseAndBound(conn)
 	<-done
 	cancel()
 	a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))
@@ -1596,6 +1597,40 @@ func halfCloseWriteOrClose(c net.Conn) {
 		return
 	}
 	_ = c.Close()
+}
+
+// halfCloseGracePeriod bounds how long the surviving copy direction is
+// allowed to stay alive after the OTHER direction has ended. Set per the
+// proxy-half-close audit: long enough for normal HTTP request/response
+// and bond drain-then-half-close to complete (both well under 10 s in
+// observed traffic), short enough to prevent a malicious or hung peer
+// from leaking goroutines + relay streams (which historically caused
+// host-memory exhaustion before the legacy cancel-on-FIN was added).
+const halfCloseGracePeriod = 30 * time.Second
+
+// halfCloseAndBound performs a graceful end-of-stream + bounded-drain
+// handoff on `c`. Two effects, both essential:
+//
+//  1. CloseWrite (or full Close fallback) so the peer reads a clean FIN.
+//     This is the data-integrity half: in-flight buffered bytes that have
+//     already been written into c's send queue are NOT aborted, unlike
+//     the legacy `cancel()`-on-first-direction-end pattern.
+//
+//  2. SetReadDeadline(now + halfCloseGracePeriod). The OTHER copy goroutine
+//     (in this handler's bidirectional copy pair) is reading from `c`; if
+//     its peer never reciprocates the FIN, that Read would block forever.
+//     The deadline forces the Read to error within `halfCloseGracePeriod`
+//     so the handler returns and the stream / goroutine are reclaimed.
+//
+// This combined shape replaces both the destructive `cancel()` (which
+// preserved liveness but lost in-flight data) and the naive bare
+// CloseWrite (which preserved data but leaked sessions).
+func halfCloseAndBound(c net.Conn) {
+	if c == nil {
+		return
+	}
+	halfCloseWriteOrClose(c)
+	_ = c.SetReadDeadline(time.Now().Add(halfCloseGracePeriod))
 }
 
 // handleHTTP implements an HTTP CONNECT proxy (RFC 7231 §4.3.6).
@@ -1756,13 +1791,13 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 		n, _ := copyCtx(ctx, remote, conn)
 		atomic.AddInt64(&up, n)
 		// See handleSOCKS5 for the rationale on half-close vs cancel.
-		halfCloseWriteOrClose(remote)
+		halfCloseAndBound(remote)
 		done <- struct{}{}
 	}()
 	// Download: remote → client.
 	n, _ := copyCtx(ctx, conn, remote)
 	atomic.AddInt64(&down, n)
-	halfCloseWriteOrClose(conn)
+	halfCloseAndBound(conn)
 	<-done
 	cancel()
 	a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))

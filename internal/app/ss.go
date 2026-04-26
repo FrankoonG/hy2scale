@@ -304,13 +304,13 @@ func (a *App) handleSSNone(conn net.Conn) {
 		// any final response and close. Without this the function
 		// would hang on the download direction's io.Copy when the
 		// client hangs up but the server has nothing more to send.
-		halfCloseWriteOrClose(remote)
+		halfCloseAndBound(remote)
 		done <- struct{}{}
 	}()
 	// Download: remote → client.
 	n2, _ := io.Copy(conn, remote)
 	atomic.AddInt64(&down, n2)
-	halfCloseWriteOrClose(conn)
+	halfCloseAndBound(conn)
 	<-done
 	if username != "" {
 		a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))

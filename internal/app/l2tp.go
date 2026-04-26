@@ -662,11 +662,11 @@ func (a *App) handleTransparent(conn net.Conn) {
 		done := make(chan struct{})
 		go func() {
 			io.Copy(remote, conn)
-			halfCloseWriteOrClose(remote)
+			halfCloseAndBound(remote)
 			close(done)
 		}()
 		io.Copy(conn, remote)
-		halfCloseWriteOrClose(conn)
+		halfCloseAndBound(conn)
 		<-done
 		return
 	}
@@ -717,13 +717,13 @@ func (a *App) handleTransparent(conn net.Conn) {
 		// Upload: client → remote.
 		n, _ := copyCtx(ctx, remote, conn)
 		atomic.AddInt64(&up, n)
-		halfCloseWriteOrClose(remote)
+		halfCloseAndBound(remote)
 		done <- struct{}{}
 	}()
 	// Download: remote → client.
 	n, _ := copyCtx(ctx, conn, remote)
 	atomic.AddInt64(&down, n)
-	halfCloseWriteOrClose(conn)
+	halfCloseAndBound(conn)
 	<-done
 	cancel()
 	a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))

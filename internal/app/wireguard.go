@@ -337,12 +337,12 @@ func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 			go func() {
 				// Upload: wgConn → remote.
 				io.Copy(remote, wgConn)
-				halfCloseWriteOrClose(remote)
+				halfCloseAndBound(remote)
 				done <- struct{}{}
 			}()
 			// Download: remote → wgConn.
 			io.Copy(wgConn, remote)
-			halfCloseWriteOrClose(wgConn)
+			halfCloseAndBound(wgConn)
 			<-done
 		}()
 	})
