@@ -662,6 +662,7 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
 	oldName := s.app.Node().Name()
 	s.app.Node().SetName(cfg.Name)
+	s.app.Node().SetNodeID(cfg.NodeID)
 	s.app.Node().SetExit(cfg.ExitNode)
 
 	needReconnect := false
@@ -873,6 +874,16 @@ func (s *Server) streamGraphLayout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	peers := s.app.Node().Peers()
+	// Alt-slot peers carry the OTHER direction in a mutually-dialed
+	// (bidirectional) deployment — see relay.Node.peersAlt for the slot
+	// contract. We merge them into the same maps below so both directions
+	// surface in the topology JSON: top-level for outbound side, inbound
+	// child of self for inbound side. The frontend then renders parallel
+	// rails for the mutual link (NodesGraphView's `hasOpposite` branch).
+	peersAlt := s.app.Node().PeersAlt()
+	allPeers := make([]relay.PeerInfo, 0, len(peers)+len(peersAlt))
+	allPeers = append(allPeers, peers...)
+	allPeers = append(allPeers, peersAlt...)
 	cfg := s.app.Store().Get()
 
 	// Build client lookup for addr info
@@ -886,7 +897,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	incompatMap := make(map[string]bool)
 	conflictMap := make(map[string]bool)
 	unsupportedMap := make(map[string]bool)
-	for _, p := range peers {
+	for _, p := range allPeers {
 		connected[p.Name] = true
 		if p.Native {
 			nativeMap[p.Name] = true
@@ -955,7 +966,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nameSet := make(map[string]bool)
-	for _, p := range peers {
+	for _, p := range allPeers {
 		nameSet[p.Name] = true
 	}
 	for _, cl := range cfg.Clients {
@@ -981,7 +992,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	}
 	selfChildren := make([]topoSubPeer, 0)
 	inboundNames := make(map[string]bool)
-	for _, p := range peers {
+	for _, p := range allPeers {
 		if p.Direction == "inbound" {
 			inboundNames[p.Name] = true
 			child := topoSubPeer{
@@ -1086,20 +1097,25 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			}
 			tn.Direction = "outbound"
 		}
-		for _, p := range peers {
+		// Pull the OUTBOUND-direction peer info for this name, since this
+		// is the top-level outbound entry. In the bidirectional case the
+		// outbound side may live in either primary or alt — search both.
+		// If only an inbound entry is available, use it as the source of
+		// metadata (ExitNode, TunCapable, etc.) but keep direction logic
+		// gated by configuredOutbound below.
+		for _, p := range allPeers {
 			if p.Name == name {
 				tn.ExitNode = p.ExitNode
-				// Don't let a transient inbound registration overwrite
-				// the configured outbound direction — for the
-				// bidirectional case we want THIS top-level entry to
-				// stay direction='outbound' so the frontend's addEdge
-				// produces an opposite edge to the inbound child entry
-				// (which is direction='inbound' in selfChildren).
 				if !configuredOutbound {
 					tn.Direction = p.Direction
 				}
 				tn.TunCapable = p.TunCapable
-				break
+				if p.Direction == "outbound" {
+					// Found the matching outbound entry — prefer this and
+					// stop. (Continuing would overwrite with inbound
+					// metadata in mutual-dial topologies.)
+					break
+				}
 			}
 		}
 		tn.Native = nativeMap[name]
