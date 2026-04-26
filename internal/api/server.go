@@ -1042,8 +1042,17 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	})
 
 	for _, name := range names {
-		// Skip inbound peers — they're nested under self
-		if inboundNames[name] {
+		_, configuredOutbound := clientMap[name]
+		// Skip inbound peers from the top-level list — they're nested
+		// under self and shouldn't render twice — UNLESS this peer is
+		// ALSO in our cfg.Clients (we configured it as outbound). In
+		// that case the relationship is genuinely bidirectional: we
+		// dial them AND they dial us. Emit both: this top-level entry
+		// (outbound, from our config) plus the inbound child under
+		// self (kept in selfChildren above). The frontend's addEdge
+		// will produce two opposite-direction edges and the graph
+		// renders them as parallel rails.
+		if inboundNames[name] && !configuredOutbound {
 			continue
 		}
 		tn := treeNode{Name: name, Connected: connected[name] && !disabledMap[name], Disabled: disabledMap[name]}
@@ -1080,7 +1089,15 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		for _, p := range peers {
 			if p.Name == name {
 				tn.ExitNode = p.ExitNode
-				tn.Direction = p.Direction
+				// Don't let a transient inbound registration overwrite
+				// the configured outbound direction — for the
+				// bidirectional case we want THIS top-level entry to
+				// stay direction='outbound' so the frontend's addEdge
+				// produces an opposite edge to the inbound child entry
+				// (which is direction='inbound' in selfChildren).
+				if !configuredOutbound {
+					tn.Direction = p.Direction
+				}
 				tn.TunCapable = p.TunCapable
 				break
 			}
