@@ -66,8 +66,6 @@
   "nodes.noHy2Server": "hy2 서버 없음",
   "nodes.syncing": "동기화 중",
   "nodes.offline": "오프라인",
-  "nodes.incompatible": "호환 불가",
-  "nodes.conflict": "충돌",
   "nodes.initStreamWindow": "초기 스트림 윈도우",
   "nodes.maxStreamWindow": "최대 스트림 윈도우",
   "nodes.initConnWindow": "초기 연결 윈도우",

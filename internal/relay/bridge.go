@@ -13,9 +13,89 @@ import (
 
 const (
 	bridgeTimeout      = 90 * time.Second // max wait for rebind before giving up (must exceed QUIC idle timeout)
-	bridgeCongestionTO = 8 * time.Second // if no Read response for this long while Writing, stream is congested → proactive rebind
+	bridgeCongestionTO = 8 * time.Second  // bidirectional silence threshold: stream considered stuck → proactive rebind
 	bridgeRebindAddr   = "_relay_rebind_"
 )
+
+// ConnState captures the metrics a RebindTrigger evaluates.
+// Values are unix nanoseconds; zero means "no activity yet".
+type ConnState struct {
+	LastRead  int64
+	LastWrite int64
+	ViaPath   []string // current via path; len==0 means direct (single-hop bridge)
+}
+
+// RebindTrigger decides whether a bridged stream should be torn down and
+// rebound. Triggers run on the writer hot path; ShouldRebind must be O(1).
+// Implementations may consider any field of ConnState; new fields will be
+// added without breaking compatibility.
+type RebindTrigger interface {
+	ShouldRebind(s ConnState) (yes bool, reason string)
+}
+
+// BidirectionalIdleTrigger fires when *both* directions have been silent
+// for Timeout. Replaces the old "no Read while Writing" rule, which
+// wrongly fired during legitimate one-way uploads (e.g. HTTP POST while
+// the server hadn't responded yet) and slow downloads. Bidirectional
+// silence remains a strong signal of a truly stuck stream — the same
+// signal the cn-xinchang storm fixes were aimed at.
+type BidirectionalIdleTrigger struct {
+	Timeout time.Duration
+}
+
+// ShouldRebind implements RebindTrigger.
+func (t BidirectionalIdleTrigger) ShouldRebind(s ConnState) (bool, string) {
+	last := s.LastRead
+	if s.LastWrite > last {
+		last = s.LastWrite
+	}
+	if last == 0 {
+		// Stream just opened; no activity to compare against. Treat as healthy.
+		return false, ""
+	}
+	stall := time.Since(time.Unix(0, last))
+	if stall > t.Timeout {
+		return true, fmt.Sprintf("idle both ways for %v", stall.Round(time.Second))
+	}
+	return false, ""
+}
+
+// RebindOpts allows callers to override defaults when explicitly invoking
+// rebind. Currently only the via path can be overridden — left as the sole
+// member so the type is the obvious extension point for future cross-path
+// migration work.
+type RebindOpts struct {
+	ViaPath []string // if non-nil, replace bridgedConn.viaPath for this rebind
+}
+
+// defaultTriggers returns the trigger set installed on every bridgedConn
+// created in 1.3.1.
+//
+// Empty by default. The earlier "no Read while Writing for 8 s" rule
+// (and its bidirectional successor) cannot distinguish "stream is
+// stuck" from "upstream is rate-limited and the chain has nothing to
+// flush right now" — both look like silence on the wire. Once the
+// trigger fires it tears down the stream, breaking otherwise-healthy
+// long slow transfers.
+//
+// Liveness for v1.3.1 is enforced by three other layers, all of which
+// stay in place:
+//
+//   1. QUIC's own connection-level idle timeout (30 s) drops a
+//      truly dead transport.
+//   2. idleTimeoutConn (10 min) catches application-level dead
+//      streams when QUIC misses them.
+//   3. The traffic-aware health-check disconnect (this commit's
+//      sibling change) tears down a peer whose probes fail AND whose
+//      byte counters haven't moved.
+//
+// The RebindTrigger interface remains as the integration point for
+// future, smarter triggers (path-quality migration, BBR-aware
+// stalling, etc.), so opting into one is one constructor argument
+// away — but the bug-prone universal default goes.
+func defaultTriggers() []RebindTrigger {
+	return nil
+}
 
 // bridgeState represents the lifecycle of a stream bridge.
 type bridgeState int32

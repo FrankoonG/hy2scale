@@ -16,7 +16,14 @@ import SettingsPage from '@/pages/SettingsPage';
 function AuthenticatedRoutes() {
   const setNode = useNodeStore((s) => s.setNode);
   const setTopology = useNodeStore((s) => s.setTopology);
+  const node = useNodeStore((s) => s.node);
   const navigate = useNavigate();
+
+  // Browser tab title — `<self node_id> - HY2 SCALE` once we know who we
+  // are; static "HY2 SCALE" until the API call returns.
+  useEffect(() => {
+    document.title = node?.node_id ? `${node.node_id} - HY2 SCALE` : 'HY2 SCALE';
+  }, [node?.node_id]);
 
   // Fetch node info once on mount
   useQuery({

@@ -10,6 +10,13 @@ import LoginBackground from '@/components/LoginBackground';
 export default function LoginPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+
+  // Tab title for the login page: `Login - HY2 SCALE` (i18n) so the
+  // unauthenticated screen doesn't accidentally inherit the previous
+  // session's `<node_id> - HY2 SCALE` from when the user was logged in.
+  useEffect(() => {
+    document.title = `${t('app.signin')} - HY2 SCALE`;
+  }, [t]);
   const { login, loginWithHash, loading, error } = useAuthStore();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');

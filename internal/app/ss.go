@@ -296,9 +296,21 @@ func (a *App) handleSSNone(conn net.Conn) {
 
 	var up, down int64
 	done := make(chan struct{})
-	go func() { n, _ := io.Copy(remote, conn); atomic.AddInt64(&up, n); done <- struct{}{} }()
+	go func() {
+		// Upload: client → remote.
+		n, _ := io.Copy(remote, conn)
+		atomic.AddInt64(&up, n)
+		// Forward client FIN to remote so the exit can finish writing
+		// any final response and close. Without this the function
+		// would hang on the download direction's io.Copy when the
+		// client hangs up but the server has nothing more to send.
+		halfCloseAndBound(remote)
+		done <- struct{}{}
+	}()
+	// Download: remote → client.
 	n2, _ := io.Copy(conn, remote)
 	atomic.AddInt64(&down, n2)
+	halfCloseAndBound(conn)
 	<-done
 	if username != "" {
 		a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))

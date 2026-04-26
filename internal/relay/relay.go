@@ -112,14 +112,37 @@ type PeerInfo struct {
 	Native       bool   `json:"native"`
 	LatencyMs    int    `json:"latency_ms"`
 	Version      string `json:"version,omitempty"`
+	// NodeID is the remote's reported stable identifier (from peerMeta).
+	// Used by the bidirectional-slot logic to prove "this incoming
+	// register is from the same logical instance as the existing primary,
+	// not an impostor". Empty for old peers — that case falls back to
+	// legacy single-slot replace behavior.
+	NodeID       string `json:"node_id,omitempty"`
 	Incompatible bool   `json:"incompatible,omitempty"`
 	Conflict     bool   `json:"conflict,omitempty"`
 	TunCapable   bool   `json:"tun_capable,omitempty"`
+	// PV is the remote's wire-protocol generation. Higher than ours
+	// means the remote may speak frames we can't parse — see
+	// ProtocolVersion comment. Forwarded to the topology API so the
+	// frontend can hide nested sub-peers from such links and render
+	// the direct connection itself as `unsupported`.
+	PV          int  `json:"pv,omitempty"`
+	Unsupported bool `json:"unsupported,omitempty"`
 }
 
 // NodeVersion is the version string sent during peer registration.
 // Set by the app package at init time.
 var NodeVersion = "1.0.0"
+
+// ProtocolVersion is an integer identifying the inter-node wire format
+// generation. Bumped (independently of NodeVersion semver) whenever a
+// breaking peer-protocol change ships. Older instances that see a
+// remote peer with a HIGHER ProtocolVersion treat it as opaque:
+// hide nested sub-peers entirely (they may use frames we can't parse)
+// and mark direct peers as unsupported. Newer instances accept any
+// older peer and just downgrade behavior locally to the older feature
+// set. v1.3.x ships protocol v3 — v1 = pre-1.0, v2 = 1.0–1.2.
+const ProtocolVersion = 3
 
 // NodeTunCapable is set by the app layer at startup if this node can handle
 // exit-side TUN (has NET_ADMIN + /dev/net/tun).
@@ -143,6 +166,16 @@ func isCompatible(version string) bool {
 type peerMeta struct {
 	Version    string `json:"v,omitempty"`
 	TunCapable bool   `json:"tun,omitempty"` // true if node can handle exit TUN (has NET_ADMIN + /dev/net/tun)
+	// PV is the wire-protocol generation. Absent on pre-1.3.x peers
+	// (treat as 0 — accept everything for backward compatibility).
+	PV int `json:"pv,omitempty"`
+	// NodeID is the remote's stable cluster-unique identifier. Sent in
+	// register metadata so the receiver can disambiguate "two physical
+	// connections to the SAME logical peer" (mutual dial → bidirectional
+	// slot) from "a name collision impostor" (mechanism A territory).
+	// Empty on pre-1.3.x peers — receiver falls back to legacy
+	// single-slot replace behavior in that case.
+	NodeID string `json:"id,omitempty"`
 }
 
 // writeMeta sends a length-prefixed JSON metadata blob.
@@ -186,9 +219,15 @@ type peer struct {
 	waiting   map[string]chan net.Conn
 	txBytes   atomic.Uint64
 	rxBytes   atomic.Uint64
-	failCount atomic.Int32 // consecutive ping failures
-	ctx       context.Context    // canceled when peer disconnects
-	cancel    context.CancelFunc
+	failCount atomic.Int32 // consecutive ping failures (reset on success or active traffic)
+	// Snapshot of tx/rx at last completed probe; used to spot peers whose
+	// probe stream is starved by their data stream (saturated bottleneck
+	// link) so we don't disconnect a link that is, by every other metric,
+	// healthy and actively transferring.
+	lastProbeTx atomic.Uint64
+	lastProbeRx atomic.Uint64
+	ctx         context.Context // canceled when peer disconnects
+	cancel      context.CancelFunc
 
 	// Multi-IP: additional outbound QUIC connections
 	extraConns   []hyclient.Client // extra clients (index 0 = second IP, etc.)
@@ -289,11 +328,21 @@ type Stats struct {
 }
 
 type Node struct {
-	name  string
-	exit  bool
-	mu    sync.RWMutex
-	peers map[string]*peer
-	seq   atomic.Uint64
+	name   string
+	nodeID string // cluster-unique stable identifier; sent in peerMeta.NodeID
+	exit   bool
+	mu     sync.RWMutex
+	// peers holds the PRIMARY connection to each named peer. When a peer
+	// has only one direction (the common case), it lives here regardless
+	// of direction. When a peer is mutually dialed (both outbound and
+	// inbound to the same NodeID), the routing-preferred direction —
+	// typically outbound — lives here and the other direction lives in
+	// peersAlt under the same name. Every existing reader of n.peers
+	// gets the routing-preferred slot transparently; callers that need
+	// the secondary channel use PeersAlt() / peerSlots().
+	peers    map[string]*peer
+	peersAlt map[string]*peer
+	seq      atomic.Uint64
 
 	nestedMu sync.RWMutex
 	nested   map[string]bool
@@ -542,15 +591,35 @@ func (n *Node) StartLatencyProber(ctx context.Context) {
 							}
 						} else {
 							n.SetLatency(name, -1)
-							fails := p.failCount.Add(1)
-							if fails >= 3 && p.cancel != nil {
-								log.Printf("[relay] %s: %d consecutive ping failures, disconnecting for reconnect", name, fails)
-								p.cancel()
+							// If the peer pushed/pulled bytes since the last probe,
+							// the link is alive — the ping just got queued behind
+							// data on a saturated QUIC connection (e.g. long upload
+							// through a rate-limited downstream hop). Treat as
+							// "probe starved by congestion", reset failCount, do
+							// not disconnect. Active byte counters are a stronger
+							// liveness signal than a stuck control stream.
+							curTx := p.txBytes.Load()
+							curRx := p.rxBytes.Load()
+							prevTx := p.lastProbeTx.Load()
+							prevRx := p.lastProbeRx.Load()
+							if curTx > prevTx || curRx > prevRx {
+								p.failCount.Store(0)
+								log.Printf("[relay] %s: ping failed but link active (Δtx=%d Δrx=%d) — congestion, not disconnect",
+									name, curTx-prevTx, curRx-prevRx)
+							} else {
+								fails := p.failCount.Add(1)
+								if fails >= 3 && p.cancel != nil {
+									log.Printf("[relay] %s: %d consecutive ping failures (no traffic), disconnecting for reconnect", name, fails)
+									p.cancel()
+								}
 							}
 							if len(p.connAddrs) > 0 {
 								n.setAddrLatency(name, p.connAddrs[0], -1)
 							}
 						}
+						// Snapshot tx/rx for next probe's congestion-vs-dead disambiguation.
+						p.lastProbeTx.Store(p.txBytes.Load())
+						p.lastProbeRx.Store(p.rxBytes.Load())
 						// Probe extra connections for per-addr latency
 						n.probeExtraConns(name, p)
 					}
@@ -578,6 +647,53 @@ func (n *Node) Name() string { return n.name }
 
 // SetName updates the node's name.
 func (n *Node) SetName(name string) { n.name = name }
+
+// SetNodeID is called by the app layer at startup (and whenever the
+// NodeID is regenerated/rebound) so register handshakes can transmit
+// our stable identifier. Empty until set — keep the first call early
+// in App init, before any connectLoop fires.
+func (n *Node) SetNodeID(id string) { n.nodeID = id }
+
+// NodeID returns the local stable identifier configured via SetNodeID.
+func (n *Node) NodeID() string { return n.nodeID }
+
+// peerSlots returns both slots for `name` under a single read lock. Used
+// by code that wants to consult both directions (e.g. topology API).
+// Caller MUST hold n.mu.RLock or call this without holding n.mu.
+func (n *Node) peerSlots(name string) (primary, alt *peer) {
+	n.mu.RLock()
+	primary = n.peers[name]
+	alt = n.peersAlt[name]
+	n.mu.RUnlock()
+	return
+}
+
+// PeersAlt returns a snapshot of the secondary-slot peer infos. Pairs
+// with Peers() for the primary side. Topology API merges the two so a
+// mutually-dialed peer surfaces as both top-level outbound and inbound
+// child of self in the rendered tree.
+func (n *Node) PeersAlt() []PeerInfo {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	n.latencyMu.RLock()
+	defer n.latencyMu.RUnlock()
+	result := make([]PeerInfo, 0, len(n.peersAlt))
+	conflictNames := make(map[string]bool)
+	for _, name := range n.conflicts {
+		conflictNames[name] = true
+	}
+	for name, p := range n.peersAlt {
+		info := p.info
+		if ms, ok := n.latencies[name]; ok {
+			info.LatencyMs = ms
+		}
+		if conflictNames[name] {
+			info.Conflict = true
+		}
+		result = append(result, info)
+	}
+	return result
+}
 
 // IsExit returns whether this node is an exit node.
 func (n *Node) IsExit() bool { return n.exit }
@@ -672,6 +788,7 @@ func NewNode(name string, exitNode bool) *Node {
 		name:      name,
 		exit:      exitNode,
 		peers:     make(map[string]*peer),
+		peersAlt:  make(map[string]*peer),
 		nested:    make(map[string]bool),
 		blocked:   make(map[string]bool),
 		peerRates: make(map[string]PeerTraffic),
@@ -756,7 +873,7 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 		remoteMeta.Version = "1.0.0" // old peers don't send version
 	}
 	// Send our metadata (remote reads it only if it sent the flag)
-	writeMeta(regStream, peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable})
+	writeMeta(regStream, peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable, PV: ProtocolVersion, NodeID: n.nodeID})
 
 	if onID != nil {
 		onID(actualName)
@@ -788,27 +905,90 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	if !compat {
 		log.Printf("[%s] peer %s version %s is incompatible (min %s)", n.name, actualName, remoteMeta.Version, MinCompatVersion)
 	}
+	unsupported := remoteMeta.PV > ProtocolVersion
+	if unsupported {
+		log.Printf("[%s] peer %s wire protocol v%d is newer than ours (v%d) — direct only, sub-peers hidden", n.name, actualName, remoteMeta.PV, ProtocolVersion)
+	}
 	childCtx, childCancel := context.WithCancel(ctx)
 	p := &peer{
-		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version, Incompatible: !compat, TunCapable: remoteMeta.TunCapable},
+		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version, NodeID: remoteMeta.NodeID, Incompatible: !compat, TunCapable: remoteMeta.TunCapable, PV: remoteMeta.PV, Unsupported: unsupported},
 		client:  client,
 		waiting: make(map[string]chan net.Conn),
 		ctx:     childCtx,
 		cancel:  childCancel,
 	}
+	// Slot-aware install — symmetric to the inbound register handler
+	// above. See comments there for the full decision matrix.
+	const incomingDir = "outbound"
+	incomingID := remoteMeta.NodeID
 	n.mu.Lock()
-	oldPeer, hadOld := n.peers[actualName]
-	// Carry over extra IP connections from old peer (they have independent QUIC clients)
-	if hadOld && len(oldPeer.extraConns) > 0 {
-		p.extraConns = oldPeer.extraConns
-		p.connAddrs = oldPeer.connAddrs
-		p.connStatuses = oldPeer.connStatuses
+	existingPri, hasPri := n.peers[actualName]
+	existingAlt, hasAlt := n.peersAlt[actualName]
+
+	// (1) Impostor check
+	if hasPri && existingPri.info.NodeID != "" && incomingID != "" && existingPri.info.NodeID != incomingID {
+		n.mu.Unlock()
+		log.Printf("[%s] dial: %s NodeID mismatch (existing=%s, incoming=%s) — rejecting impostor",
+			n.name, actualName, existingPri.info.NodeID, incomingID)
+		return fmt.Errorf("relay: peer %s NodeID mismatch", actualName)
 	}
-	n.peers[actualName] = p
+	if hasAlt && existingAlt.info.NodeID != "" && incomingID != "" && existingAlt.info.NodeID != incomingID {
+		n.mu.Unlock()
+		log.Printf("[%s] dial: %s NodeID mismatch on alt (existing=%s, incoming=%s) — rejecting impostor",
+			n.name, actualName, existingAlt.info.NodeID, incomingID)
+		return fmt.Errorf("relay: peer %s NodeID mismatch on alt", actualName)
+	}
+
+	slot := "primary"
+	var oldPeer *peer
+	var carryFrom *peer // for extraConns transfer (multi-IP)
+	if hasPri {
+		samePriID := existingPri.info.NodeID == incomingID && incomingID != ""
+		if existingPri.info.Direction == incomingDir {
+			// Real outbound reconnect → replace primary, carry extra conns
+			oldPeer = existingPri
+			carryFrom = existingPri
+			slot = "primary"
+		} else if samePriID {
+			// Mutual dial: existing primary is inbound, incoming is outbound
+			// from same instance. Outbound is routing-preferred — make IT
+			// the primary and demote the old inbound to alt.
+			log.Printf("[%s] dial: %s mutual dial detected (existing %s, incoming %s, NodeID=%s) — outbound takes primary, inbound→alt",
+				n.name, actualName, existingPri.info.Direction, incomingDir, incomingID)
+			// Move existing inbound primary to alt slot.
+			if hasAlt && existingAlt.info.Direction == incomingDir {
+				// Pre-existing outbound at alt (alt-slot reconnect) — replace it.
+				oldPeer = existingAlt
+				carryFrom = existingAlt
+			}
+			// Demote old primary (inbound) to alt — keep it alive (don't cancel),
+			// since the inbound channel is still working.
+			n.peersAlt[actualName] = existingPri
+			slot = "primary"
+		} else {
+			// Legacy fallback — at least one side has no NodeID.
+			log.Printf("[%s] dial: %s replacing existing peer (dir=%s→%s, legacy NodeID fallback)",
+				n.name, actualName, existingPri.info.Direction, incomingDir)
+			oldPeer = existingPri
+			carryFrom = existingPri
+			slot = "primary"
+		}
+	}
+	// Carry over extra IP connections from the slot we're about to overwrite.
+	if carryFrom != nil && len(carryFrom.extraConns) > 0 {
+		p.extraConns = carryFrom.extraConns
+		p.connAddrs = carryFrom.connAddrs
+		p.connStatuses = carryFrom.connStatuses
+	}
+	if slot == "alt" {
+		n.peersAlt[actualName] = p
+	} else {
+		n.peers[actualName] = p
+	}
 	n.mu.Unlock()
 	// Close old PRIMARY QUIC client to force-terminate stale streams.
 	// Extra connections are preserved above.
-	if hadOld {
+	if oldPeer != nil {
 		if oldPeer.cancel != nil {
 			oldPeer.cancel()
 		}
@@ -819,7 +999,18 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	defer func() {
 		childCancel()
 		n.mu.Lock()
-		delete(n.peers, actualName)
+		// Mirror the inbound watchdog cleanup: only delete if we're still
+		// the current entry, look in both slots, and promote alt → primary
+		// when removing from primary.
+		if cur, ok := n.peers[actualName]; ok && cur == p {
+			delete(n.peers, actualName)
+			if alt, ok := n.peersAlt[actualName]; ok {
+				n.peers[actualName] = alt
+				delete(n.peersAlt, actualName)
+			}
+		} else if cur, ok := n.peersAlt[actualName]; ok && cur == p {
+			delete(n.peersAlt, actualName)
+		}
 		n.mu.Unlock()
 	}()
 
@@ -969,7 +1160,7 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 	var remoteMeta peerMeta
 	if flags[0]&0x02 != 0 {
 		// Send our metadata, then read client's
-		writeMeta(stream, peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable})
+		writeMeta(stream, peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable, PV: ProtocolVersion, NodeID: n.nodeID})
 		remoteMeta = readMeta(stream, 2*time.Second)
 	}
 	if remoteMeta.Version == "" {
@@ -987,6 +1178,10 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 	if !compat {
 		log.Printf("[%s] inbound peer %s version %s is incompatible (min %s)", n.name, name, remoteMeta.Version, MinCompatVersion)
 	}
+	unsupported := remoteMeta.PV > ProtocolVersion
+	if unsupported {
+		log.Printf("[%s] inbound peer %s wire protocol v%d is newer than ours (v%d) — direct only, sub-peers hidden", n.name, name, remoteMeta.PV, ProtocolVersion)
+	}
 	peerCtx, peerCancel := context.WithCancel(ctx)
 	p := &peer{
 		info: PeerInfo{
@@ -994,38 +1189,105 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 			ExitNode:     flags[0]&0x01 != 0,
 			Direction:    "inbound",
 			Version:      remoteMeta.Version,
+			NodeID:       remoteMeta.NodeID,
 			Incompatible: !compat,
 			TunCapable:   remoteMeta.TunCapable,
+			PV:           remoteMeta.PV,
+			Unsupported:  unsupported,
 		},
 		waiting: make(map[string]chan net.Conn),
 		ctx:     peerCtx,
 		cancel:  peerCancel,
 	}
 
+	// Slot-aware register decision:
+	//
+	// Goal — let the same logical peer (same NodeID) hold TWO simultaneous
+	// physical channels (outbound + inbound) so a mutual-dial deployment
+	// stops flapping in `register: replacing existing peer` loops.
+	//
+	// Decisions, in order:
+	//   1) NodeID mismatch on either occupied slot → impostor; reject the
+	//      register, leave existing slots untouched. (Mechanism A
+	//      symmetric to the outbound path.)
+	//   2) Primary occupied, SAME direction as incoming → real reconnect;
+	//      replace primary (preserves the 30-min ghost-ctrl bug fix).
+	//   3) Primary occupied, DIFFERENT direction, NodeIDs match → mutual
+	//      dial detected; install in alt slot.
+	//   4) Primary occupied, DIFFERENT direction, but at least one
+	//      NodeID is empty → legacy peer; fall back to replacing primary
+	//      (preserves pre-1.3.x single-slot behavior).
+	//   5) Alt occupied, SAME direction → alt-slot reconnect; replace alt.
+	//   6) Otherwise → install primary (new peer).
+	const incomingDir = "inbound"
+	incomingID := remoteMeta.NodeID
 	n.mu.Lock()
-	existing, exists := n.peers[name]
-	if exists && existing.info.Direction == "inbound" {
-		// An inbound register is always initiated over a FRESH QUIC connection
-		// on the remote side — so receiving a new one means the old ctrl
-		// stream is dead (either QUIC timed out on the remote or the remote
-		// explicitly reconnected). Always replace; never skip. Skipping would
-		// leave the dead ctrl in place and lock out the peer for the entire
-		// QUIC idle-timeout window (observed: kbv stuck in a 30min register
-		// rejection loop on AUB because the old inbound ctrl was dead but
-		// n.peers[kbv].ctrlW was still non-nil).
-		log.Printf("[%s] register: %s re-registering (replacing stale inbound ctrl, ver %s→%s, tun %v→%v)",
-			n.name, name, existing.info.Version, remoteMeta.Version,
-			existing.info.TunCapable, remoteMeta.TunCapable)
-		// fall through to the replacement branch below
+	existingPri, hasPri := n.peers[name]
+	existingAlt, hasAlt := n.peersAlt[name]
+
+	// (1) Impostor check — both sides have NodeIDs and they differ.
+	if hasPri && existingPri.info.NodeID != "" && incomingID != "" && existingPri.info.NodeID != incomingID {
+		n.mu.Unlock()
+		log.Printf("[%s] register: %s NodeID mismatch (existing=%s, incoming=%s) — rejecting impostor",
+			n.name, name, existingPri.info.NodeID, incomingID)
+		stream.Close()
+		return
 	}
-	if exists {
-		log.Printf("[%s] register: %s replacing existing peer (dir=%s, hasCtrl=%v)", n.name, name, existing.info.Direction, existing.ctrlW != nil)
+	if hasAlt && existingAlt.info.NodeID != "" && incomingID != "" && existingAlt.info.NodeID != incomingID {
+		n.mu.Unlock()
+		log.Printf("[%s] register: %s NodeID mismatch on alt (existing=%s, incoming=%s) — rejecting impostor",
+			n.name, name, existingAlt.info.NodeID, incomingID)
+		stream.Close()
+		return
 	}
-	// Cancel old peer context to clean up stale connections
-	if exists && existing.cancel != nil {
-		existing.cancel()
+
+	slot := "primary"      // where p will be installed
+	var oldPeer *peer      // entry being replaced (cancelled below)
+	if hasPri {
+		samePriID := existingPri.info.NodeID == incomingID && incomingID != ""
+		if existingPri.info.Direction == incomingDir {
+			// (2) Same direction at primary → real reconnect.
+			log.Printf("[%s] register: %s re-registering (replacing stale %s ctrl, ver %s→%s, tun %v→%v)",
+				n.name, name, incomingDir, existingPri.info.Version, remoteMeta.Version,
+				existingPri.info.TunCapable, remoteMeta.TunCapable)
+			oldPeer = existingPri
+			slot = "primary"
+		} else if samePriID {
+			// (3) Different direction, same instance → bidirectional alt.
+			log.Printf("[%s] register: %s mutual dial detected (existing %s, incoming %s, NodeID=%s) — installing in alt slot",
+				n.name, name, existingPri.info.Direction, incomingDir, incomingID)
+			slot = "alt"
+			if hasAlt && existingAlt.info.Direction == incomingDir {
+				// (5) Alt-slot reconnect under the same direction.
+				log.Printf("[%s] register: %s alt-slot %s re-registering",
+					n.name, name, incomingDir)
+				oldPeer = existingAlt
+			}
+		} else {
+			// (4) Legacy fallback — at least one side has no NodeID.
+			log.Printf("[%s] register: %s replacing existing peer (dir=%s→%s, legacy NodeID fallback)",
+				n.name, name, existingPri.info.Direction, incomingDir)
+			oldPeer = existingPri
+			slot = "primary"
+		}
+	} else if hasAlt && existingAlt.info.Direction == incomingDir {
+		// Edge case: only alt is occupied with same direction (e.g.
+		// primary went away). Replace the alt. New peer will be alt.
+		log.Printf("[%s] register: %s alt-only re-registering",
+			n.name, name)
+		oldPeer = existingAlt
+		slot = "alt"
 	}
-	n.peers[name] = p
+	// Otherwise: empty slots → install as primary (new peer, no log).
+
+	if oldPeer != nil && oldPeer.cancel != nil {
+		oldPeer.cancel()
+	}
+	if slot == "alt" {
+		n.peersAlt[name] = p
+	} else {
+		n.peers[name] = p
+	}
 	n.mu.Unlock()
 
 	// Watchdog: tie the peer entry's lifetime to the register stream.
@@ -1054,9 +1316,21 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 	stream.Close() // defensive — may already be closed by the remote or by existing.cancel()
 
 	n.mu.Lock()
-	// Only delete if we're still the current entry (not replaced by another registration)
+	// Only delete if we're still the current entry (not replaced by
+	// another registration). Look in BOTH slots — a peer that was
+	// installed in alt (bidirectional case) stays in alt for its
+	// lifetime; the watchdog has to clean the right map.
 	if current, ok := n.peers[name]; ok && current == p {
 		delete(n.peers, name)
+		// If alt is also occupied, promote it to primary so callers that
+		// only consult the primary slot keep working through the
+		// surviving channel.
+		if alt, ok := n.peersAlt[name]; ok {
+			n.peers[name] = alt
+			delete(n.peersAlt, name)
+		}
+	} else if current, ok := n.peersAlt[name]; ok && current == p {
+		delete(n.peersAlt, name)
 	}
 	n.mu.Unlock()
 }
@@ -1760,12 +2034,14 @@ type countedConn struct {
 	net.Conn
 	tx, rx         *atomic.Uint64
 	peerTx, peerRx *atomic.Uint64
-	// Optional third counter set for a specific qualified nested path (e.g.
-	// "au/au-r1-a"). Lets one stream contribute to both the first-hop peer
-	// counter and a path-specific counter without double-wrapping.
-	pathTx, pathRx *atomic.Uint64
-	conns          *atomic.Int64
-	closed         atomic.Bool
+	// Optional counter sets, one per qualified nested-path PREFIX with
+	// ≥2 hops. For a stream dialed through "au/au-r1/au-r1-a" we update
+	// the counters for both "au/au-r1" AND "au/au-r1/au-r1-a" — so the
+	// graph view's per-hop realtime-speed badges all increment together
+	// instead of only the final-hop counter.
+	pathTxs, pathRxs []*atomic.Uint64
+	conns            *atomic.Int64
+	closed           atomic.Bool
 }
 
 func (c *countedConn) Close() error {
@@ -1778,12 +2054,13 @@ func (c *countedConn) Close() error {
 func (c *countedConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 	if n > 0 {
-		c.rx.Add(uint64(n))
+		add := uint64(n)
+		c.rx.Add(add)
 		if c.peerRx != nil {
-			c.peerRx.Add(uint64(n))
+			c.peerRx.Add(add)
 		}
-		if c.pathRx != nil {
-			c.pathRx.Add(uint64(n))
+		for _, p := range c.pathRxs {
+			p.Add(add)
 		}
 	}
 	return n, err
@@ -1792,12 +2069,13 @@ func (c *countedConn) Read(b []byte) (int, error) {
 func (c *countedConn) Write(b []byte) (int, error) {
 	n, err := c.Conn.Write(b)
 	if n > 0 {
-		c.tx.Add(uint64(n))
+		add := uint64(n)
+		c.tx.Add(add)
 		if c.peerTx != nil {
-			c.peerTx.Add(uint64(n))
+			c.peerTx.Add(add)
 		}
-		if c.pathTx != nil {
-			c.pathTx.Add(uint64(n))
+		for _, p := range c.pathTxs {
+			p.Add(add)
 		}
 	}
 	return n, err
@@ -1821,10 +2099,19 @@ func (n *Node) wrapConnPath(peerName, pathKey string, conn net.Conn) net.Conn {
 		cc.peerTx = &p.txBytes
 		cc.peerRx = &p.rxBytes
 	}
+	// Attach a counter for every nested-path PREFIX of length ≥ 2 along
+	// the qualified path. The single-hop direct-peer prefix is already
+	// covered by peerTx/peerRx above, so we start prefix accumulation
+	// from the 2-hop slice. e.g. "au/au-r1/au-r1-a" → counters for both
+	// "au/au-r1" and "au/au-r1/au-r1-a", so the graph's realtime-speed
+	// badges on every intermediate hop animate together.
 	if pathKey != "" {
-		rec := n.getOrCreatePathCounters(pathKey)
-		cc.pathTx = &rec.tx
-		cc.pathRx = &rec.rx
+		segs := strings.Split(pathKey, "/")
+		for i := 2; i <= len(segs); i++ {
+			rec := n.getOrCreatePathCounters(strings.Join(segs[:i], "/"))
+			cc.pathTxs = append(cc.pathTxs, &rec.tx)
+			cc.pathRxs = append(cc.pathRxs, &rec.rx)
+		}
 	}
 	n.conns.Add(1)
 	return cc
@@ -2201,6 +2488,7 @@ func (n *Node) DialViaBridged(ctx context.Context, path []string, addr string) (
 		node:     n,
 		peerName: firstPeer,
 		stream:   n.wrapConnPath(firstPeer, strings.Join(path, "/"), stream),
+		triggers: defaultTriggers(),
 	}
 	// Store the via address template for rebind
 	bc.viaPath = path

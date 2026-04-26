@@ -715,10 +715,17 @@ func (e *ruleEngine) handleConn(parentCtx context.Context, conn net.Conn) {
 		}
 		defer remote.Close()
 		done := make(chan struct{})
-		go func() { copyCtx(ctx, remote, conn); cancel(); done <- struct{}{} }()
+		go func() {
+			// Upload: client → remote.
+			copyCtx(ctx, remote, conn)
+			halfCloseAndBound(remote)
+			done <- struct{}{}
+		}()
+		// Download: remote → client.
 		copyCtx(ctx, conn, remote)
-		cancel()
+		halfCloseAndBound(conn)
 		<-done
+		cancel()
 		return
 	}
 

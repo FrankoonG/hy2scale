@@ -167,9 +167,11 @@ func New(dataDir string) (*App, error) {
 
 	persistPath := dataDir + "/config.yaml"
 
+	node := relay.NewNode(cfg.Name, cfg.ExitNode)
+	node.SetNodeID(cfg.NodeID) // expose stable id to register handshakes
 	return &App{
 		store:        NewConfigStore(cfg, persistPath),
-		node:         relay.NewNode(cfg.Name, cfg.ExitNode),
+		node:         node,
 		tls:          NewTLSStore(dataDir),
 		dataDir:      dataDir,
 		clientCancel: make(map[string]context.CancelFunc),
@@ -1012,10 +1014,18 @@ func (a *App) startServer(ctx context.Context, sc *ServerConfig) error {
 			Certificates: []tls.Certificate{cert},
 		},
 		QUICConfig: hyserver.QUICConfig{
-			InitialStreamReceiveWindow:     67108864,
-			MaxStreamReceiveWindow:         67108864,
-			InitialConnectionReceiveWindow: 134217728,
-			MaxConnectionReceiveWindow:     134217728,
+			// 8 MB stream / 16 MB connection. Smaller than upstream hy2's
+			// 64 MB / 128 MB on purpose: in a multi-hop relay chain, each
+			// hop holds an independent receive window, so 64 MB × 3 hops
+			// pre-acknowledges 192 MB of data before the slowest link
+			// shows back-pressure to the client. 8 MB / hop keeps a
+			// 3-hop chain to ~24 MB of pre-ACK buffer — small enough
+			// that legitimate slow uploads stay aligned with real wire
+			// speed rather than fake-completing in <1s.
+			InitialStreamReceiveWindow:     8388608,
+			MaxStreamReceiveWindow:         8388608,
+			InitialConnectionReceiveWindow: 16777216,
+			MaxConnectionReceiveWindow:     16777216,
 			MaxIncomingStreams:              4096,
 		},
 		Authenticator: &hy2Auth{app: a, sysPassword: sc.Password},
@@ -1128,10 +1138,15 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 			Auth:       cl.Password,
 			TLSConfig:  tlsCfg,
 			QUICConfig: hyclient.QUICConfig{
-				InitialStreamReceiveWindow:     67108864,
-				MaxStreamReceiveWindow:         67108864,
-				InitialConnectionReceiveWindow: 134217728,
-				MaxConnectionReceiveWindow:     134217728,
+				// See server-side comment at NewServer for why these are 8/16 MB
+				// rather than 64/128 MB. The client side must match: a small
+				// receive window on the server is only useful if the *peer's*
+				// (i.e. our outbound) receive window is also small, otherwise
+				// the chain still over-buffers in the other direction.
+				InitialStreamReceiveWindow:     8388608,
+				MaxStreamReceiveWindow:         8388608,
+				InitialConnectionReceiveWindow: 16777216,
+				MaxConnectionReceiveWindow:     16777216,
 				DisablePathMTUDiscovery:        TunCaptureActive(), // only in compat mode where Docker bridge may drop large UDP
 			},
 			CongestionConfig: hyclient.CongestionConfig{
@@ -1270,11 +1285,15 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 		maxRx = uint64(cl.MaxRx)
 	}
 
-	// QUIC windows
-	isw := uint64(67108864)  // 64MB
-	msw := uint64(67108864)
-	icw := uint64(134217728) // 128MB
-	mcw := uint64(134217728)
+	// QUIC windows. Defaults match the server-side hy2 listener
+	// (8 MB stream / 16 MB connection) — see the comment on
+	// hyserver.QUICConfig above. Per-peer overrides via cl.InitStreamWindow
+	// etc. let an operator restore the old 64 MB behaviour for a
+	// specific high-BDP link if needed.
+	isw := uint64(8388608)  // 8MB
+	msw := uint64(8388608)
+	icw := uint64(16777216) // 16MB
+	mcw := uint64(16777216)
 	if cl.InitStreamWindow > 0 {
 		isw = uint64(cl.InitStreamWindow)
 	}
@@ -1538,19 +1557,82 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 	var up, down int64
 	done := make(chan struct{})
 	go func() {
+		// Upload: client → remote. (copyCtx(dst, src) reads src, writes dst.)
 		n, _ := copyCtx(ctx, remote, conn)
 		atomic.AddInt64(&up, n)
-		cancel() // unblock the other direction
+		// Upload ended (client FIN or remote write failed). Forward the
+		// FIN downstream so the exit/target sees a clean end-of-request.
+		// Do NOT cancel the response direction — server reply may still
+		// be draining back, and aborting it would lose buffered bytes.
+		halfCloseAndBound(remote)
 		done <- struct{}{}
 	}()
+	// Download: remote → client.
 	n2, _ := copyCtx(ctx, conn, remote)
 	atomic.AddInt64(&down, n2)
-	cancel() // unblock the other direction
+	// Download ended (server FIN or client write failed). Forward FIN to
+	// client AND bound the goroutine's remaining read on conn so a hung
+	// client doesn't leak this session.
+	halfCloseAndBound(conn)
 	<-done
+	cancel()
 	a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))
 	if username != "" {
 		a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))
 	}
+}
+
+// halfCloseWriteOrClose forwards an end-of-stream signal on `c`'s write
+// side only, so the peer can read the natural FIN while we keep reading
+// the response on the read side. Used by every proxy handler's
+// bidirectional copy plumbing to avoid aborting the opposite direction's
+// in-flight buffered data when one side hangs up.
+//
+// For TCP / QUIC streams CloseWrite is the correct primitive. For
+// `net.Pipe()` ends (e.g. bond's user-side conn) there's no half-close,
+// so we fall back to full Close — which IS the right signal for the
+// bond writer's EOF detection.
+func halfCloseWriteOrClose(c net.Conn) {
+	type writeCloser interface{ CloseWrite() error }
+	if cw, ok := c.(writeCloser); ok {
+		_ = cw.CloseWrite()
+		return
+	}
+	_ = c.Close()
+}
+
+// halfCloseGracePeriod bounds how long the surviving copy direction is
+// allowed to stay alive after the OTHER direction has ended. Set per the
+// proxy-half-close audit: long enough for normal HTTP request/response
+// and bond drain-then-half-close to complete (both well under 10 s in
+// observed traffic), short enough to prevent a malicious or hung peer
+// from leaking goroutines + relay streams (which historically caused
+// host-memory exhaustion before the legacy cancel-on-FIN was added).
+const halfCloseGracePeriod = 30 * time.Second
+
+// halfCloseAndBound performs a graceful end-of-stream + bounded-drain
+// handoff on `c`. Two effects, both essential:
+//
+//  1. CloseWrite (or full Close fallback) so the peer reads a clean FIN.
+//     This is the data-integrity half: in-flight buffered bytes that have
+//     already been written into c's send queue are NOT aborted, unlike
+//     the legacy `cancel()`-on-first-direction-end pattern.
+//
+//  2. SetReadDeadline(now + halfCloseGracePeriod). The OTHER copy goroutine
+//     (in this handler's bidirectional copy pair) is reading from `c`; if
+//     its peer never reciprocates the FIN, that Read would block forever.
+//     The deadline forces the Read to error within `halfCloseGracePeriod`
+//     so the handler returns and the stream / goroutine are reclaimed.
+//
+// This combined shape replaces both the destructive `cancel()` (which
+// preserved liveness but lost in-flight data) and the naive bare
+// CloseWrite (which preserved data but leaked sessions).
+func halfCloseAndBound(c net.Conn) {
+	if c == nil {
+		return
+	}
+	halfCloseWriteOrClose(c)
+	_ = c.SetReadDeadline(time.Now().Add(halfCloseGracePeriod))
 }
 
 // handleHTTP implements an HTTP CONNECT proxy (RFC 7231 §4.3.6).
@@ -1707,15 +1789,19 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 	var up, down int64
 	done := make(chan struct{})
 	go func() {
+		// Upload: client → remote.
 		n, _ := copyCtx(ctx, remote, conn)
 		atomic.AddInt64(&up, n)
-		remote.Close()
+		// See handleSOCKS5 for the rationale on half-close vs cancel.
+		halfCloseAndBound(remote)
 		done <- struct{}{}
 	}()
+	// Download: remote → client.
 	n, _ := copyCtx(ctx, conn, remote)
 	atomic.AddInt64(&down, n)
-	cancel()
+	halfCloseAndBound(conn)
 	<-done
+	cancel()
 	a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))
 	if username != "" {
 		a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))

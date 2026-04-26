@@ -60,6 +60,12 @@ interface GraphEdge {
   disabled: boolean;
   /** Current tx+rx in bytes/sec (updated every topology poll). */
   currentRate: number;
+  /** Configured bandwidth ceiling for this edge (bytes/sec). Set when
+   *  EITHER endpoint reports `max_rate` from cfg.Clients (`MaxTx/MaxRx`).
+   *  When non-zero, edgeWidth scales by this instead of the observed
+   *  peak — so a known-bandwidth link draws at calibrated thickness on
+   *  the very first paint. 0 means "unknown, fall back to peak". */
+  configuredMaxRate: number;
   /** Segment latency in ms — between the two endpoints only, NOT cumulative
    *  from self. Derived as child.cumulative − parent.cumulative during the
    *  tree walk and stored for the first-visited occurrence of the edge. */
@@ -204,13 +210,18 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
         name: n.is_self ? (selfName || n.name || 'self') : n.name,
         isSelf: !!n.is_self,
         disabled: !!n.disabled,
-        // Offline if explicitly disabled, latency reported as -1 (unreachable),
-        // or the top-level `connected` flag is false. Root-peer offline keeps
-        // its dot visible but edges to it turn red + marked ×.
-        offline: !!n.disabled || (n.latency_ms < 0) || (n.connected === false && !n.is_self),
+        // Offline only when (a) the user disabled it, or (b) the
+        // server's `connected` flag is explicitly false. A latency value
+        // of -1 alone is NOT sufficient: latency probes are sampled
+        // periodically and a single missed sample makes the graph briefly
+        // turn the node red + flash "unreachable" while the list view
+        // still correctly shows it green. Trust the list-view's
+        // status-cache contract — `connected` is the authoritative
+        // reachability flag, latency is a quality metric.
+        offline: !!n.disabled || (n.connected === false && !n.is_self),
         nested: !!n.nested,
         native: !!n.native,
-        incompatible: !!n.incompatible || !!n.conflict,
+        incompatible: !!n.incompatible || !!n.conflict || !!n.unsupported,
         depth,
         degree: 0,
         qpath,
@@ -229,7 +240,7 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
     }
   }
 
-  function addEdge(a: string, b: string, direction: string | undefined, disabled: boolean, rate: number, segmentLatencyMs: number) {
+  function addEdge(a: string, b: string, direction: string | undefined, disabled: boolean, rate: number, segmentLatencyMs: number, configuredMaxRate: number) {
     if (a === b) return;
     // Directed keying: an edge represents a specific dialer→dialee TCP link.
     // - outbound: parent dialed child → key `a→b`
@@ -245,12 +256,13 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
     }
     const existing = edges.get(ekey);
     if (!existing) {
-      const e: GraphEdge = { key: ekey, from, to, directionKnown, disabled, currentRate: rate, segmentLatencyMs };
+      const e: GraphEdge = { key: ekey, from, to, directionKnown, disabled, currentRate: rate, configuredMaxRate, segmentLatencyMs };
       edges.set(ekey, e);
       const na = nodes.get(a); if (na) na.degree++;
       const nb = nodes.get(b); if (nb) nb.degree++;
     } else {
       if (rate > existing.currentRate) existing.currentRate = rate;
+      if (configuredMaxRate > existing.configuredMaxRate) existing.configuredMaxRate = configuredMaxRate;
       if (disabled) existing.disabled = true;
       // keep first-visited segment latency
     }
@@ -280,7 +292,7 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
         } else if (childLat === -1) {
           segLat = -1;
         }
-        addEdge(parentKey, keyOf(n), n.direction, !!n.disabled, rate, segLat);
+        addEdge(parentKey, keyOf(n), n.direction, !!n.disabled, rate, segLat, n.max_rate || 0);
       }
       if (n.children && n.children.length > 0) {
         walk(n.children, keyOf(n), n.latency_ms || 0, depth + 1, qpath, false);
@@ -350,8 +362,11 @@ function HaloText({ x, y, stroke, children }: { x: number; y: number; stroke: st
 function fmtLatency(ms: number): string {
   if (ms < 0) return 'offline';
   if (ms === 0) return '—';
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
+  // Always render in milliseconds for visual consistency across the
+  // graph — the previous "auto switch to seconds above 1000 ms" branch
+  // made the dot-center label lose alignment with neighbouring labels
+  // and made cumulative-vs-segment comparisons confusing.
+  return `${Math.round(ms)}ms`;
 }
 
 export default function NodesGraphView({ topology, selfId, selfName, onOpenRemote, onEditNode, selectedQPath, onSelectQPath }: Props) {
@@ -361,13 +376,41 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
   const { nodes, edges } = useMemo(() => buildGraph(topology, selfId, selfName), [topology, selfId, selfName]);
 
-  // Per-edge running max — used to normalise flow speed.
-  const maxByEdgeRef = useRef<Map<string, number>>(new Map());
+  // Per-edge running max — used to normalise flow speed AND to size the
+  // edge stroke. Persist to localStorage so the line-thickness signal
+  // doesn't disappear after every page refresh: previously a refresh
+  // wiped the in-memory map, all edges drew at the minimum width, and
+  // it took toggling a route off+on to repopulate the peak.
+  const maxByEdgeRef = useRef<Map<string, number>>((() => {
+    try {
+      const raw = localStorage.getItem('hy2.edgeMax');
+      if (!raw) return new Map();
+      const obj = JSON.parse(raw) as Record<string, number>;
+      return new Map(Object.entries(obj));
+    } catch {
+      return new Map();
+    }
+  })());
+  const edgeMaxSaveTimer = useRef<number | null>(null);
   useMemo(() => {
+    let dirty = false;
     edges.forEach((e) => {
       const prev = maxByEdgeRef.current.get(e.key) || 0;
-      if (e.currentRate > prev) maxByEdgeRef.current.set(e.key, e.currentRate);
+      if (e.currentRate > prev) {
+        maxByEdgeRef.current.set(e.key, e.currentRate);
+        dirty = true;
+      }
     });
+    if (dirty) {
+      if (edgeMaxSaveTimer.current) window.clearTimeout(edgeMaxSaveTimer.current);
+      edgeMaxSaveTimer.current = window.setTimeout(() => {
+        try {
+          const obj: Record<string, number> = {};
+          maxByEdgeRef.current.forEach((v, k) => { obj[k] = v; });
+          localStorage.setItem('hy2.edgeMax', JSON.stringify(obj));
+        } catch { /* quota / disabled storage — ignore */ }
+      }, 1000);
+    }
   }, [edges]);
 
   const auto = useMemo(() => autoLayout(nodes), [nodes]);
@@ -828,11 +871,24 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       setCurrentQPath(q);
       if (forwardToParent) onSelectQPath?.(q);
     } else {
-      const q = paths[0].join('/');
+      // If the previously-selected path's chain is a strict prefix of any
+      // available route to the new target, prefer that route — clicking
+      // deeper into the same subtree shouldn't snap back to a root-rooted
+      // alternate path.
+      let chosen = paths[0];
+      if (currentQPath) {
+        const prevSegs = currentQPath.split('/');
+        const extending = paths.find(p =>
+          p.length > prevSegs.length &&
+          prevSegs.every((seg, i) => p[i] === seg)
+        );
+        if (extending) chosen = extending;
+      }
+      const q = chosen.join('/');
       setCurrentQPath(q);
       if (forwardToParent) onSelectQPath?.(q); else onSelectQPath?.(null);
     }
-  }, [topology, selfId, selfName, selectedKey, pathIdx, onSelectQPath]);
+  }, [topology, selfId, selfName, selectedKey, pathIdx, currentQPath, onSelectQPath]);
 
   const handleBlankClick = useCallback(() => {
     if (!currentQPath) return;
@@ -1118,9 +1174,19 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // Edge stroke width — scaled against an ABSOLUTE 0–1000 Mbps reference
   // so a line's thickness means the same thing regardless of what else
   // the mesh has seen. Values above 1 Gbps saturate at the max width.
+  //
+  // Reference picks the BEST available signal:
+  //   1. `configuredMaxRate` from cfg.Clients (`MaxTx`/`MaxRx`) — if the
+  //      operator declared the link's bandwidth, use it directly so the
+  //      thickness is right on the very first paint, with no traffic
+  //      needed. Cross-nested: the parent peer reports its own configured
+  //      bandwidth for each sub-peer in its `max_rate` field, so a
+  //      grand-child link can size correctly here too.
+  //   2. otherwise the running observed peak from `maxByEdgeRef`.
   function edgeWidth(e: GraphEdge): number {
-    const peak = maxByEdgeRef.current.get(e.key) || 0;
-    const t = Math.min(1, peak / REF_MBPS_1000);
+    const observedPeak = maxByEdgeRef.current.get(e.key) || 0;
+    const ref = e.configuredMaxRate > 0 ? e.configuredMaxRate : observedPeak;
+    const t = Math.min(1, ref / REF_MBPS_1000);
     return 1.5 + t * 5.5; // 1.5 .. 7 px
   }
 
@@ -1171,6 +1237,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     let last = performance.now();
     const BASE_SPEED = 24;
     const MAX_SPEED = 180;
+    // Idle (no traffic) chevron pace is HALF of BASE_SPEED so the
+    // visual gap between "the link is alive but quiet" and "any
+    // amount of traffic, even a few KB/s" is obvious. The instant
+    // a non-zero rate is observed, target jumps to BASE_SPEED and
+    // scales up from there; the lerp below smooths the transition
+    // so the change reads as an acceleration rather than a jump-cut.
+    const IDLE_SPEED = BASE_SPEED / 2;
     const LERP = 0.08;
     const loop = (now: number) => {
       const dt = Math.min(0.1, (now - last) / 1000);
@@ -1186,8 +1259,10 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       curEdges.forEach((e) => {
         if (!e.directionKnown) return;
         const t = Math.min(1, e.currentRate / denom);
-        const target = BASE_SPEED + t * (MAX_SPEED - BASE_SPEED);
-        const state = flowStateRef.current.get(e.key) || { phase: 0, speed: BASE_SPEED };
+        const target = e.currentRate > 0
+          ? BASE_SPEED + t * (MAX_SPEED - BASE_SPEED)
+          : IDLE_SPEED;
+        const state = flowStateRef.current.get(e.key) || { phase: 0, speed: IDLE_SPEED };
         state.speed += (target - state.speed) * LERP;
         // phase advances in the same direction as the edge (start → end).
         state.phase = ((state.phase + state.speed * dt) % CHEV_SPACING + CHEV_SPACING) % CHEV_SPACING;
@@ -1464,10 +1539,15 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             const my = (y1 + y2) / 2;
 
             const screenLen = edgeScreenLen(p, q);
-            const showLatency = e.segmentLatencyMs !== 0 && screenLen > 60;
-            // Rate label is always shown (even for 0 B/s) once the edge is
-            // long enough on screen to fit the label text.
-            const showRate = screenLen > 110;
+            // Suppress in-line edge labels on unreachable links — both
+            // latency and rate are meaningless on a connection that
+            // isn't flowing, and crowding them onto a red dashed edge
+            // adds visual noise without information.
+            const fromOffEarly = nodes.get(e.from)?.offline;
+            const toOffEarly = nodes.get(e.to)?.offline;
+            const edgeReachable = !e.disabled && !fromOffEarly && !toOffEarly;
+            const showLatency = edgeReachable && e.segmentLatencyMs !== 0 && screenLen > 60;
+            const showRate = edgeReachable && screenLen > 110;
             const width = edgeWidth(e);
 
             // Path highlight animation: all edges on the active path go
@@ -1522,11 +1602,11 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                     one at a time in sequence from self, so the cumulative
                     effect radiates outward to the selected node. A fresh
                     key per selection change forces animation restart. */}
-                {onPath && !offline && (
+                {onPath && (
                   <line
                     key={activePath ? activePath.join('/') + ':' + edgeIdx : 'draw'}
                     x1={dx1} y1={dy1} x2={dx2} y2={dy2}
-                    className="hy-topo-edge-draw"
+                    className={`hy-topo-edge-draw${offline ? ' offline' : ''}`}
                     style={{
                       ['--hy-path-len' as any]: drawLen,
                       ['--hy-path-draw-ms' as any]: `${sched?.durationMs ?? PATH_TOTAL_MS}ms`,
@@ -1638,7 +1718,25 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       </svg>
       {displayPath && displayPath.length > 0 && (() => {
         const selNode = nodes.get(displayPath[displayPath.length - 1]);
-        const totalLat = selNode?.totalLatencyMs ?? 0;
+        // Sum segment latencies along the SELECTED path, not whatever value
+        // was last written into the per-node map. The per-node
+        // totalLatencyMs is overwritten on every visit during topology
+        // traversal, so it represents "the last path that happened to be
+        // walked", not the path the user is currently viewing — which made
+        // the displayed sum identical for every selection of the same
+        // final node.
+        const fullPath = displayPath[0] === selfId ? displayPath : [selfId, ...displayPath];
+        let totalLat = 0;
+        let anyOffline = false;
+        for (let i = 1; i < fullPath.length; i++) {
+          const a = fullPath[i - 1], b = fullPath[i];
+          const e = edges.get(`${a}→${b}`) ?? edges.get(`${b}→${a}`)
+            ?? edges.get(`?${a < b ? a : b}|${a < b ? b : a}`);
+          const seg = e?.segmentLatencyMs ?? -1;
+          if (seg < 0) { anyOffline = true; break; }
+          totalLat += seg;
+        }
+        if (anyOffline) totalLat = -1;
         const offline = !!selNode?.offline || totalLat < 0;
         const hops = displayPath.map((k) => nodes.get(k)?.name || k);
         const latClass = offline ? 'lat-bad' : totalLat <= 0 ? 'lat-na' : totalLat < 80 ? 'lat-ok' : totalLat < 200 ? 'lat-mid' : 'lat-bad';
@@ -1661,7 +1759,14 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
               })}
             </span>
             <span className={`hy-topo-pathinfo-lat ${latClass}`}>
-              {offline ? t('nodes.graph.unreachable') : fmtLatency(totalLat)}
+              {/*
+               * Use the same status word the list view's status column uses:
+               * `nodes.offline` for both `connected=false` and explicitly
+               * `disabled=true`. The previous generic `nodes.graph.unreachable`
+               * literal made graph and list disagree on what to call the
+               * same condition.
+               */}
+              {offline ? t('nodes.offline') : fmtLatency(totalLat)}
             </span>
             {showOpen && (
               <button
