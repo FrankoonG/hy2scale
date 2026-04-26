@@ -49,6 +49,7 @@ type bondReceiver struct {
 	paths          map[int]net.Conn    // pathIndex → relay stream
 	pathWriteMu    map[int]*sync.Mutex // per-path write serializer (return frames + keepalives)
 	teardownsRcvd  map[int]bool        // per-path teardown received from sender
+	writerDoneCh   chan struct{}       // closed when all sender paths have torn down
 	pathTxBytes    map[int]int64       // bytes written per path
 	pathWriteNs    map[int]int64       // cumulative write time in ns per path
 	pathWriteCount map[int]int64       // write count per path
@@ -106,6 +107,7 @@ func (a *App) handleBondStream(bondAddr string, pathConn net.Conn) error {
 		paths:          make(map[int]net.Conn),
 		pathWriteMu:    make(map[int]*sync.Mutex),
 		teardownsRcvd:  make(map[int]bool),
+		writerDoneCh:   make(chan struct{}),
 		pathTxBytes:    make(map[int]int64),
 		pathWriteNs:    make(map[int]int64),
 		pathWriteCount: make(map[int]int64),
@@ -130,6 +132,7 @@ func (a *App) handleBondStream(bondAddr string, pathConn net.Conn) error {
 			recv.paths = make(map[int]net.Conn)
 			recv.pathWriteMu = make(map[int]*sync.Mutex)
 			recv.teardownsRcvd = make(map[int]bool)
+			recv.writerDoneCh = make(chan struct{})
 			recv.pathTxBytes = make(map[int]int64)
 			recv.writeSeq = 0
 			needsInit = true
@@ -235,14 +238,15 @@ func (recv *bondReceiver) readPath(pathIndex int, conn net.Conn) {
 		length := binary.BigEndian.Uint16(hdr[8:10])
 
 		if seq == bondTeardownSeq {
-			// Sender finished writing on this path. Count it; only when
+			// Sender finished writing on this path. Count it; only after
 			// every currently-registered path has reported done do we
-			// half-close the target so any in-flight chunks on slower
-			// paths are still delivered first. doReturnWrite continues
-			// to drain target.Read until the downstream peer FINs back.
+			// signal the deliverer to drain remaining reorder data and
+			// THEN half-close the target. We can't half-close right here
+			// because chunks already in the reorder buffer haven't been
+			// written to target yet — closing target now would lose them.
 			if recv.markPathTeardown(pathIndex) {
-				log.Printf("[bond-rx] %d: all paths done writing, half-closing target", recv.id)
-				recv.halfCloseTarget()
+				log.Printf("[bond-rx] %d: all paths done writing, signaling deliverer to flush", recv.id)
+				recv.signalWriterDone()
 			} else {
 				debugLog("[bond-rx] %d: teardown from path %d (waiting for others)", recv.id, pathIndex)
 			}
@@ -315,6 +319,15 @@ func (recv *bondReceiver) runDeliverer() {
 		bufSize := len(recv.reorderBuf)
 		recv.reorderMu.Unlock()
 
+		// If the sender has reported done on every path AND we just
+		// drained the reorder buffer, the target should see a clean FIN
+		// now so the application layer wakes up from its read.
+		if bufSize == 0 && recv.isWriterDone() {
+			log.Printf("[bond-rx] %d: deliverer drained, half-closing target", recv.id)
+			recv.halfCloseTarget()
+			return
+		}
+
 		if !delivered {
 			timeout := 200 * time.Millisecond
 			if bufSize == 0 {
@@ -338,6 +351,24 @@ func (recv *bondReceiver) runDeliverer() {
 				return
 			}
 		}
+	}
+}
+
+// isWriterDone returns true once every sender path has reported its final
+// teardown and we can safely FIN the downstream peer after the reorder
+// buffer drains.
+func (recv *bondReceiver) isWriterDone() bool {
+	recv.mu.Lock()
+	ch := recv.writerDoneCh
+	recv.mu.Unlock()
+	if ch == nil {
+		return false
+	}
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -655,6 +686,25 @@ func (recv *bondReceiver) halfCloseTarget() {
 		return
 	}
 	t.Close()
+}
+
+// signalWriterDone closes writerDoneCh exactly once. The deliverer's
+// drain-then-half-close path is what actually FINs the target — we just
+// flip the flag here.
+func (recv *bondReceiver) signalWriterDone() {
+	recv.mu.Lock()
+	defer recv.mu.Unlock()
+	select {
+	case <-recv.writerDoneCh:
+		// already closed
+	default:
+		close(recv.writerDoneCh)
+	}
+	// Wake the deliverer so it re-checks the drain condition right away.
+	select {
+	case recv.reorderCh <- struct{}{}:
+	default:
+	}
 }
 
 // runKeepaliveSender writes a length-0 frame on every registered path on a
