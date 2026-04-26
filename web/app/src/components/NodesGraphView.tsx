@@ -1638,7 +1638,25 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       </svg>
       {displayPath && displayPath.length > 0 && (() => {
         const selNode = nodes.get(displayPath[displayPath.length - 1]);
-        const totalLat = selNode?.totalLatencyMs ?? 0;
+        // Sum segment latencies along the SELECTED path, not whatever value
+        // was last written into the per-node map. The per-node
+        // totalLatencyMs is overwritten on every visit during topology
+        // traversal, so it represents "the last path that happened to be
+        // walked", not the path the user is currently viewing — which made
+        // the displayed sum identical for every selection of the same
+        // final node.
+        const fullPath = displayPath[0] === selfId ? displayPath : [selfId, ...displayPath];
+        let totalLat = 0;
+        let anyOffline = false;
+        for (let i = 1; i < fullPath.length; i++) {
+          const a = fullPath[i - 1], b = fullPath[i];
+          const e = edges.get(`${a}→${b}`) ?? edges.get(`${b}→${a}`)
+            ?? edges.get(`?${a < b ? a : b}|${a < b ? b : a}`);
+          const seg = e?.segmentLatencyMs ?? -1;
+          if (seg < 0) { anyOffline = true; break; }
+          totalLat += seg;
+        }
+        if (anyOffline) totalLat = -1;
         const offline = !!selNode?.offline || totalLat < 0;
         const hops = displayPath.map((k) => nodes.get(k)?.name || k);
         const latClass = offline ? 'lat-bad' : totalLat <= 0 ? 'lat-na' : totalLat < 80 ? 'lat-ok' : totalLat < 200 ? 'lat-mid' : 'lat-bad';
