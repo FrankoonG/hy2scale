@@ -46,6 +46,14 @@ type topoSubPeer struct {
 	TunCapable bool           `json:"tun_capable,omitempty"`
 	TxRate     uint64         `json:"tx_rate"`
 	RxRate     uint64         `json:"rx_rate"`
+	// MaxRate is the configured peak the link can sustain (bytes/sec),
+	// derived from `max(ClientEntry.MaxTx, ClientEntry.MaxRx)` of the
+	// dialer side. The graph uses it as the reference for edge
+	// thickness — a known-bandwidth link draws at its calibrated width
+	// immediately on first load instead of having to observe traffic
+	// to populate a peak. 0 = unknown → falls back to observed peak
+	// on the frontend.
+	MaxRate    uint64         `json:"max_rate,omitempty"`
 	// Connected mirrors the direct-peer Connected flag for nested
 	// sub-peers. A sub-peer that the parent has configured but is
 	// currently offline is propagated with Connected=false so the
@@ -916,14 +924,33 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		LatencyMs    int               `json:"latency_ms"`
 		TxRate       uint64            `json:"tx_rate"`
 		RxRate       uint64            `json:"rx_rate"`
+		// MaxRate (bytes/sec) — same role as topoSubPeer.MaxRate,
+		// see comment there. Populated from the local cfg.Clients
+		// entry's max(MaxTx, MaxRx).
+		MaxRate      uint64            `json:"max_rate,omitempty"`
 		IsSelf       bool              `json:"is_self,omitempty"`
 		Children     []topoSubPeer     `json:"children,omitempty"`
 	}
 
 	disabledMap := make(map[string]bool)
+	// maxRateByName: configured bandwidth per direct outbound peer.
+	// max(MaxTx, MaxRx) so a duplex-capped link is represented by the
+	// higher-of-two rates (the one that's actually a saturating cap
+	// for the dominant traffic direction in most deployments).
+	maxRateByName := make(map[string]uint64)
 	for _, cl := range cfg.Clients {
 		if cl.Disabled {
 			disabledMap[cl.Name] = true
+		}
+		var m int
+		if cl.MaxTx > m {
+			m = cl.MaxTx
+		}
+		if cl.MaxRx > m {
+			m = cl.MaxRx
+		}
+		if m > 0 {
+			maxRateByName[cl.Name] = uint64(m)
 		}
 	}
 
@@ -1081,6 +1108,9 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			tn.TxRate = pr.TxRate
 			tn.RxRate = pr.RxRate
 		}
+		if mr, ok := maxRateByName[name]; ok {
+			tn.MaxRate = mr
+		}
 
 		// Load sub-peers from background cache only (never blocks).
 		// Hide children when the peer's wire-protocol generation is
@@ -1134,7 +1164,29 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 			// peers are NOT propagated at all — see filter below — so
 			// the consumer never sees `Disabled=true` for our sub-peers.
 			Connected bool          `json:"connected"`
+			// MaxRate (bytes/sec) — see topoSubPeer.MaxRate comment.
+			// Surfaced so a remote graph (drawing US over a multi-hop
+			// chain) can size the edge by our local configured cap
+			// before any traffic actually flows.
+			MaxRate   uint64        `json:"max_rate,omitempty"`
 			Children  []topoSubPeer `json:"children,omitempty"`
+		}
+
+		// Per-direct-peer configured bandwidth lookup, identical to
+		// the topology-API map but local to this closure. Keyed by
+		// peer name (= cfg.Clients[i].Name).
+		maxRateByName := make(map[string]uint64)
+		for _, cl := range cfg.Clients {
+			var m int
+			if cl.MaxTx > m {
+				m = cl.MaxTx
+			}
+			if cl.MaxRx > m {
+				m = cl.MaxRx
+			}
+			if m > 0 {
+				maxRateByName[cl.Name] = uint64(m)
+			}
 		}
 
 		// Live (currently-connected) direct peers. Skip any that we
@@ -1147,7 +1199,7 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 			if pcfg, ok := cfg.Peers[p.Name]; ok && pcfg.Disabled {
 				continue
 			}
-			pc := peerWithChildren{PeerInfo: p, Connected: true}
+			pc := peerWithChildren{PeerInfo: p, Connected: true, MaxRate: maxRateByName[p.Name]}
 			if pcfg, ok := cfg.Peers[p.Name]; ok && pcfg.Nested {
 				cached := s.getCachedSubPeers(p.Name)
 				flat := make([]topoSubPeer, 0, len(cached))
@@ -1176,6 +1228,7 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 			result = append(result, peerWithChildren{
 				PeerInfo:  relay.PeerInfo{Name: cl.Name, Direction: "outbound"},
 				Connected: false,
+				MaxRate:   maxRateByName[cl.Name],
 			})
 		}
 
@@ -1423,6 +1476,10 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 		// behavior is preserved unchanged. New peers send true/false
 		// explicitly per the offline-propagation contract.
 		Connected *bool         `json:"connected,omitempty"`
+		// MaxRate, bytes/sec; absent on old peers. Used by the graph
+		// to size the edge thickness directly from configured
+		// bandwidth, even before any traffic flows.
+		MaxRate   uint64        `json:"max_rate,omitempty"`
 		Children  []topoSubPeer `json:"children,omitempty"`
 	}
 	var remotePeers []peerWithChildren
@@ -1470,6 +1527,7 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 			Version:    rp.Version,
 			TunCapable: rp.TunCapable,
 			Connected:  connected,
+			MaxRate:    rp.MaxRate,
 			Children:   embedded,
 		}
 		children = append(children, child)

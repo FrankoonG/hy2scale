@@ -43,6 +43,10 @@ export interface TopologyNode {
   incompatible?: boolean;
   conflict?: boolean;
   unsupported?: boolean;
+  // Configured bandwidth ceiling (bytes/sec) for the edge between
+  // this node and its parent. 0 / undefined → unknown; the graph
+  // falls back to observed-peak thickness.
+  max_rate?: number;
   latency_ms: number;
   tx_rate: number;
   rx_rate: number;
