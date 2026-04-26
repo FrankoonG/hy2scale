@@ -828,11 +828,24 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       setCurrentQPath(q);
       if (forwardToParent) onSelectQPath?.(q);
     } else {
-      const q = paths[0].join('/');
+      // If the previously-selected path's chain is a strict prefix of any
+      // available route to the new target, prefer that route — clicking
+      // deeper into the same subtree shouldn't snap back to a root-rooted
+      // alternate path.
+      let chosen = paths[0];
+      if (currentQPath) {
+        const prevSegs = currentQPath.split('/');
+        const extending = paths.find(p =>
+          p.length > prevSegs.length &&
+          prevSegs.every((seg, i) => p[i] === seg)
+        );
+        if (extending) chosen = extending;
+      }
+      const q = chosen.join('/');
       setCurrentQPath(q);
       if (forwardToParent) onSelectQPath?.(q); else onSelectQPath?.(null);
     }
-  }, [topology, selfId, selfName, selectedKey, pathIdx, onSelectQPath]);
+  }, [topology, selfId, selfName, selectedKey, pathIdx, currentQPath, onSelectQPath]);
 
   const handleBlankClick = useCallback(() => {
     if (!currentQPath) return;
