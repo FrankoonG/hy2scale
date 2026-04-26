@@ -46,12 +46,14 @@ type bondReceiver struct {
 	target   net.Conn // TCP connection to real destination
 
 	mu             sync.Mutex
-	paths          map[int]net.Conn  // pathIndex → relay stream
-	pathTxBytes    map[int]int64     // bytes written per path
-	pathWriteNs    map[int]int64     // cumulative write time in ns per path
-	pathWriteCount map[int]int64     // write count per path
-	pathWeights    map[int]int64     // sender-provided weight hints (0-100)
-	writeSeq       uint32            // for return traffic
+	paths          map[int]net.Conn    // pathIndex → relay stream
+	pathWriteMu    map[int]*sync.Mutex // per-path write serializer (return frames + keepalives)
+	teardownsRcvd  map[int]bool        // per-path teardown received from sender
+	pathTxBytes    map[int]int64       // bytes written per path
+	pathWriteNs    map[int]int64       // cumulative write time in ns per path
+	pathWriteCount map[int]int64       // write count per path
+	pathWeights    map[int]int64       // sender-provided weight hints (0-100)
+	writeSeq       uint32              // for return traffic
 
 	// Reorder buffer for incoming (sender→exit) traffic
 	reorderMu   sync.Mutex
@@ -99,17 +101,19 @@ func (a *App) handleBondStream(bondAddr string, pathConn net.Conn) error {
 	// Get or create receiver
 	var recv *bondReceiver
 	v, loaded := bondReceivers.LoadOrStore(bondID, &bondReceiver{
-		id:          bondID,
-		realAddr:    realAddr,
+		id:             bondID,
+		realAddr:       realAddr,
 		paths:          make(map[int]net.Conn),
+		pathWriteMu:    make(map[int]*sync.Mutex),
+		teardownsRcvd:  make(map[int]bool),
 		pathTxBytes:    make(map[int]int64),
 		pathWriteNs:    make(map[int]int64),
 		pathWriteCount: make(map[int]int64),
 		pathWeights:    make(map[int]int64),
-		reorderBuf:  make(map[uint32][]byte),
-		reorderNext: 1,
-		reorderCh:   make(chan struct{}, 1),
-		closeCh:     make(chan struct{}),
+		reorderBuf:     make(map[uint32][]byte),
+		reorderNext:    1,
+		reorderCh:      make(chan struct{}, 1),
+		closeCh:        make(chan struct{}),
 	})
 	recv = v.(*bondReceiver)
 
@@ -124,6 +128,8 @@ func (a *App) handleBondStream(bondAddr string, pathConn net.Conn) error {
 			recv.reorderBuf = make(map[uint32][]byte)
 			recv.reorderNext = 1
 			recv.paths = make(map[int]net.Conn)
+			recv.pathWriteMu = make(map[int]*sync.Mutex)
+			recv.teardownsRcvd = make(map[int]bool)
 			recv.pathTxBytes = make(map[int]int64)
 			recv.writeSeq = 0
 			needsInit = true
@@ -166,6 +172,10 @@ func (a *App) handleBondStream(bondAddr string, pathConn net.Conn) error {
 		// Start deliverer (reorder buffer → target)
 		go recv.runDeliverer()
 
+		// Periodic length-0 frame on every registered path so the sender's
+		// per-path read deadline survives long upload-only intervals.
+		go recv.runKeepaliveSender()
+
 		// Cleanup: delete from map after 60s grace period (allows reconnection)
 		go func() {
 			<-recv.closeCh
@@ -183,6 +193,12 @@ func (a *App) handleBondStream(bondAddr string, pathConn net.Conn) error {
 	// Register this path
 	recv.mu.Lock()
 	recv.paths[pathIndex] = pathConn
+	if recv.pathWriteMu == nil {
+		recv.pathWriteMu = make(map[int]*sync.Mutex)
+	}
+	if recv.pathWriteMu[pathIndex] == nil {
+		recv.pathWriteMu[pathIndex] = &sync.Mutex{}
+	}
 	recv.mu.Unlock()
 	log.Printf("[bond-rx] %d: path %d connected", bondID, pathIndex)
 
@@ -219,8 +235,17 @@ func (recv *bondReceiver) readPath(pathIndex int, conn net.Conn) {
 		length := binary.BigEndian.Uint16(hdr[8:10])
 
 		if seq == bondTeardownSeq {
-			debugLog("[bond-rx] %d: teardown from path %d", recv.id, pathIndex)
-			recv.close()
+			// Sender finished writing on this path. Count it; only when
+			// every currently-registered path has reported done do we
+			// half-close the target so any in-flight chunks on slower
+			// paths are still delivered first. doReturnWrite continues
+			// to drain target.Read until the downstream peer FINs back.
+			if recv.markPathTeardown(pathIndex) {
+				log.Printf("[bond-rx] %d: all paths done writing, half-closing target", recv.id)
+				recv.halfCloseTarget()
+			} else {
+				debugLog("[bond-rx] %d: teardown from path %d (waiting for others)", recv.id, pathIndex)
+			}
 			return
 		}
 
@@ -403,40 +428,16 @@ func (recv *bondReceiver) doReturnWrite(target net.Conn) {
 				recv.pathTxBytes[pathIdx] += int64(n)
 				recv.mu.Unlock()
 
-				// Set write deadline to detect dead paths quickly
-				bp.SetWriteDeadline(time.Now().Add(5 * time.Second))
-				var hdr [bondFrameHeaderSize]byte
-				binary.BigEndian.PutUint32(hdr[0:4], recv.id)
-				binary.BigEndian.PutUint32(hdr[4:8], seq)
-				binary.BigEndian.PutUint16(hdr[8:10], uint16(len(chunk)))
-
-				if _, werr := bp.Write(hdr[:]); werr != nil {
+				if werr := recv.writeFrame(pathIdx, bp, seq, chunk); werr != nil {
 					log.Printf("[bond-rx] %d: path %d dead, redistributing", recv.id, pathIdx)
 					recv.mu.Lock()
 					delete(recv.paths, pathIdx)
+					delete(recv.pathWriteMu, pathIdx)
 					recv.mu.Unlock()
 					// Retry this chunk on another path
-					_, bp2 := recv.selectReturnPathIdx(int(seq))
+					idx2, bp2 := recv.selectReturnPathIdx(int(seq))
 					if bp2 != nil {
-						bp2.Write(hdr[:])
-						bp2.Write(chunk)
-					}
-					continue
-				}
-				if _, werr := bp.Write(chunk); werr != nil {
-					log.Printf("[bond-rx] %d: path %d dead, redistributing", recv.id, pathIdx)
-					recv.mu.Lock()
-					delete(recv.paths, pathIdx)
-					recv.mu.Unlock()
-					// Header already sent on dead path, need fresh frame on new path
-					_, bp2 := recv.selectReturnPathIdx(int(seq))
-					if bp2 != nil {
-						var hdr2 [bondFrameHeaderSize]byte
-						binary.BigEndian.PutUint32(hdr2[0:4], recv.id)
-						binary.BigEndian.PutUint32(hdr2[4:8], seq)
-						binary.BigEndian.PutUint16(hdr2[8:10], uint16(len(chunk)))
-						bp2.Write(hdr2[:])
-						bp2.Write(chunk)
+						recv.writeFrame(idx2, bp2, seq, chunk)
 					}
 					continue
 				}
@@ -444,16 +445,7 @@ func (recv *bondReceiver) doReturnWrite(target net.Conn) {
 		}
 		if err != nil {
 			log.Printf("[bond-rx] %d: return writer done, distribution: %v", recv.id, pathBytes)
-			// Send teardown on all paths — will be delivered in-order after all data
-			recv.mu.Lock()
-			for _, p := range recv.paths {
-				var td [bondFrameHeaderSize]byte
-				binary.BigEndian.PutUint32(td[0:4], recv.id)
-				binary.BigEndian.PutUint32(td[4:8], bondTeardownSeq)
-				binary.BigEndian.PutUint16(td[8:10], 0)
-				p.Write(td[:])
-			}
-			recv.mu.Unlock()
+			recv.broadcastTeardown()
 			return
 		}
 	}
@@ -574,4 +566,131 @@ func (recv *bondReceiver) close() {
 		c.Close()
 	}
 	log.Printf("[bond-rx] %d: session closed", recv.id)
+}
+
+// writeFrame serializes a single (header + optional payload) write on the
+// chosen path through that path's write mutex. Other writers (return data,
+// keepalive, teardown) must use this so frames don't interleave.
+func (recv *bondReceiver) writeFrame(pathIdx int, conn net.Conn, seq uint32, payload []byte) error {
+	recv.mu.Lock()
+	mu := recv.pathWriteMu[pathIdx]
+	recv.mu.Unlock()
+	if mu == nil {
+		// Path was deregistered between selection and write.
+		return fmt.Errorf("bond-rx: no write mutex for path %d", pathIdx)
+	}
+
+	var hdr [bondFrameHeaderSize]byte
+	binary.BigEndian.PutUint32(hdr[0:4], recv.id)
+	binary.BigEndian.PutUint32(hdr[4:8], seq)
+	binary.BigEndian.PutUint16(hdr[8:10], uint16(len(payload)))
+
+	mu.Lock()
+	defer mu.Unlock()
+	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write(hdr[:]); err != nil {
+		conn.SetWriteDeadline(time.Time{})
+		return err
+	}
+	if len(payload) > 0 {
+		if _, err := conn.Write(payload); err != nil {
+			conn.SetWriteDeadline(time.Time{})
+			return err
+		}
+	}
+	conn.SetWriteDeadline(time.Time{})
+	return nil
+}
+
+// broadcastTeardown writes a teardown frame on every currently registered
+// path, serialized through each path's write mutex.
+func (recv *bondReceiver) broadcastTeardown() {
+	recv.mu.Lock()
+	type entry struct {
+		idx  int
+		conn net.Conn
+	}
+	entries := make([]entry, 0, len(recv.paths))
+	for idx, c := range recv.paths {
+		entries = append(entries, entry{idx, c})
+	}
+	recv.mu.Unlock()
+
+	for _, e := range entries {
+		recv.writeFrame(e.idx, e.conn, bondTeardownSeq, nil)
+	}
+}
+
+// markPathTeardown records that this path's sender side has reported done.
+// Returns true when every currently-registered path has reported.
+func (recv *bondReceiver) markPathTeardown(pathIdx int) bool {
+	recv.mu.Lock()
+	defer recv.mu.Unlock()
+	if recv.teardownsRcvd == nil {
+		recv.teardownsRcvd = make(map[int]bool)
+	}
+	recv.teardownsRcvd[pathIdx] = true
+	for idx := range recv.paths {
+		if !recv.teardownsRcvd[idx] {
+			return false
+		}
+	}
+	return len(recv.paths) > 0
+}
+
+// halfCloseTarget signals end-of-stream to the downstream peer (target) so
+// it can release any application-layer waits (e.g. an HTTP server reading
+// the request body, or a TCP sink). Falls back to a full Close on non-TCP
+// targets so the test sink and pure-TCP servers both unblock cleanly.
+func (recv *bondReceiver) halfCloseTarget() {
+	recv.mu.Lock()
+	t := recv.target
+	recv.mu.Unlock()
+	if t == nil {
+		return
+	}
+	type writeCloser interface{ CloseWrite() error }
+	if tc, ok := t.(writeCloser); ok {
+		_ = tc.CloseWrite()
+		return
+	}
+	t.Close()
+}
+
+// runKeepaliveSender writes a length-0 frame on every registered path on a
+// fixed cadence so the sender's per-path read deadline never expires during
+// a pure-upload (return-direction-idle) flow.
+func (recv *bondReceiver) runKeepaliveSender() {
+	t := time.NewTicker(bondKeepaliveInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-recv.closeCh:
+			return
+		case <-t.C:
+			if recv.isClosed() {
+				return
+			}
+			recv.mu.Lock()
+			type entry struct {
+				idx  int
+				conn net.Conn
+			}
+			entries := make([]entry, 0, len(recv.paths))
+			for idx, c := range recv.paths {
+				entries = append(entries, entry{idx, c})
+			}
+			recv.mu.Unlock()
+
+			for _, e := range entries {
+				if err := recv.writeFrame(e.idx, e.conn, bondKeepaliveSeq, nil); err != nil {
+					recv.mu.Lock()
+					delete(recv.paths, e.idx)
+					delete(recv.pathWriteMu, e.idx)
+					recv.mu.Unlock()
+					debugLog("[bond-rx] %d: keepalive on path %d failed: %v", recv.id, e.idx, err)
+				}
+			}
+		}
+	}
 }
