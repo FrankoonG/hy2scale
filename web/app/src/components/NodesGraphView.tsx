@@ -283,8 +283,17 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
         // Segment latency: cumulative at child minus cumulative at parent.
         // When either is unknown (0 = not measured, -1 = offline) fall back
         // to the child's own value — best we can do with current data.
+        // `connected === false` means this specific hop is broken. The
+        // backend only fills latency_ms = -1 on top-level direct peers; for
+        // sub-peers it leaves latency_ms = 0 even when connected = false,
+        // so we MUST gate on connected explicitly — otherwise the parent →
+        // offline-child edge gets segLat = 0 and renders as a healthy 0 ms
+        // hop, while every consumer of segmentLatencyMs (edge offline class,
+        // path-info totals, × marker) silently treats it as reachable.
         let segLat = 0;
-        if (childLat > 0 && parentCumulativeLat >= 0) {
+        if (n.connected === false) {
+          segLat = -1;
+        } else if (childLat > 0 && parentCumulativeLat >= 0) {
           const diff = childLat - parentCumulativeLat;
           segLat = diff > 0 ? diff : childLat;
         } else if (childLat > 0) {
@@ -1543,9 +1552,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             // latency and rate are meaningless on a connection that
             // isn't flowing, and crowding them onto a red dashed edge
             // adds visual noise without information.
+            // segmentLatencyMs < 0 is its own broken-edge signal: in mesh
+            // topologies a peer reachable via one path can be unreachable
+            // via another, so node.offline (which dedupes by name across
+            // every walk-encounter) is too coarse for per-edge state.
             const fromOffEarly = nodes.get(e.from)?.offline;
             const toOffEarly = nodes.get(e.to)?.offline;
-            const edgeReachable = !e.disabled && !fromOffEarly && !toOffEarly;
+            const edgeReachable = !e.disabled && !fromOffEarly && !toOffEarly && e.segmentLatencyMs >= 0;
             const showLatency = edgeReachable && e.segmentLatencyMs !== 0 && screenLen > 60;
             const showRate = edgeReachable && screenLen > 110;
             const width = edgeWidth(e);
@@ -1561,12 +1574,15 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             const onPath = edgeIdx !== undefined;
             const sched = pathEdgeSchedule.get(e.key);
             // An edge is offline/down when the edge itself is disabled OR
-            // either endpoint reports offline. Such edges turn red, lose
-            // the flow-dot animation, and carry an × marker at their
-            // midpoint so the broken hop is obvious at a glance.
+            // either endpoint reports offline OR the edge's own segment
+            // latency is < 0 (the per-hop broken-link signal — needed for
+            // mesh topologies where a single peer name appears in multiple
+            // paths and the node-level offline flag dedupes wrong).
+            // Such edges turn red, lose the flow-dot animation, and carry
+            // an × marker at their midpoint so the broken hop is obvious.
             const fromOff = nodes.get(e.from)?.offline;
             const toOff = nodes.get(e.to)?.offline;
-            const offline = e.disabled || !!fromOff || !!toOff;
+            const offline = e.disabled || !!fromOff || !!toOff || e.segmentLatencyMs < 0;
             const cls = [
               'hy-topo-edge',
               offline && 'offline',
