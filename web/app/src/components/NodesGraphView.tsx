@@ -60,6 +60,12 @@ interface GraphEdge {
   disabled: boolean;
   /** Current tx+rx in bytes/sec (updated every topology poll). */
   currentRate: number;
+  /** Configured bandwidth ceiling for this edge (bytes/sec). Set when
+   *  EITHER endpoint reports `max_rate` from cfg.Clients (`MaxTx/MaxRx`).
+   *  When non-zero, edgeWidth scales by this instead of the observed
+   *  peak — so a known-bandwidth link draws at calibrated thickness on
+   *  the very first paint. 0 means "unknown, fall back to peak". */
+  configuredMaxRate: number;
   /** Segment latency in ms — between the two endpoints only, NOT cumulative
    *  from self. Derived as child.cumulative − parent.cumulative during the
    *  tree walk and stored for the first-visited occurrence of the edge. */
@@ -234,7 +240,7 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
     }
   }
 
-  function addEdge(a: string, b: string, direction: string | undefined, disabled: boolean, rate: number, segmentLatencyMs: number) {
+  function addEdge(a: string, b: string, direction: string | undefined, disabled: boolean, rate: number, segmentLatencyMs: number, configuredMaxRate: number) {
     if (a === b) return;
     // Directed keying: an edge represents a specific dialer→dialee TCP link.
     // - outbound: parent dialed child → key `a→b`
@@ -250,12 +256,13 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
     }
     const existing = edges.get(ekey);
     if (!existing) {
-      const e: GraphEdge = { key: ekey, from, to, directionKnown, disabled, currentRate: rate, segmentLatencyMs };
+      const e: GraphEdge = { key: ekey, from, to, directionKnown, disabled, currentRate: rate, configuredMaxRate, segmentLatencyMs };
       edges.set(ekey, e);
       const na = nodes.get(a); if (na) na.degree++;
       const nb = nodes.get(b); if (nb) nb.degree++;
     } else {
       if (rate > existing.currentRate) existing.currentRate = rate;
+      if (configuredMaxRate > existing.configuredMaxRate) existing.configuredMaxRate = configuredMaxRate;
       if (disabled) existing.disabled = true;
       // keep first-visited segment latency
     }
@@ -285,7 +292,7 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
         } else if (childLat === -1) {
           segLat = -1;
         }
-        addEdge(parentKey, keyOf(n), n.direction, !!n.disabled, rate, segLat);
+        addEdge(parentKey, keyOf(n), n.direction, !!n.disabled, rate, segLat, n.max_rate || 0);
       }
       if (n.children && n.children.length > 0) {
         walk(n.children, keyOf(n), n.latency_ms || 0, depth + 1, qpath, false);
@@ -1167,9 +1174,19 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // Edge stroke width — scaled against an ABSOLUTE 0–1000 Mbps reference
   // so a line's thickness means the same thing regardless of what else
   // the mesh has seen. Values above 1 Gbps saturate at the max width.
+  //
+  // Reference picks the BEST available signal:
+  //   1. `configuredMaxRate` from cfg.Clients (`MaxTx`/`MaxRx`) — if the
+  //      operator declared the link's bandwidth, use it directly so the
+  //      thickness is right on the very first paint, with no traffic
+  //      needed. Cross-nested: the parent peer reports its own configured
+  //      bandwidth for each sub-peer in its `max_rate` field, so a
+  //      grand-child link can size correctly here too.
+  //   2. otherwise the running observed peak from `maxByEdgeRef`.
   function edgeWidth(e: GraphEdge): number {
-    const peak = maxByEdgeRef.current.get(e.key) || 0;
-    const t = Math.min(1, peak / REF_MBPS_1000);
+    const observedPeak = maxByEdgeRef.current.get(e.key) || 0;
+    const ref = e.configuredMaxRate > 0 ? e.configuredMaxRate : observedPeak;
+    const t = Math.min(1, ref / REF_MBPS_1000);
     return 1.5 + t * 5.5; // 1.5 .. 7 px
   }
 
