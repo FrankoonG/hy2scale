@@ -46,6 +46,13 @@ type topoSubPeer struct {
 	TunCapable bool           `json:"tun_capable,omitempty"`
 	TxRate     uint64         `json:"tx_rate"`
 	RxRate     uint64         `json:"rx_rate"`
+	// Connected mirrors the direct-peer Connected flag for nested
+	// sub-peers. A sub-peer that the parent has configured but is
+	// currently offline is propagated with Connected=false so the
+	// graph stays visually complete (red edge, but the node is still
+	// drawn). Old peers that don't send this field default to
+	// Connected=true on the consumer side for backward compat.
+	Connected  bool           `json:"connected"`
 	Children   []topoSubPeer  `json:"children,omitempty"`
 }
 
@@ -958,6 +965,13 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				LatencyMs:  latencyCache[p.Name],
 				Version:    p.Version,
 				TunCapable: p.TunCapable,
+				// Inbound peers in the live `peers` slice are connected
+				// by definition — `p` was added when the inbound stream
+				// registered. The new `connected` field on topoSubPeer
+				// has no `omitempty`, so we MUST set it to true here or
+				// the row defaults to false → list shows "offline" for
+				// every active inbound peer.
+				Connected: true,
 			}
 			if pc, ok := cfg.Peers[p.Name]; ok {
 				if pc.Nested {
@@ -1115,11 +1129,25 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 		cfg := s.app.Store().Get()
 		type peerWithChildren struct {
 			relay.PeerInfo
-			Children []topoSubPeer `json:"children,omitempty"`
+			// Connected lets a remote consumer distinguish "configured
+			// here but currently offline" from "fully alive". Disabled
+			// peers are NOT propagated at all — see filter below — so
+			// the consumer never sees `Disabled=true` for our sub-peers.
+			Connected bool          `json:"connected"`
+			Children  []topoSubPeer `json:"children,omitempty"`
 		}
+
+		// Live (currently-connected) direct peers. Skip any that we
+		// have explicitly disabled in our peers config — the user's
+		// preference is that disabled peers should NOT propagate.
+		liveByName := make(map[string]bool, len(peers))
 		result := make([]peerWithChildren, 0, len(peers))
 		for _, p := range peers {
-			pc := peerWithChildren{PeerInfo: p}
+			liveByName[p.Name] = true
+			if pcfg, ok := cfg.Peers[p.Name]; ok && pcfg.Disabled {
+				continue
+			}
+			pc := peerWithChildren{PeerInfo: p, Connected: true}
 			if pcfg, ok := cfg.Peers[p.Name]; ok && pcfg.Nested {
 				cached := s.getCachedSubPeers(p.Name)
 				flat := make([]topoSubPeer, 0, len(cached))
@@ -1131,6 +1159,26 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 			}
 			result = append(result, pc)
 		}
+
+		// Configured-but-offline outbound peers. These appear in
+		// cfg.Clients but are missing from the live `peers` slice
+		// because Node.peers gets the entry deleted on disconnect.
+		// Propagate them with Connected=false so the consumer's
+		// graph stays visually complete (red edge to offline node,
+		// node still drawn). Skip disabled.
+		for _, cl := range cfg.Clients {
+			if liveByName[cl.Name] {
+				continue
+			}
+			if pcfg, ok := cfg.Peers[cl.Name]; ok && pcfg.Disabled {
+				continue
+			}
+			result = append(result, peerWithChildren{
+				PeerInfo:  relay.PeerInfo{Name: cl.Name, Direction: "outbound"},
+				Connected: false,
+			})
+		}
+
 		data, _ := json.Marshal(result)
 		return data
 	})
@@ -1369,7 +1417,13 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 		LatencyMs  int           `json:"latency_ms"`
 		Version    string        `json:"version,omitempty"`
 		TunCapable bool          `json:"tun_capable,omitempty"`
-		Children   []topoSubPeer `json:"children,omitempty"`
+		// Pointer so we can detect "field absent" vs "field=false".
+		// Older peers (1.3.0/early 1.3.1) don't send `connected` at
+		// all — we treat absent as live (true) so the legacy
+		// behavior is preserved unchanged. New peers send true/false
+		// explicitly per the offline-propagation contract.
+		Connected *bool         `json:"connected,omitempty"`
+		Children  []topoSubPeer `json:"children,omitempty"`
 	}
 	var remotePeers []peerWithChildren
 	if err := json.Unmarshal(data, &remotePeers); err != nil {
@@ -1400,6 +1454,12 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 				embedded = append(embedded, gc)
 			}
 		}
+		// Connected: absent → treat as connected (legacy peers).
+		// Present → use the explicit value.
+		connected := true
+		if rp.Connected != nil {
+			connected = *rp.Connected
+		}
 		child := topoSubPeer{
 			Name:       rp.Name,
 			ExitNode:   rp.ExitNode,
@@ -1409,6 +1469,7 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 			Native:     rp.Native,
 			Version:    rp.Version,
 			TunCapable: rp.TunCapable,
+			Connected:  connected,
 			Children:   embedded,
 		}
 		children = append(children, child)
@@ -1600,6 +1661,11 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 			Direction: sp.Direction,
 			Via:       peerName,
 			LatencyMs: childLatency,
+			// Default to connected=true — this code path is for peers
+			// the source actively reported (relay PeerInfo from PeersOf).
+			// Offline propagation flows through fetchSubPeersViaStream's
+			// dedicated handling above, not this branch.
+			Connected: true,
 		}
 		qualifiedKey := peerName + "/" + sp.Name
 		if sp.Native {

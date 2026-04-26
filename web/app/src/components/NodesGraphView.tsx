@@ -1513,10 +1513,15 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             const my = (y1 + y2) / 2;
 
             const screenLen = edgeScreenLen(p, q);
-            const showLatency = e.segmentLatencyMs !== 0 && screenLen > 60;
-            // Rate label is always shown (even for 0 B/s) once the edge is
-            // long enough on screen to fit the label text.
-            const showRate = screenLen > 110;
+            // Suppress in-line edge labels on unreachable links — both
+            // latency and rate are meaningless on a connection that
+            // isn't flowing, and crowding them onto a red dashed edge
+            // adds visual noise without information.
+            const fromOffEarly = nodes.get(e.from)?.offline;
+            const toOffEarly = nodes.get(e.to)?.offline;
+            const edgeReachable = !e.disabled && !fromOffEarly && !toOffEarly;
+            const showLatency = edgeReachable && e.segmentLatencyMs !== 0 && screenLen > 60;
+            const showRate = edgeReachable && screenLen > 110;
             const width = edgeWidth(e);
 
             // Path highlight animation: all edges on the active path go
@@ -1728,7 +1733,14 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
               })}
             </span>
             <span className={`hy-topo-pathinfo-lat ${latClass}`}>
-              {offline ? t('nodes.graph.unreachable') : fmtLatency(totalLat)}
+              {/*
+               * Use the same status word the list view's status column uses:
+               * `nodes.offline` for both `connected=false` and explicitly
+               * `disabled=true`. The previous generic `nodes.graph.unreachable`
+               * literal made graph and list disagree on what to call the
+               * same condition.
+               */}
+              {offline ? t('nodes.offline') : fmtLatency(totalLat)}
             </span>
             {showOpen && (
               <button
