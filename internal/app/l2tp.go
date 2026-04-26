@@ -656,8 +656,18 @@ func (a *App) handleTransparent(conn net.Conn) {
 			return
 		}
 		defer remote.Close()
-		go func() { io.Copy(remote, conn); remote.Close() }()
+		// Upload: client → remote. When upload ends, half-close
+		// remote's write side rather than full-closing it — the
+		// download direction may still be draining through TCP buffers.
+		done := make(chan struct{})
+		go func() {
+			io.Copy(remote, conn)
+			halfCloseWriteOrClose(remote)
+			close(done)
+		}()
 		io.Copy(conn, remote)
+		halfCloseWriteOrClose(conn)
+		<-done
 		return
 	}
 
@@ -704,13 +714,16 @@ func (a *App) handleTransparent(conn net.Conn) {
 	var up, down int64
 	done := make(chan struct{})
 	go func() {
+		// Upload: client → remote.
 		n, _ := copyCtx(ctx, remote, conn)
 		atomic.AddInt64(&up, n)
-		remote.Close()
+		halfCloseWriteOrClose(remote)
 		done <- struct{}{}
 	}()
+	// Download: remote → client.
 	n, _ := copyCtx(ctx, conn, remote)
 	atomic.AddInt64(&down, n)
+	halfCloseWriteOrClose(conn)
 	<-done
 	cancel()
 	a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))
