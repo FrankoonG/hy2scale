@@ -1576,11 +1576,11 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                     one at a time in sequence from self, so the cumulative
                     effect radiates outward to the selected node. A fresh
                     key per selection change forces animation restart. */}
-                {onPath && !offline && (
+                {onPath && (
                   <line
                     key={activePath ? activePath.join('/') + ':' + edgeIdx : 'draw'}
                     x1={dx1} y1={dy1} x2={dx2} y2={dy2}
-                    className="hy-topo-edge-draw"
+                    className={`hy-topo-edge-draw${offline ? ' offline' : ''}`}
                     style={{
                       ['--hy-path-len' as any]: drawLen,
                       ['--hy-path-draw-ms' as any]: `${sched?.durationMs ?? PATH_TOTAL_MS}ms`,

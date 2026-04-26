@@ -431,6 +431,12 @@ a.peer-link:hover{text-decoration:underline}
    animates to 0, revealing the blue stroke outward toward the target.
    Rendered on top of the base so it reads as the dominant highlight. */
 .hy-topo-edge-draw{color:#4361ee;stroke:currentColor;stroke-width:5;stroke-linecap:round;fill:none;pointer-events:none;stroke-dasharray:var(--hy-path-len);stroke-dashoffset:var(--hy-path-len);animation:hy-topo-path-draw var(--hy-path-draw-ms, 320ms) linear var(--hy-path-draw-delay, 0ms) forwards}
+/* Path-highlight overlay on an offline / unreachable edge — paint
+   in red instead of blue so the user still sees the route they
+   selected (the segment isn't silently invisible) but in a colour
+   that matches the dashed red base + × marker, signalling that
+   this segment is not actually reachable. */
+.hy-topo-edge-draw.offline{color:#ef4444}
 @keyframes hy-topo-path-draw{to{stroke-dashoffset:0}}
 
 /* Offline / disabled edges — red, dashed, no flow, × marker. */
