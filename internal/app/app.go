@@ -1555,19 +1555,47 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 	var up, down int64
 	done := make(chan struct{})
 	go func() {
+		// Upload: client → remote. (copyCtx(dst, src) reads src, writes dst.)
 		n, _ := copyCtx(ctx, remote, conn)
 		atomic.AddInt64(&up, n)
-		cancel() // unblock the other direction
+		// Upload ended (client FIN or remote write failed). Forward the
+		// FIN downstream so the exit/target sees a clean end-of-request.
+		// Do NOT cancel the response direction — server reply may still
+		// be draining back, and aborting it would lose buffered bytes.
+		halfCloseWriteOrClose(remote)
 		done <- struct{}{}
 	}()
+	// Download: remote → client.
 	n2, _ := copyCtx(ctx, conn, remote)
 	atomic.AddInt64(&down, n2)
-	cancel() // unblock the other direction
+	// Download ended (server FIN or client write failed). Forward FIN to
+	// client.
+	halfCloseWriteOrClose(conn)
 	<-done
+	cancel()
 	a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))
 	if username != "" {
 		a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))
 	}
+}
+
+// halfCloseWriteOrClose forwards an end-of-stream signal on `c`'s write
+// side only, so the peer can read the natural FIN while we keep reading
+// the response on the read side. Used by every proxy handler's
+// bidirectional copy plumbing to avoid aborting the opposite direction's
+// in-flight buffered data when one side hangs up.
+//
+// For TCP / QUIC streams CloseWrite is the correct primitive. For
+// `net.Pipe()` ends (e.g. bond's user-side conn) there's no half-close,
+// so we fall back to full Close — which IS the right signal for the
+// bond writer's EOF detection.
+func halfCloseWriteOrClose(c net.Conn) {
+	type writeCloser interface{ CloseWrite() error }
+	if cw, ok := c.(writeCloser); ok {
+		_ = cw.CloseWrite()
+		return
+	}
+	_ = c.Close()
 }
 
 // handleHTTP implements an HTTP CONNECT proxy (RFC 7231 §4.3.6).
@@ -1724,15 +1752,19 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 	var up, down int64
 	done := make(chan struct{})
 	go func() {
+		// Upload: client → remote.
 		n, _ := copyCtx(ctx, remote, conn)
 		atomic.AddInt64(&up, n)
-		remote.Close()
+		// See handleSOCKS5 for the rationale on half-close vs cancel.
+		halfCloseWriteOrClose(remote)
 		done <- struct{}{}
 	}()
+	// Download: remote → client.
 	n, _ := copyCtx(ctx, conn, remote)
 	atomic.AddInt64(&down, n)
-	cancel()
+	halfCloseWriteOrClose(conn)
 	<-done
+	cancel()
 	a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))
 	if username != "" {
 		a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))
