@@ -869,13 +869,13 @@ func (a *App) handleIKEv2Transparent(conn net.Conn, cfg IKEv2Config) {
 		// Upload: client → remote.
 		n, _ := copyCtx(ctx, remote, conn)
 		atomic.AddInt64(&up, n)
-		halfCloseWriteOrClose(remote)
+		halfCloseAndBound(remote)
 		done <- struct{}{}
 	}()
 	// Download: remote → client.
 	n, _ := copyCtx(ctx, conn, remote)
 	atomic.AddInt64(&down, n)
-	halfCloseWriteOrClose(conn)
+	halfCloseAndBound(conn)
 	<-done
 	cancel()
 	a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))

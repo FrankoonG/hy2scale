@@ -718,12 +718,12 @@ func (e *ruleEngine) handleConn(parentCtx context.Context, conn net.Conn) {
 		go func() {
 			// Upload: client → remote.
 			copyCtx(ctx, remote, conn)
-			halfCloseWriteOrClose(remote)
+			halfCloseAndBound(remote)
 			done <- struct{}{}
 		}()
 		// Download: remote → client.
 		copyCtx(ctx, conn, remote)
-		halfCloseWriteOrClose(conn)
+		halfCloseAndBound(conn)
 		<-done
 		cancel()
 		return
