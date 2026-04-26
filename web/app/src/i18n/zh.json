@@ -59,6 +59,8 @@
   "nodes.selfSignedAuto": "自签名（自动）",
   "nodes.nodeIdRequired": "节点 ID 为必填项",
   "nodes.settingsSaved": "节点设置已保存。",
+  "nodes.serverPasswordCollidesUser": "Hy2 服务密码与用户 '{{name}}' 冲突 — 请换一个。",
+  "users.passwordCollidesServer": "用户密码与 hy2 服务密码冲突 — 请换一个。",
   "nodes.noConnections": "暂无连接。点击 <b>+ 添加节点</b> 来建立连接。",
   "nodes.view.list": "列表视图",
   "nodes.view.graph": "图形视图",

@@ -59,6 +59,8 @@
   "nodes.selfSignedAuto": "자체 서명 (자동)",
   "nodes.nodeIdRequired": "노드 ID는 필수입니다",
   "nodes.settingsSaved": "노드 설정 저장됨.",
+  "nodes.serverPasswordCollidesUser": "Hy2 서버 비밀번호가 사용자 '{{name}}'과(와) 충돌합니다 — 다른 비밀번호를 사용하세요.",
+  "users.passwordCollidesServer": "사용자 비밀번호가 hy2 서버 비밀번호와 충돌합니다 — 다른 비밀번호를 사용하세요.",
   "nodes.noConnections": "연결이 없습니다. <b>+ 노드 추가</b>를 클릭하세요.",
   "nodes.view.list": "목록 보기",
   "nodes.view.graph": "그래프 보기",

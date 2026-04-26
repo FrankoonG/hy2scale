@@ -350,8 +350,11 @@ function HaloText({ x, y, stroke, children }: { x: number; y: number; stroke: st
 function fmtLatency(ms: number): string {
   if (ms < 0) return 'offline';
   if (ms === 0) return '—';
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
+  // Always render in milliseconds for visual consistency across the
+  // graph — the previous "auto switch to seconds above 1000 ms" branch
+  // made the dot-center label lose alignment with neighbouring labels
+  // and made cumulative-vs-segment comparisons confusing.
+  return `${Math.round(ms)}ms`;
 }
 
 export default function NodesGraphView({ topology, selfId, selfName, onOpenRemote, onEditNode, selectedQPath, onSelectQPath }: Props) {

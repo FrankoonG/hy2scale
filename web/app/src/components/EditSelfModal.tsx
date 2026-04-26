@@ -31,6 +31,16 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
     enabled: open,
   });
 
+  // Need the user list to detect a hy2-server / user-account password
+  // collision before submitting — peers receive the server password in
+  // cleartext via the clients[] block, so a duplicated user password
+  // would leak that user's credentials cluster-wide.
+  const { data: users } = useQuery({
+    queryKey: ['users'],
+    queryFn: () => api.getUsers(),
+    enabled: open,
+  });
+
   useEffect(() => {
     if (open && node) {
       setNodeId(node.node_id || '');
@@ -50,6 +60,13 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
     if (!nodeId.trim()) {
       toast.error(t('nodes.nodeIdRequired'));
       return;
+    }
+    if (password) {
+      const collide = (users || []).find((u) => u.password === password);
+      if (collide) {
+        toast.error(t('nodes.serverPasswordCollidesUser', { name: collide.username }));
+        return;
+      }
     }
     setLoading(true);
     try {
