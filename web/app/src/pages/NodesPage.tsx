@@ -236,6 +236,12 @@ export default function NodesPage() {
     if (n.unsupported) return <span className="latency latency-bad">{t('nodes.unsupported')}</span>;
     if (n.disabled) return <span className="latency latency-off">{t('nodes.offline')}</span>;
     if (n.is_self) return <span className="latency latency-good">∞</span>;
+    // `connected === false` is the authoritative offline flag — set on
+    // direct peers when the QUIC link is down, AND on nested sub-peers
+    // that the parent reports as offline (post offline-propagation
+    // change). Trips before the latency-based heuristics so the row
+    // shows "offline" instead of an ambiguous em-dash.
+    if (n.connected === false) return <span className="latency latency-off">{t('nodes.offline')}</span>;
     if (n.latency_ms === -1) return <span className="latency latency-off">{t('nodes.offline')}</span>;
     if (n.latency_ms === 0) return <span className="latency latency-na">—</span>;
     const cls = n.latency_ms < 80 ? 'latency-good' : n.latency_ms < 200 ? 'latency-med' : 'latency-bad';
