@@ -1237,6 +1237,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     let last = performance.now();
     const BASE_SPEED = 24;
     const MAX_SPEED = 180;
+    // Idle (no traffic) chevron pace is HALF of BASE_SPEED so the
+    // visual gap between "the link is alive but quiet" and "any
+    // amount of traffic, even a few KB/s" is obvious. The instant
+    // a non-zero rate is observed, target jumps to BASE_SPEED and
+    // scales up from there; the lerp below smooths the transition
+    // so the change reads as an acceleration rather than a jump-cut.
+    const IDLE_SPEED = BASE_SPEED / 2;
     const LERP = 0.08;
     const loop = (now: number) => {
       const dt = Math.min(0.1, (now - last) / 1000);
@@ -1252,8 +1259,10 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       curEdges.forEach((e) => {
         if (!e.directionKnown) return;
         const t = Math.min(1, e.currentRate / denom);
-        const target = BASE_SPEED + t * (MAX_SPEED - BASE_SPEED);
-        const state = flowStateRef.current.get(e.key) || { phase: 0, speed: BASE_SPEED };
+        const target = e.currentRate > 0
+          ? BASE_SPEED + t * (MAX_SPEED - BASE_SPEED)
+          : IDLE_SPEED;
+        const state = flowStateRef.current.get(e.key) || { phase: 0, speed: IDLE_SPEED };
         state.speed += (target - state.speed) * LERP;
         // phase advances in the same direction as the edge (start → end).
         state.phase = ((state.phase + state.speed * dt) % CHEV_SPACING + CHEV_SPACING) % CHEV_SPACING;
