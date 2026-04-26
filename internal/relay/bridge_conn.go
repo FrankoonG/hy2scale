@@ -43,8 +43,44 @@ type bridgedConn struct {
 	viaPath       []string
 	viaTargetAddr string
 
+	// Triggers consulted on each Write to decide proactive rebind. Empty
+	// list = no proactive rebind. Default in 1.3.1: a single
+	// BidirectionalIdleTrigger. Read with mu held so a future
+	// SetTriggers / SetViaPath can mutate safely.
+	triggers []RebindTrigger
+
 	// Single monitor goroutine that closes the stream when bridge dies
 	monitorOnce sync.Once
+}
+
+// SetViaPath updates the via path used by future rebind attempts. Currently
+// no caller in 1.3.1 — wired now so future cross-path migration work can
+// rebind a logical stream onto a different intermediate without changing
+// bridgedConn callers.
+func (c *bridgedConn) SetViaPath(p []string) {
+	c.mu.Lock()
+	c.viaPath = append([]string(nil), p...)
+	c.mu.Unlock()
+}
+
+// shouldRebindByTriggers consults all installed triggers; first yes wins.
+// Returns false if no triggers are installed.
+func (c *bridgedConn) shouldRebindByTriggers() bool {
+	c.mu.Lock()
+	triggers := c.triggers
+	state := ConnState{
+		LastRead:  c.lastRead.Load(),
+		LastWrite: c.lastWrite.Load(),
+		ViaPath:   c.viaPath,
+	}
+	c.mu.Unlock()
+	for _, trig := range triggers {
+		if yes, reason := trig.ShouldRebind(state); yes {
+			log.Printf("[bridge] %s trigger fired (%s), proactive rebind", c.bridge.id, reason)
+			return true
+		}
+	}
+	return false
 }
 
 // startMonitor launches a single goroutine (per conn) that watches bridge.ctx
@@ -100,6 +136,7 @@ func (n *Node) DialTCPBridged(peerName, addr string) (net.Conn, string, error) {
 		node:     n,
 		peerName: peerName,
 		stream:   n.wrapConn(peerName, stream),
+		triggers: defaultTriggers(),
 	}
 	bc.startMonitor()
 	return bc, bridge.id, nil
@@ -166,20 +203,18 @@ func (c *bridgedConn) Write(b []byte) (int, error) {
 			return 0, net.ErrClosed
 		}
 
-		// Check for sustained congestion (direct connections only, not multi-hop via).
-		if len(c.viaPath) == 0 {
-			lastR := c.lastRead.Load()
-			if lastR > 0 && c.lastWrite.Load() > lastR {
-				stall := time.Since(time.Unix(0, lastR))
-				if stall > bridgeCongestionTO {
-					log.Printf("[bridge] %s congested (no read for %v), proactive rebind", c.bridge.id, stall.Round(time.Second))
-					s.Close()
-					if !c.tryRebind() {
-						return 0, net.ErrClosed
-					}
-					continue
-				}
+		// Consult installed RebindTriggers. The bidirectional-idle trigger
+		// replaces the old "no Read while Writing" rule, which broke
+		// legitimate one-way uploads. Triggers run only on direct
+		// connections (no via): multi-hop bridges are governed by their
+		// per-hop bridges and the outer bridge's via state would not
+		// reflect inner stream health anyway.
+		if len(c.viaPath) == 0 && c.shouldRebindByTriggers() {
+			s.Close()
+			if !c.tryRebind() {
+				return 0, net.ErrClosed
 			}
+			continue
 		}
 
 		n, err := s.Write(b)
@@ -243,7 +278,17 @@ func isCleanClose(err error) bool {
 // let the storm run longer before we break the loop.
 const maxZombieRebinds = 2
 
+// tryRebind is the legacy zero-arg wrapper used by Read/Write hot paths.
+// Equivalent to tryRebindWith(RebindOpts{}).
 func (c *bridgedConn) tryRebind() bool {
+	return c.tryRebindWith(RebindOpts{})
+}
+
+// tryRebindWith performs a rebind, optionally overriding the via path. 1.3.1
+// has no callers passing a non-zero RebindOpts — the override is a hook for
+// future cross-path migration work where a path quality trigger picks a new
+// upstream and asks the bridge to reattach there.
+func (c *bridgedConn) tryRebindWith(opts RebindOpts) bool {
 	c.mu.Lock()
 	if c.rebinding {
 		done := c.rebindDone
@@ -253,6 +298,9 @@ func (c *bridgedConn) tryRebind() bool {
 	}
 	c.rebinding = true
 	c.rebindDone = make(chan struct{})
+	if opts.ViaPath != nil {
+		c.viaPath = append([]string(nil), opts.ViaPath...)
+	}
 	c.mu.Unlock()
 
 	defer func() {

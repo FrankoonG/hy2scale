@@ -42,8 +42,16 @@ const (
 	bondMinChunkSize    = 4096
 	bondMaxChunkSize    = 65535
 	bondSetupSeq        = 0
+	bondKeepaliveSeq    = 0xFFFFFFFD
 	bondWeightSeq       = 0xFFFFFFFE
 	bondTeardownSeq     = 0xFFFFFFFF
+
+	// bondKeepaliveInterval drives length-0 frames sent in BOTH directions
+	// while a session is active. It must be safely below the per-path read
+	// deadlines on either side (sender 8 s, receiver 10 s) so an idle return
+	// or forward direction doesn't cause spurious "deadline exceeded"
+	// teardowns. 3 s gives ~2 chances per deadline window.
+	bondKeepaliveInterval = 3 * time.Second
 )
 
 // bondSession is the sender-side state for a multi-path bond.
@@ -280,8 +288,47 @@ func (sess *bondSession) runWriter(src net.Conn) {
 			if err != io.EOF {
 				debugLog("[bond] %d: writer read error: %v", sess.id, err)
 			}
+			// Local user side hung up — signal end-of-stream to the receiver
+			// so it half-closes the target and the downstream peer (e.g. an
+			// HTTP server / TCP sink) sees a clean FIN. Without this the
+			// receiver's runReturnWriter blocks on target.Read forever and
+			// the upload appears to "hang at 100%".
+			sess.signalWriterDone()
 			return
 		}
+	}
+}
+
+// signalWriterDone broadcasts a length-0 frame with seq=bondTeardownSeq on
+// every healthy path. Each frame is queued AFTER all previously written data
+// on its path, so TCP in-order delivery guarantees the receiver only acts on
+// the teardown after every preceding data chunk on that same path is
+// consumed. The receiver counts teardowns across paths before closing the
+// target — that's how we avoid losing in-flight chunks on slower paths.
+func (sess *bondSession) signalWriterDone() {
+	sess.mu.Lock()
+	healthy := make([]*bondPath, 0, len(sess.paths))
+	for _, bp := range sess.paths {
+		bp.mu.Lock()
+		if bp.healthy && bp.conn != nil {
+			healthy = append(healthy, bp)
+		}
+		bp.mu.Unlock()
+	}
+	sess.mu.Unlock()
+
+	for _, bp := range healthy {
+		var hdr [bondFrameHeaderSize]byte
+		binary.BigEndian.PutUint32(hdr[0:4], sess.id)
+		binary.BigEndian.PutUint32(hdr[4:8], bondTeardownSeq)
+		binary.BigEndian.PutUint16(hdr[8:10], 0)
+		bp.mu.Lock()
+		if bp.conn != nil {
+			bp.conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			bp.conn.Write(hdr[:])
+			bp.conn.SetWriteDeadline(time.Time{})
+		}
+		bp.mu.Unlock()
 	}
 }
 
@@ -726,6 +773,11 @@ func (sess *bondSession) runHealthMonitor(a *App) {
 			// Send weight hints to receiver (via path 0, which is always connected)
 			sess.sendWeightHints()
 
+			// Send keepalive on every healthy path so the receiver's per-path
+			// read deadline never expires when the application is doing pure
+			// upload (no return frames otherwise).
+			sess.sendKeepalives()
+
 			// Try to reopen dead paths (skip torn-down ones)
 			for _, bp := range sess.paths {
 				bp.mu.Lock()
@@ -818,6 +870,51 @@ func (sess *bondSession) sendWeightHints() {
 	firstHealthy.conn.Write(hdr[:])
 	firstHealthy.conn.Write(payload)
 	firstHealthy.mu.Unlock()
+}
+
+// sendKeepalives writes a length-0 frame on every healthy path. Receivers
+// short-circuit length-0 reads with `continue` and the frame refreshes the
+// peer's per-path read deadline. Errors mark the path unhealthy so the
+// health monitor can attempt to reopen it.
+func (sess *bondSession) sendKeepalives() {
+	sess.mu.Lock()
+	healthy := make([]*bondPath, 0, len(sess.paths))
+	for _, bp := range sess.paths {
+		bp.mu.Lock()
+		if bp.healthy && bp.conn != nil {
+			healthy = append(healthy, bp)
+		}
+		bp.mu.Unlock()
+	}
+	sess.mu.Unlock()
+
+	if len(healthy) == 0 {
+		return
+	}
+
+	var hdr [bondFrameHeaderSize]byte
+	binary.BigEndian.PutUint32(hdr[0:4], sess.id)
+	binary.BigEndian.PutUint32(hdr[4:8], bondKeepaliveSeq)
+	binary.BigEndian.PutUint16(hdr[8:10], 0)
+
+	for _, bp := range healthy {
+		bp.mu.Lock()
+		conn := bp.conn
+		if conn == nil {
+			bp.mu.Unlock()
+			continue
+		}
+		conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+		_, err := conn.Write(hdr[:])
+		conn.SetWriteDeadline(time.Time{})
+		if err != nil {
+			bp.healthy = false
+			if bp.conn != nil {
+				bp.conn.Close()
+			}
+		}
+		bp.mu.Unlock()
+	}
 }
 
 func (sess *bondSession) close() {

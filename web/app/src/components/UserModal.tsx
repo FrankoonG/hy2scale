@@ -5,6 +5,7 @@ import { Modal, Button, Input, PasswordInput, Toggle, FormGroup, FormGrid, Tabs,
 import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from './ExitPathList';
 import * as api from '@/api';
 import { PASSWORD_ONLY_PROXIES } from '@/config/proxyRegistry';
+import { useNodeStore } from '@/store/node';
 
 interface Props {
   open: boolean;
@@ -53,6 +54,15 @@ export default function UserModal({ open, onClose, editingId, animateFrom }: Pro
   const handleSubmit = async () => {
     if (!username || !password) {
       toast.error(t('users.usernamePassRequired'));
+      return;
+    }
+    // Block re-using the hy2 server password as a user account password —
+    // peers see the server password in plain text via the clients[]
+    // block, so this would silently leak the user's credentials to every
+    // other peer. Backend enforces the same rule, this is the UI hint.
+    const node = useNodeStore.getState().node;
+    if (node?.server?.password && node.server.password === password) {
+      toast.error(t('users.passwordCollidesServer'));
       return;
     }
     setLoading(true);

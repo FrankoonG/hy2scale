@@ -46,6 +46,21 @@ type topoSubPeer struct {
 	TunCapable bool           `json:"tun_capable,omitempty"`
 	TxRate     uint64         `json:"tx_rate"`
 	RxRate     uint64         `json:"rx_rate"`
+	// MaxRate is the configured peak the link can sustain (bytes/sec),
+	// derived from `max(ClientEntry.MaxTx, ClientEntry.MaxRx)` of the
+	// dialer side. The graph uses it as the reference for edge
+	// thickness — a known-bandwidth link draws at its calibrated width
+	// immediately on first load instead of having to observe traffic
+	// to populate a peak. 0 = unknown → falls back to observed peak
+	// on the frontend.
+	MaxRate    uint64         `json:"max_rate,omitempty"`
+	// Connected mirrors the direct-peer Connected flag for nested
+	// sub-peers. A sub-peer that the parent has configured but is
+	// currently offline is propagated with Connected=false so the
+	// graph stays visually complete (red edge, but the node is still
+	// drawn). Old peers that don't send this field default to
+	// Connected=true on the consumer side for backward compat.
+	Connected  bool           `json:"connected"`
 	Children   []topoSubPeer  `json:"children,omitempty"`
 }
 
@@ -563,7 +578,7 @@ func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // Version is the application version. Update this on each release.
-const Version = "1.3.0"
+const Version = "1.3.1"
 
 func init() {
 	app.AppVersion = Version
@@ -606,6 +621,19 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server password must be at least 6 characters", 400)
 		return
 	}
+	// The hy2 relay password is broadcast to every other peer via the
+	// clients list — sharing it with a SOCKS5/HTTP user account would
+	// give that user full peer-level relay access. Reject the collision
+	// at save time on both directions.
+	if body.Server != nil && body.Server.Password != "" {
+		curUsers := s.app.Store().Get().Users
+		for _, u := range curUsers {
+			if u.Password == body.Server.Password {
+				http.Error(w, fmt.Sprintf("server password collides with user %q — pick a different password", u.Username), 400)
+				return
+			}
+		}
+	}
 	oldID := s.app.Store().Get().NodeID
 
 	s.app.Store().Update(func(c *app.Config) {
@@ -634,6 +662,7 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
 	oldName := s.app.Node().Name()
 	s.app.Node().SetName(cfg.Name)
+	s.app.Node().SetNodeID(cfg.NodeID)
 	s.app.Node().SetExit(cfg.ExitNode)
 
 	needReconnect := false
@@ -845,6 +874,16 @@ func (s *Server) streamGraphLayout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	peers := s.app.Node().Peers()
+	// Alt-slot peers carry the OTHER direction in a mutually-dialed
+	// (bidirectional) deployment — see relay.Node.peersAlt for the slot
+	// contract. We merge them into the same maps below so both directions
+	// surface in the topology JSON: top-level for outbound side, inbound
+	// child of self for inbound side. The frontend then renders parallel
+	// rails for the mutual link (NodesGraphView's `hasOpposite` branch).
+	peersAlt := s.app.Node().PeersAlt()
+	allPeers := make([]relay.PeerInfo, 0, len(peers)+len(peersAlt))
+	allPeers = append(allPeers, peers...)
+	allPeers = append(allPeers, peersAlt...)
 	cfg := s.app.Store().Get()
 
 	// Build client lookup for addr info
@@ -857,7 +896,8 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	versionMap := make(map[string]string)
 	incompatMap := make(map[string]bool)
 	conflictMap := make(map[string]bool)
-	for _, p := range peers {
+	unsupportedMap := make(map[string]bool)
+	for _, p := range allPeers {
 		connected[p.Name] = true
 		if p.Native {
 			nativeMap[p.Name] = true
@@ -870,6 +910,9 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		}
 		if p.Conflict {
 			conflictMap[p.Name] = true
+		}
+		if p.Unsupported {
+			unsupportedMap[p.Name] = true
 		}
 	}
 
@@ -887,23 +930,43 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		Version      string            `json:"version,omitempty"`
 		Incompatible bool              `json:"incompatible,omitempty"`
 		Conflict     bool              `json:"conflict,omitempty"`
+		Unsupported  bool              `json:"unsupported,omitempty"`
 		TunCapable   bool              `json:"tun_capable,omitempty"`
 		LatencyMs    int               `json:"latency_ms"`
 		TxRate       uint64            `json:"tx_rate"`
 		RxRate       uint64            `json:"rx_rate"`
+		// MaxRate (bytes/sec) — same role as topoSubPeer.MaxRate,
+		// see comment there. Populated from the local cfg.Clients
+		// entry's max(MaxTx, MaxRx).
+		MaxRate      uint64            `json:"max_rate,omitempty"`
 		IsSelf       bool              `json:"is_self,omitempty"`
 		Children     []topoSubPeer     `json:"children,omitempty"`
 	}
 
 	disabledMap := make(map[string]bool)
+	// maxRateByName: configured bandwidth per direct outbound peer.
+	// max(MaxTx, MaxRx) so a duplex-capped link is represented by the
+	// higher-of-two rates (the one that's actually a saturating cap
+	// for the dominant traffic direction in most deployments).
+	maxRateByName := make(map[string]uint64)
 	for _, cl := range cfg.Clients {
 		if cl.Disabled {
 			disabledMap[cl.Name] = true
 		}
+		var m int
+		if cl.MaxTx > m {
+			m = cl.MaxTx
+		}
+		if cl.MaxRx > m {
+			m = cl.MaxRx
+		}
+		if m > 0 {
+			maxRateByName[cl.Name] = uint64(m)
+		}
 	}
 
 	nameSet := make(map[string]bool)
-	for _, p := range peers {
+	for _, p := range allPeers {
 		nameSet[p.Name] = true
 	}
 	for _, cl := range cfg.Clients {
@@ -929,7 +992,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	}
 	selfChildren := make([]topoSubPeer, 0)
 	inboundNames := make(map[string]bool)
-	for _, p := range peers {
+	for _, p := range allPeers {
 		if p.Direction == "inbound" {
 			inboundNames[p.Name] = true
 			child := topoSubPeer{
@@ -940,6 +1003,13 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				LatencyMs:  latencyCache[p.Name],
 				Version:    p.Version,
 				TunCapable: p.TunCapable,
+				// Inbound peers in the live `peers` slice are connected
+				// by definition — `p` was added when the inbound stream
+				// registered. The new `connected` field on topoSubPeer
+				// has no `omitempty`, so we MUST set it to true here or
+				// the row defaults to false → list shows "offline" for
+				// every active inbound peer.
+				Connected: true,
 			}
 			if pc, ok := cfg.Peers[p.Name]; ok {
 				if pc.Nested {
@@ -983,8 +1053,17 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	})
 
 	for _, name := range names {
-		// Skip inbound peers — they're nested under self
-		if inboundNames[name] {
+		_, configuredOutbound := clientMap[name]
+		// Skip inbound peers from the top-level list — they're nested
+		// under self and shouldn't render twice — UNLESS this peer is
+		// ALSO in our cfg.Clients (we configured it as outbound). In
+		// that case the relationship is genuinely bidirectional: we
+		// dial them AND they dial us. Emit both: this top-level entry
+		// (outbound, from our config) plus the inbound child under
+		// self (kept in selfChildren above). The frontend's addEdge
+		// will produce two opposite-direction edges and the graph
+		// renders them as parallel rails.
+		if inboundNames[name] && !configuredOutbound {
 			continue
 		}
 		tn := treeNode{Name: name, Connected: connected[name] && !disabledMap[name], Disabled: disabledMap[name]}
@@ -1018,23 +1097,39 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			}
 			tn.Direction = "outbound"
 		}
-		for _, p := range peers {
+		// Pull the OUTBOUND-direction peer info for this name, since this
+		// is the top-level outbound entry. In the bidirectional case the
+		// outbound side may live in either primary or alt — search both.
+		// If only an inbound entry is available, use it as the source of
+		// metadata (ExitNode, TunCapable, etc.) but keep direction logic
+		// gated by configuredOutbound below.
+		for _, p := range allPeers {
 			if p.Name == name {
 				tn.ExitNode = p.ExitNode
-				tn.Direction = p.Direction
+				if !configuredOutbound {
+					tn.Direction = p.Direction
+				}
 				tn.TunCapable = p.TunCapable
-				break
+				if p.Direction == "outbound" {
+					// Found the matching outbound entry — prefer this and
+					// stop. (Continuing would overwrite with inbound
+					// metadata in mutual-dial topologies.)
+					break
+				}
 			}
 		}
 		tn.Native = nativeMap[name]
 		tn.Version = versionMap[name]
 		tn.Incompatible = incompatMap[name]
 		tn.Conflict = conflictMap[name]
-		if tn.Incompatible || tn.Conflict {
-			tn.Nested = false // incompatible/conflicting peers cannot use nested
-		} else if tn.Native {
-			tn.Nested = false
-		} else if pc, ok := cfg.Peers[name]; ok && pc.Nested {
+		tn.Unsupported = unsupportedMap[name]
+		// Nested flag is always whatever the config says — config is the
+		// only authority. Transient compatibility / native-binding /
+		// conflict states are surfaced in their own fields (Incompatible,
+		// Native, Conflict) so the UI can present a "nested but currently
+		// blocked" visual rather than silently flipping the user's
+		// configured nested off during a network blip.
+		if pc, ok := cfg.Peers[name]; ok && pc.Nested {
 			tn.Nested = true
 		}
 		if tn.Connected && tn.Direction == "outbound" {
@@ -1046,9 +1141,16 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			tn.TxRate = pr.TxRate
 			tn.RxRate = pr.RxRate
 		}
+		if mr, ok := maxRateByName[name]; ok {
+			tn.MaxRate = mr
+		}
 
-		// Load sub-peers from background cache only (never blocks)
-		if tn.Nested && tn.Connected && !tn.Native && !tn.Incompatible && !tn.Conflict {
+		// Load sub-peers from background cache only (never blocks).
+		// Hide children when the peer's wire-protocol generation is
+		// newer than ours — we may not be able to parse the frames it
+		// would use to expose those sub-peers, and we don't want to
+		// surface them in the UI as if they were reachable.
+		if tn.Nested && tn.Connected && !tn.Native && !tn.Incompatible && !tn.Conflict && !tn.Unsupported {
 			ancestors := selfAncestors(cfg, name)
 			children := filterAncestorPaths(s.getCachedSubPeers(name), ancestors)
 			tn.Children = s.filterChildrenByNestedConfig(children, name, cfg, ancestors, pathRates)
@@ -1090,11 +1192,47 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 		cfg := s.app.Store().Get()
 		type peerWithChildren struct {
 			relay.PeerInfo
-			Children []topoSubPeer `json:"children,omitempty"`
+			// Connected lets a remote consumer distinguish "configured
+			// here but currently offline" from "fully alive". Disabled
+			// peers are NOT propagated at all — see filter below — so
+			// the consumer never sees `Disabled=true` for our sub-peers.
+			Connected bool          `json:"connected"`
+			// MaxRate (bytes/sec) — see topoSubPeer.MaxRate comment.
+			// Surfaced so a remote graph (drawing US over a multi-hop
+			// chain) can size the edge by our local configured cap
+			// before any traffic actually flows.
+			MaxRate   uint64        `json:"max_rate,omitempty"`
+			Children  []topoSubPeer `json:"children,omitempty"`
 		}
+
+		// Per-direct-peer configured bandwidth lookup, identical to
+		// the topology-API map but local to this closure. Keyed by
+		// peer name (= cfg.Clients[i].Name).
+		maxRateByName := make(map[string]uint64)
+		for _, cl := range cfg.Clients {
+			var m int
+			if cl.MaxTx > m {
+				m = cl.MaxTx
+			}
+			if cl.MaxRx > m {
+				m = cl.MaxRx
+			}
+			if m > 0 {
+				maxRateByName[cl.Name] = uint64(m)
+			}
+		}
+
+		// Live (currently-connected) direct peers. Skip any that we
+		// have explicitly disabled in our peers config — the user's
+		// preference is that disabled peers should NOT propagate.
+		liveByName := make(map[string]bool, len(peers))
 		result := make([]peerWithChildren, 0, len(peers))
 		for _, p := range peers {
-			pc := peerWithChildren{PeerInfo: p}
+			liveByName[p.Name] = true
+			if pcfg, ok := cfg.Peers[p.Name]; ok && pcfg.Disabled {
+				continue
+			}
+			pc := peerWithChildren{PeerInfo: p, Connected: true, MaxRate: maxRateByName[p.Name]}
 			if pcfg, ok := cfg.Peers[p.Name]; ok && pcfg.Nested {
 				cached := s.getCachedSubPeers(p.Name)
 				flat := make([]topoSubPeer, 0, len(cached))
@@ -1106,6 +1244,27 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 			}
 			result = append(result, pc)
 		}
+
+		// Configured-but-offline outbound peers. These appear in
+		// cfg.Clients but are missing from the live `peers` slice
+		// because Node.peers gets the entry deleted on disconnect.
+		// Propagate them with Connected=false so the consumer's
+		// graph stays visually complete (red edge to offline node,
+		// node still drawn). Skip disabled.
+		for _, cl := range cfg.Clients {
+			if liveByName[cl.Name] {
+				continue
+			}
+			if pcfg, ok := cfg.Peers[cl.Name]; ok && pcfg.Disabled {
+				continue
+			}
+			result = append(result, peerWithChildren{
+				PeerInfo:  relay.PeerInfo{Name: cl.Name, Direction: "outbound"},
+				Connected: false,
+				MaxRate:   maxRateByName[cl.Name],
+			})
+		}
+
 		data, _ := json.Marshal(result)
 		return data
 	})
@@ -1344,7 +1503,17 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 		LatencyMs  int           `json:"latency_ms"`
 		Version    string        `json:"version,omitempty"`
 		TunCapable bool          `json:"tun_capable,omitempty"`
-		Children   []topoSubPeer `json:"children,omitempty"`
+		// Pointer so we can detect "field absent" vs "field=false".
+		// Older peers (1.3.0/early 1.3.1) don't send `connected` at
+		// all — we treat absent as live (true) so the legacy
+		// behavior is preserved unchanged. New peers send true/false
+		// explicitly per the offline-propagation contract.
+		Connected *bool         `json:"connected,omitempty"`
+		// MaxRate, bytes/sec; absent on old peers. Used by the graph
+		// to size the edge thickness directly from configured
+		// bandwidth, even before any traffic flows.
+		MaxRate   uint64        `json:"max_rate,omitempty"`
+		Children  []topoSubPeer `json:"children,omitempty"`
 	}
 	var remotePeers []peerWithChildren
 	if err := json.Unmarshal(data, &remotePeers); err != nil {
@@ -1375,6 +1544,12 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 				embedded = append(embedded, gc)
 			}
 		}
+		// Connected: absent → treat as connected (legacy peers).
+		// Present → use the explicit value.
+		connected := true
+		if rp.Connected != nil {
+			connected = *rp.Connected
+		}
 		child := topoSubPeer{
 			Name:       rp.Name,
 			ExitNode:   rp.ExitNode,
@@ -1384,6 +1559,8 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 			Native:     rp.Native,
 			Version:    rp.Version,
 			TunCapable: rp.TunCapable,
+			Connected:  connected,
+			MaxRate:    rp.MaxRate,
 			Children:   embedded,
 		}
 		children = append(children, child)
@@ -1575,6 +1752,11 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 			Direction: sp.Direction,
 			Via:       peerName,
 			LatencyMs: childLatency,
+			// Default to connected=true — this code path is for peers
+			// the source actively reported (relay PeerInfo from PeersOf).
+			// Offline propagation flows through fetchSubPeersViaStream's
+			// dedicated handling above, not this branch.
+			Connected: true,
 		}
 		qualifiedKey := peerName + "/" + sp.Name
 		if sp.Native {
@@ -2229,6 +2411,12 @@ func (s *Server) addUserAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "username and password required", 400)
 		return
 	}
+	// Block the user/server-password collision from the user-side too
+	// (the inverse check lives in updateNode).
+	if cur := s.app.Store().Get(); cur.Server != nil && cur.Server.Password != "" && cur.Server.Password == u.Password {
+		http.Error(w, "user password collides with the hy2 server password — pick a different password", 400)
+		return
+	}
 	if sanitized, err := app.SanitizeExitMode(u.ExitPaths, u.ExitMode); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
@@ -2259,6 +2447,12 @@ func (s *Server) updateUserAPI(w http.ResponseWriter, r *http.Request) {
 		u.ExitVia = u.ExitPaths[0]
 	} else if u.ExitVia != "" {
 		u.ExitPaths = []string{u.ExitVia}
+	}
+	if u.Password != "" {
+		if cur := s.app.Store().Get(); cur.Server != nil && cur.Server.Password != "" && cur.Server.Password == u.Password {
+			http.Error(w, "user password collides with the hy2 server password — pick a different password", 400)
+			return
+		}
 	}
 	if sanitized, err := app.SanitizeExitMode(u.ExitPaths, u.ExitMode); err != nil {
 		http.Error(w, err.Error(), 400)
