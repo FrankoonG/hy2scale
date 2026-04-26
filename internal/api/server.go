@@ -606,6 +606,19 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server password must be at least 6 characters", 400)
 		return
 	}
+	// The hy2 relay password is broadcast to every other peer via the
+	// clients list — sharing it with a SOCKS5/HTTP user account would
+	// give that user full peer-level relay access. Reject the collision
+	// at save time on both directions.
+	if body.Server != nil && body.Server.Password != "" {
+		curUsers := s.app.Store().Get().Users
+		for _, u := range curUsers {
+			if u.Password == body.Server.Password {
+				http.Error(w, fmt.Sprintf("server password collides with user %q — pick a different password", u.Username), 400)
+				return
+			}
+		}
+	}
 	oldID := s.app.Store().Get().NodeID
 
 	s.app.Store().Update(func(c *app.Config) {
@@ -2229,6 +2242,12 @@ func (s *Server) addUserAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "username and password required", 400)
 		return
 	}
+	// Block the user/server-password collision from the user-side too
+	// (the inverse check lives in updateNode).
+	if cur := s.app.Store().Get(); cur.Server != nil && cur.Server.Password != "" && cur.Server.Password == u.Password {
+		http.Error(w, "user password collides with the hy2 server password — pick a different password", 400)
+		return
+	}
 	if sanitized, err := app.SanitizeExitMode(u.ExitPaths, u.ExitMode); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
@@ -2259,6 +2278,12 @@ func (s *Server) updateUserAPI(w http.ResponseWriter, r *http.Request) {
 		u.ExitVia = u.ExitPaths[0]
 	} else if u.ExitVia != "" {
 		u.ExitPaths = []string{u.ExitVia}
+	}
+	if u.Password != "" {
+		if cur := s.app.Store().Get(); cur.Server != nil && cur.Server.Password != "" && cur.Server.Password == u.Password {
+			http.Error(w, "user password collides with the hy2 server password — pick a different password", 400)
+			return
+		}
 	}
 	if sanitized, err := app.SanitizeExitMode(u.ExitPaths, u.ExitMode); err != nil {
 		http.Error(w, err.Error(), 400)

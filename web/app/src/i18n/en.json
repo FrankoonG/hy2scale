@@ -59,6 +59,8 @@
   "nodes.selfSignedAuto": "Self-signed (auto)",
   "nodes.nodeIdRequired": "Node ID is required",
   "nodes.settingsSaved": "Node settings saved.",
+  "nodes.serverPasswordCollidesUser": "Hy2 server password collides with user '{{name}}' — pick a different one.",
+  "users.passwordCollidesServer": "User password collides with the hy2 server password — pick a different one.",
   "nodes.noConnections": "No connections. Click <b>+ Add Node</b> to connect.",
   "nodes.view.list": "List view",
   "nodes.view.graph": "Graph view",
