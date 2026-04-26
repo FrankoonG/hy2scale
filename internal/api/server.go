@@ -870,6 +870,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	versionMap := make(map[string]string)
 	incompatMap := make(map[string]bool)
 	conflictMap := make(map[string]bool)
+	unsupportedMap := make(map[string]bool)
 	for _, p := range peers {
 		connected[p.Name] = true
 		if p.Native {
@@ -883,6 +884,9 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		}
 		if p.Conflict {
 			conflictMap[p.Name] = true
+		}
+		if p.Unsupported {
+			unsupportedMap[p.Name] = true
 		}
 	}
 
@@ -900,6 +904,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		Version      string            `json:"version,omitempty"`
 		Incompatible bool              `json:"incompatible,omitempty"`
 		Conflict     bool              `json:"conflict,omitempty"`
+		Unsupported  bool              `json:"unsupported,omitempty"`
 		TunCapable   bool              `json:"tun_capable,omitempty"`
 		LatencyMs    int               `json:"latency_ms"`
 		TxRate       uint64            `json:"tx_rate"`
@@ -1043,11 +1048,14 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		tn.Version = versionMap[name]
 		tn.Incompatible = incompatMap[name]
 		tn.Conflict = conflictMap[name]
-		if tn.Incompatible || tn.Conflict {
-			tn.Nested = false // incompatible/conflicting peers cannot use nested
-		} else if tn.Native {
-			tn.Nested = false
-		} else if pc, ok := cfg.Peers[name]; ok && pc.Nested {
+		tn.Unsupported = unsupportedMap[name]
+		// Nested flag is always whatever the config says — config is the
+		// only authority. Transient compatibility / native-binding /
+		// conflict states are surfaced in their own fields (Incompatible,
+		// Native, Conflict) so the UI can present a "nested but currently
+		// blocked" visual rather than silently flipping the user's
+		// configured nested off during a network blip.
+		if pc, ok := cfg.Peers[name]; ok && pc.Nested {
 			tn.Nested = true
 		}
 		if tn.Connected && tn.Direction == "outbound" {
@@ -1060,8 +1068,12 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			tn.RxRate = pr.RxRate
 		}
 
-		// Load sub-peers from background cache only (never blocks)
-		if tn.Nested && tn.Connected && !tn.Native && !tn.Incompatible && !tn.Conflict {
+		// Load sub-peers from background cache only (never blocks).
+		// Hide children when the peer's wire-protocol generation is
+		// newer than ours — we may not be able to parse the frames it
+		// would use to expose those sub-peers, and we don't want to
+		// surface them in the UI as if they were reachable.
+		if tn.Nested && tn.Connected && !tn.Native && !tn.Incompatible && !tn.Conflict && !tn.Unsupported {
 			ancestors := selfAncestors(cfg, name)
 			children := filterAncestorPaths(s.getCachedSubPeers(name), ancestors)
 			tn.Children = s.filterChildrenByNestedConfig(children, name, cfg, ancestors, pathRates)

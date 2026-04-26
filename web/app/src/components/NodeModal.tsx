@@ -148,7 +148,8 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   const validateAddrs = (): string[] | null => {
     setAddrError('');
     for (const item of addrItems) {
-      if (!item.host.trim()) {
+      const host = item.host.trim();
+      if (!host) {
         setAddrError(t('nodes.hostRequired'));
         return null;
       }
@@ -156,8 +157,22 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
         setAddrError(t('nodes.invalidPort'));
         return null;
       }
+      // IPv6 address validation: bracketed (`[fe80::1]`) or bare. Reject
+      // anything that looks malformed before it reaches the backend
+      // (which uses net.SplitHostPort and would silently fail).
+      const stripped = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+      if (stripped.includes(':') && !/^[0-9a-fA-F:]+$/.test(stripped)) {
+        setAddrError(t('nodes.invalidIPv6'));
+        return null;
+      }
     }
-    const strs = addrItems.map(r => `${r.host.trim()}:${r.port.trim()}`);
+    const strs = addrItems.map(r => {
+      const h = r.host.trim();
+      // Wrap bare IPv6 in brackets so `<host>:<port>` parses unambiguously.
+      const isV6 = h.includes(':') && !h.startsWith('[');
+      const formatted = isV6 ? `[${h}]` : h;
+      return `${formatted}:${r.port.trim()}`;
+    });
     const seen = new Set<string>();
     for (const s of strs) {
       if (seen.has(s)) {
