@@ -48,6 +48,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Frontend MUST be rebuilt fresh and copied into internal/web/static/
+      # before `go build` runs — the binary uses `go:embed internal/web/static`
+      # so a stale committed bundle silently ships outdated UI even when
+      # NodesGraphView.tsx etc. are correctly updated in source. The
+      # build-docker job already does this via Dockerfile; build-binary used
+      # to skip it, which made every release bare-binary tarball ship the
+      # last-committed dist instead of the post-checkout source. Mirror
+      # build-docker's frontend step here so the two artifacts stay in sync.
+      - name: Build frontend
+        run: |
+          cd web/ui-framework && npm ci && npm run build
+          cd ../app && npm ci && npm run build
+          rm -rf internal/web/static
+          mkdir -p internal/web/static
+          cp -r web/app/dist/. internal/web/static/
+        working-directory: ${{ github.workspace }}
+
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
