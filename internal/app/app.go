@@ -167,9 +167,11 @@ func New(dataDir string) (*App, error) {
 
 	persistPath := dataDir + "/config.yaml"
 
+	node := relay.NewNode(cfg.Name, cfg.ExitNode)
+	node.SetNodeID(cfg.NodeID) // expose stable id to register handshakes
 	return &App{
 		store:        NewConfigStore(cfg, persistPath),
-		node:         relay.NewNode(cfg.Name, cfg.ExitNode),
+		node:         node,
 		tls:          NewTLSStore(dataDir),
 		dataDir:      dataDir,
 		clientCancel: make(map[string]context.CancelFunc),
