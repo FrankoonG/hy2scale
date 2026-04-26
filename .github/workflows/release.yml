@@ -62,11 +62,13 @@ jobs:
       # build-docker's frontend step here so the two artifacts stay in sync.
       - name: Build frontend
         run: |
-          cd web/ui-framework && npm ci && npm run build
-          cd ../app && npm ci && npm run build
+          set -euxo pipefail
+          (cd web/ui-framework && npm ci && npm run build)
+          (cd web/app && npm ci && npm run build)
           rm -rf internal/web/static
           mkdir -p internal/web/static
           cp -r web/app/dist/. internal/web/static/
+          ls -la internal/web/static/assets/
         working-directory: ${{ github.workspace }}
 
       - uses: actions/setup-go@v5
