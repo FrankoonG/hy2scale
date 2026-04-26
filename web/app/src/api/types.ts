@@ -42,6 +42,7 @@ export interface TopologyNode {
   compat?: boolean;
   incompatible?: boolean;
   conflict?: boolean;
+  unsupported?: boolean;
   latency_ms: number;
   tx_rate: number;
   rx_rate: number;

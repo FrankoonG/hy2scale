@@ -204,13 +204,18 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
         name: n.is_self ? (selfName || n.name || 'self') : n.name,
         isSelf: !!n.is_self,
         disabled: !!n.disabled,
-        // Offline if explicitly disabled, latency reported as -1 (unreachable),
-        // or the top-level `connected` flag is false. Root-peer offline keeps
-        // its dot visible but edges to it turn red + marked ×.
-        offline: !!n.disabled || (n.latency_ms < 0) || (n.connected === false && !n.is_self),
+        // Offline only when (a) the user disabled it, or (b) the
+        // server's `connected` flag is explicitly false. A latency value
+        // of -1 alone is NOT sufficient: latency probes are sampled
+        // periodically and a single missed sample makes the graph briefly
+        // turn the node red + flash "unreachable" while the list view
+        // still correctly shows it green. Trust the list-view's
+        // status-cache contract — `connected` is the authoritative
+        // reachability flag, latency is a quality metric.
+        offline: !!n.disabled || (n.connected === false && !n.is_self),
         nested: !!n.nested,
         native: !!n.native,
-        incompatible: !!n.incompatible || !!n.conflict,
+        incompatible: !!n.incompatible || !!n.conflict || !!n.unsupported,
         depth,
         degree: 0,
         qpath,
@@ -364,13 +369,41 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
   const { nodes, edges } = useMemo(() => buildGraph(topology, selfId, selfName), [topology, selfId, selfName]);
 
-  // Per-edge running max — used to normalise flow speed.
-  const maxByEdgeRef = useRef<Map<string, number>>(new Map());
+  // Per-edge running max — used to normalise flow speed AND to size the
+  // edge stroke. Persist to localStorage so the line-thickness signal
+  // doesn't disappear after every page refresh: previously a refresh
+  // wiped the in-memory map, all edges drew at the minimum width, and
+  // it took toggling a route off+on to repopulate the peak.
+  const maxByEdgeRef = useRef<Map<string, number>>((() => {
+    try {
+      const raw = localStorage.getItem('hy2.edgeMax');
+      if (!raw) return new Map();
+      const obj = JSON.parse(raw) as Record<string, number>;
+      return new Map(Object.entries(obj));
+    } catch {
+      return new Map();
+    }
+  })());
+  const edgeMaxSaveTimer = useRef<number | null>(null);
   useMemo(() => {
+    let dirty = false;
     edges.forEach((e) => {
       const prev = maxByEdgeRef.current.get(e.key) || 0;
-      if (e.currentRate > prev) maxByEdgeRef.current.set(e.key, e.currentRate);
+      if (e.currentRate > prev) {
+        maxByEdgeRef.current.set(e.key, e.currentRate);
+        dirty = true;
+      }
     });
+    if (dirty) {
+      if (edgeMaxSaveTimer.current) window.clearTimeout(edgeMaxSaveTimer.current);
+      edgeMaxSaveTimer.current = window.setTimeout(() => {
+        try {
+          const obj: Record<string, number> = {};
+          maxByEdgeRef.current.forEach((v, k) => { obj[k] = v; });
+          localStorage.setItem('hy2.edgeMax', JSON.stringify(obj));
+        } catch { /* quota / disabled storage — ignore */ }
+      }, 1000);
+    }
   }, [edges]);
 
   const auto = useMemo(() => autoLayout(nodes), [nodes]);

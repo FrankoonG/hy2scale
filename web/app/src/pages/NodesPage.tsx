@@ -233,6 +233,7 @@ export default function NodesPage() {
     }
     if (n.incompatible) return <span className="latency latency-bad">{t('nodes.incompatible')}</span>;
     if (n.conflict) return <span className="latency latency-bad">{t('nodes.conflict')}</span>;
+    if (n.unsupported) return <span className="latency latency-bad">{t('nodes.unsupported')}</span>;
     if (n.disabled) return <span className="latency latency-off">{t('nodes.offline')}</span>;
     if (n.is_self) return <span className="latency latency-good">∞</span>;
     if (n.latency_ms === -1) return <span className="latency latency-off">{t('nodes.offline')}</span>;

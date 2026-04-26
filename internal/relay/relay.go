@@ -115,11 +115,28 @@ type PeerInfo struct {
 	Incompatible bool   `json:"incompatible,omitempty"`
 	Conflict     bool   `json:"conflict,omitempty"`
 	TunCapable   bool   `json:"tun_capable,omitempty"`
+	// PV is the remote's wire-protocol generation. Higher than ours
+	// means the remote may speak frames we can't parse — see
+	// ProtocolVersion comment. Forwarded to the topology API so the
+	// frontend can hide nested sub-peers from such links and render
+	// the direct connection itself as `unsupported`.
+	PV          int  `json:"pv,omitempty"`
+	Unsupported bool `json:"unsupported,omitempty"`
 }
 
 // NodeVersion is the version string sent during peer registration.
 // Set by the app package at init time.
 var NodeVersion = "1.0.0"
+
+// ProtocolVersion is an integer identifying the inter-node wire format
+// generation. Bumped (independently of NodeVersion semver) whenever a
+// breaking peer-protocol change ships. Older instances that see a
+// remote peer with a HIGHER ProtocolVersion treat it as opaque:
+// hide nested sub-peers entirely (they may use frames we can't parse)
+// and mark direct peers as unsupported. Newer instances accept any
+// older peer and just downgrade behavior locally to the older feature
+// set. v1.3.x ships protocol v3 — v1 = pre-1.0, v2 = 1.0–1.2.
+const ProtocolVersion = 3
 
 // NodeTunCapable is set by the app layer at startup if this node can handle
 // exit-side TUN (has NET_ADMIN + /dev/net/tun).
@@ -143,6 +160,9 @@ func isCompatible(version string) bool {
 type peerMeta struct {
 	Version    string `json:"v,omitempty"`
 	TunCapable bool   `json:"tun,omitempty"` // true if node can handle exit TUN (has NET_ADMIN + /dev/net/tun)
+	// PV is the wire-protocol generation. Absent on pre-1.3.x peers
+	// (treat as 0 — accept everything for backward compatibility).
+	PV int `json:"pv,omitempty"`
 }
 
 // writeMeta sends a length-prefixed JSON metadata blob.
@@ -782,7 +802,7 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 		remoteMeta.Version = "1.0.0" // old peers don't send version
 	}
 	// Send our metadata (remote reads it only if it sent the flag)
-	writeMeta(regStream, peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable})
+	writeMeta(regStream, peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable, PV: ProtocolVersion})
 
 	if onID != nil {
 		onID(actualName)
@@ -814,9 +834,13 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	if !compat {
 		log.Printf("[%s] peer %s version %s is incompatible (min %s)", n.name, actualName, remoteMeta.Version, MinCompatVersion)
 	}
+	unsupported := remoteMeta.PV > ProtocolVersion
+	if unsupported {
+		log.Printf("[%s] peer %s wire protocol v%d is newer than ours (v%d) — direct only, sub-peers hidden", n.name, actualName, remoteMeta.PV, ProtocolVersion)
+	}
 	childCtx, childCancel := context.WithCancel(ctx)
 	p := &peer{
-		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version, Incompatible: !compat, TunCapable: remoteMeta.TunCapable},
+		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version, Incompatible: !compat, TunCapable: remoteMeta.TunCapable, PV: remoteMeta.PV, Unsupported: unsupported},
 		client:  client,
 		waiting: make(map[string]chan net.Conn),
 		ctx:     childCtx,
@@ -995,7 +1019,7 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 	var remoteMeta peerMeta
 	if flags[0]&0x02 != 0 {
 		// Send our metadata, then read client's
-		writeMeta(stream, peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable})
+		writeMeta(stream, peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable, PV: ProtocolVersion})
 		remoteMeta = readMeta(stream, 2*time.Second)
 	}
 	if remoteMeta.Version == "" {
@@ -1013,6 +1037,10 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 	if !compat {
 		log.Printf("[%s] inbound peer %s version %s is incompatible (min %s)", n.name, name, remoteMeta.Version, MinCompatVersion)
 	}
+	unsupported := remoteMeta.PV > ProtocolVersion
+	if unsupported {
+		log.Printf("[%s] inbound peer %s wire protocol v%d is newer than ours (v%d) — direct only, sub-peers hidden", n.name, name, remoteMeta.PV, ProtocolVersion)
+	}
 	peerCtx, peerCancel := context.WithCancel(ctx)
 	p := &peer{
 		info: PeerInfo{
@@ -1022,6 +1050,8 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 			Version:      remoteMeta.Version,
 			Incompatible: !compat,
 			TunCapable:   remoteMeta.TunCapable,
+			PV:           remoteMeta.PV,
+			Unsupported:  unsupported,
 		},
 		waiting: make(map[string]chan net.Conn),
 		ctx:     peerCtx,
@@ -1786,12 +1816,14 @@ type countedConn struct {
 	net.Conn
 	tx, rx         *atomic.Uint64
 	peerTx, peerRx *atomic.Uint64
-	// Optional third counter set for a specific qualified nested path (e.g.
-	// "au/au-r1-a"). Lets one stream contribute to both the first-hop peer
-	// counter and a path-specific counter without double-wrapping.
-	pathTx, pathRx *atomic.Uint64
-	conns          *atomic.Int64
-	closed         atomic.Bool
+	// Optional counter sets, one per qualified nested-path PREFIX with
+	// ≥2 hops. For a stream dialed through "au/au-r1/au-r1-a" we update
+	// the counters for both "au/au-r1" AND "au/au-r1/au-r1-a" — so the
+	// graph view's per-hop realtime-speed badges all increment together
+	// instead of only the final-hop counter.
+	pathTxs, pathRxs []*atomic.Uint64
+	conns            *atomic.Int64
+	closed           atomic.Bool
 }
 
 func (c *countedConn) Close() error {
@@ -1804,12 +1836,13 @@ func (c *countedConn) Close() error {
 func (c *countedConn) Read(b []byte) (int, error) {
 	n, err := c.Conn.Read(b)
 	if n > 0 {
-		c.rx.Add(uint64(n))
+		add := uint64(n)
+		c.rx.Add(add)
 		if c.peerRx != nil {
-			c.peerRx.Add(uint64(n))
+			c.peerRx.Add(add)
 		}
-		if c.pathRx != nil {
-			c.pathRx.Add(uint64(n))
+		for _, p := range c.pathRxs {
+			p.Add(add)
 		}
 	}
 	return n, err
@@ -1818,12 +1851,13 @@ func (c *countedConn) Read(b []byte) (int, error) {
 func (c *countedConn) Write(b []byte) (int, error) {
 	n, err := c.Conn.Write(b)
 	if n > 0 {
-		c.tx.Add(uint64(n))
+		add := uint64(n)
+		c.tx.Add(add)
 		if c.peerTx != nil {
-			c.peerTx.Add(uint64(n))
+			c.peerTx.Add(add)
 		}
-		if c.pathTx != nil {
-			c.pathTx.Add(uint64(n))
+		for _, p := range c.pathTxs {
+			p.Add(add)
 		}
 	}
 	return n, err
@@ -1847,10 +1881,19 @@ func (n *Node) wrapConnPath(peerName, pathKey string, conn net.Conn) net.Conn {
 		cc.peerTx = &p.txBytes
 		cc.peerRx = &p.rxBytes
 	}
+	// Attach a counter for every nested-path PREFIX of length ≥ 2 along
+	// the qualified path. The single-hop direct-peer prefix is already
+	// covered by peerTx/peerRx above, so we start prefix accumulation
+	// from the 2-hop slice. e.g. "au/au-r1/au-r1-a" → counters for both
+	// "au/au-r1" and "au/au-r1/au-r1-a", so the graph's realtime-speed
+	// badges on every intermediate hop animate together.
 	if pathKey != "" {
-		rec := n.getOrCreatePathCounters(pathKey)
-		cc.pathTx = &rec.tx
-		cc.pathRx = &rec.rx
+		segs := strings.Split(pathKey, "/")
+		for i := 2; i <= len(segs); i++ {
+			rec := n.getOrCreatePathCounters(strings.Join(segs[:i], "/"))
+			cc.pathTxs = append(cc.pathTxs, &rec.tx)
+			cc.pathRxs = append(cc.pathRxs, &rec.rx)
+		}
 	}
 	n.conns.Add(1)
 	return cc
