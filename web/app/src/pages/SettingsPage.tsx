@@ -86,6 +86,13 @@ export default function SettingsPage() {
   const [dns, setDns] = useState('');
   const [savingUI, setSavingUI] = useState(false);
   const [savingDns, setSavingDns] = useState(false);
+  // Nested-discovery hard limits (hot-reloadable, no restart needed)
+  const [maxNestedDepth, setMaxNestedDepth] = useState('5');
+  const [maxResponseNodes, setMaxResponseNodes] = useState('1024');
+  const [maxCacheEntries, setMaxCacheEntries] = useState('5000');
+  const [maxResponseBytes, setMaxResponseBytes] = useState('1048576');
+  const [maxFetchFanOut, setMaxFetchFanOut] = useState('8');
+  const [savingLimits, setSavingLimits] = useState(false);
 
   // Password
   const [curPw, setCurPw] = useState('');
@@ -107,6 +114,11 @@ export default function SettingsPage() {
       setHttpsCertId(settings.https_cert_id || '');
       setSessionTimeout(String(settings.session_timeout_h || 12));
       setDns(settings.dns || '');
+      setMaxNestedDepth(String(settings.max_nested_depth || 5));
+      setMaxResponseNodes(String(settings.max_response_nodes || 1024));
+      setMaxCacheEntries(String(settings.max_cache_entries || 5000));
+      setMaxResponseBytes(String(settings.max_response_bytes || 1048576));
+      setMaxFetchFanOut(String(settings.max_fetch_fan_out || 8));
     }
   }, [settings]);
 
@@ -136,6 +148,22 @@ export default function SettingsPage() {
       queryClient.invalidateQueries({ queryKey: ['settings'] });
     } catch (e: any) { toast.error(String(e.message || e)); }
     finally { setSavingDns(false); }
+  };
+
+  const handleSaveLimits = async () => {
+    setSavingLimits(true);
+    try {
+      await api.updateUISettings({
+        max_nested_depth: parseInt(maxNestedDepth) || 5,
+        max_response_nodes: parseInt(maxResponseNodes) || 1024,
+        max_cache_entries: parseInt(maxCacheEntries) || 5000,
+        max_response_bytes: parseInt(maxResponseBytes) || 1048576,
+        max_fetch_fan_out: parseInt(maxFetchFanOut) || 8,
+      });
+      toast.success(t('settings.limitsSavedHot'));
+      queryClient.invalidateQueries({ queryKey: ['settings'] });
+    } catch (e: any) { toast.error(String(e.message || e)); }
+    finally { setSavingLimits(false); }
   };
 
   const handleChangePw = async () => {
@@ -237,6 +265,35 @@ export default function SettingsPage() {
                     <Input value={dns} onChange={(e) => setDns(e.target.value)} placeholder="8.8.8.8,1.1.1.1" />
                   </FormGroup>
                   <Button variant="primary" onClick={handleSaveDns} loading={savingDns} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
+                </div>
+              </Card>
+            )}
+
+            {/* System: Nested-discovery hard limits — hot-reloadable. Hidden
+                during forced password change. */}
+            {!forcePasswordChange && (
+              <Card fill={1} title={t('settings.nestedLimits')}>
+                <div style={{ maxWidth: 480, display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                    {t('settings.nestedLimitsDesc')}
+                  </div>
+                  <FormGroup label={t('settings.maxNestedDepth')}>
+                    <Input type="number" min={1} max={10} value={maxNestedDepth} onChange={(e) => setMaxNestedDepth(e.target.value)} />
+                  </FormGroup>
+                  <FormGroup label={t('settings.maxResponseNodes')}>
+                    <Input type="number" min={1} max={65536} value={maxResponseNodes} onChange={(e) => setMaxResponseNodes(e.target.value)} />
+                  </FormGroup>
+                  <FormGroup label={t('settings.maxCacheEntries')}>
+                    <Input type="number" min={1} max={100000} value={maxCacheEntries} onChange={(e) => setMaxCacheEntries(e.target.value)} />
+                  </FormGroup>
+                  <FormGroup label={t('settings.maxResponseBytes')}>
+                    <Input type="number" min={1024} max={16777216} value={maxResponseBytes} onChange={(e) => setMaxResponseBytes(e.target.value)} suffix="B" />
+                  </FormGroup>
+                  <FormGroup label={t('settings.maxFetchFanOut')}>
+                    <Input type="number" min={1} max={64} value={maxFetchFanOut} onChange={(e) => setMaxFetchFanOut(e.target.value)} />
+                  </FormGroup>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t('settings.hotReload')}</div>
+                  <Button variant="primary" onClick={handleSaveLimits} loading={savingLimits} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
                 </div>
               </Card>
             )}
