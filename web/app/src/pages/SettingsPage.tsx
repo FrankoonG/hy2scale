@@ -94,12 +94,10 @@ export default function SettingsPage() {
   const [maxFetchFanOut, setMaxFetchFanOut] = useState('8');
   const [savingLimits, setSavingLimits] = useState(false);
   const [nestedModalOpen, setNestedModalOpen] = useState(false);
-  const [pwModalOpen, setPwModalOpen] = useState(false);
   // Track the click origin so the Modal's open animation expands from
   // the button the user just clicked (matches NodesPage's UserModal /
   // NodeModal pattern). Falls back to undefined → centred default.
   const [nestedAnimateFrom, setNestedAnimateFrom] = useState<{ x: number; y: number } | undefined>();
-  const [pwAnimateFrom, setPwAnimateFrom] = useState<{ x: number; y: number } | undefined>();
 
   // Password
   const [curPw, setCurPw] = useState('');
@@ -189,7 +187,6 @@ export default function SettingsPage() {
         new_password: newHash,
       });
       toast.success(t('settings.passwordUpdated'));
-      setPwModalOpen(false);
       setTimeout(() => { logout(); navigate('/login'); }, 2000);
     } catch (e: any) { toast.error(String(e.message || e)); }
     finally { setSavingPw(false); }
@@ -251,15 +248,15 @@ export default function SettingsPage() {
     <div className="hy-page">
       <Tabs
         items={[
-          { key: 'system', label: t('settings.system') },
           { key: 'web', label: t('settings.web'), disabled: forcePasswordChange },
+          { key: 'system', label: t('settings.system') },
           { key: 'upgrade', label: t('settings.upgrade'), disabled: forcePasswordChange },
         ]}
         activeKey={activeTab}
         onChange={(key) => { if (!forcePasswordChange || key === 'system') setActiveTab(key as any); }}
       />
 
-      <TabPanel fill activeKey={activeTab} keys={['system', 'web', 'upgrade']}>
+      <TabPanel fill activeKey={activeTab} keys={['web', 'system', 'upgrade']}>
         {activeTab === 'system' ? (
           <>
             {forcePasswordChange && (
@@ -272,58 +269,69 @@ export default function SettingsPage() {
               <div style={{ maxWidth: 480, display: 'flex', flexDirection: 'column', gap: 18 }}>
                 {!forcePasswordChange && (
                   <FormGroup label={t('settings.dns')}>
-                    <Input
-                      value={dns}
-                      onChange={(e) => setDns(e.target.value)}
-                      placeholder="8.8.8.8,1.1.1.1"
-                      suffix={
-                        <button
-                          onClick={handleSaveDns}
-                          disabled={savingDns}
-                          aria-label={t('app.save')}
-                          title={t('app.save')}
-                          style={{
-                            background: 'none', border: 'none', cursor: savingDns ? 'wait' : 'pointer',
-                            padding: 4, color: 'var(--primary)', display: 'flex', alignItems: 'center',
-                          }}
-                        >
-                          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
-                               strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                            <polyline points="17 21 17 13 7 13 7 21"/>
-                            <polyline points="7 3 7 8 15 8"/>
-                          </svg>
-                        </button>
-                      }
-                    />
+                    {/* Input keeps stock styling; save action sits beside it
+                        as a hy-circle-btn (same component family used in TLS
+                        sub-menu's CA-key generate button). */}
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <div style={{ flex: 1 }}>
+                        <Input
+                          value={dns}
+                          onChange={(e) => setDns(e.target.value)}
+                          placeholder="8.8.8.8,1.1.1.1"
+                        />
+                      </div>
+                      <button
+                        className="hy-circle-btn"
+                        onClick={handleSaveDns}
+                        disabled={savingDns}
+                        aria-label={t('app.save')}
+                        title={t('app.save')}
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                             strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                          <polyline points="17 21 17 13 7 13 7 21"/>
+                          <polyline points="7 3 7 8 15 8"/>
+                        </svg>
+                      </button>
+                    </div>
                   </FormGroup>
                 )}
 
                 {!forcePasswordChange && (
-                  <Button
-                    onClick={(e) => {
-                      setNestedAnimateFrom({ x: e.clientX, y: e.clientY });
-                      setNestedModalOpen(true);
-                    }}
-                    style={{ justifyContent: 'space-between' }}
-                    fullWidth
-                  >
-                    <span>{t('settings.nestedLimits')}</span>
-                    <span style={{ color: 'var(--text-muted)' }}>›</span>
-                  </Button>
+                  <>
+                    <div className="section-divider" style={{ cursor: 'default' }}>{t('settings.nestedLimits')}</div>
+                    <Button
+                      onClick={(e) => {
+                        setNestedAnimateFrom({ x: e.clientX, y: e.clientY });
+                        setNestedModalOpen(true);
+                      }}
+                      style={{ justifyContent: 'space-between' }}
+                      fullWidth
+                    >
+                      <span>{t('settings.openNestedLimits')}</span>
+                      <span style={{ color: 'var(--text-muted)' }}>›</span>
+                    </Button>
+                  </>
                 )}
 
-                <Button
-                  onClick={(e) => {
-                    setPwAnimateFrom({ x: e.clientX, y: e.clientY });
-                    setPwModalOpen(true);
-                  }}
-                  style={{ justifyContent: 'space-between' }}
-                  fullWidth
-                >
-                  <span>{t('settings.changePassword')}</span>
-                  <span style={{ color: 'var(--text-muted)' }}>›</span>
-                </Button>
+                {/* Change Password — inline within the System card, separated
+                    by a section divider. Always visible (the only path during
+                    forced password change). */}
+                <div className="section-divider" style={{ cursor: 'default' }}>{t('settings.changePassword')}</div>
+                <FormGroup label={t('settings.currentPassword')} required>
+                  <PasswordInput value={curPw} onChange={(e) => setCurPw(e.target.value)} />
+                </FormGroup>
+                <FormGroup label={t('settings.newUsernameOpt')}>
+                  <Input value={newUser} onChange={(e) => setNewUser(e.target.value)} />
+                </FormGroup>
+                <FormGroup label={t('settings.newPassword')}>
+                  <PasswordInput value={newPw} onChange={(e) => setNewPw(e.target.value)} onGenerate={(pw) => { setNewPw(pw); setConfirmPw(pw); }} />
+                </FormGroup>
+                <FormGroup label={t('settings.confirmPassword')}>
+                  <PasswordInput value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} />
+                </FormGroup>
+                <Button variant="primary" onClick={handleChangePw} loading={savingPw} style={{ alignSelf: 'flex-start' }}>{t('settings.update')}</Button>
               </div>
             </Card>
 
@@ -363,34 +371,6 @@ export default function SettingsPage() {
               </div>
             </Modal>
 
-            {/* Sub-menu: Change password (modal). */}
-            <Modal
-              open={pwModalOpen}
-              onClose={() => setPwModalOpen(false)}
-              title={t('settings.changePassword')}
-              animateFrom={pwAnimateFrom}
-              footer={
-                <>
-                  <Button onClick={() => setPwModalOpen(false)}>{t('app.cancel')}</Button>
-                  <Button variant="primary" onClick={handleChangePw} loading={savingPw}>{t('settings.update')}</Button>
-                </>
-              }
-            >
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                <FormGroup label={t('settings.currentPassword')} required>
-                  <PasswordInput value={curPw} onChange={(e) => setCurPw(e.target.value)} />
-                </FormGroup>
-                <FormGroup label={t('settings.newUsernameOpt')}>
-                  <Input value={newUser} onChange={(e) => setNewUser(e.target.value)} />
-                </FormGroup>
-                <FormGroup label={t('settings.newPassword')}>
-                  <PasswordInput value={newPw} onChange={(e) => setNewPw(e.target.value)} onGenerate={(pw) => { setNewPw(pw); setConfirmPw(pw); }} />
-                </FormGroup>
-                <FormGroup label={t('settings.confirmPassword')}>
-                  <PasswordInput value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} />
-                </FormGroup>
-              </div>
-            </Modal>
           </>
         ) : activeTab === 'web' ? (
           <Card fill={1} title={t('settings.webUi')}>
