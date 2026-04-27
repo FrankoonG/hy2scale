@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Card, Button, Input, PasswordInput, Toggle, Select, FormGroup, FormGrid, Tabs, TabPanel, Badge, useToast, useConfirm,
+  Card, Button, Input, PasswordInput, Toggle, Select, FormGroup, FormGrid, Tabs, TabPanel, Badge, Modal, useToast, useConfirm,
 } from '@hy2scale/ui';
 import * as api from '@/api';
 import { useAuthStore } from '@/store/auth';
@@ -93,6 +93,13 @@ export default function SettingsPage() {
   const [maxResponseBytes, setMaxResponseBytes] = useState('1048576');
   const [maxFetchFanOut, setMaxFetchFanOut] = useState('8');
   const [savingLimits, setSavingLimits] = useState(false);
+  const [nestedModalOpen, setNestedModalOpen] = useState(false);
+  const [pwModalOpen, setPwModalOpen] = useState(false);
+  // Track the click origin so the Modal's open animation expands from
+  // the button the user just clicked (matches NodesPage's UserModal /
+  // NodeModal pattern). Falls back to undefined → centred default.
+  const [nestedAnimateFrom, setNestedAnimateFrom] = useState<{ x: number; y: number } | undefined>();
+  const [pwAnimateFrom, setPwAnimateFrom] = useState<{ x: number; y: number } | undefined>();
 
   // Password
   const [curPw, setCurPw] = useState('');
@@ -162,6 +169,7 @@ export default function SettingsPage() {
       });
       toast.success(t('settings.limitsSavedHot'));
       queryClient.invalidateQueries({ queryKey: ['settings'] });
+      setNestedModalOpen(false);
     } catch (e: any) { toast.error(String(e.message || e)); }
     finally { setSavingLimits(false); }
   };
@@ -181,6 +189,7 @@ export default function SettingsPage() {
         new_password: newHash,
       });
       toast.success(t('settings.passwordUpdated'));
+      setPwModalOpen(false);
       setTimeout(() => { logout(); navigate('/login'); }, 2000);
     } catch (e: any) { toast.error(String(e.message || e)); }
     finally { setSavingPw(false); }
@@ -257,50 +266,117 @@ export default function SettingsPage() {
               <div className="hy-alert-warn">{t('settings.forcePasswordChange')}</div>
             )}
 
-            {/* System: DNS — hidden during forced password change */}
-            {!forcePasswordChange && (
-              <Card fill={1} title={t('settings.system')}>
-                <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {/* Single System card: DNS inline-save + buttons opening
+                modal sub-menus for nested limits / change password. */}
+            <Card fill={1} title={t('settings.system')}>
+              <div style={{ maxWidth: 480, display: 'flex', flexDirection: 'column', gap: 18 }}>
+                {!forcePasswordChange && (
                   <FormGroup label={t('settings.dns')}>
-                    <Input value={dns} onChange={(e) => setDns(e.target.value)} placeholder="8.8.8.8,1.1.1.1" />
+                    <Input
+                      value={dns}
+                      onChange={(e) => setDns(e.target.value)}
+                      placeholder="8.8.8.8,1.1.1.1"
+                      suffix={
+                        <button
+                          onClick={handleSaveDns}
+                          disabled={savingDns}
+                          aria-label={t('app.save')}
+                          title={t('app.save')}
+                          style={{
+                            background: 'none', border: 'none', cursor: savingDns ? 'wait' : 'pointer',
+                            padding: 4, color: 'var(--primary)', display: 'flex', alignItems: 'center',
+                          }}
+                        >
+                          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+                               strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                            <polyline points="17 21 17 13 7 13 7 21"/>
+                            <polyline points="7 3 7 8 15 8"/>
+                          </svg>
+                        </button>
+                      }
+                    />
                   </FormGroup>
-                  <Button variant="primary" onClick={handleSaveDns} loading={savingDns} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
-                </div>
-              </Card>
-            )}
+                )}
 
-            {/* System: Nested-discovery hard limits — hot-reloadable. Hidden
-                during forced password change. */}
-            {!forcePasswordChange && (
-              <Card fill={1} title={t('settings.nestedLimits')}>
-                <div style={{ maxWidth: 480, display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                    {t('settings.nestedLimitsDesc')}
-                  </div>
-                  <FormGroup label={t('settings.maxNestedDepth')}>
-                    <Input type="number" min={1} max={10} value={maxNestedDepth} onChange={(e) => setMaxNestedDepth(e.target.value)} />
-                  </FormGroup>
-                  <FormGroup label={t('settings.maxResponseNodes')}>
-                    <Input type="number" min={1} max={65536} value={maxResponseNodes} onChange={(e) => setMaxResponseNodes(e.target.value)} />
-                  </FormGroup>
-                  <FormGroup label={t('settings.maxCacheEntries')}>
-                    <Input type="number" min={1} max={100000} value={maxCacheEntries} onChange={(e) => setMaxCacheEntries(e.target.value)} />
-                  </FormGroup>
-                  <FormGroup label={t('settings.maxResponseBytes')}>
-                    <Input type="number" min={1024} max={16777216} value={maxResponseBytes} onChange={(e) => setMaxResponseBytes(e.target.value)} suffix="B" />
-                  </FormGroup>
-                  <FormGroup label={t('settings.maxFetchFanOut')}>
-                    <Input type="number" min={1} max={64} value={maxFetchFanOut} onChange={(e) => setMaxFetchFanOut(e.target.value)} />
-                  </FormGroup>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t('settings.hotReload')}</div>
-                  <Button variant="primary" onClick={handleSaveLimits} loading={savingLimits} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
-                </div>
-              </Card>
-            )}
+                {!forcePasswordChange && (
+                  <Button
+                    onClick={(e) => {
+                      setNestedAnimateFrom({ x: e.clientX, y: e.clientY });
+                      setNestedModalOpen(true);
+                    }}
+                    style={{ justifyContent: 'space-between' }}
+                    fullWidth
+                  >
+                    <span>{t('settings.nestedLimits')}</span>
+                    <span style={{ color: 'var(--text-muted)' }}>›</span>
+                  </Button>
+                )}
 
-            {/* Credentials */}
-            <Card fill={2} title={t('settings.changePassword')}>
-              <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <Button
+                  onClick={(e) => {
+                    setPwAnimateFrom({ x: e.clientX, y: e.clientY });
+                    setPwModalOpen(true);
+                  }}
+                  style={{ justifyContent: 'space-between' }}
+                  fullWidth
+                >
+                  <span>{t('settings.changePassword')}</span>
+                  <span style={{ color: 'var(--text-muted)' }}>›</span>
+                </Button>
+              </div>
+            </Card>
+
+            {/* Sub-menu: Nested-discovery limits (modal). */}
+            <Modal
+              open={nestedModalOpen}
+              onClose={() => setNestedModalOpen(false)}
+              title={t('settings.nestedLimits')}
+              animateFrom={nestedAnimateFrom}
+              footer={
+                <>
+                  <Button onClick={() => setNestedModalOpen(false)}>{t('app.cancel')}</Button>
+                  <Button variant="primary" onClick={handleSaveLimits} loading={savingLimits}>{t('app.save')}</Button>
+                </>
+              }
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                  {t('settings.nestedLimitsDesc')}
+                </div>
+                <FormGroup label={t('settings.maxNestedDepth')}>
+                  <Input type="number" min={1} max={10} value={maxNestedDepth} onChange={(e) => setMaxNestedDepth(e.target.value)} />
+                </FormGroup>
+                <FormGroup label={t('settings.maxResponseNodes')}>
+                  <Input type="number" min={1} max={65536} value={maxResponseNodes} onChange={(e) => setMaxResponseNodes(e.target.value)} />
+                </FormGroup>
+                <FormGroup label={t('settings.maxCacheEntries')}>
+                  <Input type="number" min={1} max={100000} value={maxCacheEntries} onChange={(e) => setMaxCacheEntries(e.target.value)} />
+                </FormGroup>
+                <FormGroup label={t('settings.maxResponseBytes')}>
+                  <Input type="number" min={1024} max={16777216} value={maxResponseBytes} onChange={(e) => setMaxResponseBytes(e.target.value)} suffix="B" />
+                </FormGroup>
+                <FormGroup label={t('settings.maxFetchFanOut')}>
+                  <Input type="number" min={1} max={64} value={maxFetchFanOut} onChange={(e) => setMaxFetchFanOut(e.target.value)} />
+                </FormGroup>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t('settings.hotReload')}</div>
+              </div>
+            </Modal>
+
+            {/* Sub-menu: Change password (modal). */}
+            <Modal
+              open={pwModalOpen}
+              onClose={() => setPwModalOpen(false)}
+              title={t('settings.changePassword')}
+              animateFrom={pwAnimateFrom}
+              footer={
+                <>
+                  <Button onClick={() => setPwModalOpen(false)}>{t('app.cancel')}</Button>
+                  <Button variant="primary" onClick={handleChangePw} loading={savingPw}>{t('settings.update')}</Button>
+                </>
+              }
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
                 <FormGroup label={t('settings.currentPassword')} required>
                   <PasswordInput value={curPw} onChange={(e) => setCurPw(e.target.value)} />
                 </FormGroup>
@@ -313,9 +389,8 @@ export default function SettingsPage() {
                 <FormGroup label={t('settings.confirmPassword')}>
                   <PasswordInput value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} />
                 </FormGroup>
-                <Button variant="primary" onClick={handleChangePw} loading={savingPw} style={{ alignSelf: 'flex-start' }}>{t('settings.update')}</Button>
               </div>
-            </Card>
+            </Modal>
           </>
         ) : activeTab === 'web' ? (
           <Card fill={1} title={t('settings.webUi')}>
