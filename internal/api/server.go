@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/FrankoonG/hy2scale/internal/app"
@@ -138,6 +139,9 @@ func NewServer(a *app.App, addr, basePath string) *Server {
 	if passHash == "" {
 		passHash = sha256Hex("admin")
 	}
+	// Install runtime nested limits from cfg + env override; subsequent
+	// updateUISettings calls re-apply on every change for hot-reload.
+	applyNestedLimits(cfg)
 	return &Server{
 		app:        a,
 		addr:       addr,
@@ -517,6 +521,7 @@ func (s *Server) getUISettings(w http.ResponseWriter, r *http.Request) {
 	if dns == "" { dns = "8.8.8.8,1.1.1.1" }
 	sessionH := cfg.SessionTimeoutH
 	if sessionH == 0 { sessionH = 12 }
+	lim := getNestedLimits() // current runtime values (post-clamp + env override)
 	writeJSON(w, map[string]any{
 		"listen":             s.addr,
 		"base_path":          s.basePath,
@@ -524,22 +529,35 @@ func (s *Server) getUISettings(w http.ResponseWriter, r *http.Request) {
 		"force_https":        cfg.ForceHTTPS,
 		"https_cert_id":      cfg.HTTPSCertID,
 		"session_timeout_h":  sessionH,
+		// Nested-discovery hard limits — hot-reloadable, no restart.
+		"max_nested_depth":   lim.MaxDepth,
+		"max_response_nodes": lim.MaxResponseNodes,
+		"max_cache_entries":  lim.MaxCacheEntries,
+		"max_response_bytes": lim.MaxResponseBytes,
+		"max_fetch_fan_out":  lim.MaxFetchFanOut,
 	})
 }
 
 func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Listen          *string `json:"listen"`
-		BasePath        *string `json:"base_path"`
-		DNS             *string `json:"dns"`
-		ForceHTTPS      *bool   `json:"force_https"`
-		HTTPSCertID     *string `json:"https_cert_id"`
-		SessionTimeoutH *int    `json:"session_timeout_h"`
+		Listen           *string `json:"listen"`
+		BasePath         *string `json:"base_path"`
+		DNS              *string `json:"dns"`
+		ForceHTTPS       *bool   `json:"force_https"`
+		HTTPSCertID      *string `json:"https_cert_id"`
+		SessionTimeoutH  *int    `json:"session_timeout_h"`
+		MaxNestedDepth   *int    `json:"max_nested_depth"`
+		MaxResponseNodes *int    `json:"max_response_nodes"`
+		MaxCacheEntries  *int    `json:"max_cache_entries"`
+		MaxResponseBytes *int    `json:"max_response_bytes"`
+		MaxFetchFanOut   *int    `json:"max_fetch_fan_out"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	nestedTouched := body.MaxNestedDepth != nil || body.MaxResponseNodes != nil ||
+		body.MaxCacheEntries != nil || body.MaxResponseBytes != nil || body.MaxFetchFanOut != nil
 	s.app.Store().Update(func(c *app.Config) {
 		if body.Listen != nil {
 			c.UIListen = *body.Listen
@@ -559,8 +577,31 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 		if body.SessionTimeoutH != nil {
 			c.SessionTimeoutH = *body.SessionTimeoutH
 		}
+		if body.MaxNestedDepth != nil {
+			c.MaxNestedDepth = *body.MaxNestedDepth
+		}
+		if body.MaxResponseNodes != nil {
+			c.MaxResponseNodes = *body.MaxResponseNodes
+		}
+		if body.MaxCacheEntries != nil {
+			c.MaxCacheEntries = *body.MaxCacheEntries
+		}
+		if body.MaxResponseBytes != nil {
+			c.MaxResponseBytes = *body.MaxResponseBytes
+		}
+		if body.MaxFetchFanOut != nil {
+			c.MaxFetchFanOut = *body.MaxFetchFanOut
+		}
 	})
-	writeJSON(w, map[string]string{"status": "ok", "note": "restart required for changes to take effect"})
+	// Hot-reload the runtime atomic pointer if any nested limit changed —
+	// next walkAndCache / assembleDeepTree / fetchSubPeersViaStream call
+	// picks up the new clamped values without a restart.
+	note := "restart required for listen/base_path changes to take effect"
+	if nestedTouched {
+		applyNestedLimits(s.app.Store().Get())
+		note = "nested limits applied live; restart still required for listen/base_path changes"
+	}
+	writeJSON(w, map[string]string{"status": "ok", "note": note})
 }
 
 // --- Node ---
@@ -1169,57 +1210,95 @@ func (s *Server) getCachedSubPeers(name string) []topoSubPeer {
 	return s.subPeersCache[name]
 }
 
-// maxNestedDepth bounds how deep one fetchSubPeersViaStream response is
-// allowed to populate qualified-path cache keys, AND how deep the
-// outbound listPeers response walks the local cache. Default 5; override
-// via HY2SCALE_MAX_NESTED_DEPTH (clamped to [1, 10]). The hard cap of 10
-// is a defensive backstop — rule 1 + rule 2 already structurally bound
-// the tree shape under any sane config.
-var maxNestedDepth = func() int {
-	s := strings.TrimSpace(os.Getenv("HY2SCALE_MAX_NESTED_DEPTH"))
-	if s == "" {
-		return 5
+// nestedLimits holds the runtime values of the 5 nested-discovery hard
+// caps. Sourced from cfg fields (with built-in defaults as fallback) and
+// clamped to sane ranges by clampNestedLimits. The atomic pointer makes
+// the limits hot-reloadable: updateUISettings calls applyNestedLimits to
+// install a new snapshot, and every read site (walkAndCache,
+// assembleDeepTree, fetchSubPeersViaStream, SubPeersUpdater) picks it up
+// on the next tick without a restart.
+type nestedLimits struct {
+	MaxDepth         int
+	MaxResponseNodes int
+	MaxCacheEntries  int
+	MaxResponseBytes int
+	MaxFetchFanOut   int
+}
+
+var currentNestedLimits atomic.Pointer[nestedLimits]
+
+// clampNestedLimits applies built-in defaults for any zero / unset field
+// and clamps each value to a sane range. Defaults match the original
+// v1.3.2 constants so behaviour is identical when cfg has the fields
+// blank.
+func clampNestedLimits(in nestedLimits) nestedLimits {
+	if in.MaxDepth <= 0 {
+		in.MaxDepth = 5
 	}
-	n, err := strconv.Atoi(s)
-	if err != nil || n < 1 {
-		return 5
+	if in.MaxDepth > 10 {
+		in.MaxDepth = 10
 	}
-	if n > 10 {
-		return 10
+	if in.MaxResponseNodes <= 0 {
+		in.MaxResponseNodes = 1024
 	}
-	return n
-}()
+	if in.MaxResponseNodes > 65536 {
+		in.MaxResponseNodes = 65536
+	}
+	if in.MaxCacheEntries <= 0 {
+		in.MaxCacheEntries = 5000
+	}
+	if in.MaxCacheEntries > 100000 {
+		in.MaxCacheEntries = 100000
+	}
+	if in.MaxResponseBytes <= 0 {
+		in.MaxResponseBytes = 1 << 20 // 1 MiB
+	}
+	if in.MaxResponseBytes > 16<<20 {
+		in.MaxResponseBytes = 16 << 20
+	}
+	if in.MaxFetchFanOut <= 0 {
+		in.MaxFetchFanOut = 8
+	}
+	if in.MaxFetchFanOut > 64 {
+		in.MaxFetchFanOut = 64
+	}
+	return in
+}
 
-// maxResponseNodes caps the total node count any single listPeers
-// response will pack out of the local cache. Defensive backstop —
-// rule 1 + rule 2 + maxNestedDepth already structurally bound the
-// shape under a sane config. 1024 is plenty for a normal-sized mesh
-// (e.g. 8 direct peers × 4 deep × ~32 leaves = 1024) and well below
-// any sane wire-payload concern.
-const maxResponseNodes = 1024
+// applyNestedLimits reads the cfg fields, clamps, and atomically installs
+// the resulting snapshot. Called once at server start and again on every
+// successful updateUISettings PUT. Reads on hot paths use getNestedLimits.
+func applyNestedLimits(cfg app.Config) {
+	limits := clampNestedLimits(nestedLimits{
+		MaxDepth:         cfg.MaxNestedDepth,
+		MaxResponseNodes: cfg.MaxResponseNodes,
+		MaxCacheEntries:  cfg.MaxCacheEntries,
+		MaxResponseBytes: cfg.MaxResponseBytes,
+		MaxFetchFanOut:   cfg.MaxFetchFanOut,
+	})
+	// Env override on max-depth kept as a startup-only escape hatch — if
+	// the operator deliberately set HY2SCALE_MAX_NESTED_DEPTH the env
+	// value wins over the cfg field. Reads on every applyNestedLimits
+	// call so re-setting via env+restart keeps working.
+	if e := strings.TrimSpace(os.Getenv("HY2SCALE_MAX_NESTED_DEPTH")); e != "" {
+		if n, err := strconv.Atoi(e); err == nil && n >= 1 && n <= 10 {
+			limits.MaxDepth = n
+		}
+	}
+	currentNestedLimits.Store(&limits)
+}
 
-// maxCacheEntries is a defensive cap on the total number of
-// qualified-path keys subPeersCache will hold after one fetch round.
-// Each entry is a small flat slice so memory pressure is modest, but
-// pathological topologies (very wide fan-out × max depth) could push
-// numbers high. 5000 is generous — a 100-direct-peer cluster with
-// full maxDepth=5 expansion would still need fan-out × 5 ≈ 500-2500
-// entries, well below the cap. See walkAndCache for enforcement.
-const maxCacheEntries = 5000
+// getNestedLimits returns the current snapshot. Cheap: one atomic load,
+// no allocation. Always non-nil after applyNestedLimits has run at least
+// once at server start.
+func getNestedLimits() nestedLimits {
+	if p := currentNestedLimits.Load(); p != nil {
+		return *p
+	}
+	return clampNestedLimits(nestedLimits{}) // pure-defaults fallback
+}
 
-// maxResponseBytes hard-caps an incoming listPeers payload. Reject
-// (skip + log) anything larger before json.Unmarshal — defends
-// against a peer running a non-compliant fork or a hostile actor
-// pushing oversized trees. 1 MiB is ~5x more than maxResponseNodes
-// at typical encoding density.
-const maxResponseBytes = 1 << 20
-
-// maxFetchFanOut bounds concurrent fetchSubPeersViaStream goroutines
-// per SubPeersUpdater round. Today's code spawns unbounded fan-out
-// (one goroutine per nested-authorised direct peer); 8 is more than
-// enough for any sane cluster while preventing thread blowup if the
-// list ever grows pathologically.
-const maxFetchFanOut = 8
+// (limits live in nestedLimits / currentNestedLimits / getNestedLimits above)
 
 // assembleDeepTree walks the local subPeersCache to build a multi-depth
 // tree rooted at `prefix`. The result is suitable for embedding into a
@@ -1241,7 +1320,8 @@ const maxFetchFanOut = 8
 // Counter is passed by pointer so siblings share quota — preventing one
 // fan-out branch from pre-empting all the budget.
 func (s *Server) assembleDeepTree(cfg app.Config, prefix string, depth int, count *int) []topoSubPeer {
-	if depth >= maxNestedDepth || *count >= maxResponseNodes {
+	lim := getNestedLimits()
+	if depth >= lim.MaxDepth || *count >= lim.MaxResponseNodes {
 		return nil
 	}
 	s.subPeersMu.RLock()
@@ -1252,7 +1332,7 @@ func (s *Server) assembleDeepTree(cfg app.Config, prefix string, depth int, coun
 	}
 	result := make([]topoSubPeer, 0, len(base))
 	for _, c := range base {
-		if *count >= maxResponseNodes {
+		if *count >= lim.MaxResponseNodes {
 			break
 		}
 		qkey := prefix + "/" + c.Name
@@ -1282,10 +1362,11 @@ func (s *Server) assembleDeepTree(cfg app.Config, prefix string, depth int, coun
 // cache[A/B/C], …) — the storage shape mirrors the qualified-key
 // addressing the topology API and adaptive routing already use.
 func walkAndCache(prefix string, children []topoSubPeer, ancestors map[string]bool, depth int, newCache map[string][]topoSubPeer) {
-	if depth >= maxNestedDepth || len(children) == 0 {
+	lim := getNestedLimits()
+	if depth >= lim.MaxDepth || len(children) == 0 {
 		return
 	}
-	if len(newCache) >= maxCacheEntries {
+	if len(newCache) >= lim.MaxCacheEntries {
 		// Defensive cache-size cap — refuse to add more keys this
 		// round. Already-populated entries stay valid; we just stop
 		// expanding deeper. Rule 1 + maxNestedDepth + rule 2 should
@@ -1460,11 +1541,11 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 			children []topoSubPeer
 		}
 		resultCh := make(chan fetchResult, len(fetchNames))
-		// Bounded fan-out: at most maxFetchFanOut concurrent stream
+		// Bounded fan-out: at most cfg-driven concurrent stream
 		// fetches, regardless of how many direct peers are
 		// nested-authorised. Keeps goroutine + socket pressure
 		// predictable on a heavy cluster.
-		sem := make(chan struct{}, maxFetchFanOut)
+		sem := make(chan struct{}, getNestedLimits().MaxFetchFanOut)
 		for _, n := range fetchNames {
 			sem <- struct{}{}
 			go func(name string) {
@@ -1638,8 +1719,8 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 	if err != nil {
 		return nil
 	}
-	if len(data) > maxResponseBytes {
-		log.Printf("[topology] %s listPeers payload %d B > %d cap — dropping", peerName, len(data), maxResponseBytes)
+	if cap := getNestedLimits().MaxResponseBytes; len(data) > cap {
+		log.Printf("[topology] %s listPeers payload %d B > %d cap — dropping", peerName, len(data), cap)
 		return nil
 	}
 	type peerWithChildren struct {
@@ -1772,7 +1853,7 @@ func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName
 	// below come up empty and the recursion ends naturally. This branch
 	// only fires if cache state contradicts maxNestedDepth (e.g., env
 	// var was lowered after cache was filled, or in-memory drift).
-	if depth >= maxNestedDepth {
+	if depth >= getNestedLimits().MaxDepth {
 		stripped := make([]topoSubPeer, len(children))
 		for i, c := range children {
 			c.Children = nil

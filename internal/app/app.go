@@ -120,6 +120,19 @@ type Config struct {
 	// server-side so the layout follows the user across browsers/devices
 	// and multiple concurrent sessions converge on a single source of truth.
 	GraphLayout map[string]GraphLayoutPos `yaml:"graph_layout,omitempty" json:"graph_layout,omitempty"`
+	// Nested-discovery hard limits. Defensive backstops on the deep-cache
+	// machinery (see internal/api/server.go walkAndCache /
+	// assembleDeepTree). Under a sane config rule 1 cycle drop + rule 2
+	// gating already structurally bound the tree shape; these caps only
+	// fire under pathological mis-config or hostile peers. Hot-reloadable:
+	// updateUISettings refreshes the runtime atomic-pointer so changes
+	// take effect within the next SubPeersUpdater tick (≤7 s) without a
+	// restart. Zero / missing means "use built-in default".
+	MaxNestedDepth   int `yaml:"max_nested_depth,omitempty" json:"max_nested_depth,omitempty"`     // default 5,         hard cap 10
+	MaxResponseNodes int `yaml:"max_response_nodes,omitempty" json:"max_response_nodes,omitempty"` // default 1024,      hard cap 65536
+	MaxCacheEntries  int `yaml:"max_cache_entries,omitempty" json:"max_cache_entries,omitempty"`   // default 5000,      hard cap 100000
+	MaxResponseBytes int `yaml:"max_response_bytes,omitempty" json:"max_response_bytes,omitempty"` // default 1048576,   hard cap 16<<20
+	MaxFetchFanOut   int `yaml:"max_fetch_fan_out,omitempty" json:"max_fetch_fan_out,omitempty"`   // default 8,         hard cap 64
 }
 
 // GraphLayoutPos stores a single node's coordinates in the topology graph.

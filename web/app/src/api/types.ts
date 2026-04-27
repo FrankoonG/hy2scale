@@ -235,6 +235,12 @@ export interface UISettings {
   force_https: boolean;
   https_cert_id: string;
   session_timeout_h: number;
+  // Nested-discovery hard limits — hot-reloadable on PUT.
+  max_nested_depth: number;
+  max_response_nodes: number;
+  max_cache_entries: number;
+  max_response_bytes: number;
+  max_fetch_fan_out: number;
 }
 
 export interface PortConflict {
