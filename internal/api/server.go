@@ -1034,7 +1034,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		if c.Nested {
 			ancestors := selfAncestors(cfg, c.Name)
 			children := filterAncestorPaths(s.getCachedSubPeers(c.Name), ancestors)
-			selfChildren[i].Children = s.filterChildrenByNestedConfig(children, c.Name, cfg, ancestors, pathRates)
+			selfChildren[i].Children = s.filterChildrenByNestedConfig(children, c.Name, cfg, ancestors, pathRates, 0)
 		}
 	}
 	sort.Slice(selfChildren, func(i, j int) bool { return selfChildren[i].Name < selfChildren[j].Name })
@@ -1153,7 +1153,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		if tn.Nested && tn.Connected && !tn.Native && !tn.Incompatible && !tn.Conflict && !tn.Unsupported {
 			ancestors := selfAncestors(cfg, name)
 			children := filterAncestorPaths(s.getCachedSubPeers(name), ancestors)
-			tn.Children = s.filterChildrenByNestedConfig(children, name, cfg, ancestors, pathRates)
+			tn.Children = s.filterChildrenByNestedConfig(children, name, cfg, ancestors, pathRates, 0)
 		}
 		// Also load children for inbound peers nested under self
 		// (they can have outbound connections visible if nested is enabled)
@@ -1720,9 +1720,23 @@ func doTruncate(children []topoSubPeer, parentLatency int, selfID string, depth 
 // Path-qualified traffic rates are attached per node so the Nodes UI can
 // attribute relayed bytes to the specific nested descendant they're destined
 // for, not only to the first-hop direct peer that physically carries them.
-func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName string, cfg app.Config, ancestors map[string]bool, pathRates map[string]relay.PeerTraffic) []topoSubPeer {
+func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName string, cfg app.Config, ancestors map[string]bool, pathRates map[string]relay.PeerTraffic, depth int) []topoSubPeer {
 	if len(children) == 0 {
 		return children
+	}
+	// Defensive depth cap mirroring the cache-fill side (walkAndCache).
+	// Under normal operation this never binds — walkAndCache already
+	// stops populating qkeys past maxNestedDepth, so the cache lookups
+	// below come up empty and the recursion ends naturally. This branch
+	// only fires if cache state contradicts maxNestedDepth (e.g., env
+	// var was lowered after cache was filled, or in-memory drift).
+	if depth >= maxNestedDepth {
+		stripped := make([]topoSubPeer, len(children))
+		for i, c := range children {
+			c.Children = nil
+			stripped[i] = c
+		}
+		return stripped
 	}
 	result := make([]topoSubPeer, 0, len(children))
 	for _, c := range children {
@@ -1739,14 +1753,15 @@ func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName
 		}
 		if c.Nested {
 			if len(c.Children) == 0 {
-				// Pull one level from the per-qualified-path cache populated
-				// by the updater. This is how depth > 2 gets displayed now
-				// that single-hop listPeers responses are flat.
+				// Pull from the per-qualified-path cache populated by
+				// StartSubPeersUpdater + walkAndCache. v1.3.2 fills
+				// every depth ≤ maxNestedDepth, so this lookup may
+				// return data even at qualified keys ≥3 deep.
 				c.Children = s.getCachedSubPeers(qualifiedKey)
 			}
 			if len(c.Children) > 0 {
 				ancestors[c.Name] = true
-				c.Children = s.filterChildrenByNestedConfig(c.Children, qualifiedKey, cfg, ancestors, pathRates)
+				c.Children = s.filterChildrenByNestedConfig(c.Children, qualifiedKey, cfg, ancestors, pathRates, depth+1)
 				delete(ancestors, c.Name)
 			}
 		} else {
