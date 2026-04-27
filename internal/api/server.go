@@ -1190,6 +1190,64 @@ var maxNestedDepth = func() int {
 	return n
 }()
 
+// maxResponseNodes caps the total node count any single listPeers
+// response will pack out of the local cache. Defensive backstop —
+// rule 1 + rule 2 + maxNestedDepth already structurally bound the
+// shape under a sane config. 1024 is plenty for a normal-sized mesh
+// (e.g. 8 direct peers × 4 deep × ~32 leaves = 1024) and well below
+// any sane wire-payload concern.
+const maxResponseNodes = 1024
+
+// assembleDeepTree walks the local subPeersCache to build a multi-depth
+// tree rooted at `prefix`. The result is suitable for embedding into a
+// peerWithChildren.Children field — Children at every level reflect
+// what we have cached for that qualified path, gated by rule 2.
+//
+// Recursion stops at any of:
+//   - depth >= maxNestedDepth (defensive cap)
+//   - cache miss at the qualified key (we have nothing to publish)
+//   - cfg.Peers[qkey].Nested == false (rule 2 — caller didn't authorise
+//     us to propagate descendants of qkey)
+//   - cfg.Peers[qkey].Disabled == true (caller explicitly disabled this
+//     peer — don't propagate at all)
+//   - emitted node count >= maxResponseNodes (defensive payload cap)
+//
+// Rule 1 (cycle drop) is already enforced when the cache was populated
+// (walkAndCache pre-seeds ancestors); we don't repeat the check here.
+//
+// Counter is passed by pointer so siblings share quota — preventing one
+// fan-out branch from pre-empting all the budget.
+func (s *Server) assembleDeepTree(cfg app.Config, prefix string, depth int, count *int) []topoSubPeer {
+	if depth >= maxNestedDepth || *count >= maxResponseNodes {
+		return nil
+	}
+	s.subPeersMu.RLock()
+	base, ok := s.subPeersCache[prefix]
+	s.subPeersMu.RUnlock()
+	if !ok || len(base) == 0 {
+		return nil
+	}
+	result := make([]topoSubPeer, 0, len(base))
+	for _, c := range base {
+		if *count >= maxResponseNodes {
+			break
+		}
+		qkey := prefix + "/" + c.Name
+		if pc, hasPC := cfg.Peers[qkey]; hasPC && pc.Disabled {
+			continue // user disabled — drop entirely
+		}
+		out := c // value copy; mutate the local
+		*count++
+		if pc, hasPC := cfg.Peers[qkey]; hasPC && pc.Nested {
+			out.Children = s.assembleDeepTree(cfg, qkey, depth+1, count)
+		} else {
+			out.Children = nil
+		}
+		result = append(result, out)
+	}
+	return result
+}
+
 // walkAndCache populates newCache at every qualified-path key discovered
 // in the response tree. It applies rule 1 (drop any descendant whose
 // name is already an ancestor — self-id, self-name, and any peer name
@@ -1292,13 +1350,13 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 			}
 			pc := peerWithChildren{PeerInfo: p, Connected: true, MaxRate: maxRateByName[p.Name]}
 			if pcfg, ok := cfg.Peers[p.Name]; ok && pcfg.Nested {
-				cached := s.getCachedSubPeers(p.Name)
-				flat := make([]topoSubPeer, 0, len(cached))
-				for _, c := range cached {
-					c.Children = nil // flat — rule 3
-					flat = append(flat, c)
-				}
-				pc.Children = flat
+				// v1.3.2: walk own cache for qualified paths prefixed
+				// with p.Name, building a multi-depth tree per the
+				// rule-2 authorisation chain. Stops at maxNestedDepth
+				// or maxResponseNodes (both defensive backstops; rule 1
+				// + rule 2 already shape the tree under sane config).
+				count := 0
+				pc.Children = s.assembleDeepTree(cfg, p.Name, 0, &count)
 			}
 			result = append(result, pc)
 		}
