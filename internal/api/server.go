@@ -1198,6 +1198,29 @@ var maxNestedDepth = func() int {
 // any sane wire-payload concern.
 const maxResponseNodes = 1024
 
+// maxCacheEntries is a defensive cap on the total number of
+// qualified-path keys subPeersCache will hold after one fetch round.
+// Each entry is a small flat slice so memory pressure is modest, but
+// pathological topologies (very wide fan-out × max depth) could push
+// numbers high. 5000 is generous — a 100-direct-peer cluster with
+// full maxDepth=5 expansion would still need fan-out × 5 ≈ 500-2500
+// entries, well below the cap. See walkAndCache for enforcement.
+const maxCacheEntries = 5000
+
+// maxResponseBytes hard-caps an incoming listPeers payload. Reject
+// (skip + log) anything larger before json.Unmarshal — defends
+// against a peer running a non-compliant fork or a hostile actor
+// pushing oversized trees. 1 MiB is ~5x more than maxResponseNodes
+// at typical encoding density.
+const maxResponseBytes = 1 << 20
+
+// maxFetchFanOut bounds concurrent fetchSubPeersViaStream goroutines
+// per SubPeersUpdater round. Today's code spawns unbounded fan-out
+// (one goroutine per nested-authorised direct peer); 8 is more than
+// enough for any sane cluster while preventing thread blowup if the
+// list ever grows pathologically.
+const maxFetchFanOut = 8
+
 // assembleDeepTree walks the local subPeersCache to build a multi-depth
 // tree rooted at `prefix`. The result is suitable for embedding into a
 // peerWithChildren.Children field — Children at every level reflect
@@ -1260,6 +1283,14 @@ func (s *Server) assembleDeepTree(cfg app.Config, prefix string, depth int, coun
 // addressing the topology API and adaptive routing already use.
 func walkAndCache(prefix string, children []topoSubPeer, ancestors map[string]bool, depth int, newCache map[string][]topoSubPeer) {
 	if depth >= maxNestedDepth || len(children) == 0 {
+		return
+	}
+	if len(newCache) >= maxCacheEntries {
+		// Defensive cache-size cap — refuse to add more keys this
+		// round. Already-populated entries stay valid; we just stop
+		// expanding deeper. Rule 1 + maxNestedDepth + rule 2 should
+		// keep this from binding under sane configs; if it ever does
+		// the operator is the one paying with truncation visibility.
 		return
 	}
 	flat := make([]topoSubPeer, 0, len(children))
@@ -1429,8 +1460,15 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 			children []topoSubPeer
 		}
 		resultCh := make(chan fetchResult, len(fetchNames))
+		// Bounded fan-out: at most maxFetchFanOut concurrent stream
+		// fetches, regardless of how many direct peers are
+		// nested-authorised. Keeps goroutine + socket pressure
+		// predictable on a heavy cluster.
+		sem := make(chan struct{}, maxFetchFanOut)
 		for _, n := range fetchNames {
+			sem <- struct{}{}
 			go func(name string) {
+				defer func() { <-sem }()
 				resultCh <- fetchResult{name, s.fetchSubPeersViaStream(name)}
 			}(n)
 		}
@@ -1598,6 +1636,10 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 	data, err := s.app.Node().PeersOfRaw(peerName)
 	if err != nil {
+		return nil
+	}
+	if len(data) > maxResponseBytes {
+		log.Printf("[topology] %s listPeers payload %d B > %d cap — dropping", peerName, len(data), maxResponseBytes)
 		return nil
 	}
 	type peerWithChildren struct {
