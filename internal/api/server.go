@@ -1169,6 +1169,64 @@ func (s *Server) getCachedSubPeers(name string) []topoSubPeer {
 	return s.subPeersCache[name]
 }
 
+// maxNestedDepth bounds how deep one fetchSubPeersViaStream response is
+// allowed to populate qualified-path cache keys, AND how deep the
+// outbound listPeers response walks the local cache. Default 5; override
+// via HY2SCALE_MAX_NESTED_DEPTH (clamped to [1, 10]). The hard cap of 10
+// is a defensive backstop — rule 1 + rule 2 already structurally bound
+// the tree shape under any sane config.
+var maxNestedDepth = func() int {
+	s := strings.TrimSpace(os.Getenv("HY2SCALE_MAX_NESTED_DEPTH"))
+	if s == "" {
+		return 5
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 {
+		return 5
+	}
+	if n > 10 {
+		return 10
+	}
+	return n
+}()
+
+// walkAndCache populates newCache at every qualified-path key discovered
+// in the response tree. It applies rule 1 (drop any descendant whose
+// name is already an ancestor — self-id, self-name, and any peer name
+// already on the path are seeded into the ancestors set by the caller)
+// at every level, and stops recursing at maxNestedDepth.
+//
+// Each map entry is stored flat: the slice elements have Children=nil.
+// Depth comes from chained qualified keys (cache[A], cache[A/B],
+// cache[A/B/C], …) — the storage shape mirrors the qualified-key
+// addressing the topology API and adaptive routing already use.
+func walkAndCache(prefix string, children []topoSubPeer, ancestors map[string]bool, depth int, newCache map[string][]topoSubPeer) {
+	if depth >= maxNestedDepth || len(children) == 0 {
+		return
+	}
+	flat := make([]topoSubPeer, 0, len(children))
+	for _, c := range children {
+		if ancestors[c.Name] {
+			continue
+		}
+		cflat := c
+		cflat.Children = nil
+		flat = append(flat, cflat)
+	}
+	if len(flat) == 0 {
+		return
+	}
+	newCache[prefix] = flat
+	for _, c := range children {
+		if ancestors[c.Name] || len(c.Children) == 0 {
+			continue
+		}
+		ancestors[c.Name] = true
+		walkAndCache(prefix+"/"+c.Name, c.Children, ancestors, depth+1, newCache)
+		delete(ancestors, c.Name)
+	}
+}
+
 // StartSubPeersUpdater runs in background, periodically refreshes nested peer data.
 // Uses relay streamListPeers for both outbound and inbound peers (same mechanism).
 func (s *Server) StartSubPeersUpdater(ctx context.Context) {
@@ -1324,34 +1382,23 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 				if r.children == nil {
 					break
 				}
-				// Populate newCache at the direct-peer key as a flat list
-				// (UI's filterChildrenByNestedConfig recurses into Children
-				// separately by pulling from subPeersCache at qualified
-				// keys — which is what the inner loop below fills).
-				flatDirect := make([]topoSubPeer, len(r.children))
-				for i, c := range r.children {
-					c2 := c
-					c2.Children = nil
-					flatDirect[i] = c2
+				// v1.3.2: walk the response tree to whatever depth the
+				// remote sent (clamped by maxNestedDepth). Each visited
+				// path becomes a flat cache entry keyed by the qualified
+				// path string — the same addressing topology /
+				// findPathsTo / etc. already use. Rule 1 (cycle drop)
+				// is applied at every level via the ancestors set
+				// pre-seeded with self identity and the direct-peer
+				// prefix. Rule 3 is preserved: every grandchild we
+				// learn about is one whose direct parent (the peer
+				// queried) chose to publish it in their listPeers
+				// response — we never bypass to query the target.
+				ancestors := map[string]bool{
+					cfg.NodeID: true,
+					cfg.Name:   true,
+					r.name:     true,
 				}
-				newCache[r.name] = flatDirect
-				// Each direct peer whose remote authorised as nested will
-				// have its own flat list of grandchildren attached — cache
-				// it under the qualified key. This is the one and only
-				// way we learn about qualified paths per rule 3.
-				for _, c := range r.children {
-					if len(c.Children) == 0 {
-						continue
-					}
-					qkey := r.name + "/" + c.Name
-					flatGrand := make([]topoSubPeer, len(c.Children))
-					for i, gc := range c.Children {
-						gc2 := gc
-						gc2.Children = nil
-						flatGrand[i] = gc2
-					}
-					newCache[qkey] = flatGrand
-				}
+				walkAndCache(r.name, r.children, ancestors, 0, newCache)
 			case <-time.After(6 * time.Second):
 			}
 		}
@@ -1528,11 +1575,16 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 		if childLatency > 0 && parentLatency > 0 {
 			childLatency += parentLatency
 		}
-		// Rule 1 at the grandchildren level: drop any grandchild whose name
-		// already appears in {local self, direct peer}. Guards against
-		// paths like AUB/cn-xinchang/au-kbv looping back to us. Deeper
-		// cycle detection within embedded children isn't needed here —
-		// they are flat (rule 3) so at most one level of descendant.
+		// Rule 1 at the FIRST grandchild level: drop any grandchild whose
+		// name already appears in {local self, direct peer}. Guards
+		// against paths like AUB/cn-xinchang/au-kbv looping back to us.
+		// v1.3.2: deeper levels of the response tree are kept intact —
+		// the consumer (walkAndCache in StartSubPeersUpdater) walks them
+		// and applies rule 1 / depth-cap at every level via the
+		// ancestors set. We no longer strip beyond the first grandchild
+		// here; depth comes back through chained hops naturally and the
+		// per-walk cycle check inside walkAndCache prevents the
+		// pathological self-amplification rc14 was guarding against.
 		var embedded []topoSubPeer
 		if len(rp.Children) > 0 {
 			embedded = make([]topoSubPeer, 0, len(rp.Children))
@@ -1540,8 +1592,7 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 				if selfNames[gc.Name] || gc.Name == rp.Name {
 					continue
 				}
-				gc.Children = nil // defense-in-depth flatten
-				embedded = append(embedded, gc)
+				embedded = append(embedded, gc) // keep gc.Children intact
 			}
 		}
 		// Connected: absent → treat as connected (legacy peers).
