@@ -22,6 +22,19 @@
 
 ## 快速开始
 
+### 一键安装（原生二进制 + systemd）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/FrankoonG/hy2scale/main/install.sh | sudo sh
+```
+
+自动识别 CPU 架构（`amd64` / `arm64` / `armv7` / `mips64le` /
+`mipsle-softfloat`），从最新 release 下载匹配的 tar 包，把二进制装到
+`/usr/local/bin/hy2scale` 并注册 systemd 服务。重复运行即原地升级。
+固定版本用 `HY2SCALE_VERSION=v1.3.1`；卸载用 `… | sudo sh -s -- --uninstall`。
+
+### Docker
+
 Full 模式（Host 网络 — 全部功能启用）：
 
 ```bash
