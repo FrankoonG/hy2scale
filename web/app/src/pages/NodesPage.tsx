@@ -415,15 +415,21 @@ export default function NodesPage() {
   collectKeys(treeNodes);
   const selection = useSelection(selectableKeys);
 
-  // When switching to list with a node already selected (typically from a
-  // graph-view click), scroll the matching row into view so the user
-  // doesn't have to hunt for it in a long table. Uses the data-row-key
-  // attribute that Table/TreeTable expose. Two RAFs let the framework
-  // finish its layout/animation pass (TreeTable uses framer-motion for
-  // row entry) before we measure.
-  const selectedKeysSig = Array.from(selection.selected).sort().join(',');
+  // Scroll-to-selection on graph→list view switch ONLY. Triggers when
+  // the user has just flipped the view to list AND a single row is
+  // selected (typically chosen on the graph just before). We don't
+  // want this to fire on every in-list selection change — clicking a
+  // row in list view should select it where the user clicked, not yank
+  // the table to recenter on it. So `selection` is read inside the
+  // effect but is NOT in the dependency list; the only trigger is the
+  // viewMode transition. A ref tracks the previous render's viewMode
+  // so we can distinguish a fresh graph→list flip from any later
+  // re-render while in list view.
+  const prevViewMode = useRef(viewMode);
   useEffect(() => {
-    if (viewMode !== 'list') return;
+    const wasGraph = prevViewMode.current === 'graph';
+    prevViewMode.current = viewMode;
+    if (!wasGraph || viewMode !== 'list') return;
     if (selection.count !== 1) return;
     const target = Array.from(selection.selected)[0];
     requestAnimationFrame(() => {
@@ -432,7 +438,9 @@ export default function NodesPage() {
         if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
       });
     });
-  }, [viewMode, selectedKeysSig, selection.count]);
+    // selection intentionally omitted from deps — see comment above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode]);
 
   const bulkToggleNodes = useCallback(async (disabled: boolean) => {
     try {
