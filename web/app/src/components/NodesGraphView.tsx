@@ -987,6 +987,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       const dist = Math.max(1, Math.hypot(dx, dy));
       const anchor = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
       pinchRef.current = { startDist: dist, startZoom: zoom, startPan: pan, anchor };
+      // Pinch-zoom counts as user interaction; auto-fit yields to it.
+      didUserInteract.current = true;
       dragState.current = null;
       try { (ev.currentTarget as SVGSVGElement).setPointerCapture(ev.pointerId); } catch { /* ignore */ }
       ev.preventDefault();
@@ -1103,7 +1105,11 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       if (s.mode === 'pan') {
         const dx = ev.clientX - s.startClient.x;
         const dy = ev.clientY - s.startClient.y;
-        if (!s.moved && Math.abs(dx) + Math.abs(dy) > 4) s.moved = true;
+        if (!s.moved && Math.abs(dx) + Math.abs(dy) > 4) {
+          s.moved = true;
+          // First real pan — disables auto-fit on subsequent SVG resizes.
+          didUserInteract.current = true;
+        }
         setPan(clampPan({ x: s.startPan.x + dx, y: s.startPan.y + dy }, zoom));
       } else {
         const cur = clientToSvg(ev.clientX, ev.clientY);
@@ -1173,6 +1179,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     if (!svg) return;
     const handler = (ev: WheelEvent) => {
       ev.preventDefault();
+      // Wheel-zoom counts as user interaction; auto-fit yields to it.
+      didUserInteract.current = true;
       const r = svg.getBoundingClientRect();
       const cx = ev.clientX - r.left;
       const cy = ev.clientY - r.top;
@@ -1188,6 +1196,10 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     return () => svg.removeEventListener('wheel', handler);
   }, []);
 
+  // Auto-fit yields to manual pan/zoom/wheel/pinch — see the layout
+  // effect below for why we need this. Declared up here so fitView (and
+  // the various pointer/wheel handlers above) can flip it without TDZ.
+  const didUserInteract = useRef(false);
   const fitView = useCallback(() => {
     const svg = svgRef.current;
     if (!svg) return;
@@ -1195,6 +1207,10 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     if (r.width <= 0 || r.height <= 0) return;
     const pts = Object.values(positions);
     if (pts.length === 0) return;
+    // Manual Reset view (or any explicit fit) clears the interaction lock,
+    // so the next SVG resize will auto-fit again instead of preserving a
+    // stale custom pan/zoom.
+    didUserInteract.current = false;
     const minX = Math.min(...pts.map((p) => p.x)) - R_HUB_OUTER - 40;
     const maxX = Math.max(...pts.map((p) => p.x)) + R_HUB_OUTER + 40;
     const minY = Math.min(...pts.map((p) => p.y)) - R_HUB_OUTER - 40;
@@ -1204,16 +1220,35 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     setZoom(z);
   }, [positions]);
 
-  const didFit = useRef(false);
+  // Auto-fit-on-mount AND auto-fit when the SVG resizes (until the user
+  // has manually panned/zoomed). Without the resize-driven re-fit, every
+  // list→graph view flip ends up with a stale pan: the SVG mounts at the
+  // parent Card's last height (which was sized for the TreeTable), the
+  // initial fitView runs against that, and a frame later the Card relays
+  // its child to its real graph-view dimensions but the pan/zoom is
+  // already locked in. The result is the dots are clipped above (or
+  // below) the new viewport — clicking the existing "Reset view" button
+  // fixes it manually, but the user shouldn't have to.
   useLayoutEffect(() => {
-    if (didFit.current) return;
     if (Object.keys(positions).length === 0) return;
     const svg = svgRef.current;
     if (!svg) return;
-    const r = svg.getBoundingClientRect();
-    if (r.width <= 0 || r.height <= 0) return;
-    didFit.current = true;
-    fitView();
+    // Initial fit once positions and the SVG box are both ready.
+    const tryFit = () => {
+      const r = svg.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) fitView();
+    };
+    tryFit();
+    // Re-fit when the SVG actually resizes, until the user starts panning
+    // or zooming (didUserInteract). On list→graph flips the SVG's first
+    // measured size is wrong; ResizeObserver fires on the corrected
+    // size and we re-fit once.
+    const ro = new ResizeObserver(() => {
+      if (didUserInteract.current) return;
+      tryFit();
+    });
+    ro.observe(svg);
+    return () => ro.disconnect();
   }, [positions, fitView]);
 
   const confirm = useConfirm();
