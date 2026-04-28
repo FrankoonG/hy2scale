@@ -164,7 +164,11 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
   const showPeerDetail = useCallback(async (name: string, e?: MouseEvent) => {
     if (e) setClickPos({ x: e.clientX, y: e.clientY });
     try {
-      const res = await api.getWGPeerConfig(name);
+      // Default the [Peer] Endpoint to the host the user is currently
+      // accessing this admin UI through — that's the same node serving
+      // WireGuard, so it's a safe baseline. The user can edit the .conf
+      // afterwards if their actual public hostname differs.
+      const res = await api.getWGPeerConfig(name, window.location.hostname);
       const text = await (res as any).text();
       setDetailName(name);
       setDetailConfig(text);
