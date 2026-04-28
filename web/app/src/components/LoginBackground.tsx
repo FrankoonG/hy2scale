@@ -126,18 +126,21 @@ export default function LoginBackground() {
           // few high-degree (≥3) nodes that will render as concentric
           // hubs at draw time, while most stay sparse. Native is capped
           // separately by NATIVE_MAX_LINKS, regardless of probability.
-          const dense = ci.linkCount + cj.linkCount;
-          // Probability tiers — kept modest on purpose. The orphan
-          // problem is solved deterministically in the post-pass below
-          // (which wires every isolated normal to its nearest neighbor)
-          // so we don't have to inflate the base probability and risk
-          // bumping the ≥3-link concentric ratio above the
-          // user-confirmed sweet spot of roughly 1/3 of normals.
+          // Flat probability for non-native pairs. The previous tiered
+          // approach (dense >= 4 → 0.55, dense >= 2 → 0.40) created a
+          // "rich get richer" feedback: once a circle accumulated 2+
+          // links its per-neighbor probability jumped, snowballing into
+          // dense clusters of ≥3-link concentric dots. Aggregate counts
+          // looked fine at 30% concentric, but the eye registers the
+          // dense regions, not the global average — so under the login
+          // box the ratio felt like 80%. A flat 0.30 across all
+          // non-native pairs gives a binomial linkCount with mean ~1.8
+          // and tail (linkCount ≥ 3) of ~26%, with no clustering.
+          // Orphan tail is ~12% which the post-pass below stitches up
+          // deterministically.
           let prob: number;
           if (eitherNative) prob = 0.30;
-          else if (dense >= 4) prob = 0.55;
-          else if (dense >= 2) prob = 0.40;
-          else prob = 0.22;
+          else prob = 0.30;
           if (r >= prob) continue;
           if (ci.kind === 'native' && ci.linkCount >= NATIVE_MAX_LINKS) continue;
           if (cj.kind === 'native' && cj.linkCount >= NATIVE_MAX_LINKS) continue;
