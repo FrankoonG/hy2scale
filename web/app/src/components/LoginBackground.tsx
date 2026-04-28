@@ -127,6 +127,12 @@ export default function LoginBackground() {
           // hubs at draw time, while most stay sparse. Native is capped
           // separately by NATIVE_MAX_LINKS, regardless of probability.
           const dense = ci.linkCount + cj.linkCount;
+          // Probability tiers — kept modest on purpose. The orphan
+          // problem is solved deterministically in the post-pass below
+          // (which wires every isolated normal to its nearest neighbor)
+          // so we don't have to inflate the base probability and risk
+          // bumping the ≥3-link concentric ratio above the
+          // user-confirmed sweet spot of roughly 1/3 of normals.
           let prob: number;
           if (eitherNative) prob = 0.30;
           else if (dense >= 4) prob = 0.55;
@@ -149,11 +155,46 @@ export default function LoginBackground() {
           cj.linkCount++;
         }
       }
-      // Promote orphans: a normal circle that ended up with zero
-      // connections is, by the user's rule, offline. Native circles that
-      // ended up isolated keep their kind — a native upstream with no
-      // line is rare but it's still semantically a native (just nothing
-      // dialled it this layout). They render as plain yellow.
+      // Orphan rescue: a normal circle with zero connections is
+      // semantically out-of-graph. Without intervention the random
+      // probability pass leaves a chunky tail of isolated normals
+      // (~22% in early tuning), and promoting them all to offline
+      // makes the background look diseased. Instead, deterministically
+      // attach each orphan to its single closest existing-normal
+      // neighbor — exactly one new edge per orphan, so no concentric-
+      // hub inflation. Native and offline kinds are skipped: native
+      // already has its own cap, and pre-marked offline is a deliberate
+      // visual outlier (often paired in clusters or alone).
+      for (let i = 0; i < circles.length; i++) {
+        const ci = circles[i];
+        if (ci.kind !== 'normal' || ci.linkCount > 0) continue;
+        // Find closest neighbor that's already on the graph (has at
+        // least one link). Restrict to GRID*1.8 like the main pass so
+        // the rescue line stays visually local.
+        let bestJ = -1, bestD = Infinity;
+        for (let j = 0; j < circles.length; j++) {
+          if (j === i) continue;
+          const cj = circles[j];
+          if (cj.kind === 'native' && cj.linkCount >= NATIVE_MAX_LINKS) continue;
+          if (cj.linkCount === 0 && cj.kind !== 'normal') continue;
+          const dx = ci.x - cj.x, dy = ci.y - cj.y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 > GRID * GRID * 1.8 * 1.8) continue;
+          if (d2 < bestD) { bestD = d2; bestJ = j; }
+        }
+        if (bestJ === -1) {
+          // No reachable neighbor at all — promote to offline. Rare.
+          ci.kind = 'offline';
+          continue;
+        }
+        const cj = circles[bestJ];
+        const a = Math.min(i, bestJ), b = Math.max(i, bestJ);
+        const off = ci.kind === 'offline' || cj.kind === 'offline';
+        // Thin line — these are rescue stitches, not real "transit" edges.
+        links.push({ a, b, width: 0.6 + hash(a, b, 99) * 0.6, offline: off });
+        ci.linkCount++; cj.linkCount++;
+      }
+      // Anything still at zero (unreachable corners) → offline.
       for (const c of circles) {
         if (c.kind === 'normal' && c.linkCount === 0) {
           c.kind = 'offline';
