@@ -133,6 +133,16 @@ type Config struct {
 	MaxCacheEntries  int `yaml:"max_cache_entries,omitempty" json:"max_cache_entries,omitempty"`   // default 5000,      hard cap 100000
 	MaxResponseBytes int `yaml:"max_response_bytes,omitempty" json:"max_response_bytes,omitempty"` // default 1048576,   hard cap 16<<20
 	MaxFetchFanOut   int `yaml:"max_fetch_fan_out,omitempty" json:"max_fetch_fan_out,omitempty"`   // default 8,         hard cap 64
+
+	// RelayAdminPassthrough lets web/API requests delivered through the
+	// authenticated peer-to-peer relay bridge (apiBridge in
+	// internal/api/server.go) skip the local session/Bearer-token check.
+	// Off by default — backwards compatible with every prior release where
+	// every API route required login regardless of transport. When on, the
+	// trust boundary becomes the relay handshake itself: a peer that has
+	// already authenticated as a known node is allowed to administer this
+	// node's web UI without a separate admin password.
+	RelayAdminPassthrough bool `yaml:"relay_admin_passthrough,omitempty" json:"relay_admin_passthrough,omitempty"`
 }
 
 // GraphLayoutPos stores a single node's coordinates in the topology graph.
@@ -1021,11 +1031,16 @@ func (a *App) startServer(ctx context.Context, sc *ServerConfig) error {
 	if err != nil {
 		return err
 	}
+	authImpl := &hy2Auth{app: a, sysPassword: sc.Password}
 	hyServer, err := hyserver.NewServer(&hyserver.Config{
 		Conn: conn,
 		TLSConfig: hyserver.TLSConfig{
 			Certificates: []tls.Certificate{cert},
 		},
+		// EventLogger: authImpl already implements hyserver.EventLogger; its
+		// TCPRequest stashes the authID for the next Outbound.TCP call so
+		// nodeOutbound.TCP can gate _relay_api_ streams on auth class.
+		EventLogger: authImpl,
 		QUICConfig: hyserver.QUICConfig{
 			// 8 MB stream / 16 MB connection. Smaller than upstream hy2's
 			// 64 MB / 128 MB on purpose: in a multi-hop relay chain, each
@@ -1041,7 +1056,7 @@ func (a *App) startServer(ctx context.Context, sc *ServerConfig) error {
 			MaxConnectionReceiveWindow:     16777216,
 			MaxIncomingStreams:              4096,
 		},
-		Authenticator: &hy2Auth{app: a, sysPassword: sc.Password},
+		Authenticator: authImpl,
 		Outbound:      &nodeOutbound{app: a, node: a.node, ctx: ctx},
 	})
 	if err != nil {
@@ -2231,8 +2246,23 @@ type nodeOutbound struct {
 
 func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
 	if relay.IsRelayStream(reqAddr) {
+		// Capture the authID stashed by hy2Auth.TCPRequest for THIS goroutine
+		// (hyserver invokes EventLogger.TCPRequest immediately before
+		// Outbound.TCP in the same goroutine). For `_relay_api_:0` we wrap
+		// the local pipe end in *RelayAuthConn so the api server's
+		// relaySrv ConnContext can extract the authID into the request
+		// context. authMiddleware then applies RelayAdminPassthrough only
+		// when authID == "system" — i.e. the inbound QUIC connection used
+		// the peer-node system password. User-level (`user:<name>`) hits
+		// fall through to the normal token check, which 401s the API or
+		// SPA-redirects to /login. Default-deny on missing entry.
+		authID := takeGoIDAuth()
 		c1, c2 := net.Pipe()
-		go o.node.HandleStream(o.ctx, reqAddr, c1)
+		var local net.Conn = c1
+		if reqAddr == relay.StreamAPI {
+			local = &RelayAuthConn{Conn: c1, AuthID: authID}
+		}
+		go o.node.HandleStream(o.ctx, reqAddr, local)
 		return c2, nil
 	}
 	// Bond stream: exit node receives multi-path bond connections
