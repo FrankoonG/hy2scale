@@ -122,6 +122,13 @@
 .hy-table .col-check input[type="checkbox"]:indeterminate::after{content:'';position:absolute;left:50%;top:50%;width:8px;height:2px;background:#fff;border-radius:1px;transform:translate(-50%,-50%)}
 .hy-table .col-check input[type="checkbox"]:hover{border-color:var(--primary)}
 .hy-table tr.selected td{background:var(--primary-light)}
+/* Row-body click selection: deliberately NO cursor:pointer — the
+   row-body click is a *secondary* affordance for power users; the
+   primary affordances (checkbox, edit button, links) already advertise
+   themselves with their own pointer cursors. A row-wide pointer would
+   misleadingly imply the whole row is a single clickable surface and
+   override the nested cursor styles of the leading checkbox cell.
+   Click handler stays bound — just the visual cue is dropped. */
 
 /* Ghost row edit button */
 .hy-row-edit{padding:6px;border:none;background:transparent;color:var(--text-muted);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;border-radius:var(--radius-sm);transition:all .15s;opacity:.5}
@@ -367,6 +374,26 @@ a.peer-link:hover{text-decoration:underline}
 .hy-topo-dot.disabled .hy-topo-dot-outer{fill-opacity:.12}
 .hy-topo-dot.disabled .hy-topo-dot-inner{fill-opacity:.25}
 .hy-topo-dot.bad .hy-topo-dot-inner{color:#ef4444}
+/* NATIVE — raw hy2 servers we connect to as exits / inbound edges.
+   They aren't hy2scale peers (no relay protocol, no admin API), so the
+   palette splits them off from the regular blue with a saturated yellow.
+   Outer fill carries the same opacity ramp as default so transit /
+   single styles stay legible. */
+.hy-topo-dot.native .hy-topo-dot-outer{color:#eab308}
+.hy-topo-dot.native .hy-topo-dot-inner{color:#92400e}
+.hy-topo-dot.native .hy-topo-dot-name{color:#92400e}
+/* Offline — peer is configured but currently unreachable (couldn't
+   complete the QUIC handshake / register flow / etc.). Distinct from
+   `disabled` (user-toggled off, faded) and `bad` (incompatible peer,
+   red inner): offline keeps the dot at full opacity but tints it
+   light red so it reads "broken" at a glance. The dashed red edge +
+   × marker on the line stays as the secondary cue. Source-ordered
+   AFTER `.hy-topo-dot.native` so when both classes are present
+   (forced-native peer that's currently offline) the offline red
+   wins — the immediate connection state is the more urgent signal. */
+.hy-topo-dot.offline .hy-topo-dot-outer{color:#fca5a5}
+.hy-topo-dot.offline .hy-topo-dot-inner{color:#dc2626}
+.hy-topo-dot.offline .hy-topo-dot-name{color:#b91c1c}
 .hy-topo-dot-name{font-size:11px;font-weight:600;color:#1f2328;fill:currentColor;font-family:var(--mono)}
 .hy-topo-dot.self .hy-topo-dot-name{color:#4361ee}
 
@@ -437,6 +464,12 @@ a.peer-link:hover{text-decoration:underline}
    that matches the dashed red base + × marker, signalling that
    this segment is not actually reachable. */
 .hy-topo-edge-draw.offline{color:#ef4444}
+/* Path-highlight overlay turns yellow when EITHER endpoint of the edge
+   is a NATIVE node. Mirrors the .hy-topo-dot.native palette so
+   selecting a route through a raw hy2 server reads as the same colour
+   family on both the node and the line. The .offline rule above wins
+   when both apply (disconnected segments stay red regardless). */
+.hy-topo-edge.to-native .hy-topo-edge-draw{color:#eab308}
 @keyframes hy-topo-path-draw{to{stroke-dashoffset:0}}
 
 /* Offline / disabled edges — red, dashed, no flow, × marker. */
@@ -506,7 +539,14 @@ a.peer-link:hover{text-decoration:underline}
 /* ====== Tooltip ====== */
 .hy-tooltip-wrap{position:relative;display:inline-flex}
 .hy-tooltip-wrap:has(> .hy-link-box){display:flex;width:100%}
-.hy-tooltip{position:fixed;z-index:99999;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:var(--mono);font-size:12px;box-shadow:0 4px 16px rgba(0,0,0,.12);pointer-events:none;white-space:pre;line-height:1.8;max-width:300px;margin-top:2px}
+/* `white-space: pre-wrap` (was `pre`) lets long unbroken lines soft-wrap
+   instead of overflowing the rounded container; explicit \n / line
+   breaks in the content are still preserved.
+   `max-width` raised from a hard 300px to a viewport-responsive cap so
+   longer conflict messages or mono blocks size to content rather than
+   clipping into a narrow strip. The `min(560px, …)` keeps small
+   screens sane. */
+.hy-tooltip{position:fixed;z-index:99999;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:var(--mono);font-size:12px;box-shadow:0 4px 16px rgba(0,0,0,.12);pointer-events:none;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8;max-width:min(560px,calc(100vw - 24px));margin-top:2px}
 
 /* ====== Spinner ====== */
 .hy-spinner{display:inline-block;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:hy-spin .6s linear infinite}

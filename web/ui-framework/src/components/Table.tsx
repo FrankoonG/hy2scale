@@ -1,4 +1,5 @@
 import { type ReactNode, useRef, useEffect } from 'react';
+import * as React from 'react';
 import clsx from 'clsx';
 
 export interface Column<T> {
@@ -13,8 +14,30 @@ export interface SelectionState {
   selected: Set<string>;
   toggle: (key: string) => void;
   toggleAll: () => void;
+  // selectOnly is the row-body click action: replaces the entire
+  // selection with just this one key. The leading checkbox still uses
+  // toggle() so multi-select via checkbox stays additive.
+  selectOnly: (key: string) => void;
   isAllSelected: boolean;
   isSomeSelected: boolean;
+}
+
+// isInteractiveDescendant walks up from the clicked element toward the row
+// and returns true if any ancestor along the way is a control the user
+// would expect to handle the click itself (buttons, links, inputs,
+// contentEditable). Used so row-body click selection doesn't fire when
+// the user actually clicked Edit / a checkbox / an inline form field.
+// Exported so pages that render raw `<table>` markup (UsersPage) can
+// apply the same behaviour without depending on the Table component.
+export function isInteractiveDescendant(target: EventTarget | null, row: HTMLElement): boolean {
+  for (let el = target as HTMLElement | null; el && el !== row; el = el.parentElement) {
+    const tag = el.tagName;
+    if (tag === 'BUTTON' || tag === 'A' || tag === 'INPUT' || tag === 'SELECT' ||
+        tag === 'TEXTAREA' || tag === 'LABEL' || el.isContentEditable) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export interface TableProps<T> {
@@ -62,8 +85,18 @@ export function Table<T>({ columns, data, rowKey, rowClassName, emptyText, selec
           {data.map((row, i) => {
             const key = rowKey(row, i);
             const isSelected = selection?.selected.has(key);
+            const onRowClick = selection
+              ? (e: React.MouseEvent<HTMLTableRowElement>) => {
+                  if (isInteractiveDescendant(e.target, e.currentTarget)) return;
+                  selection.selectOnly(key);
+                }
+              : undefined;
             return (
-              <tr key={key} className={clsx(rowClassName?.(row, i), isSelected && 'selected')}>
+              <tr
+                key={key}
+                className={clsx(rowClassName?.(row, i), isSelected && 'selected', selection && 'hy-row-clickable')}
+                onClick={onRowClick}
+              >
                 {selection && (
                   <td className="col-check">
                     <input type="checkbox" checked={!!isSelected} onChange={() => selection.toggle(key)} />
