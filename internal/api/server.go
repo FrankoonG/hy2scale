@@ -92,6 +92,11 @@ type Server struct {
 	// /api/build-id and reloads on mismatch so a server rebuild doesn't
 	// leave long-lived tabs running stale code.
 	buildID string
+
+	// Online-update singleton. Shared across all sessions so that two
+	// browser tabs see the same download progress instead of triggering
+	// duplicate downloads. See internal/api/upgrade.go.
+	upgrade *upgradeJob
 }
 
 // validAddrSpec checks "host:portspec" where portspec can be "5565", "1000,2000", "20000-30000"
@@ -153,6 +158,7 @@ func NewServer(a *app.App, addr, basePath string) *Server {
 		subPeersKick:  make(chan struct{}, 1),
 		layoutSubs:    make(map[uint64]chan map[string]app.GraphLayoutPos),
 		sessions: make(map[string]time.Time),
+		upgrade:  newUpgradeJob(),
 	}
 }
 
@@ -248,6 +254,14 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("GET /api/system/arch", s.getSystemArch)
 	authed.HandleFunc("GET /api/build-info", s.getBuildInfo)
 	authed.HandleFunc("POST /api/upgrade", s.uploadUpgrade)
+	// Online-update endpoints. /check polls GitHub for the latest release;
+	// /download starts a server-side download whose progress every session
+	// observes via /events (SSE); /apply swaps in the downloaded binary.
+	authed.HandleFunc("GET /api/upgrade/check", s.checkUpdate)
+	authed.HandleFunc("POST /api/upgrade/download", s.startDownload)
+	authed.HandleFunc("GET /api/upgrade/status", s.getUpgradeStatus)
+	authed.HandleFunc("GET /api/upgrade/events", s.streamUpgradeEvents)
+	authed.HandleFunc("POST /api/upgrade/apply", s.applyDownloadedUpgrade)
 	authed.HandleFunc("GET /api/settings/ui", s.getUISettings)
 	authed.HandleFunc("PUT /api/settings/ui", s.updateUISettings)
 
@@ -358,14 +372,54 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	// Relay incoming remote-proxy streams (_relay_api_) to the same HTTP
-	// handler by bridging the stream into an in-process listener.
+	// handler by bridging the stream into an in-process listener. The
+	// bridge's http.Server is separate from the public TCP one so its
+	// handler chain can tag each request with the relay-delivered marker
+	// — authMiddleware then applies RelayAdminPassthrough only to those.
 	apiBridge := newStreamListener()
 	s.app.Node().SetAPIHandler(func(stream net.Conn) {
 		apiBridge.push(stream)
 	})
-	go srv.Serve(apiBridge)
+	relaySrv := &http.Server{
+		Handler:     root,
+		ConnContext: relayConnContext,
+	}
+	go func() { <-ctx.Done(); relaySrv.Close() }()
+	go relaySrv.Serve(apiBridge)
 
 	return srv.Serve(ln)
+}
+
+// relayCtxKey carries the hyserver authID of the QUIC connection that
+// originated a request delivered through apiBridge ("" for non-relay TCP
+// requests). Unexported struct type so external packages can neither synthesize
+// the key nor inject a forged value via context.WithValue. The api server's
+// relaySrv populates it via ConnContext from the *app.RelayAuthConn wrapping
+// each pushed stream; authMiddleware reads it back to gate the
+// RelayAdminPassthrough bypass on authID == "system".
+type relayCtxKey struct{}
+
+// relayAuthCarrier is the small interface satisfied by *app.RelayAuthConn —
+// duck-typed here so this package doesn't have to import app/ for what is
+// purely a metadata read.
+type relayAuthCarrier interface {
+	RelayAuthID() string
+}
+
+func relayConnContext(ctx context.Context, c net.Conn) context.Context {
+	if rc, ok := c.(relayAuthCarrier); ok {
+		return context.WithValue(ctx, relayCtxKey{}, rc.RelayAuthID())
+	}
+	return ctx
+}
+
+// relayAuthID returns the hyserver authID for the current request, or ""
+// if the request didn't arrive via apiBridge (or arrived without an
+// auth-tagged conn). authMiddleware uses this to decide whether to apply
+// RelayAdminPassthrough.
+func relayAuthID(ctx context.Context) string {
+	v, _ := ctx.Value(relayCtxKey{}).(string)
+	return v
 }
 
 // streamListener is a net.Listener backed by a channel; each Accept returns a
@@ -458,6 +512,18 @@ func (s *Server) sessionTimeout() time.Duration {
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// RelayAdminPassthrough lets requests delivered through the
+		// peer-to-peer relay bridge skip the local token check — but
+		// ONLY when the underlying QUIC connection authenticated with
+		// the system password (auth ID "system"). User-level relay
+		// traffic (auth ID "user:<name>") falls through to the normal
+		// auth path, which 401s the API or SPA-redirects to /login —
+		// so a regular VPN user can never escalate to admin via
+		// `_relay_api_:0` even with the toggle on.
+		if relayAuthID(r.Context()) == "system" && s.app.Store().Get().RelayAdminPassthrough {
+			next.ServeHTTP(w, r)
+			return
+		}
 		token := r.Header.Get("Authorization")
 		if len(token) > 7 && token[:7] == "Bearer " {
 			token = token[7:]
@@ -535,6 +601,8 @@ func (s *Server) getUISettings(w http.ResponseWriter, r *http.Request) {
 		"max_cache_entries":  lim.MaxCacheEntries,
 		"max_response_bytes": lim.MaxResponseBytes,
 		"max_fetch_fan_out":  lim.MaxFetchFanOut,
+		// Off by default: relay-delivered admin requests still need a token.
+		"relay_admin_passthrough": cfg.RelayAdminPassthrough,
 	})
 }
 
@@ -551,6 +619,7 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 		MaxCacheEntries  *int    `json:"max_cache_entries"`
 		MaxResponseBytes *int    `json:"max_response_bytes"`
 		MaxFetchFanOut   *int    `json:"max_fetch_fan_out"`
+		RelayAdminPassthrough *bool `json:"relay_admin_passthrough"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), 400)
@@ -592,14 +661,26 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 		if body.MaxFetchFanOut != nil {
 			c.MaxFetchFanOut = *body.MaxFetchFanOut
 		}
+		if body.RelayAdminPassthrough != nil {
+			c.RelayAdminPassthrough = *body.RelayAdminPassthrough
+		}
 	})
 	// Hot-reload the runtime atomic pointer if any nested limit changed —
 	// next walkAndCache / assembleDeepTree / fetchSubPeersViaStream call
 	// picks up the new clamped values without a restart.
-	note := "restart required for listen/base_path changes to take effect"
 	if nestedTouched {
 		applyNestedLimits(s.app.Store().Get())
-		note = "nested limits applied live; restart still required for listen/base_path changes"
+	}
+	// Only listen/base_path actually need a restart — they're consumed at
+	// http.ListenAndServe binding time. DNS is read on every ikev2/l2tp
+	// handshake (a.store.Get().DNS), so DNS changes affect new VPN
+	// connections immediately. force_https / https_cert_id / session
+	// timeout are restart-required (TLS bound at startup).
+	listenChanged := body.Listen != nil || body.BasePath != nil ||
+		body.ForceHTTPS != nil || body.HTTPSCertID != nil
+	note := "applied live"
+	if listenChanged {
+		note = "listen / base_path / TLS settings require restart to take effect"
 	}
 	writeJSON(w, map[string]string{"status": "ok", "note": note})
 }
@@ -3324,97 +3405,24 @@ func (s *Server) uploadUpgrade(w http.ResponseWriter, r *http.Request) {
 	// Limit to 200MB
 	r.Body = http.MaxBytesReader(w, r.Body, 200<<20)
 
-	gr, err := gzip.NewReader(r.Body)
+	tmp, err := os.CreateTemp("", "hy2scale-upload-*.tar.gz")
 	if err != nil {
-		http.Error(w, "invalid gzip: "+err.Error(), 400)
+		http.Error(w, "temp file: "+err.Error(), 500)
 		return
 	}
-	defer gr.Close()
-
-	tr := tar.NewReader(gr)
-	expectedArch := runtime.GOOS + "-" + runtime.GOARCH
-	// Also accept just the binary name without arch suffix
-	expectedBin := "hy2scale"
-
-	var found bool
-	var tmpPath string
-
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			http.Error(w, "invalid tar: "+err.Error(), 400)
-			return
-		}
-		name := filepath.Base(hdr.Name)
-		// Match: hy2scale, hy2scale-linux-amd64, hy2scale-linux-arm64, etc.
-		if hdr.Typeflag != tar.TypeReg {
-			continue
-		}
-		isMatch := name == expectedBin ||
-			name == expectedBin+"-"+expectedArch ||
-			name == expectedBin+"_"+expectedArch
-		if !isMatch {
-			continue
-		}
-
-		// Extract to temp file
-		tmp, err := os.CreateTemp("", "hy2scale-upgrade-*")
-		if err != nil {
-			http.Error(w, "temp file: "+err.Error(), 500)
-			return
-		}
-		if _, err := io.Copy(tmp, tr); err != nil {
-			tmp.Close()
-			os.Remove(tmp.Name())
-			http.Error(w, "extract: "+err.Error(), 500)
-			return
-		}
+	if _, err := io.Copy(tmp, r.Body); err != nil {
 		tmp.Close()
-		os.Chmod(tmp.Name(), 0755)
-		tmpPath = tmp.Name()
-		found = true
-		break
-	}
-
-	if !found {
-		http.Error(w, fmt.Sprintf("no matching binary for %s found in archive", expectedArch), 400)
+		os.Remove(tmp.Name())
+		http.Error(w, "save: "+err.Error(), 500)
 		return
 	}
+	tmp.Close()
+	defer os.Remove(tmp.Name())
 
-	// Verify it's a real binary by trying to run --version or just checking it's executable
-	out, err := exec.Command(tmpPath, "--version").CombinedOutput()
-	_ = out // ignore output, just check it runs
-	// Some binaries may not support --version, so we don't require success
-
-	// Replace current binary
-	self, err := os.Executable()
-	if err != nil {
-		os.Remove(tmpPath)
-		http.Error(w, "cannot find self: "+err.Error(), 500)
+	if err := applyTarball(tmp.Name()); err != nil {
+		http.Error(w, err.Error(), 400)
 		return
 	}
-	self, _ = filepath.EvalSymlinks(self)
-
-	// Rename current binary as backup
-	bakPath := self + ".bak"
-	os.Remove(bakPath)
-	if err := os.Rename(self, bakPath); err != nil {
-		os.Remove(tmpPath)
-		http.Error(w, "backup old binary: "+err.Error(), 500)
-		return
-	}
-
-	// Move new binary into place
-	if err := os.Rename(tmpPath, self); err != nil {
-		// Restore backup
-		os.Rename(bakPath, self)
-		http.Error(w, "install new binary: "+err.Error(), 500)
-		return
-	}
-	os.Chmod(self, 0755)
 
 	log.Printf("[upgrade] binary upgraded from upload, restarting...")
 	writeJSON(w, map[string]string{"status": "ok", "message": "upgrade successful, restarting"})
@@ -3423,4 +3431,89 @@ func (s *Server) uploadUpgrade(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(500 * time.Millisecond)
 		os.Exit(0)
 	}()
+}
+
+// applyTarball extracts the matching platform binary from a gzipped tar
+// archive at path and atomically swaps it into place, leaving the previous
+// binary as <self>.bak. Caller is responsible for triggering os.Exit so
+// the process restarts on the new binary. Used by both the manual upload
+// path (uploadUpgrade) and the online-update path
+// (applyDownloadedUpgrade) so the two stay in lock-step.
+func applyTarball(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer f.Close()
+
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("invalid gzip: %w", err)
+	}
+	defer gr.Close()
+
+	tr := tar.NewReader(gr)
+	expectedArch := runtime.GOOS + "-" + runtime.GOARCH
+	expectedBin := "hy2scale"
+
+	var tmpPath string
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("invalid tar: %w", err)
+		}
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+		name := filepath.Base(hdr.Name)
+		isMatch := name == expectedBin ||
+			name == expectedBin+"-"+expectedArch ||
+			name == expectedBin+"_"+expectedArch
+		if !isMatch {
+			continue
+		}
+		tmp, err := os.CreateTemp("", "hy2scale-upgrade-*")
+		if err != nil {
+			return fmt.Errorf("temp file: %w", err)
+		}
+		if _, err := io.Copy(tmp, tr); err != nil {
+			tmp.Close()
+			os.Remove(tmp.Name())
+			return fmt.Errorf("extract: %w", err)
+		}
+		tmp.Close()
+		os.Chmod(tmp.Name(), 0755)
+		tmpPath = tmp.Name()
+		break
+	}
+	if tmpPath == "" {
+		return fmt.Errorf("no matching binary for %s found in archive", expectedArch)
+	}
+
+	// Smoke test — non-fatal because some builds may not support --version.
+	out, _ := exec.Command(tmpPath, "--version").CombinedOutput()
+	_ = out
+
+	self, err := os.Executable()
+	if err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("cannot find self: %w", err)
+	}
+	self, _ = filepath.EvalSymlinks(self)
+
+	bakPath := self + ".bak"
+	os.Remove(bakPath)
+	if err := os.Rename(self, bakPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("backup old binary: %w", err)
+	}
+	if err := os.Rename(tmpPath, self); err != nil {
+		os.Rename(bakPath, self)
+		return fmt.Errorf("install new binary: %w", err)
+	}
+	os.Chmod(self, 0755)
+	return nil
 }
