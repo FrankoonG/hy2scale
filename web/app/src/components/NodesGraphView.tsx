@@ -205,20 +205,18 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
     const k = keyOf(n);
     const existing = nodes.get(k);
     if (!existing) {
-      nodes.set(k, {
+      const thisUnreachable = n.connected === false && !n.is_self;
+      const node: GraphNode & { _anyReachable?: boolean; _anyUnreachable?: boolean } = {
         key: k,
         name: n.is_self ? (selfName || n.name || 'self') : n.name,
         isSelf: !!n.is_self,
         disabled: !!n.disabled,
-        // Offline only when (a) the user disabled it, or (b) the
-        // server's `connected` flag is explicitly false. A latency value
-        // of -1 alone is NOT sufficient: latency probes are sampled
-        // periodically and a single missed sample makes the graph briefly
-        // turn the node red + flash "unreachable" while the list view
-        // still correctly shows it green. Trust the list-view's
-        // status-cache contract — `connected` is the authoritative
-        // reachability flag, latency is a quality metric.
-        offline: !!n.disabled || (n.connected === false && !n.is_self),
+        // Offline only when (a) the user disabled it, or (b) ALL paths
+        // observed for this node are unreachable. The single-occurrence
+        // case is trivial; multi-occurrence is settled below in the
+        // merge branch. Trust list-view's status-cache contract:
+        // `connected` is the authoritative reachability flag.
+        offline: !!n.disabled || thisUnreachable,
         nested: !!n.nested,
         native: !!n.native,
         incompatible: !!n.incompatible || !!n.conflict || !!n.unsupported,
@@ -227,16 +225,50 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
         qpath,
         totalLatencyMs: n.is_self ? 0 : (typeof n.latency_ms === 'number' ? n.latency_ms : 0),
         editable,
-      });
-    } else if (depth < existing.depth) {
-      existing.depth = depth;
-      existing.qpath = qpath;
-      if (!n.is_self && typeof n.latency_ms === 'number' && n.latency_ms > 0) {
-        existing.totalLatencyMs = n.latency_ms;
+      };
+      // Seed reachability tracking — see merge branch below for why.
+      if (thisUnreachable) node._anyUnreachable = true;
+      else node._anyReachable = true;
+      nodes.set(k, node);
+    } else {
+      // Multi-occurrence merge per flag — needs different semantics
+      // depending on what the flag means:
+      //
+      // OR (any occurrence's `true` wins): `disabled`, `nested`,
+      // `native`, `incompatible`. These are positive states that we
+      // want to surface as long as at least one source asserts them
+      // (e.g. force_native on the direct-peer entry shouldn't be
+      // erased when the same node appears as a deep child whose
+      // cached copy didn't carry the override).
+      //
+      // AND (offline only when EVERY path is unreachable): `offline`.
+      // For a mutual peer reachable both inbound and outbound, or for
+      // a sub-peer reachable via multiple parent paths, having one
+      // line in red and another in blue means the node IS still
+      // reachable. The dot stays normal-coloured; only the dead lines
+      // turn red. Tracked via `_anyReachable` so the FINAL state
+      // (committed below the loop) is `disabled || !anyReachable`.
+      if (n.disabled) existing.disabled = true;
+      if (n.nested) existing.nested = true;
+      if (n.native) existing.native = true;
+      if (n.incompatible || n.conflict || n.unsupported) existing.incompatible = true;
+      // Track reachability state — any one occurrence that's NOT
+      // explicitly unreachable counts as reachable. We re-derive
+      // `existing.offline` here so the answer reflects the strongest
+      // available signal across all occurrences seen so far.
+      const thisUnreachable = n.connected === false && !n.is_self;
+      if (!thisUnreachable) (existing as any)._anyReachable = true;
+      else (existing as any)._anyUnreachable = true;
+      existing.offline = !!existing.disabled ||
+        (!!(existing as any)._anyUnreachable && !(existing as any)._anyReachable);
+      if (depth < existing.depth) {
+        existing.depth = depth;
+        existing.qpath = qpath;
+        if (!n.is_self && typeof n.latency_ms === 'number' && n.latency_ms > 0) {
+          existing.totalLatencyMs = n.latency_ms;
+        }
+        if (editable) existing.editable = true;
       }
-      // If we now see the node at a shallower depth it must be the
-      // top-level entry for that name — promote it to editable.
-      if (editable) existing.editable = true;
     }
   }
 
@@ -813,20 +845,36 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     return [selfId, ...rawActivePath];
   }, [rawActivePath, selfId]);
   const displayPath = rawActivePath;
+  // Direction-aware per-hop edge-key picker. Used by BOTH
+  // `activePathOrder` (which edges are on-path) and `pathEdgeSchedule`
+  // (when each on-path edge starts its draw). Both must agree on the
+  // exact edge key for every hop, otherwise the schedule's
+  // {delay, duration} attaches to the wrong key, the actually-on-path
+  // edge falls back to default `delayMs: 0`, and the per-hop sequential
+  // sweep collapses into a simultaneous all-at-once flash.
+  const pickEdgeKey = useCallback((a: string, b: string, hopIndex: number): string | null => {
+    // For mutual peers (both inbound + outbound edges exist), the FIRST
+    // hop's direction depends on whether the user picked the inbound or
+    // outbound qpath. rawActivePath starts with selfId for inbound
+    // (peer dialed self → prefer `peer→self`); otherwise it's outbound
+    // (self dialed peer → prefer `self→peer`).
+    const firstHopInbound = !!rawActivePath && rawActivePath.length > 0 && rawActivePath[0] === selfId;
+    const candidates = (hopIndex === 0 && firstHopInbound)
+      ? [`${b}→${a}`, `${a}→${b}`, `?${a < b ? a : b}|${a < b ? b : a}`]
+      : [`${a}→${b}`, `${b}→${a}`, `?${a < b ? a : b}|${a < b ? b : a}`];
+    for (const c of candidates) if (edges.has(c)) return c;
+    return null;
+  }, [rawActivePath, selfId, edges]);
+
   const activePathOrder = useMemo(() => {
     const m = new Map<string, number>();
     if (!activePath) return m;
     for (let i = 0; i < activePath.length - 1; i++) {
-      const a = activePath[i], b = activePath[i + 1];
-      const candidates = [
-        `${a}→${b}`,
-        `${b}→${a}`,
-        `?${a < b ? a : b}|${a < b ? b : a}`,
-      ];
-      for (const c of candidates) if (edges.has(c)) { m.set(c, i); break; }
+      const key = pickEdgeKey(activePath[i], activePath[i + 1], i);
+      if (key) m.set(key, i);
     }
     return m;
-  }, [activePath, edges]);
+  }, [activePath, pickEdgeKey]);
 
   // Continuous sweep animation for the selected-path highlight. The
   // whole path is treated as one stroke being drawn at constant speed
@@ -846,9 +894,11 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       const a = activePath[i], b = activePath[i + 1];
       const p = positions[a], q = positions[b];
       if (!p || !q) continue;
-      const candidates = [`${a}→${b}`, `${b}→${a}`, `?${a < b ? a : b}|${a < b ? b : a}`];
-      let key = '';
-      for (const c of candidates) if (edges.has(c)) { key = c; break; }
+      // Use the SAME direction-aware picker as activePathOrder so the
+      // schedule attaches to the same edge key the renderer marks
+      // on-path. Mismatch → on-path edge gets default `delayMs: 0`
+      // and the per-hop sequential draw collapses to all-at-once.
+      const key = pickEdgeKey(a, b, i);
       if (!key) continue;
       segs.push({ key, len: Math.hypot(q.x - p.x, q.y - p.y) });
     }
@@ -861,7 +911,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       cum += s.len;
     }
     return map;
-  }, [activePath, edges, positions]);
+  }, [activePath, pickEdgeKey, positions]);
 
   const handleNodeClick = useCallback((key: string) => {
     const paths = findPathsToName(topology, key, selfId, selfName);
@@ -1583,10 +1633,17 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             const fromOff = nodes.get(e.from)?.offline;
             const toOff = nodes.get(e.to)?.offline;
             const offline = e.disabled || !!fromOff || !!toOff || e.segmentLatencyMs < 0;
+            // An edge "touches native" when EITHER endpoint is a NATIVE
+            // node (raw hy2 server, not a hy2scale peer). The path-
+            // highlight overlay re-tints to yellow on these edges so
+            // selecting a route through a native upstream/downstream
+            // visually matches the dot styling.
+            const touchesNative = !!nodes.get(e.from)?.native || !!nodes.get(e.to)?.native;
             const cls = [
               'hy-topo-edge',
               offline && 'offline',
               onPath && !offline && 'on-path',
+              touchesNative && 'to-native',
             ].filter(Boolean).join(' ');
             // Draw-direction: for the path-highlight overlay we want the
             // stroke to appear as if being "painted" from the self-side
@@ -1716,7 +1773,16 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
               'hy-topo-dot',
               n.isSelf && 'self',
               n.disabled && 'disabled',
+              // Offline (couldn't connect) but not user-disabled →
+              // light-red dot. Applies regardless of `native` so an
+              // offline native upstream reads as broken just like any
+              // other offline peer; `disabled` already fades opacity
+              // and is the user's intentional state, so it's exempt.
+              // CSS source order ensures `.offline` rules override the
+              // `.native` palette when both classes are present.
+              n.offline && !n.disabled && 'offline',
               n.nested && 'nested',
+              n.native && 'native',
               n.incompatible && 'bad',
               isSelected && 'selected',
             ].filter(Boolean).join(' ');

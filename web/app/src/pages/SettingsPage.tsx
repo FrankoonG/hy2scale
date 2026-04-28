@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Card, Button, Input, PasswordInput, Toggle, Select, FormGroup, FormGrid, Tabs, TabPanel, Badge, Modal, useToast, useConfirm,
+  Card, Button, Input, PasswordInput, Toggle, Select, FormGroup, FormGrid, Tabs, TabPanel, Badge, useToast, useConfirm,
 } from '@hy2scale/ui';
 import * as api from '@/api';
 import { useAuthStore } from '@/store/auth';
@@ -85,19 +85,15 @@ export default function SettingsPage() {
   const [sessionTimeout, setSessionTimeout] = useState('12');
   const [dns, setDns] = useState('');
   const [savingUI, setSavingUI] = useState(false);
-  const [savingDns, setSavingDns] = useState(false);
   // Nested-discovery hard limits (hot-reloadable, no restart needed)
   const [maxNestedDepth, setMaxNestedDepth] = useState('5');
   const [maxResponseNodes, setMaxResponseNodes] = useState('1024');
   const [maxCacheEntries, setMaxCacheEntries] = useState('5000');
   const [maxResponseBytes, setMaxResponseBytes] = useState('1048576');
   const [maxFetchFanOut, setMaxFetchFanOut] = useState('8');
-  const [savingLimits, setSavingLimits] = useState(false);
-  const [nestedModalOpen, setNestedModalOpen] = useState(false);
-  // Track the click origin so the Modal's open animation expands from
-  // the button the user just clicked (matches NodesPage's UserModal /
-  // NodeModal pattern). Falls back to undefined → centred default.
-  const [nestedAnimateFrom, setNestedAnimateFrom] = useState<{ x: number; y: number } | undefined>();
+  const [savingSystem, setSavingSystem] = useState(false);
+  const [nestedExpanded, setNestedExpanded] = useState(false);
+  const [relayPassthrough, setRelayPassthrough] = useState(false);
 
   // Password
   const [curPw, setCurPw] = useState('');
@@ -110,6 +106,13 @@ export default function SettingsPage() {
   const restoreRef = useRef<HTMLInputElement>(null);
   const upgradeRef = useRef<HTMLInputElement>(null);
   const [upgrading, setUpgrading] = useState(false);
+
+  // Online-update state — server-side singleton; SSE keeps every tab in
+  // sync without duplicate downloads. State is null until the first
+  // /api/upgrade/status fetch resolves.
+  const [upgradeStatus, setUpgradeStatus] = useState<api.UpgradeStatus | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [applying, setApplying] = useState(false);
 
   useEffect(() => {
     if (settings) {
@@ -124,6 +127,7 @@ export default function SettingsPage() {
       setMaxCacheEntries(String(settings.max_cache_entries || 5000));
       setMaxResponseBytes(String(settings.max_response_bytes || 1048576));
       setMaxFetchFanOut(String(settings.max_fetch_fan_out || 8));
+      setRelayPassthrough(!!settings.relay_admin_passthrough);
     }
   }, [settings]);
 
@@ -141,35 +145,34 @@ export default function SettingsPage() {
     finally { setSavingUI(false); }
   };
 
-  const handleSaveDns = async () => {
-    setSavingDns(true);
+  // Single Save handler for the System tab — sends DNS + 5 nested limit
+  // fields together. All hot-reloadable (no restart needed): DNS via
+  // store.Get() reads in ikev2/l2tp at handshake time, nested limits via
+  // atomic.Pointer swap inside the API server.
+  const handleSaveSystem = async () => {
+    setSavingSystem(true);
     try {
       await api.updateUISettings({
-        listen, base_path: basePath, force_https: forceHttps,
-        https_cert_id: httpsCertId, session_timeout_h: parseInt(sessionTimeout) || 12,
         dns,
-      });
-      toast.success(t('settings.saved'));
-      queryClient.invalidateQueries({ queryKey: ['settings'] });
-    } catch (e: any) { toast.error(String(e.message || e)); }
-    finally { setSavingDns(false); }
-  };
-
-  const handleSaveLimits = async () => {
-    setSavingLimits(true);
-    try {
-      await api.updateUISettings({
+        relay_admin_passthrough: relayPassthrough,
         max_nested_depth: parseInt(maxNestedDepth) || 5,
         max_response_nodes: parseInt(maxResponseNodes) || 1024,
         max_cache_entries: parseInt(maxCacheEntries) || 5000,
         max_response_bytes: parseInt(maxResponseBytes) || 1048576,
         max_fetch_fan_out: parseInt(maxFetchFanOut) || 8,
       });
-      toast.success(t('settings.limitsSavedHot'));
+      toast.success(t('settings.savedHot'));
       queryClient.invalidateQueries({ queryKey: ['settings'] });
-      setNestedModalOpen(false);
     } catch (e: any) { toast.error(String(e.message || e)); }
-    finally { setSavingLimits(false); }
+    finally { setSavingSystem(false); }
+  };
+
+  const handleRestoreNestedDefaults = () => {
+    setMaxNestedDepth('5');
+    setMaxResponseNodes('1024');
+    setMaxCacheEntries('5000');
+    setMaxResponseBytes('1048576');
+    setMaxFetchFanOut('8');
   };
 
   const handleChangePw = async () => {
@@ -215,6 +218,62 @@ export default function SettingsPage() {
       toast.success(t('settings.restoreComplete'));
       setTimeout(() => window.location.reload(), 3000);
     } catch (e: any) { toast.error(t('settings.restoreFailed') + ': ' + String(e.message || e)); }
+  };
+
+  // Subscribe to upgrade-job SSE only while the Upgrade tab is mounted and
+  // the deployment supports online updates (Docker only). Each frame is a
+  // full snapshot so a missed event self-heals on the next.
+  useEffect(() => {
+    if (activeTab !== 'upgrade' || !archInfo?.in_docker) return;
+    api.getUpgradeStatus().then(setUpgradeStatus).catch(() => {});
+    const base = (window as any).__BASE__ || '';
+    const token = sessionStorage.getItem('token:' + base);
+    const url = `${base}/api/upgrade/events${token ? '?token=' + encodeURIComponent(token) : ''}`;
+    const es = new EventSource(url);
+    es.onmessage = (e) => {
+      try { setUpgradeStatus(JSON.parse(e.data)); } catch {}
+    };
+    return () => es.close();
+  }, [activeTab, archInfo?.in_docker]);
+
+  // First-arrival auto-check: if we have no Latest yet and the job is idle,
+  // fetch /upgrade/check once so the user sees current vs latest without
+  // having to press a separate button. Subsequent visits skip — the
+  // server's job state already remembers the latest version.
+  useEffect(() => {
+    if (activeTab !== 'upgrade' || !archInfo?.in_docker || !upgradeStatus) return;
+    if (upgradeStatus.state === 'idle' && !upgradeStatus.latest && !checking) {
+      setChecking(true);
+      api.checkUpdate().catch(() => {}).finally(() => setChecking(false));
+    }
+  }, [activeTab, archInfo?.in_docker, upgradeStatus?.state, upgradeStatus?.latest]);
+
+  const handleCheckUpdate = async () => {
+    setChecking(true);
+    try { await api.checkUpdate(); }
+    catch (e: any) { toast.error(String(e.message || e)); }
+    finally { setChecking(false); }
+  };
+  const handleStartDownload = async () => {
+    try { await api.startUpgradeDownload(); }
+    catch (e: any) { toast.error(String(e.message || e)); }
+  };
+  const handleApplyUpdate = async () => {
+    const ok = await confirm({
+      title: t('settings.applyUpdate'),
+      message: t('settings.upgradeConfirm'),
+      danger: true, confirmText: t('app.confirm'), cancelText: t('app.cancel'),
+    });
+    if (!ok) return;
+    setApplying(true);
+    try {
+      await api.applyUpgrade();
+      toast.success(t('settings.upgradeApplying'));
+      setTimeout(() => window.location.reload(), 5000);
+    } catch (e: any) {
+      toast.error(String(e.message || e));
+      setApplying(false);
+    }
   };
 
   const handleUpgrade = async (file: File) => {
@@ -268,50 +327,62 @@ export default function SettingsPage() {
             <Card fill={1} title={t('settings.system')}>
               <div style={{ maxWidth: 480, display: 'flex', flexDirection: 'column', gap: 18 }}>
                 {!forcePasswordChange && (
-                  <FormGroup label={t('settings.dns')}>
-                    {/* Input keeps stock styling; save action sits beside it
-                        as a hy-circle-btn (same component family used in TLS
-                        sub-menu's CA-key generate button). */}
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <div style={{ flex: 1 }}>
-                        <Input
-                          value={dns}
-                          onChange={(e) => setDns(e.target.value)}
-                          placeholder="8.8.8.8,1.1.1.1"
-                        />
-                      </div>
-                      <button
-                        className="hy-circle-btn"
-                        onClick={handleSaveDns}
-                        disabled={savingDns}
-                        aria-label={t('app.save')}
-                        title={t('app.save')}
-                      >
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                             strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                          <polyline points="17 21 17 13 7 13 7 21"/>
-                          <polyline points="7 3 7 8 15 8"/>
-                        </svg>
-                      </button>
-                    </div>
-                  </FormGroup>
-                )}
-
-                {!forcePasswordChange && (
                   <>
-                    <div className="section-divider" style={{ cursor: 'default' }}>{t('settings.nestedLimits')}</div>
-                    <Button
-                      onClick={(e) => {
-                        setNestedAnimateFrom({ x: e.clientX, y: e.clientY });
-                        setNestedModalOpen(true);
-                      }}
-                      style={{ justifyContent: 'space-between' }}
-                      fullWidth
+                    <FormGroup label={t('settings.dns')}>
+                      <Input
+                        value={dns}
+                        onChange={(e) => setDns(e.target.value)}
+                        placeholder="8.8.8.8,1.1.1.1"
+                      />
+                    </FormGroup>
+
+                    {/* Relay-delivered admin requests bypass auth when on.
+                        Off by default — backwards compatible. The trust
+                        boundary becomes the peer-to-peer relay handshake. */}
+                    <FormGroup label={t('settings.relayPassthrough')}>
+                      <Toggle checked={relayPassthrough} onChange={(e) => setRelayPassthrough(e.target.checked)} />
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.4 }}>
+                        {t('settings.relayPassthroughDesc')}
+                      </div>
+                    </FormGroup>
+
+                    <div
+                      className="section-divider"
+                      onClick={() => setNestedExpanded(!nestedExpanded)}
+                      role="button"
+                      aria-expanded={nestedExpanded}
                     >
-                      <span>{t('settings.openNestedLimits')}</span>
-                      <span style={{ color: 'var(--text-muted)' }}>›</span>
-                    </Button>
+                      <span style={{ display: 'inline-block', width: 10, transform: nestedExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▸</span>
+                      {t('settings.nestedLimits')}
+                    </div>
+                    {nestedExpanded && (
+                      <>
+                        <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                          {t('settings.nestedLimitsDesc')}
+                        </div>
+                        <FormGroup label={t('settings.maxNestedDepth')}>
+                          <Input type="number" min={1} max={10} value={maxNestedDepth} onChange={(e) => setMaxNestedDepth(e.target.value)} />
+                        </FormGroup>
+                        <FormGroup label={t('settings.maxResponseNodes')}>
+                          <Input type="number" min={1} max={65536} value={maxResponseNodes} onChange={(e) => setMaxResponseNodes(e.target.value)} />
+                        </FormGroup>
+                        <FormGroup label={t('settings.maxCacheEntries')}>
+                          <Input type="number" min={1} max={100000} value={maxCacheEntries} onChange={(e) => setMaxCacheEntries(e.target.value)} />
+                        </FormGroup>
+                        <FormGroup label={t('settings.maxResponseBytes')}>
+                          <Input type="number" min={1024} max={16777216} value={maxResponseBytes} onChange={(e) => setMaxResponseBytes(e.target.value)} suffix="B" />
+                        </FormGroup>
+                        <FormGroup label={t('settings.maxFetchFanOut')}>
+                          <Input type="number" min={1} max={64} value={maxFetchFanOut} onChange={(e) => setMaxFetchFanOut(e.target.value)} />
+                        </FormGroup>
+                      </>
+                    )}
+
+                    {/* Shared Save + Restore Defaults for DNS + nested limits — all hot-reloadable. */}
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <Button variant="primary" onClick={handleSaveSystem} loading={savingSystem}>{t('app.save')}</Button>
+                      <Button variant="ghost" onClick={handleRestoreNestedDefaults}>{t('settings.restoreDefaults')}</Button>
+                    </div>
                   </>
                 )}
 
@@ -334,42 +405,6 @@ export default function SettingsPage() {
                 <Button variant="primary" onClick={handleChangePw} loading={savingPw} style={{ alignSelf: 'flex-start' }}>{t('settings.update')}</Button>
               </div>
             </Card>
-
-            {/* Sub-menu: Nested-discovery limits (modal). */}
-            <Modal
-              open={nestedModalOpen}
-              onClose={() => setNestedModalOpen(false)}
-              title={t('settings.nestedLimits')}
-              animateFrom={nestedAnimateFrom}
-              footer={
-                <>
-                  <Button onClick={() => setNestedModalOpen(false)}>{t('app.cancel')}</Button>
-                  <Button variant="primary" onClick={handleSaveLimits} loading={savingLimits}>{t('app.save')}</Button>
-                </>
-              }
-            >
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                  {t('settings.nestedLimitsDesc')}
-                </div>
-                <FormGroup label={t('settings.maxNestedDepth')}>
-                  <Input type="number" min={1} max={10} value={maxNestedDepth} onChange={(e) => setMaxNestedDepth(e.target.value)} />
-                </FormGroup>
-                <FormGroup label={t('settings.maxResponseNodes')}>
-                  <Input type="number" min={1} max={65536} value={maxResponseNodes} onChange={(e) => setMaxResponseNodes(e.target.value)} />
-                </FormGroup>
-                <FormGroup label={t('settings.maxCacheEntries')}>
-                  <Input type="number" min={1} max={100000} value={maxCacheEntries} onChange={(e) => setMaxCacheEntries(e.target.value)} />
-                </FormGroup>
-                <FormGroup label={t('settings.maxResponseBytes')}>
-                  <Input type="number" min={1024} max={16777216} value={maxResponseBytes} onChange={(e) => setMaxResponseBytes(e.target.value)} suffix="B" />
-                </FormGroup>
-                <FormGroup label={t('settings.maxFetchFanOut')}>
-                  <Input type="number" min={1} max={64} value={maxFetchFanOut} onChange={(e) => setMaxFetchFanOut(e.target.value)} />
-                </FormGroup>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t('settings.hotReload')}</div>
-              </div>
-            </Modal>
 
           </>
         ) : activeTab === 'web' ? (
@@ -412,8 +447,80 @@ export default function SettingsPage() {
                 {archInfo?.in_docker ? (
                   <>
                     <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('settings.upgradeDesc')}</div>
+
+                    {/* Online-update row. The single primary button morphs
+                        based on the server-side job state so every session
+                        sees the same progress. The manual upload below
+                        stays as a fallback for offline / private builds. */}
+                    {upgradeStatus && (
+                      <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                        {(() => {
+                          // STRICTLY-newer check — `latest !== current` would
+                          // light up the button on a downgrade (e.g. server is
+                          // 1.3.2 and GitHub /releases/latest still points at
+                          // 1.3.1). Mirrors the backend semverGreater gate.
+                          const semverGT = (a: string, b: string) => {
+                            const pa = a.split('.').map((s) => parseInt(s, 10));
+                            const pb = b.split('.').map((s) => parseInt(s, 10));
+                            if (pa.length !== 3 || pb.length !== 3 || pa.some(isNaN) || pb.some(isNaN)) return false;
+                            for (let i = 0; i < 3; i++) {
+                              if (pa[i] !== pb[i]) return pa[i] > pb[i];
+                            }
+                            return false;
+                          };
+                          const updateAvailable = !!upgradeStatus.latest && semverGT(upgradeStatus.latest, upgradeStatus.current);
+                          if (upgradeStatus.state === 'downloading') {
+                            const pct = Math.floor(upgradeStatus.progress);
+                            return (
+                              <Button variant="primary" disabled>
+                                {t('settings.downloadingFmt', { pct })}
+                              </Button>
+                            );
+                          }
+                          if (upgradeStatus.state === 'ready') {
+                            return (
+                              <Button
+                                variant="primary"
+                                onClick={handleApplyUpdate}
+                                loading={applying}
+                                style={{ background: 'var(--success, #10b981)', borderColor: 'var(--success, #10b981)' }}
+                              >
+                                {t('settings.applyUpdate')}
+                              </Button>
+                            );
+                          }
+                          if (upgradeStatus.state === 'applying' || applying) {
+                            return <Button variant="primary" disabled>{t('settings.applying')}</Button>;
+                          }
+                          if (updateAvailable) {
+                            return (
+                              <Button variant="primary" onClick={handleStartDownload}>
+                                {t('settings.onlineUpdate')}
+                              </Button>
+                            );
+                          }
+                          return (
+                            <Button onClick={handleCheckUpdate} loading={checking || upgradeStatus.state === 'checking'}>
+                              {t('settings.checkForUpdate')}
+                            </Button>
+                          );
+                        })()}
+                        {upgradeStatus.latest && (
+                          <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                            {t('settings.latestVersion')}: <Badge>{upgradeStatus.latest}</Badge>
+                            {upgradeStatus.latest === upgradeStatus.current && (
+                              <span style={{ marginLeft: 8, color: 'var(--text-muted)' }}>· {t('settings.upToDate')}</span>
+                            )}
+                          </span>
+                        )}
+                        {upgradeStatus.state === 'error' && upgradeStatus.error && (
+                          <span style={{ fontSize: 12, color: 'var(--danger, #ef4444)' }}>{upgradeStatus.error}</span>
+                        )}
+                      </div>
+                    )}
+
                     <div>
-                      <Button variant="primary" onClick={() => upgradeRef.current?.click()} loading={upgrading}>
+                      <Button onClick={() => upgradeRef.current?.click()} loading={upgrading}>
                         {t('settings.uploadPackage')}
                       </Button>
                       <input

@@ -1,7 +1,7 @@
 import { useState, useCallback, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Card, Button, Badge, AlertBadge, useToast, useConfirm, useSelection } from '@hy2scale/ui';
+import { Card, Button, Badge, AlertBadge, useToast, useConfirm, useSelection, isInteractiveDescendant } from '@hy2scale/ui';
 import type { UserConfig, Session, PasswordConflicts } from '@/api';
 import * as api from '@/api';
 import { fmtBytes, fmtDuration } from '@/hooks/useFormat';
@@ -192,7 +192,18 @@ export default function UsersPage() {
                   const expired = isExpired(u.expiry_date);
                   const isSelected = selection.selected.has(u.id);
                   return (
-                    <tr key={u.id} className={`${!u.enabled ? 'disabled-row' : ''}${isSelected ? ' selected' : ''}`}>
+                    <tr
+                      key={u.id}
+                      className={`${!u.enabled ? 'disabled-row ' : ''}${isSelected ? 'selected ' : ''}hy-row-clickable`}
+                      onClick={(e) => {
+                        // Mirrors the framework Table's row-body click:
+                        // clicking blank cells exclusively selects this row.
+                        // The username link, edit button, and checkbox are
+                        // interactive descendants and bail out via the helper.
+                        if (isInteractiveDescendant(e.target, e.currentTarget)) return;
+                        selection.selectOnly(u.id);
+                      }}
+                    >
                       <td className="col-check">
                         <input type="checkbox" checked={isSelected} onChange={() => selection.toggle(u.id)} />
                       </td>

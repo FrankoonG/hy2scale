@@ -241,6 +241,34 @@ export interface UISettings {
   max_cache_entries: number;
   max_response_bytes: number;
   max_fetch_fan_out: number;
+  // Off by default; when on, peer-relay-delivered admin requests skip the
+  // local password / token check. Trust boundary becomes the relay handshake.
+  relay_admin_passthrough: boolean;
+}
+
+// ===== Online Update =====
+// Mirrors the upgradeJobSnapshot served by /api/upgrade/{status,events}.
+// Singleton on the server, so two browser sessions on the same node see
+// identical progress without triggering duplicate downloads.
+export interface UpgradeStatus {
+  state: 'idle' | 'checking' | 'downloading' | 'ready' | 'applying' | 'error';
+  current: string;
+  latest: string;
+  asset: string;
+  download_url: string;
+  progress: number; // 0–100
+  bytes_done: number;
+  bytes_total: number;
+  error?: string;
+}
+
+export interface UpgradeCheckResult {
+  current: string;
+  latest: string;
+  asset: string;
+  download_url: string;
+  size: number;
+  update_available: boolean;
 }
 
 export interface PortConflict {

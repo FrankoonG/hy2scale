@@ -1,12 +1,26 @@
 import { useEffect, useRef } from 'react';
 
 // Logo colors
-const CR = 77, CG = 110, CB = 163;       // outer circle: #4D6EA3
-const HR = 16, HG = 37, HB = 69;         // hub inner:    #102545
+const CR = 77, CG = 110, CB = 163;       // outer circle: #4D6EA3 — regular peers
+const HR = 16, HG = 37, HB = 69;         // hub inner:    #102545 — concentric for transit nodes
+// Mirror of the topology graph's special-state palette (see
+// web/ui-framework/src/styles/components.css `.hy-topo-dot.{native,offline}`).
+// Keeping the login background's vocabulary in sync with the actual app
+// graph so first-time viewers learn "yellow = native upstream, red = offline"
+// before they even sign in.
+const YR = 234, YG = 179, YB = 8;        // native outer: #eab308
+const YIR = 146, YIG = 64, YIB = 14;     // native inner: #92400e
+const FR = 252, FG = 165, FB = 165;      // offline outer: #fca5a5
+const FIR = 220, FIG = 38, FIB = 38;     // offline inner: #dc2626
 
 const GRID = 36;
 const RADIUS = 11;
 const HUB_INNER = 6.5;
+// Native upstream caps: in the real graph a native peer can only be reached
+// outbound by other peers (no nesting), so it never sits in the middle of a
+// chain — visually that maps to "few connecting lines." 2 keeps the dot
+// recognisable but distinctly leaf-like.
+const NATIVE_MAX_LINKS = 2;
 
 const BASE_ALPHA = 0.022;
 const MAX_ALPHA = 0.36;
@@ -36,8 +50,9 @@ function hash(x: number, y: number, seed: number) {
   return ((h & 0x7fffffff) / 0x7fffffff);
 }
 
-interface Link { a: number; b: number; width: number; }
-interface Circle { x: number; y: number; idx: number; isHub: boolean; glow: number; }
+type CircleKind = 'normal' | 'hub' | 'native' | 'offline';
+interface Link { a: number; b: number; width: number; offline: boolean; }
+interface Circle { x: number; y: number; idx: number; kind: CircleKind; glow: number; }
 interface Ripple { x: number; y: number; time: number; force: number; }
 
 export default function LoginBackground() {
@@ -66,15 +81,31 @@ export default function LoginBackground() {
       for (let r = -1; r < rows; r++) {
         const ox = r % 2 === 0 ? 0 : GRID / 2;
         for (let c = -1; c < cols; c++) {
+          // Sample once and partition the [0,1) range deterministically:
+          //   [0.00, 0.04) → native  (~4%, sparse — matches "rare upstream")
+          //   [0.04, 0.07) → offline (~3%, rarer still — visual outlier)
+          //   [0.07, 0.19) → hub     (~12%, same as before)
+          //   else         → normal
+          // Hash uses (c, r, 7) so the layout is stable across resizes.
+          const k = hash(c, r, 7);
+          let kind: CircleKind;
+          if (k < 0.04) kind = 'native';
+          else if (k < 0.07) kind = 'offline';
+          else if (k < 0.19) kind = 'hub';
+          else kind = 'normal';
           circles.push({
             x: c * GRID + ox,
             y: r * GRID,
             idx: idx++,
-            isHub: hash(c, r, 7) < 0.12,
+            kind,
             glow: 0,
           });
         }
       }
+      // Per-circle native link count, used to enforce NATIVE_MAX_LINKS while
+      // building. Tracked here (not on Circle) since it's a build-time
+      // constraint, not a runtime state.
+      const nativeLinkCount = new Int32Array(circles.length);
       for (let i = 0; i < circles.length; i++) {
         const ci = circles[i];
         for (let j = i + 1; j < circles.length; j++) {
@@ -84,15 +115,34 @@ export default function LoginBackground() {
           const d = Math.sqrt(dx * dx + dy * dy);
           if (d > GRID * 1.8) continue;
           const r = hash(i, j, 42);
-          const eitherHub = ci.isHub || cj.isHub;
-          const bothHub = ci.isHub && cj.isHub;
-          const prob = bothHub ? 0.75 : eitherHub ? 0.50 : 0.22;
+          const eitherHub = ci.kind === 'hub' || cj.kind === 'hub';
+          const bothHub = ci.kind === 'hub' && cj.kind === 'hub';
+          const eitherNative = ci.kind === 'native' || cj.kind === 'native';
+          // Native upstreams sit at the leaf of the topology — the real
+          // graph never has another native peer next to one (they're all
+          // independent endpoints), and they should advertise "few
+          // connections" visually. Cap probability and per-node fan-out.
+          let prob: number;
+          if (eitherNative) prob = 0.35;
+          else if (bothHub) prob = 0.75;
+          else if (eitherHub) prob = 0.50;
+          else prob = 0.22;
           if (r >= prob) continue;
-          let w: number;
-          if (bothHub) w = 1.0 + hash(i, j, 99) * 2.8;
-          else if (eitherHub) w = 0.8 + hash(i, j, 99) * 2.0;
-          else w = 0.5 + hash(i, j, 99) * 1.3;
-          links.push({ a: i, b: j, width: w });
+          // Hard cap for native: skip if either native endpoint already has
+          // NATIVE_MAX_LINKS edges. Mirrors the "no nesting" rule.
+          if (ci.kind === 'native' && nativeLinkCount[i] >= NATIVE_MAX_LINKS) continue;
+          if (cj.kind === 'native' && nativeLinkCount[j] >= NATIVE_MAX_LINKS) continue;
+          let lw: number;
+          if (bothHub) lw = 1.0 + hash(i, j, 99) * 2.8;
+          else if (eitherHub) lw = 0.8 + hash(i, j, 99) * 2.0;
+          else if (eitherNative) lw = 0.7 + hash(i, j, 99) * 1.0;
+          else lw = 0.5 + hash(i, j, 99) * 1.3;
+          // Edge offline iff either endpoint is offline — matches the
+          // graph's red-dashed-line rule for unreachable hops.
+          const off = ci.kind === 'offline' || cj.kind === 'offline';
+          links.push({ a: i, b: j, width: lw, offline: off });
+          if (ci.kind === 'native') nativeLinkCount[i]++;
+          if (cj.kind === 'native') nativeLinkCount[j]++;
         }
       }
       linkGlows = new Float32Array(links.length);
@@ -210,25 +260,57 @@ export default function LoginBackground() {
         ctx.moveTo(x1, y1);
         ctx.lineTo(x2, y2);
         ctx.lineWidth = link.width;
-        ctx.strokeStyle = `rgba(${CR},${CG},${CB},${g * 0.22})`;
+        if (link.offline) {
+          // Dashed red — same vocabulary as the graph's offline edge.
+          ctx.setLineDash([6, 4]);
+          ctx.strokeStyle = `rgba(${FIR},${FIG},${FIB},${g * 0.32})`;
+        } else {
+          ctx.setLineDash([]);
+          ctx.strokeStyle = `rgba(${CR},${CG},${CB},${g * 0.22})`;
+        }
         ctx.stroke();
       }
+      ctx.setLineDash([]);
 
       // --- Draw pass 2: circles ---
       for (const c of circles) {
         const g = c.glow;
         const alpha = BASE_ALPHA + (MAX_ALPHA - BASE_ALPHA) * g;
 
+        // Per-kind outer-circle colour. Native = light yellow, offline =
+        // light red, everyone else (hub OR normal) = the regular blue.
+        // Inner circle (concentric) only for HUB — hubs are transit-y in
+        // the real graph, native peers are leaf-only by definition, and
+        // offline peers don't get a "transit" hint either.
+        let or = CR, og = CG, ob = CB;
+        if (c.kind === 'native')  { or = YR; og = YG; ob = YB; }
+        else if (c.kind === 'offline') { or = FR; og = FG; ob = FB; }
+
         ctx.beginPath();
         ctx.arc(c.x, c.y, RADIUS, 0, Math.PI * 2);
-        ctx.fillStyle = `rgba(${CR},${CG},${CB},${alpha})`;
+        ctx.fillStyle = `rgba(${or},${og},${ob},${alpha})`;
         ctx.fill();
 
-        if (c.isHub && g > 0.12) {
+        if (c.kind === 'hub' && g > 0.12) {
           const hubAlpha = (g - 0.12) / 0.88 * 0.55;
           ctx.beginPath();
           ctx.arc(c.x, c.y, HUB_INNER, 0, Math.PI * 2);
           ctx.fillStyle = `rgba(${HR},${HG},${HB},${hubAlpha})`;
+          ctx.fill();
+        } else if (c.kind === 'native' && g > 0.12) {
+          // Native gets a small amber inner circle so its yellow dot
+          // reads as "intentional special state," not "stray colour."
+          // Smaller than HUB_INNER to keep it leaf-shaped.
+          const niAlpha = (g - 0.12) / 0.88 * 0.6;
+          ctx.beginPath();
+          ctx.arc(c.x, c.y, HUB_INNER * 0.7, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(${YIR},${YIG},${YIB},${niAlpha})`;
+          ctx.fill();
+        } else if (c.kind === 'offline' && g > 0.12) {
+          const oiAlpha = (g - 0.12) / 0.88 * 0.5;
+          ctx.beginPath();
+          ctx.arc(c.x, c.y, HUB_INNER * 0.7, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(${FIR},${FIG},${FIB},${oiAlpha})`;
           ctx.fill();
         }
       }

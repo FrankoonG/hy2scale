@@ -4,9 +4,10 @@ import type {
   UserConfig, Session, ProxyConfig, SSConfig, L2TPConfig,
   IKEv2Config, WireGuardConfig, WireGuardPeer,
   RoutingRule, CertInfo, UISettings, PortConflict, PasswordConflicts,
+  UpgradeStatus, UpgradeCheckResult,
 } from './types';
 
-export type { NodeConfig, Stats, TopologyNode, ClientEntry, UserConfig, Session, ProxyConfig, SSConfig, L2TPConfig, IKEv2Config, WireGuardConfig, WireGuardPeer, RoutingRule, CertInfo, UISettings, PortConflict, PasswordConflicts };
+export type { NodeConfig, Stats, TopologyNode, ClientEntry, UserConfig, Session, ProxyConfig, SSConfig, L2TPConfig, IKEv2Config, WireGuardConfig, WireGuardPeer, RoutingRule, CertInfo, UISettings, PortConflict, PasswordConflicts, UpgradeStatus, UpgradeCheckResult };
 
 // Auth
 export const login = (username: string, password: string) =>
@@ -121,8 +122,8 @@ export const updateWGPeer = (name: string, data: WireGuardPeer) =>
   api(`/wireguard/peers/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteWGPeer = (name: string) =>
   api(`/wireguard/peers/${encodeURIComponent(name)}`, { method: 'DELETE' });
-export const getWGPeerConfig = (name: string) =>
-  api<Response>(`/wireguard/peers/${encodeURIComponent(name)}/config`);
+export const getWGPeerConfig = (name: string, endpoint?: string) =>
+  api<Response>(`/wireguard/peers/${encodeURIComponent(name)}/config${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ''}`);
 export const getWGQR = (text: string) =>
   api<Response>(`/wireguard/qr?text=${encodeURIComponent(text)}`);
 
@@ -200,6 +201,12 @@ export const uploadUpgrade = async (file: File) => {
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 };
+
+// Online Update — server-side singleton, all sessions observe the same job
+export const checkUpdate = () => api<UpgradeCheckResult>('/upgrade/check');
+export const startUpgradeDownload = () => api<UpgradeStatus>('/upgrade/download', { method: 'POST' });
+export const getUpgradeStatus = () => api<UpgradeStatus>('/upgrade/status');
+export const applyUpgrade = () => api('/upgrade/apply', { method: 'POST' });
 
 // Port Check
 export const checkPorts = (ports: PortConflict[]) =>
