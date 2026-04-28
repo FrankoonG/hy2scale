@@ -27,9 +27,15 @@ export function useSelection(allKeys: string[]) {
   // selectOnly drops every other selection and picks only this one. Bound
   // to row-body click in Table/TreeTable: clicking the blank area of a
   // row "focuses" that row exclusively, while the leading checkbox keeps
-  // its additive multi-select semantics.
+  // its additive multi-select semantics. If the row IS already the
+  // sole selected entry, this acts as a deselect — letting the user
+  // toggle their single-row focus off with a second click on the same
+  // row, without touching the checkbox.
   const selectOnly = useCallback((key: string) => {
-    setSelected(new Set([key]));
+    setSelected((prev) => {
+      if (prev.size === 1 && prev.has(key)) return new Set();
+      return new Set([key]);
+    });
   }, []);
 
   const toggleAll = useCallback(() => {

@@ -94,6 +94,7 @@ export function Table<T>({ columns, data, rowKey, rowClassName, emptyText, selec
             return (
               <tr
                 key={key}
+                data-row-key={key}
                 className={clsx(rowClassName?.(row, i), isSelected && 'selected', selection && 'hy-row-clickable')}
                 onClick={onRowClick}
               >
