@@ -9,9 +9,8 @@ const HR = 16, HG = 37, HB = 69;         // hub inner:    #102545 — concentric
 // graph so first-time viewers learn "yellow = native upstream, red = offline"
 // before they even sign in.
 const YR = 234, YG = 179, YB = 8;        // native outer: #eab308
-const YIR = 146, YIG = 64, YIB = 14;     // native inner: #92400e
 const FR = 252, FG = 165, FB = 165;      // offline outer: #fca5a5
-const FIR = 220, FIG = 38, FIB = 38;     // offline inner: #dc2626
+const FIR = 220, FIG = 38, FIB = 38;     // offline edge stroke: #dc2626 (dashed-line colour only — offline dots themselves render plain)
 
 const GRID = 36;
 const RADIUS = 11;
@@ -50,10 +49,19 @@ function hash(x: number, y: number, seed: number) {
   return ((h & 0x7fffffff) / 0x7fffffff);
 }
 
-type CircleKind = 'normal' | 'hub' | 'native' | 'offline';
+// Three semantic kinds. The "hub-like" inner circle isn't its own kind —
+// it's a render-time decision based on the connection count of a normal
+// node (≥3 lines = transit-shaped → draw concentric inner). Native and
+// offline are leaf states by their own rules and never get an inner
+// circle no matter how many lines they end up with.
+type CircleKind = 'normal' | 'native' | 'offline';
 interface Link { a: number; b: number; width: number; offline: boolean; }
-interface Circle { x: number; y: number; idx: number; kind: CircleKind; glow: number; }
+interface Circle { x: number; y: number; idx: number; kind: CircleKind; glow: number; linkCount: number; }
 interface Ripple { x: number; y: number; time: number; force: number; }
+// A normal node draws a concentric inner ring only when it has at least
+// this many connecting lines — matches the user's "transit needs ≥ 3
+// edges" rule. Anything below renders as a plain outer-only dot.
+const CONCENTRIC_MIN_LINKS = 3;
 
 export default function LoginBackground() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -81,17 +89,16 @@ export default function LoginBackground() {
       for (let r = -1; r < rows; r++) {
         const ox = r % 2 === 0 ? 0 : GRID / 2;
         for (let c = -1; c < cols; c++) {
-          // Sample once and partition the [0,1) range deterministically:
-          //   [0.00, 0.04) → native  (~4%, sparse — matches "rare upstream")
-          //   [0.04, 0.07) → offline (~3%, rarer still — visual outlier)
-          //   [0.07, 0.19) → hub     (~12%, same as before)
-          //   else         → normal
+          // Initial kind (may flip to 'offline' below if the link pass
+          // leaves us with zero connections). Hash partitions:
+          //   [0.00, 0.04) → native  (~4%, sparse — leaf-only upstream)
+          //   [0.04, 0.07) → offline (~3%, intentional pre-marked)
+          //   else         → normal  (link count decides hub-shape later)
           // Hash uses (c, r, 7) so the layout is stable across resizes.
           const k = hash(c, r, 7);
           let kind: CircleKind;
           if (k < 0.04) kind = 'native';
           else if (k < 0.07) kind = 'offline';
-          else if (k < 0.19) kind = 'hub';
           else kind = 'normal';
           circles.push({
             x: c * GRID + ox,
@@ -99,13 +106,10 @@ export default function LoginBackground() {
             idx: idx++,
             kind,
             glow: 0,
+            linkCount: 0,
           });
         }
       }
-      // Per-circle native link count, used to enforce NATIVE_MAX_LINKS while
-      // building. Tracked here (not on Circle) since it's a build-time
-      // constraint, not a runtime state.
-      const nativeLinkCount = new Int32Array(circles.length);
       for (let i = 0; i < circles.length; i++) {
         const ci = circles[i];
         for (let j = i + 1; j < circles.length; j++) {
@@ -115,34 +119,44 @@ export default function LoginBackground() {
           const d = Math.sqrt(dx * dx + dy * dy);
           if (d > GRID * 1.8) continue;
           const r = hash(i, j, 42);
-          const eitherHub = ci.kind === 'hub' || cj.kind === 'hub';
-          const bothHub = ci.kind === 'hub' && cj.kind === 'hub';
           const eitherNative = ci.kind === 'native' || cj.kind === 'native';
-          // Native upstreams sit at the leaf of the topology — the real
-          // graph never has another native peer next to one (they're all
-          // independent endpoints), and they should advertise "few
-          // connections" visually. Cap probability and per-node fan-out.
+          // Without a separate "hub" kind, link probability is driven by
+          // how many edges the endpoints already accumulated — a more
+          // organic "rich get richer" pattern that naturally produces a
+          // few high-degree (≥3) nodes that will render as concentric
+          // hubs at draw time, while most stay sparse. Native is capped
+          // separately by NATIVE_MAX_LINKS, regardless of probability.
+          const dense = ci.linkCount + cj.linkCount;
           let prob: number;
-          if (eitherNative) prob = 0.35;
-          else if (bothHub) prob = 0.75;
-          else if (eitherHub) prob = 0.50;
+          if (eitherNative) prob = 0.30;
+          else if (dense >= 4) prob = 0.55;
+          else if (dense >= 2) prob = 0.40;
           else prob = 0.22;
           if (r >= prob) continue;
-          // Hard cap for native: skip if either native endpoint already has
-          // NATIVE_MAX_LINKS edges. Mirrors the "no nesting" rule.
-          if (ci.kind === 'native' && nativeLinkCount[i] >= NATIVE_MAX_LINKS) continue;
-          if (cj.kind === 'native' && nativeLinkCount[j] >= NATIVE_MAX_LINKS) continue;
+          if (ci.kind === 'native' && ci.linkCount >= NATIVE_MAX_LINKS) continue;
+          if (cj.kind === 'native' && cj.linkCount >= NATIVE_MAX_LINKS) continue;
           let lw: number;
-          if (bothHub) lw = 1.0 + hash(i, j, 99) * 2.8;
-          else if (eitherHub) lw = 0.8 + hash(i, j, 99) * 2.0;
+          if (dense >= 4) lw = 1.0 + hash(i, j, 99) * 2.4;
+          else if (dense >= 2) lw = 0.8 + hash(i, j, 99) * 1.6;
           else if (eitherNative) lw = 0.7 + hash(i, j, 99) * 1.0;
           else lw = 0.5 + hash(i, j, 99) * 1.3;
-          // Edge offline iff either endpoint is offline — matches the
-          // graph's red-dashed-line rule for unreachable hops.
+          // Edge offline iff either endpoint is (or will become) offline.
+          // Pre-marked offlines are caught here; orphan-promoted offlines
+          // are handled in the post-pass below.
           const off = ci.kind === 'offline' || cj.kind === 'offline';
           links.push({ a: i, b: j, width: lw, offline: off });
-          if (ci.kind === 'native') nativeLinkCount[i]++;
-          if (cj.kind === 'native') nativeLinkCount[j]++;
+          ci.linkCount++;
+          cj.linkCount++;
+        }
+      }
+      // Promote orphans: a normal circle that ended up with zero
+      // connections is, by the user's rule, offline. Native circles that
+      // ended up isolated keep their kind — a native upstream with no
+      // line is rare but it's still semantically a native (just nothing
+      // dialled it this layout). They render as plain yellow.
+      for (const c of circles) {
+        if (c.kind === 'normal' && c.linkCount === 0) {
+          c.kind = 'offline';
         }
       }
       linkGlows = new Float32Array(links.length);
@@ -291,26 +305,17 @@ export default function LoginBackground() {
         ctx.fillStyle = `rgba(${or},${og},${ob},${alpha})`;
         ctx.fill();
 
-        if (c.kind === 'hub' && g > 0.12) {
+        // Concentric inner ring is RESERVED for normal circles with at
+        // least CONCENTRIC_MIN_LINKS connections — those are the
+        // "transit-shaped" nodes in the graph vocabulary. Native and
+        // offline are leaf-only by their respective rules and never
+        // render an inner ring no matter how many lines touch them.
+        // A normal circle with <3 connections also stays plain.
+        if (c.kind === 'normal' && c.linkCount >= CONCENTRIC_MIN_LINKS && g > 0.12) {
           const hubAlpha = (g - 0.12) / 0.88 * 0.55;
           ctx.beginPath();
           ctx.arc(c.x, c.y, HUB_INNER, 0, Math.PI * 2);
           ctx.fillStyle = `rgba(${HR},${HG},${HB},${hubAlpha})`;
-          ctx.fill();
-        } else if (c.kind === 'native' && g > 0.12) {
-          // Native gets a small amber inner circle so its yellow dot
-          // reads as "intentional special state," not "stray colour."
-          // Smaller than HUB_INNER to keep it leaf-shaped.
-          const niAlpha = (g - 0.12) / 0.88 * 0.6;
-          ctx.beginPath();
-          ctx.arc(c.x, c.y, HUB_INNER * 0.7, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(${YIR},${YIG},${YIB},${niAlpha})`;
-          ctx.fill();
-        } else if (c.kind === 'offline' && g > 0.12) {
-          const oiAlpha = (g - 0.12) / 0.88 * 0.5;
-          ctx.beginPath();
-          ctx.arc(c.x, c.y, HUB_INNER * 0.7, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(${FIR},${FIG},${FIB},${oiAlpha})`;
           ctx.fill();
         }
       }
