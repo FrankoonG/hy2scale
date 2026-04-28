@@ -44,6 +44,10 @@ export default function NodesPage() {
   useEffect(() => {
     try { localStorage.setItem('scale:nodes-view', viewMode); } catch { /* ignore */ }
   }, [viewMode]);
+  // The list-view scroll-to-selection effect is defined AFTER `selection`
+  // is set up further down. JS hoists `function` declarations and `const`
+  // bindings differently; this useEffect references `selection.*` so it
+  // can't sit above the `useSelection(...)` call.
 
   // On short or narrow viewports the 4-stat row squeezes the Network
   // Topology card below half-screen — at narrow widths the cards wrap
@@ -410,6 +414,25 @@ export default function NodesPage() {
   };
   collectKeys(treeNodes);
   const selection = useSelection(selectableKeys);
+
+  // When switching to list with a node already selected (typically from a
+  // graph-view click), scroll the matching row into view so the user
+  // doesn't have to hunt for it in a long table. Uses the data-row-key
+  // attribute that Table/TreeTable expose. Two RAFs let the framework
+  // finish its layout/animation pass (TreeTable uses framer-motion for
+  // row entry) before we measure.
+  const selectedKeysSig = Array.from(selection.selected).sort().join(',');
+  useEffect(() => {
+    if (viewMode !== 'list') return;
+    if (selection.count !== 1) return;
+    const target = Array.from(selection.selected)[0];
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const row = document.querySelector(`tr[data-row-key="${CSS.escape(target)}"]`);
+        if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+    });
+  }, [viewMode, selectedKeysSig, selection.count]);
 
   const bulkToggleNodes = useCallback(async (disabled: boolean) => {
     try {

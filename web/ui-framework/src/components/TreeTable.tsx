@@ -117,6 +117,7 @@ export function TreeTable<T>({ columns, nodes, emptyText, selection, isSelectabl
               return (
                 <motion.tr
                   key={node.key}
+                  data-row-key={node.key}
                   className={clsx(node.className, isSelected && 'selected', selection && selectable && 'hy-row-clickable')}
                   onClick={onRowClick}
                   layout
