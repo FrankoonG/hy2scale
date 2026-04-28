@@ -1,7 +1,23 @@
 import { type ReactNode, useRef, useEffect } from 'react';
+import * as React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
 import type { SelectionState } from './Table';
+
+// Mirror of Table's isInteractiveDescendant — kept inline to avoid making
+// it part of the framework's public surface. Walks up from the click
+// target to the row and bails on any ancestor that's a native control,
+// so row-body click selection never preempts an Edit / checkbox click.
+function isInteractiveDescendant(target: EventTarget | null, row: HTMLElement): boolean {
+  for (let el = target as HTMLElement | null; el && el !== row; el = el.parentElement) {
+    const tag = el.tagName;
+    if (tag === 'BUTTON' || tag === 'A' || tag === 'INPUT' || tag === 'SELECT' ||
+        tag === 'TEXTAREA' || tag === 'LABEL' || el.isContentEditable) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export interface TreeColumn<T> {
   key: string;
@@ -92,10 +108,17 @@ export function TreeTable<T>({ columns, nodes, emptyText, selection, isSelectabl
             {rows.map(({ node, meta }) => {
               const selectable = !selection || !isSelectable || isSelectable(node, meta);
               const isSelected = selection && selectable && selection.selected.has(node.key);
+              const onRowClick = (selection && selectable)
+                ? (e: React.MouseEvent<HTMLTableRowElement>) => {
+                    if (isInteractiveDescendant(e.target, e.currentTarget)) return;
+                    selection.selectOnly(node.key);
+                  }
+                : undefined;
               return (
                 <motion.tr
                   key={node.key}
-                  className={clsx(node.className, isSelected && 'selected')}
+                  className={clsx(node.className, isSelected && 'selected', selection && selectable && 'hy-row-clickable')}
+                  onClick={onRowClick}
                   layout
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}

@@ -36,7 +36,7 @@ export { DropdownMenu } from './components/DropdownMenu';
 export type { DropdownMenuProps, DropdownItem } from './components/DropdownMenu';
 
 // Data
-export { Table } from './components/Table';
+export { Table, isInteractiveDescendant } from './components/Table';
 export type { TableProps, Column, SelectionState } from './components/Table';
 export { TreeTable, TreeCell } from './components/TreeTable';
 export type { TreeTableProps, TreeColumn, TreeNode, TreeRowMeta, TreeCellProps } from './components/TreeTable';
