@@ -138,17 +138,15 @@ export default function LoginBackground() {
           // and tail (linkCount ≥ 3) of ~26%, with no clustering.
           // Orphan tail is ~12% which the post-pass below stitches up
           // deterministically.
-          let prob: number;
-          if (eitherNative) prob = 0.30;
-          else prob = 0.30;
+          const prob = 0.30;
           if (r >= prob) continue;
           if (ci.kind === 'native' && ci.linkCount >= NATIVE_MAX_LINKS) continue;
           if (cj.kind === 'native' && cj.linkCount >= NATIVE_MAX_LINKS) continue;
-          let lw: number;
-          if (dense >= 4) lw = 1.0 + hash(i, j, 99) * 2.4;
-          else if (dense >= 2) lw = 0.8 + hash(i, j, 99) * 1.6;
-          else if (eitherNative) lw = 0.7 + hash(i, j, 99) * 1.0;
-          else lw = 0.5 + hash(i, j, 99) * 1.3;
+          // Line width — also flat, since dense-tier was removed.
+          // Slight randomness for visual texture; native edges thinner.
+          const lw = eitherNative
+            ? 0.7 + hash(i, j, 99) * 0.8
+            : 0.6 + hash(i, j, 99) * 1.4;
           // Edge offline iff either endpoint is (or will become) offline.
           // Pre-marked offlines are caught here; orphan-promoted offlines
           // are handled in the post-pass below.
@@ -192,7 +190,9 @@ export default function LoginBackground() {
         }
         const cj = circles[bestJ];
         const a = Math.min(i, bestJ), b = Math.max(i, bestJ);
-        const off = ci.kind === 'offline' || cj.kind === 'offline';
+        // ci.kind is narrowed to 'normal' here (continued above on
+        // any other kind), so only cj's kind can make this edge offline.
+        const off = cj.kind === 'offline';
         // Thin line — these are rescue stitches, not real "transit" edges.
         links.push({ a, b, width: 0.6 + hash(a, b, 99) * 0.6, offline: off });
         ci.linkCount++; cj.linkCount++;
