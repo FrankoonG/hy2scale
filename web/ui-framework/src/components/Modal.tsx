@@ -95,7 +95,6 @@ export function Modal({ open, onClose, title, footer, wide, animateFrom, childre
             {title && (
               <div className="hy-modal-header">
                 <h2>{title}</h2>
-                <button className="hy-icon-btn" onClick={onClose}>✕</button>
               </div>
             )}
             <SmoothBody>{children}</SmoothBody>

@@ -114,7 +114,7 @@
 .hy-table .col-actions{width:150px;text-align:right}
 
 /* Checkbox column */
-.hy-table .col-check{width:40px;text-align:center;user-select:none;-webkit-user-select:none;vertical-align:middle}
+.hy-table .col-check{width:40px;text-align:center;user-select:none;-webkit-user-select:none;vertical-align:middle;cursor:pointer}
 .hy-table .col-check input[type="checkbox"]{width:16px;height:16px;cursor:pointer;accent-color:var(--primary);margin:0;vertical-align:middle;border-radius:3px;border:1.5px solid var(--text-muted);appearance:none;-webkit-appearance:none;background:transparent;transition:border-color .15s;position:relative;flex-shrink:0;display:inline-block}
 .hy-table .col-check input[type="checkbox"]:checked{background:var(--primary);border-color:var(--primary)}
 .hy-table .col-check input[type="checkbox"]:checked::after{content:'';position:absolute;left:50%;top:45%;width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:translate(-50%,-50%) rotate(45deg)}
@@ -293,6 +293,9 @@ a.peer-link:hover{text-decoration:underline}
 .hy-btn.primary{background:var(--primary);border-color:var(--primary);color:#fff;transition:all .15s ease}
 .hy-btn.primary:hover{background:var(--primary-dark);border-color:var(--primary-dark);color:#fff;transform:translateY(-1px);box-shadow:0 2px 8px rgba(67,97,238,.25)}
 .hy-btn.primary:active{transform:translateY(0);box-shadow:none}
+.hy-btn.success{background:var(--green);border-color:var(--green);color:#fff;transition:all .15s ease}
+.hy-btn.success:hover{background:#16a34a;border-color:#16a34a;color:#fff;transform:translateY(-1px);box-shadow:0 2px 8px rgba(34,197,94,.25)}
+.hy-btn.success:active{transform:translateY(0);box-shadow:none}
 .hy-btn.danger{color:var(--red);border-color:transparent;background:transparent;padding:4px 8px}
 .hy-btn.danger:hover{background:var(--red-bg)}
 .hy-btn.ghost{border:none;background:none;color:var(--text-secondary)}
@@ -345,6 +348,8 @@ a.peer-link:hover{text-decoration:underline}
 .hy-topo-pathinfo-chain{display:inline-flex;align-items:center;flex-wrap:wrap;font-weight:600}
 .hy-topo-pathinfo-sep{color:var(--text-muted);margin:0 2px;font-weight:400}
 .hy-topo-pathinfo-hop{white-space:nowrap}
+.hy-topo-pathinfo-hop-link{text-decoration:none;cursor:pointer;border-bottom:1px dashed transparent;transition:border-color .15s ease}
+.hy-topo-pathinfo-hop-link:hover{border-bottom-color:currentColor}
 .hy-topo-pathinfo-lat{font-size:11px;font-weight:600;padding-left:6px;border-left:1px solid var(--border)}
 .hy-topo-pathinfo-lat.lat-ok{color:#22c55e}
 .hy-topo-pathinfo-lat.lat-mid{color:#d97706}
@@ -470,6 +475,12 @@ a.peer-link:hover{text-decoration:underline}
    family on both the node and the line. The .offline rule above wins
    when both apply (disconnected segments stay red regardless). */
 .hy-topo-edge.to-native .hy-topo-edge-draw{color:#eab308}
+/* Resting (pre-selection) tint for edges that touch a NATIVE peer — pale
+ * yellow keeps the edge visually grouped with the saturated yellow used
+ * for the native dot and the selection highlight, without overwhelming
+ * the rest of the topology in its idle state. */
+.hy-topo-edge.to-native .hy-topo-edge-base{color:#fde68a;stroke-opacity:.55}
+.hy-topo-edge.to-native .hy-topo-edge-flow{color:#fde68a;stroke-opacity:.95}
 @keyframes hy-topo-path-draw{to{stroke-dashoffset:0}}
 
 /* Offline / disabled edges — red, dashed, no flow, × marker. */

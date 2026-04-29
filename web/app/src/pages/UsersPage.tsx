@@ -1,4 +1,5 @@
-import { useState, useCallback, type MouseEvent } from 'react';
+import { useState, useCallback, useRef, type MouseEvent } from 'react';
+import { useDeselectOnBlankClick } from '@/hooks/useDeselectOnBlankClick';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, Button, Badge, AlertBadge, useToast, useConfirm, useSelection, isInteractiveDescendant } from '@hy2scale/ui';
@@ -96,6 +97,8 @@ export default function UsersPage() {
   };
 
   const selection = useSelection(users.map((u) => u.id));
+  const listScopeRef = useRef<HTMLDivElement | null>(null);
+  useDeselectOnBlankClick(selection, listScopeRef);
 
   const bulkToggle = useCallback(async (enabled: boolean) => {
     try {
@@ -157,11 +160,22 @@ export default function UsersPage() {
               </>;
             })()}
             <ImportExportButton target="users" />
+            {(() => {
+              const sel = [...selection.selected];
+              if (sel.length !== 1) return null;
+              const onEditClick = (e: MouseEvent) => openEdit(sel[0], e);
+              return (
+                <Button size="sm" variant="success" data-testid="edit-selected-btn" onClick={onEditClick}>
+                  {t('app.edit')}
+                </Button>
+              );
+            })()}
             <Button size="sm" variant="primary" onClick={openAdd}>{t('users.addUser')}</Button>
           </ResponsiveActions>
         }
         noPadding
       >
+        <div ref={listScopeRef} style={{ display: 'contents' }}>
         {users.length === 0 ? (
           <div className="hy-empty" dangerouslySetInnerHTML={{ __html: t('users.noUsers') }} />
         ) : (
@@ -169,7 +183,15 @@ export default function UsersPage() {
             <table className="hy-table">
               <thead>
                 <tr>
-                  <th className="col-check">
+                  <th
+                    className="col-check"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if ((e.target as HTMLElement).tagName !== 'INPUT') {
+                        selection.toggleAll();
+                      }
+                    }}
+                  >
                     <input
                       type="checkbox"
                       checked={selection.isAllSelected}
@@ -181,7 +203,6 @@ export default function UsersPage() {
                   <th style={{ minWidth: 180 }}>{t('users.exitVia')}</th>
                   <th style={{ width: 130, textAlign: 'right' }}>{t('users.traffic')}</th>
                   <th style={{ width: 90, textAlign: 'right' }}>{t('users.expiry')}</th>
-                  <th style={{ width: 40 }}></th>
                 </tr>
               </thead>
               <tbody>
@@ -204,7 +225,15 @@ export default function UsersPage() {
                         selection.selectOnly(u.id);
                       }}
                     >
-                      <td className="col-check">
+                      <td
+                        className="col-check"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if ((e.target as HTMLElement).tagName !== 'INPUT') {
+                            selection.toggle(u.id);
+                          }
+                        }}
+                      >
                         <input type="checkbox" checked={isSelected} onChange={() => selection.toggle(u.id)} />
                       </td>
                       <td>
@@ -238,11 +267,6 @@ export default function UsersPage() {
                       <td style={{ textAlign: 'right' }}>
                         <span style={{ fontSize: 12, color: expired ? 'var(--red)' : undefined }}>{u.expiry_date || '—'}</span>
                       </td>
-                      <td>
-                        <button className="hy-row-edit" onClick={(e) => openEdit(u.id, e)} title={t('app.edit')}>
-                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                        </button>
-                      </td>
                     </tr>
                   );
                 })}
@@ -250,6 +274,7 @@ export default function UsersPage() {
             </table>
           </div>
         )}
+        </div>
       </Card>
 
       {/* Active Devices */}

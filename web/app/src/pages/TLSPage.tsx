@@ -1,4 +1,5 @@
-import { useState, useCallback, type MouseEvent, type DragEvent } from 'react';
+import { useState, useCallback, useRef, type MouseEvent, type DragEvent } from 'react';
+import { useDeselectOnBlankClick } from '@/hooks/useDeselectOnBlankClick';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -150,6 +151,8 @@ export default function TLSPage() {
   ];
 
   const selection = useSelection(certs.map((c) => c.id));
+  const listScopeRef = useRef<HTMLDivElement | null>(null);
+  useDeselectOnBlankClick(selection, listScopeRef);
 
   const bulkDelete = useCallback(async () => {
     const ok = await confirm({
@@ -178,13 +181,7 @@ export default function TLSPage() {
     { key: 'issuer', title: t('tls.issuer'), render: (cert) => <>{cert.issuer}{cert.is_ca && <> <Badge variant="blue">CA</Badge></>}</> },
     { key: 'expires', title: t('tls.expires'), render: (cert) => <span className="mono">{cert.not_after}</span> },
     { key: 'key', title: t('tls.hasKey'), render: (cert) => cert.key_file ? <Badge variant="green">{t('app.yes')}</Badge> : <Badge variant="muted">{t('app.no')}</Badge> },
-    {
-      key: 'actions', title: '', width: '40px', render: (cert) => (
-        <button className="hy-row-edit" onClick={(e) => handleEdit(cert, e)} title={t('app.edit')}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-        </button>
-      ),
-    },
+    // Per-row edit column retired — select a row and use the top-right Edit button.
   ];
 
   return (
@@ -200,11 +197,24 @@ export default function TLSPage() {
             selectedLabel={t('app.selected', { count: selection.count })}
           >
             {selection.count > 0 && <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>}
+            {(() => {
+              const sel = [...selection.selected];
+              if (sel.length !== 1) return null;
+              const single = certs.find((c) => c.id === sel[0]);
+              if (!single) return null;
+              const onEditClick = (e: MouseEvent) => handleEdit(single, e);
+              return (
+                <Button size="sm" variant="success" data-testid="edit-selected-btn" onClick={onEditClick}>
+                  {t('app.edit')}
+                </Button>
+              );
+            })()}
             <Button size="sm" variant="primary" onClick={openNew}>{t('tls.new')}</Button>
           </ResponsiveActions>
         }
         noPadding
       >
+        <div ref={listScopeRef} style={{ display: 'contents' }}>
         <Table
           columns={certColumns}
           data={certs}
@@ -213,6 +223,7 @@ export default function TLSPage() {
           emptyText={t('tls.noCerts')}
           selection={selection}
         />
+        </div>
       </Card>
 
       {/* Cert Modal — matches old frontend: 2 tabs + generate button + CA select */}

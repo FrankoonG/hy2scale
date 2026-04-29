@@ -1,4 +1,4 @@
-import { useState, useCallback, type MouseEvent } from 'react';
+import { useState, useCallback, useRef, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -11,6 +11,7 @@ import { ExitViaCell } from '@/components/ExitViaCell';
 import ImportExportButton from '@/components/ImportExportButton';
 import ResponsiveActions from '@/components/ResponsiveActions';
 import { useExitPaths } from '@/hooks/useExitPaths';
+import { useDeselectOnBlankClick } from '@/hooks/useDeselectOnBlankClick';
 import type { RoutingRule } from '@/api';
 import * as api from '@/api';
 
@@ -33,6 +34,8 @@ export default function RulesPage() {
   const currentRules = tab === 'ip' ? ipRules : domainRules;
 
   const selection = useSelection(currentRules.map((r) => r.id));
+  const listScopeRef = useRef<HTMLDivElement | null>(null);
+  useDeselectOnBlankClick(selection, listScopeRef);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -83,13 +86,16 @@ export default function RulesPage() {
       exitData = { exit_via: tunExitVia.trim(), exit_paths: undefined, exit_mode: '' };
     } else {
       exitData = exitPathToApi(exitPath) as typeof exitData;
+      if (!exitData.exit_via) { toast.error(t('rules.exitRequired')); return; }
     }
 
     setSaving(true);
     try {
       const prioN = parseInt(priority, 10);
+      const ruleType = tab as 'ip' | 'domain';
       const ruleData = {
-        name, type: tab as 'ip' | 'domain', targets: targetList,
+        id: editId || `${ruleType}-${Date.now().toString(36)}`,
+        name, type: ruleType, targets: targetList,
         ...exitData,
         use_tun: useTun || undefined,
         priority: Number.isFinite(prioN) ? prioN : 0,
@@ -143,13 +149,7 @@ export default function RulesPage() {
     )},
     { key: 'targets', title: t('rules.targets'), render: (r) => <span className="mono" style={{ fontSize: 11 }}>{r.targets.slice(0, 3).join(', ')}{r.targets.length > 3 ? ` +${r.targets.length - 3}` : ''}</span> },
     { key: 'exit', title: t('rules.exitVia'), render: (r) => <ExitViaCell exitVia={r.exit_via} exitPaths={r.exit_paths} exitMode={r.exit_mode} /> },
-    {
-      key: 'actions', title: '', width: '40px', render: (r) => (
-        <button className="hy-row-edit" onClick={(e) => openEdit(r, e as any)} title={t('app.edit')}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-        </button>
-      ),
-    },
+    // Per-row edit column retired — select a row and use the top-right Edit button.
   ];
 
   const tabTitle = tab === 'ip' ? t('rules.ipRules') : t('rules.domainRules');
@@ -189,11 +189,24 @@ export default function RulesPage() {
                 </>;
               })()}
               <ImportExportButton target="rules" />
+              {(() => {
+                const sel = [...selection.selected];
+                if (sel.length !== 1) return null;
+                const single = currentRules.find((r) => r.id === sel[0]);
+                if (!single) return null;
+                const onEditClick = (e: MouseEvent) => openEdit(single, e);
+                return (
+                  <Button size="sm" variant="success" data-testid="edit-selected-btn" onClick={onEditClick}>
+                    {t('app.edit')}
+                  </Button>
+                );
+              })()}
               <Button size="sm" variant="primary" onClick={openAdd}>{t('rules.newRule')}</Button>
             </ResponsiveActions>
           }
           noPadding
         >
+          <div ref={listScopeRef} style={{ display: 'contents' }}>
           <Table
             columns={columns}
             data={currentRules}
@@ -202,6 +215,7 @@ export default function RulesPage() {
             emptyText={t('rules.noRules')}
             selection={selection}
           />
+          </div>
         </Card>
       </TabPanel>
 

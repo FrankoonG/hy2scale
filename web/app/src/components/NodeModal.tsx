@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { Reorder, useDragControls } from 'framer-motion';
@@ -7,7 +7,17 @@ import {
   FormGroup, FormGrid, GripIcon, useToast,
 } from '@hy2scale/ui';
 import * as api from '@/api';
-import type { ClientEntry, CertInfo } from '@/api';
+import type { ClientEntry, CertInfo, TopologyNode } from '@/api';
+import { useNodeStore } from '@/store/node';
+import { buildHy2Url, copyToClipboard } from '@/utils/buildHy2Url';
+
+// Characters that would corrupt nested qualified paths (`/`), look weird in
+// topology display (whitespace), or upset YAML/CLI consumers (control chars).
+// The set is intentionally tight — anything matching makes the form refuse.
+const NAME_BANNED_RE = /[\/\\\s\x00-\x1f\x7f]/;
+function nameIsValid(s: string): boolean {
+  return !!s && !NAME_BANNED_RE.test(s);
+}
 
 interface AddrItem { id: number; host: string; port: string; }
 let addrNextId = 1;
@@ -51,12 +61,32 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   const queryClient = useQueryClient();
 
   const [loading, setLoading] = useState(false);
+  const [name, setName] = useState('');
+  const [nameError, setNameError] = useState('');
   const [addrItems, setAddrItems] = useState<AddrItem[]>([{ id: addrNextId++, host: '', port: '' }]);
   const addrListRef = useRef<HTMLUListElement>(null);
   const [addrError, setAddrError] = useState('');
 
+  // Live topology lookup — drives the disabled state of the name field.
+  // Renaming a hy2scale peer mid-connection would orphan its keyed QUIC
+  // session, so we only allow edits when the peer is offline OR is a
+  // native (vanilla Hysteria 2) server (where the local name is just our
+  // private label and the remote doesn't care).
+  const topology = useNodeStore((s) => s.topology);
+  const editingTopologyNode: TopologyNode | undefined = useMemo(() => {
+    if (!editingName) return undefined;
+    return topology.find((n) => n.name === editingName);
+  }, [topology, editingName]);
+  const editingConnected = editingTopologyNode?.connected === true;
+  const editingNative = editingTopologyNode?.native === true;
+  const nameLocked = !!editingName && editingConnected && !editingNative;
+
   const [password, setPassword] = useState('');
   const [fastOpen, setFastOpen] = useState(false);
+  // Brutal congestion control: ON = client honours an explicit
+  // upload/download ceiling (max_tx / max_rx). OFF = let the server
+  // decide, and don't bother showing the ceiling inputs at all.
+  const [brutal, setBrutal] = useState(false);
   const [bbrProfile, setBbrProfile] = useState<'' | 'standard' | 'conservative' | 'aggressive'>('');
   const [maxTx, setMaxTx] = useState('');
   const [maxRx, setMaxRx] = useState('');
@@ -81,13 +111,16 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   useEffect(() => {
     if (!open) {
       setAddrError('');
+      setNameError('');
       return;
     }
     setAddrError('');
+    setNameError('');
     if (!editingName) {
       // Reset for add
+      setName('');
       setAddrItems([{ id: addrNextId++, host: '', port: '' }]);
-      setPassword(''); setFastOpen(false); setBbrProfile('');
+      setPassword(''); setFastOpen(false); setBrutal(false); setBbrProfile('');
       setMaxTx(''); setMaxRx('');
       setSni(''); setInsecure(true);
       setCaSource(''); setCaManual('');
@@ -96,6 +129,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       setShowQuic(false);
       return;
     }
+    setName(editingName);
     // Fetch client data
     api.getClients().then((clients) => {
       const c = clients.find((cl) => cl.name === editingName);
@@ -104,6 +138,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       setAddrItems(addrs.map(a => { const p = parseAddr(a); return { id: addrNextId++, host: p.host, port: p.port }; }));
       setPassword(c.password || '');
       setFastOpen(c.fast_open || false);
+      setBrutal(!!(c.max_tx || c.max_rx));
       setBbrProfile((c.bbr_profile as any) || '');
       setMaxTx(c.max_tx ? String(c.max_tx / 125000) : '');
       setMaxRx(c.max_rx ? String(c.max_rx / 125000) : '');
@@ -184,9 +219,57 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
     return strs;
   };
 
+  // resolveName returns the final node name from the form, or null when
+  // the input is invalid. Empty is allowed only on create (falls back to
+  // the first address). Sets nameError as a side effect on rejection.
+  const resolveName = (addrs: string[]): string | null => {
+    setNameError('');
+    const trimmed = name.trim();
+    if (!trimmed) {
+      if (editingName) {
+        setNameError(t('nodes.nodeNameRequired'));
+        return null;
+      }
+      return addrs[0];
+    }
+    if (!nameIsValid(trimmed)) {
+      setNameError(t('nodes.nodeNameInvalid'));
+      return null;
+    }
+    return trimmed;
+  };
+
+  const handleExport = async () => {
+    const addrs = validateAddrs();
+    if (!addrs) return;
+    const finalName = resolveName(addrs);
+    if (!finalName) return;
+    if (!password.trim()) {
+      toast.error(t('nodes.passRequired'));
+      return;
+    }
+    // First address only — the share-URL format has no native multi-addr
+    // slot. validateAddrs returned the formatted list (IPv6-bracketed).
+    const url = buildHy2Url({
+      name: finalName,
+      addr: addrs[0],
+      password: password.trim(),
+      sni: sni.trim() || undefined,
+      insecure: insecure || undefined,
+      max_tx: maxTx ? Math.round(parseFloat(maxTx) * 125000) : undefined,
+      max_rx: maxRx ? Math.round(parseFloat(maxRx) * 125000) : undefined,
+      fast_open: fastOpen || undefined,
+    });
+    const ok = await copyToClipboard(url);
+    if (ok) toast.success(t('nodes.exportCopied'));
+    else toast.error(t('nodes.exportFailed'));
+  };
+
   const handleSubmit = async () => {
     const addrs = validateAddrs();
     if (!addrs) return;
+    const finalName = resolveName(addrs);
+    if (!finalName) return;
     if (!password.trim()) {
       toast.error(t('nodes.passRequired'));
       return;
@@ -202,7 +285,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
 
     setLoading(true);
     const data: ClientEntry = {
-      name: editingName || addrs[0],
+      name: finalName,
       addr: addrs[0],
       addrs: addrs.length > 1 ? addrs : undefined,
       password: password.trim(),
@@ -254,6 +337,11 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       footer={
         <>
           <Button onClick={onClose}>{t('app.cancel')}</Button>
+          {editingName && (
+            <Button onClick={handleExport} data-testid="export-hy2-url">
+              {t('nodes.exportUrl')}
+            </Button>
+          )}
           <Button variant="primary" onClick={handleSubmit} loading={loading}>
             {editingName ? t('app.save') : t('nodes.connect')}
           </Button>
@@ -261,7 +349,31 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        {/* Address rows — always at the top */}
+        {/* Node name — full-width, above addresses. Disabled when editing
+            an online hy2scale peer (renaming a live QUIC session would
+            orphan its keyed state); always editable for native peers and
+            for offline entries; on create, blank falls back to first addr. */}
+        <FormGroup label={t('nodes.nodeName')}>
+          <>
+            {nameError && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 6 }}>{nameError}</div>}
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={editingName ? '' : t('nodes.nodeNameHint')}
+              disabled={nameLocked}
+              error={!!nameError}
+              data-testid="node-name-input"
+              style={{ width: '100%' }}
+            />
+            {nameLocked && (
+              <div style={{ marginTop: 6, fontSize: 12, color: 'var(--text-muted)' }}>
+                {t('nodes.nodeNameLocked')}
+              </div>
+            )}
+          </>
+        </FormGroup>
+
+        {/* Address rows */}
         <FormGroup label={t('nodes.addresses')}>
           <>
             {addrError && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 6 }}>{addrError}</div>}
@@ -299,9 +411,29 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
         </FormGroup>
 
         <FormGrid>
-          <FormGroup label={t('nodes.fastOpen')}>
-            <div style={{ paddingTop: 6 }}>
-              <Toggle checked={fastOpen} onChange={(e) => setFastOpen(e.target.checked)} />
+          {/* FastOpen + Brutal share the left cell so BBR Profile keeps
+              its full half on the right. Each toggle carries its own
+              inline label so it's clear which toggle is which. */}
+          <FormGroup label={t('nodes.tuning')}>
+            <div style={{ display: 'flex', gap: 14, paddingTop: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <Toggle checked={fastOpen} onChange={(e) => setFastOpen(e.target.checked)} />
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('nodes.fastOpen')}</span>
+              </label>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <Toggle
+                  checked={brutal}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    setBrutal(on);
+                    // Closing Brutal clears any stale ceilings so we don't
+                    // silently send max_tx/max_rx the user can no longer see.
+                    if (!on) { setMaxTx(''); setMaxRx(''); }
+                  }}
+                  data-testid="brutal-toggle"
+                />
+                <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('nodes.brutal')}</span>
+              </label>
             </div>
           </FormGroup>
           <FormGroup label={t('nodes.bbrProfile')}>
@@ -317,15 +449,18 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
           </FormGroup>
         </FormGrid>
 
-        {/* Bandwidth */}
-        <FormGrid>
-          <FormGroup label={t('nodes.upload')}>
-            <Input type="number" value={maxTx} onChange={(e) => setMaxTx(e.target.value)} placeholder="0" suffix="Mbps" />
-          </FormGroup>
-          <FormGroup label={t('nodes.download')}>
-            <Input type="number" value={maxRx} onChange={(e) => setMaxRx(e.target.value)} placeholder="0" suffix="Mbps" />
-          </FormGroup>
-        </FormGrid>
+        {/* Bandwidth — only meaningful when Brutal is on; otherwise the
+            server picks bandwidth and the inputs add noise. */}
+        {brutal && (
+          <FormGrid>
+            <FormGroup label={t('nodes.upload')}>
+              <Input type="number" value={maxTx} onChange={(e) => setMaxTx(e.target.value)} placeholder="0" suffix="Mbps" data-testid="brutal-up" />
+            </FormGroup>
+            <FormGroup label={t('nodes.download')}>
+              <Input type="number" value={maxRx} onChange={(e) => setMaxRx(e.target.value)} placeholder="0" suffix="Mbps" data-testid="brutal-down" />
+            </FormGroup>
+          </FormGrid>
+        )}
 
         {/* TLS */}
         <FormGrid>

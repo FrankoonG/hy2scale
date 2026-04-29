@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Reorder, useDragControls } from 'framer-motion';
 import { Input, FormGroup, GripIcon } from '@hy2scale/ui';
@@ -38,55 +38,50 @@ export function TargetList({ type, value, onChange, label }: TargetListProps) {
   const { t } = useTranslation();
   const validate = type === 'ip' ? validateIP : validateDomain;
 
-  // Items are fully internal state. Only synced from props on mount or
-  // when an EXTERNAL value change is detected (e.g., modal opens with new data).
+  // Items are the source of truth for the form. Initial state is captured from
+  // `value` at mount time. This component is consumed inside a Modal that
+  // unmounts on close, so a fresh mount always picks up the latest external
+  // value via the initializer — no render-phase sync needed.
   const [items, setItems] = useState<TargetItem[]>(() =>
     (value.length > 0 ? value : ['']).map((v) => ({ id: nextId++, value: v }))
   );
-  const lastEmitted = useRef<string>(JSON.stringify(value));
+  // Track what we last emitted so the post-commit effect doesn't echo the
+  // initial mount value back to the parent on the very first render.
+  const lastEmitted = useRef<string>(JSON.stringify(value.length > 0 ? value : ['']));
 
-  // Sync from parent only if the value changed externally (not from our own emit)
-  const valueJSON = JSON.stringify(value);
-  if (valueJSON !== lastEmitted.current) {
-    lastEmitted.current = valueJSON;
-    const ext = value.length > 0 ? value : [''];
-    setItems(ext.map((v) => ({ id: nextId++, value: v })));
-  }
-
-  const emit = useCallback((newItems: TargetItem[]) => {
-    const vals = newItems.map((it) => it.value);
-    lastEmitted.current = JSON.stringify(vals);
-    onChange(vals);
-  }, [onChange]);
+  // Emit AFTER commit, never inside a setItems updater. Calling parent setState
+  // from within an updater is impure and races with concurrent re-renders
+  // (e.g. zustand topology polls): a render where the parent's value still
+  // lags the internal items can mis-trigger any render-phase sync logic and
+  // remount the input element, which drops keyboard focus mid-typing.
+  useEffect(() => {
+    const vals = items.map((it) => it.value);
+    const j = JSON.stringify(vals);
+    if (j !== lastEmitted.current) {
+      lastEmitted.current = j;
+      onChange(vals);
+    }
+  }, [items, onChange]);
 
   const updateItem = useCallback((id: number, val: string) => {
-    setItems((prev) => {
-      const next = prev.map((it) => it.id === id ? { ...it, value: val } : it);
-      emit(next);
-      return next;
-    });
-  }, [emit]);
+    setItems((prev) => prev.map((it) => it.id === id ? { ...it, value: val } : it));
+  }, []);
 
   const addItem = useCallback(() => {
-    setItems((prev) => {
-      const next = [...prev, { id: nextId++, value: '' }];
-      return next;
-    });
+    setItems((prev) => [...prev, { id: nextId++, value: '' }]);
   }, []);
 
   const removeItem = useCallback((id: number) => {
     setItems((prev) => {
       const next = prev.filter((it) => it.id !== id);
       if (next.length === 0) next.push({ id: nextId++, value: '' });
-      emit(next);
       return next;
     });
-  }, [emit]);
+  }, []);
 
   const handleReorder = useCallback((newItems: TargetItem[]) => {
     setItems(newItems);
-    emit(newItems);
-  }, [emit]);
+  }, []);
 
   const listRef = useRef<HTMLUListElement>(null);
   const placeholder = type === 'ip' ? t('rules.ipHint') : t('rules.domainHint');
