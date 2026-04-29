@@ -89,6 +89,10 @@ export interface UserConfig {
   username: string;
   password: string;
   proxy_passwords?: Record<string, string>;
+  // Proxy keys this user is forbidden to authenticate on. Empty/undefined =
+  // allowed everywhere. Backend short-circuits each protocol's auth path
+  // when the proxy key appears in this list (hot-effective).
+  proxy_disabled?: string[];
   exit_via: string;
   exit_paths?: string[];
   exit_mode?: '' | 'quality' | 'aggregate';

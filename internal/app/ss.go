@@ -109,6 +109,10 @@ func (a *App) handleSS(conn net.Conn, method string) {
 		if !u.Enabled {
 			continue
 		}
+		// Per-proxy disable: admin UI can revoke a user from ss only.
+		if !u.IsProxyEnabled("ss") {
+			continue
+		}
 		// Skip if this user's SS password conflicts with another user
 		if a.IsPasswordConflicted(u.Username, "ss") {
 			continue
