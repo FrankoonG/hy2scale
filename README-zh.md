@@ -31,7 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/FrankoonG/hy2scale/main/install.sh 
 自动识别 CPU 架构（`amd64` / `arm64` / `armv7` / `mips64le` /
 `mipsle-softfloat`），从最新 release 下载匹配的 tar 包，把二进制装到
 `/usr/local/bin/hy2scale` 并注册 systemd 服务。重复运行即原地升级。
-固定版本用 `HY2SCALE_VERSION=v1.3.1`；卸载用 `… | sudo sh -s -- --uninstall`。
+固定版本用 `HY2SCALE_VERSION=v1.3.2`；卸载用 `… | sudo sh -s -- --uninstall`。
 
 ### Docker
 
@@ -70,7 +70,8 @@ iKuai v4 用户请从 [Releases](https://github.com/FrankoonG/hy2scale/releases)
 - IP 与域名路由规则将特定流量引向特定出口。
 - TLS 证书管理，内置 CA 签发。
 - 多 IP 对等节点聚合（故障转移或带宽叠加）。
-- 备份 / 恢复、容器内二进制升级，UI 支持 EN / 中文 / 한국어。
+- 备份 / 恢复、容器内二进制升级（手动上传或一键在线检查），UI 支持 EN / 中文 / 한국어。
+- 单选即编辑：在任一列表中点选一行，卡片右上角即出现绿色 **Edit** 按钮作为编辑入口；点击列表外空白取消单选；长按 **+ Add Node** 可粘贴 hysteria2:// 链接导入。
 
 ## 截图
 

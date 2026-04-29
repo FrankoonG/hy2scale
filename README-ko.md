@@ -32,7 +32,7 @@ CPU 아키텍처(`amd64` / `arm64` / `armv7` / `mips64le` /
 `mipsle-softfloat`)를 자동 감지해 최신 릴리스의 해당 tar 파일을 받고,
 `/usr/local/bin/hy2scale`에 바이너리를 설치한 뒤 systemd 서비스를
 등록합니다. 다시 실행하면 그대로 업그레이드. 버전을 고정하려면
-`HY2SCALE_VERSION=v1.3.1`, 제거하려면 `… | sudo sh -s -- --uninstall`.
+`HY2SCALE_VERSION=v1.3.2`, 제거하려면 `… | sudo sh -s -- --uninstall`.
 
 ### Docker
 
@@ -71,7 +71,8 @@ iKuai v4 사용자는 [Releases](https://github.com/FrankoonG/hy2scale/releases)
 - IP 및 도메인 라우팅 규칙으로 특정 트래픽을 특정 출구로 보냅니다.
 - 내장 CA 서명을 지원하는 TLS 인증서 관리.
 - 다중 IP 피어 집계 (페일오버 또는 대역폭 결합).
-- 백업 / 복원, 컨테이너 내 바이너리 업그레이드, EN / 中文 / 한국어 UI.
+- 백업 / 복원, 컨테이너 내 바이너리 업그레이드(수동 업로드 또는 한 번 클릭으로 온라인 검사), EN / 中文 / 한국어 UI.
+- 선택 후 편집: 어떤 리스트에서든 행을 단일 선택하면 카드 우상단에 녹색 **Edit** 버튼이 편집 진입점으로 표시됩니다. 외부 빈 영역을 클릭하면 단일 선택이 해제되고, **+ Add Node**를 길게 누르면 hysteria2:// URL 가져오기가 열립니다.
 
 ## 스크린샷
 
