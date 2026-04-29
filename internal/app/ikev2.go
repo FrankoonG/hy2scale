@@ -580,7 +580,10 @@ func (a *App) updateEAPSecrets() {
 	cfg := a.store.Get()
 	lines = append(lines, "# EAP users")
 	for _, u := range cfg.Users {
-		if u.Enabled {
+		// Skip globally-disabled users AND users explicitly revoked from
+		// ikev2; otherwise the secret stays in ipsec.secrets and the
+		// per-proxy toggle wouldn't be honoured by strongSwan.
+		if u.Enabled && u.IsProxyEnabled("ikev2") {
 			lines = append(lines, fmt.Sprintf(`%s : EAP "%s"`, u.Username, u.Password))
 		}
 	}
@@ -823,11 +826,11 @@ func (a *App) handleIKEv2Transparent(conn net.Conn, cfg IKEv2Config) {
 	var exitPaths []string
 	if ok && username != "__psk__" {
 		// User mode: look up user's exit_via
-		user, err := a.LookupUser(username, "")
+		user, err := a.LookupUser(username, "", "ikev2")
 		if err != nil {
 			c := a.store.Get()
 			for _, u := range c.Users {
-				if u.Username == username && u.Enabled {
+				if u.Username == username && u.Enabled && u.IsProxyEnabled("ikev2") {
 					user = &u
 					break
 				}

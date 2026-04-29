@@ -754,7 +754,15 @@ func (a *App) GetPasswordConflicts() map[string]map[string][]string {
 	return result
 }
 
-func (a *App) LookupUser(username, password string) (*UserConfig, error) {
+// LookupUser authenticates a username/password pair for a specific proxy
+// (socks5/http/l2tp/ikev2/...). The `proxy` argument is consulted against
+// the per-user ProxyDisabled list so an admin can revoke access to a single
+// protocol without deleting the user. Pass an empty proxy string to skip
+// the per-proxy check (for legacy/internal callers that don't represent a
+// specific listening protocol). VPN callers (l2tp/ikev2) commonly pass an
+// empty password — they validated the secret elsewhere — but they still
+// pay the ProxyDisabled check.
+func (a *App) LookupUser(username, password, proxy string) (*UserConfig, error) {
 	a.usersMu.RLock()
 	u, ok := a.userIndex[username]
 	a.usersMu.RUnlock()
@@ -766,6 +774,9 @@ func (a *App) LookupUser(username, password string) (*UserConfig, error) {
 	}
 	if !u.Enabled {
 		return nil, fmt.Errorf("user disabled")
+	}
+	if proxy != "" && !u.IsProxyEnabled(proxy) {
+		return nil, fmt.Errorf("user disabled for proxy %s", proxy)
 	}
 	if u.ExpiryDate != "" {
 		if t, err := time.Parse("2006-01-02", u.ExpiryDate); err == nil && time.Now().After(t) {
@@ -808,12 +819,14 @@ func (a *App) AddUser(u UserConfig) error {
 func (a *App) UpdateUser(id string, u UserConfig) error {
 	var oldPassword string
 	var oldProxyPw map[string]string
+	var oldProxyDisabled []string
 	var oldUsername string
 	err := a.store.Update(func(c *Config) {
 		for i, existing := range c.Users {
 			if existing.ID == id {
 				oldPassword = existing.Password
 				oldProxyPw = existing.ProxyPasswords
+				oldProxyDisabled = existing.ProxyDisabled
 				oldUsername = existing.Username
 				u.TrafficUsed = existing.TrafficUsed
 				c.Users[i] = u
@@ -824,8 +837,15 @@ func (a *App) UpdateUser(id string, u UserConfig) error {
 	if err == nil {
 		a.rebuildUserIndex()
 		a.syncVPNSecrets()
-		// If credentials changed, disconnect all active sessions for this user
-		if oldPassword != u.Password || fmt.Sprint(oldProxyPw) != fmt.Sprint(u.ProxyPasswords) || (oldUsername != u.Username && oldUsername != "") {
+		// If credentials OR per-proxy access changed, disconnect all active
+		// sessions for this user. ProxyDisabled changing means a previously
+		// permitted protocol is now revoked — keeping the in-flight tunnel
+		// alive would silently keep the user connected after the toggle.
+		credsChanged := oldPassword != u.Password ||
+			fmt.Sprint(oldProxyPw) != fmt.Sprint(u.ProxyPasswords) ||
+			fmt.Sprint(oldProxyDisabled) != fmt.Sprint(u.ProxyDisabled) ||
+			(oldUsername != u.Username && oldUsername != "")
+		if credsChanged {
 			if n := a.Sessions.KickUser(oldUsername); n > 0 {
 				log.Printf("[users] credentials changed for %s, kicked %d sessions", u.Username, n)
 			}
@@ -1512,7 +1532,7 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 		password := string(buf[3+ulen : 3+ulen+plen])
 
 		var err error
-		user, err = a.LookupUser(username, password)
+		user, err = a.LookupUser(username, password, "socks5")
 		if err != nil {
 			conn.Write([]byte{0x01, 0x01}) // auth failed
 			return
@@ -1719,7 +1739,7 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
 			return
 		}
-		u, err := a.LookupUser(creds[0], creds[1])
+		u, err := a.LookupUser(creds[0], creds[1], "http")
 		if err != nil {
 			conn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"proxy\"\r\n\r\n"))
 			return
@@ -2321,6 +2341,10 @@ func (a *hy2Auth) Authenticate(addr net.Addr, auth string, tx uint64) (bool, str
 	cfg := a.app.store.Get()
 	for _, u := range cfg.Users {
 		if u.EffectivePassword("hy2") == auth && u.Enabled {
+			// Per-proxy disable: admin UI can revoke a user from hy2 only.
+			if !u.IsProxyEnabled("hy2") {
+				continue
+			}
 			// Skip if this user's hy2 password conflicts with another user
 			if a.app.IsPasswordConflicted(u.Username, "hy2") {
 				continue

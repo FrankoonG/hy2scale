@@ -102,6 +102,28 @@ export const PROXY_REGISTRY: ProxyRegistryEntry[] = [
       return `${scheme}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`;
     },
   },
+  // VPN proxies — included so the user-modal "proxy auth" tab can list a
+  // per-proxy enable toggle for them. They don't appear in the user-detail
+  // share-link list (filtered by category='vpn'); their connection details
+  // come from the dedicated L2TP / IKEv2 admin pages instead.
+  {
+    key: 'l2tp',
+    label: 'L2TP/IPsec',
+    authType: 'username_password',
+    category: 'vpn',
+    defaultPort: '1701',
+    getPort: () => '1701',
+    buildUrl: () => '',
+  },
+  {
+    key: 'ikev2',
+    label: 'IKEv2',
+    authType: 'username_password',
+    category: 'vpn',
+    defaultPort: '500',
+    getPort: () => '500',
+    buildUrl: () => '',
+  },
 ];
 
 /** Proxy types that support per-proxy password overrides (password-only auth). */

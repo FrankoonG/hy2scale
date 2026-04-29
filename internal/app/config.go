@@ -22,13 +22,19 @@ type UserConfig struct {
 	Username       string            `yaml:"username" json:"username"`
 	Password       string            `yaml:"password" json:"password"`
 	ProxyPasswords map[string]string `yaml:"proxy_passwords,omitempty" json:"proxy_passwords,omitempty"` // proxy-specific overrides (e.g. "hy2", "ss")
-	ExitVia        string            `yaml:"exit_via" json:"exit_via"`
-	ExitPaths      []string          `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
-	ExitMode       string            `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"` // ""|"quality"|"aggregate"
-	TrafficLimit   int64             `yaml:"traffic_limit" json:"traffic_limit"`             // bytes, 0=unlimited
-	TrafficUsed    int64             `yaml:"traffic_used" json:"traffic_used"`
-	ExpiryDate     string            `yaml:"expiry_date,omitempty" json:"expiry_date"`
-	Enabled        bool              `yaml:"enabled" json:"enabled"`
+	// ProxyDisabled lists proxy keys (hy2/ss/socks5/http/l2tp/ikev2) that
+	// MUST refuse to authenticate this user. Empty/missing list = the user
+	// is allowed on every proxy. Used by the per-proxy auth toggle in the
+	// admin UI; the auth path consults IsProxyEnabled() before issuing a
+	// successful auth on each protocol.
+	ProxyDisabled []string `yaml:"proxy_disabled,omitempty" json:"proxy_disabled,omitempty"`
+	ExitVia       string   `yaml:"exit_via" json:"exit_via"`
+	ExitPaths     []string `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
+	ExitMode      string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"` // ""|"quality"|"aggregate"
+	TrafficLimit  int64    `yaml:"traffic_limit" json:"traffic_limit"`             // bytes, 0=unlimited
+	TrafficUsed   int64    `yaml:"traffic_used" json:"traffic_used"`
+	ExpiryDate    string   `yaml:"expiry_date,omitempty" json:"expiry_date"`
+	Enabled       bool     `yaml:"enabled" json:"enabled"`
 }
 
 // EffectivePassword returns the proxy-specific password if set, else the main password.
@@ -39,6 +45,17 @@ func (u *UserConfig) EffectivePassword(proxy string) string {
 		}
 	}
 	return u.Password
+}
+
+// IsProxyEnabled reports whether this user is allowed to authenticate on
+// the given proxy key. Default (empty list) is "allowed everywhere".
+func (u *UserConfig) IsProxyEnabled(proxy string) bool {
+	for _, k := range u.ProxyDisabled {
+		if k == proxy {
+			return false
+		}
+	}
+	return true
 }
 
 // ProxyConfig defines a protocol listener.

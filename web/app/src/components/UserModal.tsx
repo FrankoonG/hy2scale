@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Modal, Button, Input, PasswordInput, Toggle, FormGroup, FormGrid, Tabs, TabPanel, useToast } from '@hy2scale/ui';
 import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from './ExitPathList';
 import * as api from '@/api';
-import { PASSWORD_ONLY_PROXIES } from '@/config/proxyRegistry';
+import { PROXY_REGISTRY } from '@/config/proxyRegistry';
 import { useNodeStore } from '@/store/node';
 
 interface Props {
@@ -24,6 +24,10 @@ export default function UserModal({ open, onClose, editingId, animateFrom }: Pro
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [proxyPasswords, setProxyPasswords] = useState<Record<string, string>>({});
+  // proxyDisabled tracked as a Set for O(1) toggle membership tests; the
+  // backend stores it as a string[]. Empty set → user authenticates on
+  // every proxy.
+  const [proxyDisabled, setProxyDisabled] = useState<Set<string>>(new Set());
   const [exitPath, setExitPath] = useState<ExitPathValue>({ paths: [''], mode: '' });
   const [trafficLimit, setTrafficLimit] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
@@ -34,6 +38,7 @@ export default function UserModal({ open, onClose, editingId, animateFrom }: Pro
     setTab('general');
     if (!editingId) {
       setUsername(''); setPassword(''); setProxyPasswords({});
+      setProxyDisabled(new Set());
       setExitPath({ paths: [''], mode: '' });
       setTrafficLimit(''); setExpiryDate(''); setEnabled(true);
       return;
@@ -44,6 +49,7 @@ export default function UserModal({ open, onClose, editingId, animateFrom }: Pro
       setUsername(u.username);
       setPassword(u.password);
       setProxyPasswords(u.proxy_passwords || {});
+      setProxyDisabled(new Set(u.proxy_disabled || []));
       setExitPath(apiToExitPath(u.exit_via, u.exit_paths, u.exit_mode));
       setTrafficLimit(u.traffic_limit > 0 ? String(u.traffic_limit / 1073741824) : '');
       setExpiryDate(u.expiry_date || '');
@@ -71,10 +77,12 @@ export default function UserModal({ open, onClose, editingId, animateFrom }: Pro
     const filteredProxyPw = Object.fromEntries(
       Object.entries(proxyPasswords).filter(([, v]) => v !== '')
     );
+    const proxyDisabledArr = Array.from(proxyDisabled);
     const data = {
       username,
       password,
       proxy_passwords: Object.keys(filteredProxyPw).length > 0 ? filteredProxyPw : undefined,
+      proxy_disabled: proxyDisabledArr.length > 0 ? proxyDisabledArr : undefined,
       ...exitData,
       traffic_limit: trafficLimit ? parseFloat(trafficLimit) * 1073741824 : 0,
       expiry_date: expiryDate || undefined,
@@ -104,6 +112,13 @@ export default function UserModal({ open, onClose, editingId, animateFrom }: Pro
   const updateProxyPw = (key: string, val: string) =>
     setProxyPasswords((prev) => ({ ...prev, [key]: val }));
 
+  const toggleProxyEnabled = (key: string, on: boolean) =>
+    setProxyDisabled((prev) => {
+      const next = new Set(prev);
+      if (on) next.delete(key); else next.add(key);
+      return next;
+    });
+
   return (
     <Modal
       open={open}
@@ -121,7 +136,7 @@ export default function UserModal({ open, onClose, editingId, animateFrom }: Pro
         <Tabs
           items={[
             { key: 'general', label: t('users.general') },
-            { key: 'proxy_pw', label: t('users.proxyPasswords') },
+            { key: 'proxy_pw', label: t('users.proxyAuth') },
           ]}
           activeKey={tab}
           onChange={setTab}
@@ -157,18 +172,38 @@ export default function UserModal({ open, onClose, editingId, animateFrom }: Pro
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                {t('users.proxyPasswordsHint')}
+                {t('users.proxyAuthHint')}
               </div>
-              {PASSWORD_ONLY_PROXIES.map(({ key, label }) => (
-                <FormGroup key={key} label={label}>
-                  <PasswordInput
-                    value={proxyPasswords[key] || ''}
-                    onChange={(e) => updateProxyPw(key, e.target.value)}
-                    onGenerate={(v) => updateProxyPw(key, v)}
-                    placeholder={t('users.useMainPassword')}
-                  />
-                </FormGroup>
-              ))}
+              {PROXY_REGISTRY.map(({ key, label, authType }) => {
+                const isOn = !proxyDisabled.has(key);
+                const showPwField = authType === 'password';
+                return (
+                  <FormGroup key={key} label={label}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <Toggle
+                        checked={isOn}
+                        onChange={(e) => toggleProxyEnabled(key, e.target.checked)}
+                        data-testid={`proxy-enable-${key}`}
+                      />
+                      {showPwField ? (
+                        <div style={{ flex: 1 }}>
+                          <PasswordInput
+                            value={proxyPasswords[key] || ''}
+                            onChange={(e) => updateProxyPw(key, e.target.value)}
+                            onGenerate={(v) => updateProxyPw(key, v)}
+                            placeholder={t('users.useMainPassword')}
+                            disabled={!isOn}
+                          />
+                        </div>
+                      ) : (
+                        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                          {isOn ? t('users.proxyAuthOn') : t('users.proxyAuthOff')}
+                        </span>
+                      )}
+                    </div>
+                  </FormGroup>
+                );
+              })}
             </div>
           )}
         </TabPanel>
