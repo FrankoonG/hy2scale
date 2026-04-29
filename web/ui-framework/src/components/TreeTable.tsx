@@ -88,7 +88,15 @@ export function TreeTable<T>({ columns, nodes, emptyText, selection, isSelectabl
         <thead>
           <tr>
             {selection && (
-              <th className="col-check">
+              <th
+                className="col-check"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if ((e.target as HTMLElement).tagName !== 'INPUT') {
+                    selection.toggleAll();
+                  }
+                }}
+              >
                 <IndeterminateCheckbox
                   checked={selection.isAllSelected}
                   indeterminate={selection.isSomeSelected}
@@ -114,6 +122,18 @@ export function TreeTable<T>({ columns, nodes, emptyText, selection, isSelectabl
                     selection.selectOnly(node.key);
                   }
                 : undefined;
+              // Mirror Table's enlarged-hit-area for the col-check cell:
+              // the entire td (including its padding) toggles the checkbox
+              // and stops the click from bubbling up to the row's
+              // selectOnly handler.
+              const onCheckCellClick = (selection && selectable)
+                ? (e: React.MouseEvent<HTMLTableCellElement>) => {
+                    e.stopPropagation();
+                    if ((e.target as HTMLElement).tagName !== 'INPUT') {
+                      selection.toggle(node.key);
+                    }
+                  }
+                : undefined;
               return (
                 <motion.tr
                   key={node.key}
@@ -127,7 +147,7 @@ export function TreeTable<T>({ columns, nodes, emptyText, selection, isSelectabl
                   transition={{ type: 'spring', stiffness: 500, damping: 35 }}
                 >
                   {selection && (
-                    <td className="col-check">
+                    <td className="col-check" onClick={onCheckCellClick}>
                       {selectable ? (
                         <input type="checkbox" checked={!!isSelected} onChange={() => selection.toggle(node.key)} />
                       ) : null}

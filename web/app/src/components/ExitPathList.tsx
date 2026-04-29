@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Reorder, useDragControls } from 'framer-motion';
 import { Autocomplete, FormGroup, GripIcon } from '@hy2scale/ui';
@@ -31,71 +31,64 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
   const { t } = useTranslation();
   const { exitPaths } = useExitPaths();
 
-  // Stable ID items — sync from value.paths on mount/reset
+  // Items are the source of truth for the form. Initial state is captured from
+  // value.paths at mount time. This component is consumed inside a Modal that
+  // unmounts on close, so a fresh mount always picks up the latest external
+  // value via the initializer — no render-phase sync needed.
   const [items, setItems] = useState<PathItem[]>(() => toItems(value.paths.length > 0 ? value.paths : ['']));
-  const prevPathsRef = useRef(value.paths);
-
-  // Sync items when external paths change (e.g. modal open with new data)
-  if (value.paths !== prevPathsRef.current) {
-    const extPaths = value.paths.length > 0 ? value.paths : [''];
-    // Only reset if the actual content changed (not from our own reorder)
-    const curValues = items.map((it) => it.value);
-    if (JSON.stringify(extPaths) !== JSON.stringify(curValues)) {
-      setItems(toItems(extPaths));
-    }
-    prevPathsRef.current = value.paths;
-  }
+  // addPath/removePath need to drive mode transitions alongside items.
+  // Stash the desired mode here and let the post-commit effect apply it.
+  const pendingModeOverrideRef = useRef<ExitPathValue['mode'] | null>(null);
+  const lastEmittedRef = useRef<string>(JSON.stringify({
+    paths: value.paths.length > 0 ? value.paths : [''],
+    mode: value.mode,
+  }));
 
   const mode = value.mode;
 
-  const emitChange = useCallback((newItems: PathItem[], newMode?: string) => {
-    const paths = newItems.map((it) => it.value);
-    let m = (newMode ?? mode) as ExitPathValue['mode'];
+  // Emit AFTER commit, never inside a setItems updater. Mirrors the TargetList
+  // fix — calling parent setState from inside an updater races with concurrent
+  // re-renders (zustand topology polls) and forces remounts that drop focus.
+  useEffect(() => {
+    const paths = items.map((it) => it.value);
+    const override = pendingModeOverrideRef.current;
+    pendingModeOverrideRef.current = null;
+    let m: ExitPathValue['mode'] = override !== null ? override : mode;
     const filled = paths.filter(Boolean);
-    // Reset to direct if no filled paths or single path without multi-addr
-    if (m && filled.length <= 1) {
-      // Keep mode only if single target has multi-addr (checked at render time)
-      // For safety, reset here — render will re-enable if applicable
-      if (filled.length === 0) m = '';
-    }
-    // Auto-downgrade aggregate→quality if paths target different nodes
+    if (m && filled.length <= 1 && filled.length === 0) m = '';
     if (m === 'aggregate' && filled.length > 1) {
       const targets = new Set(filled.map((p) => p.split('/').pop()));
       if (targets.size > 1) m = 'quality';
     }
-    onChange({ paths, mode: m });
-  }, [onChange, mode]);
+    const sig = JSON.stringify({ paths, mode: m });
+    if (sig !== lastEmittedRef.current) {
+      lastEmittedRef.current = sig;
+      onChange({ paths, mode: m });
+    }
+  }, [items, mode, onChange]);
 
   const updateItem = useCallback((id: number, val: string) => {
-    setItems((prev) => {
-      const next = prev.map((it) => it.id === id ? { ...it, value: val } : it);
-      emitChange(next);
-      return next;
-    });
-  }, [emitChange]);
+    setItems((prev) => prev.map((it) => it.id === id ? { ...it, value: val } : it));
+  }, []);
 
   const addPath = useCallback(() => {
     setItems((prev) => {
-      const next = [...prev, { id: nextId++, value: '' }];
-      const newMode = prev.length === 0 ? '' : (mode || 'quality');
-      emitChange(next, newMode);
-      return next;
+      pendingModeOverrideRef.current = prev.length === 0 ? '' : (mode || 'quality');
+      return [...prev, { id: nextId++, value: '' }];
     });
-  }, [emitChange, mode]);
+  }, [mode]);
 
   const removePath = useCallback((id: number) => {
     setItems((prev) => {
       const next = prev.filter((it) => it.id !== id);
-      const newMode = next.length <= 1 ? '' : mode;
-      emitChange(next, newMode);
+      pendingModeOverrideRef.current = next.length <= 1 ? '' : mode;
       return next;
     });
-  }, [emitChange, mode]);
+  }, [mode]);
 
   const handleReorder = useCallback((newItems: PathItem[]) => {
     setItems(newItems);
-    emitChange(newItems);
-  }, [emitChange]);
+  }, []);
 
   const setMode = useCallback((m: '' | 'quality' | 'aggregate') => {
     onChange({ paths: items.map((it) => it.value), mode: m });

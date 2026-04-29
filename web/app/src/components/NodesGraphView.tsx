@@ -916,19 +916,18 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   const handleNodeClick = useCallback((key: string) => {
     const paths = findPathsToName(topology, key, selfId, selfName);
     if (paths.length === 0) return;
-    // Self is deliberately excluded from the TreeTable's selectableKeys
-    // (self can't be disabled/deleted in bulk), so forwarding a self-
-    // select via onSelectQPath would be immediately pruned by useSelection.
-    // Keep the selection local to the graph for self, so the overlay can
-    // still surface the edit button and latency chain.
-    const forwardToParent = key !== selfId;
+    // Forwarded selection key for the parent (NodesPage). Self uses the
+    // sentinel '__self__' so it lines up with the TreeTable's row keys
+    // and the top-right Edit button can route to EditSelfModal.
+    const isSelf = key === selfId;
+    const selKey = isSelf ? '__self__' : null;
     if (selectedKey === key) {
       // Same node → cycle paths (wrap around; deselect happens only when
       // the user clicks the empty canvas).
       const next = (pathIdx + 1) % paths.length;
       const q = paths[next].join('/');
       setCurrentQPath(q);
-      if (forwardToParent) onSelectQPath?.(q);
+      onSelectQPath?.(isSelf ? selKey : q);
     } else {
       // If the previously-selected path's chain is a strict prefix of any
       // available route to the new target, prefer that route — clicking
@@ -945,7 +944,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       }
       const q = chosen.join('/');
       setCurrentQPath(q);
-      if (forwardToParent) onSelectQPath?.(q); else onSelectQPath?.(null);
+      onSelectQPath?.(isSelf ? selKey : q);
     }
   }, [topology, selfId, selfName, selectedKey, pathIdx, currentQPath, onSelectQPath]);
 
@@ -1853,22 +1852,54 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         }
         if (anyOffline) totalLat = -1;
         const offline = !!selNode?.offline || totalLat < 0;
-        const hops = displayPath.map((k) => nodes.get(k)?.name || k);
+        // Both display name and the underlying graph key per hop — the
+        // key is what the qualifiedPath is built from (and what `selfId`
+        // is compared against to identify the self hop), while the name
+        // is what we actually render.
+        const hops = displayPath.map((k) => ({ key: k, name: nodes.get(k)?.name || k }));
         const latClass = offline ? 'lat-bad' : totalLat <= 0 ? 'lat-na' : totalLat < 80 ? 'lat-ok' : totalLat < 200 ? 'lat-mid' : 'lat-bad';
-        const showOpen = !!selNode && !selNode.isSelf && !!onOpenRemote;
-        const showEdit = !!selNode && !!selNode.editable && !!onEditNode;
-        const editKey = selNode?.isSelf ? '__self__' : (selNode?.key || '');
+        // Edit button retired from the path-info overlay; selecting a node
+        // and pressing the top-right Edit button is now the unified entry
+        // point for both list and graph views. Per-hop remote-open is now
+        // handled inline by clicking the hop itself.
         return (
           <div className="hy-topo-graph-pathinfo" role="status" aria-live="polite">
             <span className="hy-topo-pathinfo-label">{t('nodes.graph.selectedPath')}</span>
             <span className="hy-topo-pathinfo-chain">
               {hops.map((hop, i) => {
-                const qp = hops.slice(0, i + 1).join('/');
-                const reach = i === 0 || isReachableAt(qp);
+                // Reach check is name-keyed (matches the topology store's
+                // connectedPeers/disabledPaths sets); the remote-open URL
+                // is key-keyed so NodesPage's onOpenRemote can strip the
+                // self-id prefix correctly. Display names and node_ids
+                // diverge for the local node (e.g. id=`ea1b2adb`,
+                // name=`sg-home`), so the two paths must be distinct.
+                const qpForReach = hops.slice(0, i + 1).map((h) => h.name).join('/');
+                const qpForOpen = hops.slice(0, i + 1).map((h) => h.key).join('/');
+                const reach = i === 0 || isReachableAt(qpForReach);
+                const isSelfHop = hop.key === selfId;
+                const color = reach ? 'var(--green)' : 'var(--red)';
+                // Self hop: plain colored text — opening "remote into self"
+                // would render the same UI we're already in, so the link
+                // is suppressed there. Every other hop is a link.
+                const hopEl = isSelfHop || !onOpenRemote ? (
+                  <span className="hy-topo-pathinfo-hop" style={{ color }}>{hop.name}</span>
+                ) : (
+                  <a
+                    href="#"
+                    className="hy-topo-pathinfo-hop hy-topo-pathinfo-hop-link"
+                    style={{ color }}
+                    title={t('nodes.openRemote') || 'Open remote'}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onOpenRemote!(qpForOpen);
+                    }}
+                  >{hop.name}</a>
+                );
                 return (
                   <span key={i}>
                     {i > 0 && <span className="hy-topo-pathinfo-sep">/</span>}
-                    <span className="hy-topo-pathinfo-hop" style={{ color: reach ? 'var(--green)' : 'var(--red)' }}>{hop}</span>
+                    {hopEl}
                   </span>
                 );
               })}
@@ -1883,33 +1914,6 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                */}
               {offline ? t('nodes.offline') : fmtLatency(totalLat)}
             </span>
-            {showOpen && (
-              <button
-                type="button"
-                className="hy-topo-pathinfo-btn"
-                title={t('nodes.openRemote') || 'Open remote'}
-                onClick={(e) => { e.stopPropagation(); if (selNode) onOpenRemote!(selNode.qpath); }}
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" width="14" height="14">
-                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                  <polyline points="15 3 21 3 21 9" />
-                  <line x1="10" y1="14" x2="21" y2="3" />
-                </svg>
-              </button>
-            )}
-            {showEdit && (
-              <button
-                type="button"
-                className="hy-topo-pathinfo-btn"
-                title={t('app.edit') || 'Edit'}
-                onClick={(e) => { e.stopPropagation(); onEditNode!(editKey, { x: e.clientX, y: e.clientY }); }}
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="14" height="14">
-                  <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
-                  <path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
-                </svg>
-              </button>
-            )}
           </div>
         );
       })()}

@@ -66,7 +66,15 @@ export function Table<T>({ columns, data, rowKey, rowClassName, emptyText, selec
         <thead>
           <tr>
             {selection && (
-              <th className="col-check">
+              <th
+                className="col-check"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if ((e.target as HTMLElement).tagName !== 'INPUT') {
+                    selection.toggleAll();
+                  }
+                }}
+              >
                 <IndeterminateCheckbox
                   checked={selection.isAllSelected}
                   indeterminate={selection.isSomeSelected}
@@ -91,6 +99,18 @@ export function Table<T>({ columns, data, rowKey, rowClassName, emptyText, selec
                   selection.selectOnly(key);
                 }
               : undefined;
+            // Click anywhere in the col-check cell — including its padding —
+            // toggles the checkbox and never falls through to the row's
+            // selectOnly handler. Accidental row-clicks while aiming at a
+            // small checkbox were the most common error in user testing.
+            const onCheckCellClick = selection
+              ? (e: React.MouseEvent<HTMLTableCellElement>) => {
+                  e.stopPropagation();
+                  if ((e.target as HTMLElement).tagName !== 'INPUT') {
+                    selection.toggle(key);
+                  }
+                }
+              : undefined;
             return (
               <tr
                 key={key}
@@ -99,7 +119,7 @@ export function Table<T>({ columns, data, rowKey, rowClassName, emptyText, selec
                 onClick={onRowClick}
               >
                 {selection && (
-                  <td className="col-check">
+                  <td className="col-check" onClick={onCheckCellClick}>
                     <input type="checkbox" checked={!!isSelected} onChange={() => selection.toggle(key)} />
                   </td>
                 )}

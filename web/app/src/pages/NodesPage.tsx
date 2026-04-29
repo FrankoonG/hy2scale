@@ -13,10 +13,13 @@ import { fmtBytes, fmtRate } from '@/hooks/useFormat';
 import { useHistory } from '@/hooks/useHistory';
 import { getBasePath } from '@/api/client';
 import NodeModal from '@/components/NodeModal';
+import NodeImportModal from '@/components/NodeImportModal';
 import EditSelfModal from '@/components/EditSelfModal';
 import ResponsiveActions from '@/components/ResponsiveActions';
 import ImportExportButton from '@/components/ImportExportButton';
 import NodesGraphView from '@/components/NodesGraphView';
+import { useLongPress } from '@/hooks/useLongPress';
+import { useDeselectOnBlankClick } from '@/hooks/useDeselectOnBlankClick';
 
 export default function NodesPage() {
   const { t } = useTranslation();
@@ -26,9 +29,11 @@ export default function NodesPage() {
   const { node, topology, setTopology, syncingNodes, setSyncing, clearSyncing } = useNodeStore();
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [editSelfOpen, setEditSelfOpen] = useState(false);
   const [editingName, setEditingName] = useState<string | null>(null);
   const [clickPos, setClickPos] = useState<{ x: number; y: number } | undefined>();
+  const lastPointer = useRef<{ x: number; y: number } | null>(null);
   // Default to graph view on first visit (no stored preference) since the
   // topology graph is the more informative presentation; list view remains
   // a one-click toggle away. localStorage remembers the user's last pick
@@ -117,20 +122,52 @@ export default function NodesPage() {
   const connsHist = useHistory(stats?.conns, statsTick);
   const exitClientsHist = useHistory(stats?.exit_clients, statsTick);
 
-  const openAdd = (e: MouseEvent) => {
-    setClickPos({ x: e.clientX, y: e.clientY });
+  // Short click on the Add Node button → manual form. The pointer position
+  // for the modal animation comes from lastPointer (captured on mousedown
+  // by useLongPress' handlers, since onClick's MouseEvent reflects the
+  // release point — usually identical, but we want the press anchor).
+  const addNodeShortClick = useCallback(() => {
+    setClickPos(lastPointer.current || undefined);
     setEditingName(null);
     setModalOpen(true);
-  };
+  }, []);
 
-  const openEdit = (name: string, e: MouseEvent) => {
-    setClickPos({ x: e.clientX, y: e.clientY });
+  // Long press → import-from-URL submenu.
+  const addNodeLongPress = useCallback(() => {
+    setClickPos(lastPointer.current || undefined);
+    setImportOpen(true);
+  }, []);
+
+  const addNodeHandlers = useLongPress({
+    delayMs: 600,
+    onLongPress: addNodeLongPress,
+    onShortClick: addNodeShortClick,
+  });
+
+  // The single source of truth for opening the edit modal is the
+  // top-right Edit button (see `openEditFromBar`/`openEditSelfFromBar`).
+  // Per-row edit buttons and the graph overlay edit button were retired
+  // in favour of select-then-edit.
+  // Anchor the modal animation at the
+  // Edit button itself so the in-modal scale-in still feels purposeful.
+  const editButtonAnchor = (): { x: number; y: number } | undefined => {
+    const btn = document.querySelector('[data-testid="edit-selected-btn"]');
+    if (!btn) return undefined;
+    const r = btn.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  };
+  const openEditFromBar = (key: string, n: TopologyNode) => {
+    setClickPos(editButtonAnchor());
+    // For root-level peers and native servers the key IS the name. For
+    // nested children we still want to edit the configured root entry,
+    // not a sub-peer (which has no editable config), so fall back to
+    // the topology node's display name.
+    const name = key.includes('/') ? n.name : key;
     setEditingName(name);
     setModalOpen(true);
   };
-
-  const openEditSelf = (e: MouseEvent) => {
-    setClickPos({ x: e.clientX, y: e.clientY });
+  const openEditSelfFromBar = () => {
+    setClickPos(editButtonAnchor());
     setEditSelfOpen(true);
   };
 
@@ -384,36 +421,32 @@ export default function NodesPage() {
         </>
       ),
     },
-    {
-      key: 'actions', title: '', width: '40px',
-      render: (n, meta) => {
-        if (n.is_self) {
-          return <button className="hy-row-edit" onClick={(e) => openEditSelf(e as any)} title={t('app.edit')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>;
-        }
-        if (meta.depth === 0) {
-          // Root-level outbound clients (including native hy2 servers) are
-          // user-configured entries, so they get the edit button. Depth>0
-          // nested peers are discovered, not configured, and stay read-only.
-          return <button className="hy-row-edit" onClick={(e) => openEdit(n.name, e as any)} title={t('app.edit')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>;
-        }
-        return null;
-      },
-    },
+    // Per-row edit column intentionally omitted — selecting a row and
+    // pressing the top-right Edit button is the unified entry point.
   ];
 
   const treeNodes = buildTreeNodes(topology);
 
-  // Collect selectable keys. Exclude only the local self row; native hy2
-  // servers ARE user-configured outbound clients and deserve the checkbox.
+  // Collect selectable keys. Self is now selectable too — selecting the
+  // self row is the unified way to reach EditSelfModal via the top-right
+  // Edit button. Bulk actions still skip self where they don't apply
+  // (no nested toggle, no enable/disable, no delete on self).
   const selectableKeys: string[] = [];
   const collectKeys = (nodes: TreeNode<TopologyNode>[]) => {
     for (const n of nodes) {
-      if (!n.data.is_self) selectableKeys.push(n.key);
+      selectableKeys.push(n.key);
       if (n.children) collectKeys(n.children);
     }
   };
   collectKeys(treeNodes);
   const selection = useSelection(selectableKeys);
+
+  // Clicking anywhere outside the list region clears a single-row
+  // selection (multi-select stays sticky). The boundary is the Card —
+  // graph view's blank-canvas clear is owned by the graph itself, so we
+  // mustn't double-trigger from inside it.
+  const listScopeRef = useRef<HTMLDivElement | null>(null);
+  useDeselectOnBlankClick(selection, listScopeRef);
 
   // Scroll-to-selection on graph→list view switch ONLY. Triggers when
   // the user has just flipped the view to list AND a single row is
@@ -574,7 +607,7 @@ export default function NodesPage() {
             selectedLabel={t('app.selected', { count: selection.count })}
           >
             {(() => {
-              // Inspect selected nodes to decide which bulk buttons to show.
+              // Inspect selected nodes to decide which buttons to show.
               const sel = [...selection.selected];
               const findData = (key: string): TopologyNode | undefined => {
                 const search = (nodes: TreeNode<TopologyNode>[]): TopologyNode | undefined => {
@@ -587,26 +620,98 @@ export default function NodesPage() {
                 return search(treeNodes);
               };
               const items = sel.map(findData).filter(Boolean) as TopologyNode[];
-              const rootKeys = sel.filter((k) => !k.includes('/'));
+              const onlySelf = sel.length === 1 && items.some((n) => n.is_self);
+              // Self is preserved for the enable/disable affordance per UX
+              // spec, but excluded from nested-toggle and bulk-delete (no
+              // path-keyed Peers entry exists for self, and self can't be
+              // removed from its own config).
+              const peerItems = items.filter((n) => !n.is_self);
+              const peerKeys = sel.filter((k) => k !== '__self__');
+              const rootKeys = peerKeys.filter((k) => !k.includes('/'));
               const hasDisabled = items.some((n) => n.disabled);
               const hasEnabled = items.some((n) => !n.disabled);
-              const hasNested = items.some((n) => n.nested);
-              const hasUnnested = items.some((n) => !n.nested);
+              const hasNested = peerItems.some((n) => n.nested);
+              const hasUnnested = peerItems.some((n) => !n.nested);
               const hasRoot = rootKeys.length > 0;
               return <>
                 {hasDisabled && <Button size="sm" onClick={() => bulkToggleNodes(false)}>{t('app.bulkEnable')}</Button>}
                 {hasEnabled && <Button size="sm" onClick={() => bulkToggleNodes(true)}>{t('app.bulkDisable')}</Button>}
-                {hasUnnested && <Button size="sm" onClick={() => bulkNested(true)}>{t('nodes.bulkEnableNested')}</Button>}
-                {hasNested && <Button size="sm" onClick={() => bulkNested(false)}>{t('nodes.bulkDisableNested')}</Button>}
+                {!onlySelf && hasUnnested && <Button size="sm" onClick={() => bulkNested(true)}>{t('nodes.bulkEnableNested')}</Button>}
+                {!onlySelf && hasNested && <Button size="sm" onClick={() => bulkNested(false)}>{t('nodes.bulkDisableNested')}</Button>}
                 {hasRoot && <Button size="sm" variant="danger" onClick={bulkDeleteNodes}>{t('app.bulkDelete')}</Button>}
               </>;
             })()}
             <ImportExportButton target="nodes" />
-            <Button size="sm" variant="primary" onClick={openAdd}>{t('nodes.addNode')}</Button>
+            {(() => {
+              // Edit is a single-select shortcut placed deliberately between
+              // Import (group of catalog actions) and Add Node (the primary
+              // creation action), so it reads as "edit the one I just picked"
+              // and not as part of the multi-select bulk group on the left.
+              // Hidden when more than one row is selected, when nothing is
+              // selected, or when the single selection is a nested sub-peer
+              // (whose config lives on the parent and isn't editable here).
+              const sel = [...selection.selected];
+              if (sel.length !== 1) return null;
+              const key = sel[0];
+              if (key === '__self__') {
+                return (
+                  <Button
+                    size="sm"
+                    variant="success"
+                    data-testid="edit-selected-btn"
+                    onClick={openEditSelfFromBar}
+                  >{t('app.edit')}</Button>
+                );
+              }
+              const selfId = node?.node_id || '';
+              const stripped = selfId && key.startsWith(selfId + '/') ? key.slice(selfId.length + 1) : key;
+              if (stripped.includes('/')) return null;
+              const findData = (k: string): TopologyNode | undefined => {
+                const search = (nodes: TreeNode<TopologyNode>[]): TopologyNode | undefined => {
+                  for (const n of nodes) {
+                    if (n.key === k) return n.data;
+                    if (n.children) { const r = search(n.children); if (r) return r; }
+                  }
+                  return undefined;
+                };
+                return search(treeNodes);
+              };
+              const data = findData(key) || findData(stripped);
+              if (!data) return null;
+              return (
+                <Button
+                  size="sm"
+                  variant="success"
+                  data-testid="edit-selected-btn"
+                  onClick={() => openEditFromBar(stripped, data)}
+                >{t('app.edit')}</Button>
+              );
+            })()}
+            <Button
+              size="sm"
+              variant="primary"
+              title={t('nodes.addNodeHint')}
+              data-testid="add-node-btn"
+              onMouseDown={(e) => { lastPointer.current = { x: e.clientX, y: e.clientY }; addNodeHandlers.onMouseDown(e); }}
+              onMouseUp={addNodeHandlers.onMouseUp}
+              onMouseLeave={addNodeHandlers.onMouseLeave}
+              onTouchStart={(e) => {
+                const t0 = e.touches[0];
+                if (t0) lastPointer.current = { x: t0.clientX, y: t0.clientY };
+                addNodeHandlers.onTouchStart(e);
+              }}
+              onTouchEnd={addNodeHandlers.onTouchEnd}
+              onTouchCancel={addNodeHandlers.onTouchCancel}
+              onContextMenu={addNodeHandlers.onContextMenu}
+              onClick={addNodeHandlers.onClick}
+            >
+              {t('nodes.addNode')}
+            </Button>
           </ResponsiveActions>
         }
         noPadding
       >
+        <div ref={listScopeRef} style={{ display: 'contents' }}>
         {viewMode === 'graph' ? (
           <NodesGraphView
             topology={topology}
@@ -626,15 +731,6 @@ export default function NodesPage() {
               const chain = selfId && qpath.startsWith(selfId + '/') ? qpath.slice(selfId.length + 1) : qpath;
               window.open(`${basePath}/remote/${chain}/scale/`, '_blank', 'noopener');
             }}
-            onEditNode={(key, clickPos) => {
-              // Graph emits '__self__' for the local node, bare peer name
-              // otherwise — same convention the TreeTable row uses. Coords
-              // come from the overlay's edit button so the modal animation
-              // anchors at the button, not at screen center.
-              const ev = { clientX: clickPos.x, clientY: clickPos.y } as MouseEvent;
-              if (key === '__self__') openEditSelf(ev);
-              else openEdit(key, ev);
-            }}
           />
         ) : (
           <TreeTable
@@ -642,15 +738,22 @@ export default function NodesPage() {
             nodes={treeNodes}
             emptyText={t('nodes.noConnections')}
             selection={selection}
-            isSelectable={(node) => !node.data.is_self}
+            isSelectable={() => true}
           />
         )}
+        </div>
       </Card>
 
       <NodeModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         editingName={editingName}
+        animateFrom={clickPos}
+      />
+
+      <NodeImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
         animateFrom={clickPos}
       />
 

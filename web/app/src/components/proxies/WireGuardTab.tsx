@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, type MouseEvent } from 'react';
+import { useState, useEffect, useCallback, useRef, type MouseEvent } from 'react';
+import { useDeselectOnBlankClick } from '@/hooks/useDeselectOnBlankClick';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -202,6 +203,8 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
 
   const peers = wg?.peers || [];
   const peerSelection = useSelection(peers.map((p) => p.name));
+  const peerListScopeRef = useRef<HTMLDivElement | null>(null);
+  useDeselectOnBlankClick(peerSelection, peerListScopeRef);
 
   const bulkDeletePeers = useCallback(async () => {
     const ok = await confirm({
@@ -227,13 +230,7 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
     { key: 'exit', title: t('wg.peerExitVia'), render: (p) => <ExitViaCell exitVia={p.exit_via || ''} exitPaths={p.exit_paths} exitMode={p.exit_mode} /> },
     { key: 'ips', title: t('wg.peerAllowedIPs'), width: '130px', render: (p) => <span className="mono" style={{ fontSize: 12 }}>{p.allowed_ips}</span> },
     { key: 'ka', title: t('wg.ka'), width: '50px', render: (p) => <>{p.keepalive || '—'}</> },
-    {
-      key: 'actions', title: '', width: '40px', render: (p) => (
-        <button className="hy-row-edit" onClick={(e) => openEditPeer(p, e)} title={t('app.edit')}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-        </button>
-      ),
-    },
+    // Per-row edit column retired — select a row and use the top-right Edit button.
   ];
 
   return (
@@ -290,11 +287,24 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
           >
             {peerSelection.count > 0 && <Button size="sm" variant="danger" onClick={bulkDeletePeers}>{t('app.bulkDelete')}</Button>}
             <ImportExportButton target="wg-peers" />
+            {(() => {
+              const sel = [...peerSelection.selected];
+              if (sel.length !== 1) return null;
+              const single = peers.find((p) => p.name === sel[0]);
+              if (!single) return null;
+              const onEditClick = (e: MouseEvent) => openEditPeer(single, e);
+              return (
+                <Button size="sm" variant="success" data-testid="edit-selected-btn" onClick={onEditClick}>
+                  {t('app.edit')}
+                </Button>
+              );
+            })()}
             <Button size="sm" variant="primary" onClick={openAddPeer}>{t('wg.addPeer')}</Button>
           </ResponsiveActions>
         }
         noPadding
       >
+        <div ref={peerListScopeRef} style={{ display: 'contents' }}>
         <Table
           columns={peerColumns}
           data={peers}
@@ -302,6 +312,7 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
           emptyText={t('wg.noPeers')}
           selection={peerSelection}
         />
+        </div>
       </Card>
 
       {/* Add/Edit Peer Modal */}
