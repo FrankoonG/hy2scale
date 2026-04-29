@@ -32,7 +32,7 @@ Auto-detects the CPU architecture (`amd64`, `arm64`, `armv7`, `mips64le`,
 `mipsle-softfloat`), downloads the matching tarball from the latest
 release, installs the binary to `/usr/local/bin/hy2scale`, and registers
 a systemd service. Re-running upgrades in place. Pin a version with
-`HY2SCALE_VERSION=v1.3.1`; uninstall with `… | sudo sh -s -- --uninstall`.
+`HY2SCALE_VERSION=v1.3.2`; uninstall with `… | sudo sh -s -- --uninstall`.
 
 ### Docker
 
@@ -71,7 +71,8 @@ For iKuai v4, download the `.ipkg` from [Releases](https://github.com/FrankoonG/
 - IP and domain routing rules steer specific traffic through specific exits.
 - TLS certificate management with built-in CA signing.
 - Multi-IP peer aggregation (failover or bandwidth bonding).
-- Backup / restore, in-place binary upgrade, UI in EN / 中文 / 한국어.
+- Backup / restore, in-place binary upgrade (manual or one-click online check), UI in EN / 中文 / 한국어.
+- Select-to-edit UX: pick a row in any list and a top-right **Edit** button drives editing; clicking blank area outside the list clears the single selection; hysteria2:// share URLs can be imported by long-pressing **+ Add Node**.
 
 ## Screenshots
 
