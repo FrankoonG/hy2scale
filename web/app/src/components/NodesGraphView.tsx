@@ -1208,6 +1208,25 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     return () => window.clearTimeout(id);
   }, [snapshotApplied]);
 
+  // Edge-label CSS transition (transform .3s) makes labels glide when a
+  // dragged dot moves their edge. On first paint that's the wrong
+  // behaviour: labels sit at auto-layout midpoints, then snapshot apply
+  // moves the dots to custom positions, and the CSS transition kicks in
+  // to slide labels from auto-midpoints to custom-midpoints over 300 ms
+  // — visible even after the opacity fade completes (~180 ms). Suppress
+  // the transition until two rAFs after snapshot apply: one for React
+  // to commit the new transform, one for the browser to paint it. After
+  // that, drag-driven label glides work normally.
+  const [labelsAnim, setLabelsAnim] = useState(false);
+  useEffect(() => {
+    if (!snapshotApplied) return;
+    let r2 = 0;
+    const r1 = requestAnimationFrame(() => {
+      r2 = requestAnimationFrame(() => setLabelsAnim(true));
+    });
+    return () => { cancelAnimationFrame(r1); cancelAnimationFrame(r2); };
+  }, [snapshotApplied]);
+
   // didFit is set after the auto-fit-on-mount stabilises. Once true,
   // neither the topology-poll position updates (every ~2 s) nor any
   // later SVG resize will steamroll a user-set pan/zoom. Manual Reset
@@ -1798,7 +1817,14 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                   return (
                     <g
                       className="hy-topo-edge-label-group"
-                      style={{ transform: `translate(${lx}px, ${ly}px)` }}
+                      style={{
+                        transform: `translate(${lx}px, ${ly}px)`,
+                        // Disable the .3s glide on the very first paint so
+                        // labels appear at their custom-layout midpoints
+                        // directly instead of sliding in from auto-layout
+                        // midpoints over the next 300 ms.
+                        ...(labelsAnim ? null : { transition: 'none' }),
+                      }}
                     >
                       {showLatency && (() => {
                         const latClass = e.segmentLatencyMs < 0 ? 'lat-na' : e.segmentLatencyMs < 80 ? 'lat-ok' : e.segmentLatencyMs < 200 ? 'lat-mid' : 'lat-bad';
