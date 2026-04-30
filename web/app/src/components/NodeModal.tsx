@@ -100,13 +100,24 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   const [maxConnWin, setMaxConnWin] = useState('');
   const [showQuic, setShowQuic] = useState(false);
 
-  // Load CA certs for selector
+  // Load TLS certs for the CA-pinning selector. The "CA" field on a peer
+  // entry is used to validate that peer's TLS handshake — common cases:
+  //   * the peer serves a real CA-signed cert and we pin its CA;
+  //   * the peer serves a self-signed cert (e.g. each hy2scale node's
+  //     auto-generated `default` cert) and we pin THAT leaf as the trust
+  //     anchor.
+  // The first case wants `is_ca=true`. The second is a self-signed leaf
+  // (`is_ca=false`) that the operator imported into TLS specifically so
+  // they can pick it from the dropdown instead of re-pasting PEM into
+  // every peer that talks to that node. Dropping the is_ca filter lets
+  // both flows reach the dropdown — operators are choosing between
+  // "trust this exact cert" and "trust certs signed by this CA".
   const { data: certs } = useQuery({
     queryKey: ['certs'],
     queryFn: () => api.getCerts(),
     enabled: open,
   });
-  const caCerts = (certs || []).filter((c: CertInfo) => c.is_ca);
+  const caCerts = (certs || []) as CertInfo[];
 
   useEffect(() => {
     if (!open) {
@@ -321,10 +332,17 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
 
   const title = editingName ? t('nodes.editPrefix', { name: editingName }) : t('nodes.addTitle');
 
-  // Build CA select options
+  // Build CA select options. Annotate each TLS-list entry with whether
+  // it's a CA cert or a self-signed leaf so the operator picks the right
+  // one — the dropdown otherwise looks identical for both, and a peer
+  // pin against a CA cert vs a leaf cert validates very differently.
   const caOptions = [
     { value: '', label: t('nodes.caNone') },
-    ...caCerts.map(c => ({ value: c.id, label: c.name || c.id })),
+    ...caCerts.map((c) => {
+      const base = c.name || c.id;
+      const tag = c.is_ca ? '[CA]' : '[cert]';
+      return { value: c.id, label: `${base} ${tag}` };
+    }),
     { value: '__manual__', label: t('nodes.caManual') },
   ];
 
