@@ -31,7 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/FrankoonG/hy2scale/main/install.sh 
 自动识别 CPU 架构（`amd64` / `arm64` / `armv7` / `mips64le` /
 `mipsle-softfloat`），从最新 release 下载匹配的 tar 包，把二进制装到
 `/usr/local/bin/hy2scale` 并注册 systemd 服务。重复运行即原地升级。
-固定版本用 `HY2SCALE_VERSION=v1.3.2`；卸载用 `… | sudo sh -s -- --uninstall`。
+固定版本用 `HY2SCALE_VERSION=v1.3.3`；卸载用 `… | sudo sh -s -- --uninstall`。
 
 ### Docker
 
@@ -50,12 +50,20 @@ Bridge 模式（VPN + 代理，不含路由规则）：
 ```bash
 docker run -d --name hy2scale \
   --cap-add NET_ADMIN --cap-add NET_RAW \
+  --device-cgroup-rule="c 10:200 rwm" \
+  --device-cgroup-rule="c 108:0 rwm" \
   -p 5565:5565/tcp -p 5565:5565/udp \
   -p 500:500/udp -p 4500:4500/udp -p 1701:1701/udp -p 51820:51820/udp \
   -v hy2scale-data:/data \
   --restart unless-stopped \
   frankoong/hy2scale:latest
 ```
+
+两条 `--device-cgroup-rule` 分别授予容器对 `/dev/net/tun`（中继包捕获）和
+`/dev/ppp`（L2TP/IPsec 的 PPP 层）的访问权限。少了 `c 108:0 rwm`，L2TP 隧道
+能完成 IKE+ESP 协商，但 pppd 启动后会因无法 open `/dev/ppp` 立即退出，客户端
+会短暂显示「已连接」然后断开。Full 模式不需要这两行，因为 `--privileged`
+默认授予所有设备权限。
 
 打开 `http://<主机>:5565/scale/` — 默认登录 `admin` / `admin`。
 

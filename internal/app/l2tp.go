@@ -257,6 +257,21 @@ func CheckL2TPCapability() (bool, string) {
 			return false, "/dev/ppp not found and mknod failed (missing device or privileges)"
 		}
 	}
+	// /dev/ppp may exist as an inode but still be ungovernable: the device
+	// cgroup blocks open() with EPERM when a containerised runtime hasn't
+	// been granted access to char-major 108. mknod creates the inode but
+	// not the cgroup permission, so a stale Stat-only check passes while
+	// pppd later dies "Couldn't open the /dev/ppp device: Operation not
+	// permitted" — observed end-to-end on iKuai bridge containers and on
+	// any docker run that omits `--device-cgroup-rule="c 108:0 rwm"`.
+	if f, err := os.OpenFile("/dev/ppp", os.O_RDWR, 0); err != nil {
+		if os.IsPermission(err) {
+			return false, "/dev/ppp present but blocked by cgroup — add --device-cgroup-rule=\"c 108:0 rwm\" (or --privileged) to the container runtime"
+		}
+		return false, "/dev/ppp open failed: " + err.Error()
+	} else {
+		f.Close()
+	}
 	// Check if kernel L2TP module is available — xl2tpd needs l2tp_ppp.
 	// On Docker Desktop LinuxKit, this module is missing.
 	if _, err := os.Stat("/proc/net/pppol2tp"); err != nil {
@@ -467,7 +482,8 @@ conn l2tp-psk
 		iptRun("iptables", "-I", "DOCKER-USER", "-d", subnet, "-j", "ACCEPT")
 		iptRun("iptables", "-t", "nat", "-A", "POSTROUTING",
 			"-s", subnet, "-j", "MASQUERADE")
-		go a.runTransparentProxy(l2tpCtx, gateway, proxyPort)
+		a.l2tpWg.Add(1)
+		go func() { defer a.l2tpWg.Done(); a.runTransparentProxy(l2tpCtx, gateway, proxyPort) }()
 	} else {
 		// Compat mode: TUN capture with gvisor netstack (no iptables needed)
 		log.Printf("[l2tp] iptables unavailable, using TUN capture mode (compat)")
@@ -476,7 +492,8 @@ conn l2tp-psk
 			return err
 		}
 		// Start PPP hooks server (for AF_PACKET bridge on ppp interfaces)
-		go a.servePPPHooks(l2tpCtx, gateway, hooksPort)
+		a.l2tpWg.Add(1)
+		go func() { defer a.l2tpWg.Done(); a.servePPPHooks(l2tpCtx, gateway, hooksPort) }()
 	}
 
 	// 9. Start strongswan (shared with IKEv2; auto=add connections load automatically)
@@ -501,11 +518,17 @@ conn l2tp-psk
 // StopL2TP stops the L2TP service.
 func (a *App) StopL2TP() {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.l2tpCancel != nil {
-		a.l2tpCancel()
-		a.l2tpCancel = nil
+	cancel := a.l2tpCancel
+	a.l2tpCancel = nil
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
+	// Wait for every listener goroutine started by StartL2TP to actually
+	// release its socket. Without this, a fast disable→enable cycle hits
+	// "address already in use" on the transparent proxy port because the
+	// previous net.Listen hasn't unwound through ctx.Done()→ln.Close().
+	a.l2tpWg.Wait()
 	// Kill xl2tpd
 	exec.Command("killall", "xl2tpd").Run()
 	// Remove L2TP ipsec connection
@@ -515,8 +538,12 @@ func (a *App) StopL2TP() {
 
 // RestartL2TP stops and restarts L2TP with current config.
 func (a *App) RestartL2TP() error {
+	// Concurrent PUTs on /api/l2tp each spawn an async RestartL2TP — without
+	// this mutex two of them can interleave their Stop/Start, leaving the
+	// previous listener still bound when the second Start tries to net.Listen.
+	a.l2tpRestartMu.Lock()
+	defer a.l2tpRestartMu.Unlock()
 	a.StopL2TP()
-	time.Sleep(500 * time.Millisecond)
 	cfg := a.store.Get()
 	if cfg.L2TP == nil || !cfg.L2TP.Enabled {
 		return nil
@@ -552,8 +579,11 @@ func (a *App) runTransparentProxy(ctx context.Context, gatewayIP string, port in
 	defer ln.Close()
 	log.Printf("[l2tp] transparent proxy on %s", addr)
 
-	// Also serve PPP ip-up/ip-down hooks on HTTP
-	go a.servePPPHooks(ctx, gatewayIP, port+1)
+	// Also serve PPP ip-up/ip-down hooks on HTTP — tracked in the same
+	// waitgroup so StopL2TP doesn't return until both listener sockets
+	// are fully released back to the kernel.
+	a.l2tpWg.Add(1)
+	go func() { defer a.l2tpWg.Done(); a.servePPPHooks(ctx, gatewayIP, port+1) }()
 
 	go func() { <-ctx.Done(); ln.Close() }()
 	for {

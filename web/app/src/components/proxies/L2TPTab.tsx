@@ -51,7 +51,15 @@ export default function L2TPTab({ limited }: { limited?: boolean }) {
     <>
       {isLimited && (
         <div className="hy-warn-banner">
-          {l2tp?.host_network === false ? t('l2tp.warnHostNetwork') : t('l2tp.warnText')}
+          {/* When the backend gives a specific reason
+              (e.g. "/dev/ppp present but blocked by cgroup — add
+              --device-cgroup-rule=…"), show that verbatim. The static
+              i18n strings are misleading once NET_ADMIN/host network
+              are already granted but a different gate (cgroup, kernel
+              module) is still blocking. */}
+          {(l2tp as any)?.reason
+            ? (l2tp as any).reason
+            : l2tp?.host_network === false ? t('l2tp.warnHostNetwork') : t('l2tp.warnText')}
         </div>
       )}
     <Card fill={1} title={t('l2tp.title')}>

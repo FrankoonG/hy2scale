@@ -700,7 +700,7 @@ func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // Version is the application version. Update this on each release.
-const Version = "1.3.2"
+const Version = "1.3.3"
 
 func init() {
 	app.AppVersion = Version
@@ -1156,7 +1156,11 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		if c.Nested {
 			ancestors := selfAncestors(cfg, c.Name)
 			children := filterAncestorPaths(s.getCachedSubPeers(c.Name), ancestors)
-			selfChildren[i].Children = s.filterChildrenByNestedConfig(children, c.Name, cfg, ancestors, pathRates, 0)
+			// parentCumLat=latencyCache[c.Name] is self→c. The cache
+			// holds the cumulative self→c→child for direct children, so
+			// the depth=0 branch in filterChildrenByNestedConfig leaves
+			// them alone; deeper levels (raw one-hop) get +parentCumLat.
+			selfChildren[i].Children = s.filterChildrenByNestedConfig(children, c.Name, cfg, ancestors, pathRates, latencyCache[c.Name], 0)
 		}
 	}
 	sort.Slice(selfChildren, func(i, j int) bool { return selfChildren[i].Name < selfChildren[j].Name })
@@ -1275,7 +1279,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		if tn.Nested && tn.Connected && !tn.Native && !tn.Incompatible && !tn.Conflict && !tn.Unsupported {
 			ancestors := selfAncestors(cfg, name)
 			children := filterAncestorPaths(s.getCachedSubPeers(name), ancestors)
-			tn.Children = s.filterChildrenByNestedConfig(children, name, cfg, ancestors, pathRates, 0)
+			tn.Children = s.filterChildrenByNestedConfig(children, name, cfg, ancestors, pathRates, latencyCache[name], 0)
 		}
 		// Also load children for inbound peers nested under self
 		// (they can have outbound connections visible if nested is enabled)
@@ -1421,6 +1425,14 @@ func (s *Server) assembleDeepTree(cfg app.Config, prefix string, depth int, coun
 			continue // user disabled — drop entirely
 		}
 		out := c // value copy; mutate the local
+		// Latency stays as-is here: this function feeds the
+		// `_relay_list_peers_` response sent to other nodes, and the
+		// inter-node convention is that LatencyMs is one-hop measured
+		// by THIS node toward each child — fetchSubPeersViaStream on
+		// the receiving side adds its own self→prefix to convert.
+		// Mutating to cumulative here would double-count for downstream
+		// consumers. Cumulative-from-self adjustment for OUR own UI is
+		// done in filterChildrenByNestedConfig.
 		*count++
 		if pc, hasPC := cfg.Peers[qkey]; hasPC && pc.Nested {
 			out.Children = s.assembleDeepTree(cfg, qkey, depth+1, count)
@@ -1924,7 +1936,7 @@ func doTruncate(children []topoSubPeer, parentLatency int, selfID string, depth 
 // Path-qualified traffic rates are attached per node so the Nodes UI can
 // attribute relayed bytes to the specific nested descendant they're destined
 // for, not only to the first-hop direct peer that physically carries them.
-func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName string, cfg app.Config, ancestors map[string]bool, pathRates map[string]relay.PeerTraffic, depth int) []topoSubPeer {
+func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName string, cfg app.Config, ancestors map[string]bool, pathRates map[string]relay.PeerTraffic, parentCumLat int, depth int) []topoSubPeer {
 	if len(children) == 0 {
 		return children
 	}
@@ -1955,6 +1967,25 @@ func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName
 			c.TxRate = pr.TxRate
 			c.RxRate = pr.RxRate
 		}
+		// Latency cumulative-from-self adjustment.
+		//
+		// At depth=0 the input slice came from getCachedSubPeers(parent)
+		// which is subPeersCache[parent] — fetchSubPeersViaStream already
+		// pre-added self→parent to each direct child's LatencyMs there,
+		// so values are already cumulative. Don't double-add.
+		//
+		// At depth>=1 the input slice was either pulled from
+		// subPeersCache[parent/grandparent/...] inside the previous
+		// recursion's `c.Children = s.getCachedSubPeers(qualifiedKey)`
+		// branch — which holds RAW one-hop values — or it survived in
+		// c.Children from a remote response that walkAndCache flattened
+		// without adjustment. Either way we have to fold parentCumLat in
+		// here so the list view (and graph segment math) sees a true
+		// cumulative figure for every depth, not just the second hop.
+		if depth >= 1 && c.LatencyMs > 0 && parentCumLat > 0 {
+			c.LatencyMs += parentCumLat
+		}
+		childCumLat := c.LatencyMs
 		if c.Nested {
 			if len(c.Children) == 0 {
 				// Pull from the per-qualified-path cache populated by
@@ -1965,7 +1996,7 @@ func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName
 			}
 			if len(c.Children) > 0 {
 				ancestors[c.Name] = true
-				c.Children = s.filterChildrenByNestedConfig(c.Children, qualifiedKey, cfg, ancestors, pathRates, depth+1)
+				c.Children = s.filterChildrenByNestedConfig(c.Children, qualifiedKey, cfg, ancestors, pathRates, childCumLat, depth+1)
 				delete(ancestors, c.Name)
 			}
 		} else {
@@ -2370,13 +2401,20 @@ func (s *Server) updateSSConfig(w http.ResponseWriter, r *http.Request) {
 // --- L2TP ---
 
 func (s *Server) getL2TPConfig(w http.ResponseWriter, r *http.Request) {
-	capOK, _ := app.CheckL2TPCapability()
+	capOK, capReason := app.CheckL2TPCapability()
 	capable := capOK
 	hostNet := app.CheckHostNetwork()
 	cfg := s.app.Store().Get()
 	result := map[string]any{
 		"capable":      capable,
 		"host_network": hostNet,
+		// Surface the precise reason CheckL2TPCapability turned us down
+		// (cgroup blocking /dev/ppp, l2tp_ppp module missing, NET_ADMIN
+		// not granted, …). The UI used to fall back to a hard-coded
+		// "needs --cap-add NET_ADMIN and --network host" message which
+		// was wrong when both were already granted; with reason exposed
+		// the banner can name the actual gap.
+		"reason": capReason,
 	}
 	if cfg.L2TP != nil {
 		result["listen"] = cfg.L2TP.Listen
@@ -2423,10 +2461,16 @@ func (s *Server) updateL2TPConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getIKEv2Config(w http.ResponseWriter, r *http.Request) {
 	capable := app.CheckIKEv2Capability()
 	hostNet := app.CheckHostNetwork()
+	// Pick up whatever reason CheckCapability returned for transparency —
+	// IKEv2's own capability test is just a bool, but the underlying gate
+	// (NET_ADMIN, xfrm) shares CheckCapability with L2TP and that one
+	// reports a useful message.
+	_, capReason := app.CheckCapability()
 	cfg := s.app.Store().Get()
 	result := map[string]any{
 		"capable":      capable,
 		"host_network": hostNet,
+		"reason":       capReason,
 	}
 	nodeID := cfg.NodeID
 	if cfg.IKEv2 != nil {

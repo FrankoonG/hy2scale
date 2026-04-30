@@ -173,7 +173,11 @@ type App struct {
 	ssListener   net.Listener
 	ssCancel     context.CancelFunc
 	l2tpCancel   context.CancelFunc
+	l2tpWg       sync.WaitGroup // tracks all goroutines spawned by StartL2TP
+	l2tpRestartMu sync.Mutex    // serializes concurrent RestartL2TP
 	ikev2Cancel  context.CancelFunc
+	ikev2Wg      sync.WaitGroup // tracks all goroutines spawned by StartIKEv2
+	ikev2RestartMu sync.Mutex   // serializes concurrent RestartIKEv2
 	usersMu       sync.RWMutex
 	userIndex     map[string]*UserConfig           // username → user (for fast auth lookup)
 	pwConflicted  map[string]map[string]bool       // username → proxy → conflicted

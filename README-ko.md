@@ -32,7 +32,7 @@ CPU 아키텍처(`amd64` / `arm64` / `armv7` / `mips64le` /
 `mipsle-softfloat`)를 자동 감지해 최신 릴리스의 해당 tar 파일을 받고,
 `/usr/local/bin/hy2scale`에 바이너리를 설치한 뒤 systemd 서비스를
 등록합니다. 다시 실행하면 그대로 업그레이드. 버전을 고정하려면
-`HY2SCALE_VERSION=v1.3.2`, 제거하려면 `… | sudo sh -s -- --uninstall`.
+`HY2SCALE_VERSION=v1.3.3`, 제거하려면 `… | sudo sh -s -- --uninstall`.
 
 ### Docker
 
@@ -51,12 +51,21 @@ docker run -d --name hy2scale \
 ```bash
 docker run -d --name hy2scale \
   --cap-add NET_ADMIN --cap-add NET_RAW \
+  --device-cgroup-rule="c 10:200 rwm" \
+  --device-cgroup-rule="c 108:0 rwm" \
   -p 5565:5565/tcp -p 5565:5565/udp \
   -p 500:500/udp -p 4500:4500/udp -p 1701:1701/udp -p 51820:51820/udp \
   -v hy2scale-data:/data \
   --restart unless-stopped \
   frankoong/hy2scale:latest
 ```
+
+두 개의 `--device-cgroup-rule` 행은 컨테이너에 `/dev/net/tun` (릴레이 패킷
+캡처)과 `/dev/ppp` (L2TP/IPsec의 PPP 계층) 접근 권한을 부여합니다.
+`c 108:0 rwm`이 없으면 L2TP 터널이 IKE+ESP 협상까지는 성공하지만 pppd가
+`/dev/ppp`를 열 수 없어 즉시 종료되며, 클라이언트는 잠깐 "연결됨"을
+보였다가 끊어집니다. Full 모드는 `--privileged`가 모든 디바이스를 자동으로
+부여하므로 이 두 줄이 필요하지 않습니다.
 
 `http://<호스트>:5565/scale/` 접속 — 기본 로그인 `admin` / `admin`.
 
