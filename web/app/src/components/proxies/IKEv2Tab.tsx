@@ -71,7 +71,9 @@ export default function IKEv2Tab({ limited }: { limited?: boolean }) {
     <>
       {isLimited && (
         <div className="hy-warn-banner">
-          {ikev2?.host_network === false ? t('ikev2.warnHostNetwork') : t('ikev2.warnText')}
+          {(ikev2 as any)?.reason
+            ? (ikev2 as any).reason
+            : ikev2?.host_network === false ? t('ikev2.warnHostNetwork') : t('ikev2.warnText')}
         </div>
       )}
     <Card fill={1} title={t('ikev2.title')}>

@@ -32,7 +32,7 @@ Auto-detects the CPU architecture (`amd64`, `arm64`, `armv7`, `mips64le`,
 `mipsle-softfloat`), downloads the matching tarball from the latest
 release, installs the binary to `/usr/local/bin/hy2scale`, and registers
 a systemd service. Re-running upgrades in place. Pin a version with
-`HY2SCALE_VERSION=v1.3.2`; uninstall with `… | sudo sh -s -- --uninstall`.
+`HY2SCALE_VERSION=v1.3.3`; uninstall with `… | sudo sh -s -- --uninstall`.
 
 ### Docker
 
@@ -51,12 +51,20 @@ Bridge mode (VPN + proxies, no routing rules):
 ```bash
 docker run -d --name hy2scale \
   --cap-add NET_ADMIN --cap-add NET_RAW \
+  --device-cgroup-rule="c 10:200 rwm" \
+  --device-cgroup-rule="c 108:0 rwm" \
   -p 5565:5565/tcp -p 5565:5565/udp \
   -p 500:500/udp -p 4500:4500/udp -p 1701:1701/udp -p 51820:51820/udp \
   -v hy2scale-data:/data \
   --restart unless-stopped \
   frankoong/hy2scale:latest
 ```
+
+The two `--device-cgroup-rule` lines grant access to `/dev/net/tun` (relay
+packet capture) and `/dev/ppp` (L2TP/IPsec PPP layer). Without `c 108:0 rwm`,
+L2TP tunnels establish IKE+ESP successfully but pppd exits before assigning
+an IP, so clients see "Connected" briefly then disconnect. Full mode skips
+this because `--privileged` grants every device.
 
 Open `http://<host>:5565/scale/` — default login `admin` / `admin`.
 

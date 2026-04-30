@@ -296,7 +296,18 @@ esac
 	os.MkdirAll("/etc/ipsec.d", 0755)
 	os.WriteFile("/etc/ipsec.d/ikev2-updown.sh", []byte(updownScript), 0755)
 
-	// Resolve Local/Remote IDs
+	// Resolve Local/Remote IDs.
+	//
+	// The cert always needs a CN, so we fall back to NodeID for `localID`
+	// (the cert-CN seed). But the explicit-vs-implicit distinction matters
+	// for IKE peer matching: when the operator deliberately sets
+	// cfg.LocalID we want strongswan to publish *that* as our IKE
+	// identity (leftid) so a client with `rightid=<localID>` matches and
+	// `rightid=<wrong>` is rejected. With cfg.LocalID empty, omit the
+	// leftid clause entirely — strongswan then derives the identity from
+	// the cert subject DN, and a client with `rightid=` blank gets the
+	// "accept anything" behaviour the operator opted into.
+	cfgLocalIDExplicit := cfg.LocalID != ""
 	localID := cfg.LocalID
 	if localID == "" {
 		localID = a.store.Get().NodeID
@@ -367,13 +378,45 @@ conn ikev2-psk
 		// Clean up temp cert from TLS store (keep only in ipsec dirs)
 		a.tls.Delete("__ikev2_auto__")
 
+		// leftid policy:
+		//   * cfg.LocalID set → leftid=@<localID>. strongswan publishes
+		//     <localID> as our IKE identity, accepts only clients whose
+		//     `rightid` is empty or matches <localID>, and rejects
+		//     `rightid=<wrong>` with AUTH_FAILED. The cert CN is also
+		//     <localID>, so the cert chain validates the same name.
+		//   * cfg.LocalID empty → leftid=%any. strongswan still proves
+		//     itself with the full cert subject DN, but at the IKE peer-
+		//     config matcher it accepts ANY value the client puts in
+		//     IDr (rightid) — including arbitrary strings, which would
+		//     otherwise fail the implicit DN-vs-string compare. This
+		//     gives operators a clean opt-out from rightid enforcement.
+		// leftid policy:
+		//   * cfg.LocalID set → emit `leftid=@<localID>`. strongswan
+		//     publishes <localID> as our IKE identity; a client whose
+		//     rightid is empty or equals <localID> matches, and any
+		//     other rightid (including typos) gets AUTH_FAILED.
+		//   * cfg.LocalID empty → emit no leftid clause at all.
+		//     strongswan derives the identity from the cert subject DN.
+		//     A client with empty rightid matches (it tells strongswan
+		//     "I don't enforce a specific server name"); a client with
+		//     a non-empty rightid matches only if that rightid happens
+		//     to equal the cert DN — i.e. unset on hy2scale side =
+		//     "rightid must be blank on the client side" in practice.
+		//     strongswan has no wildcard ID syntax that would let us
+		//     advertise "match any IDr the client sends" while still
+		//     having a real cert; `leftid=%any` is parsed as the
+		//     literal FQDN "%any" and does not match arbitrary values.
+		leftIDLine := ""
+		if cfgLocalIDExplicit {
+			leftIDLine = fmt.Sprintf("    leftid=@%s\n", localID)
+		}
 		connConf = fmt.Sprintf(`
 conn ikev2-mschapv2
     keyexchange=ikev2
     auto=add
     type=tunnel
     left=%%any
-    leftcert=ikev2-server.cert.pem
+%s    leftcert=ikev2-server.cert.pem
     leftsendcert=always
     leftsubnet=0.0.0.0/0
     right=%%any
@@ -388,7 +431,7 @@ conn ikev2-mschapv2
     dpddelay=300s
     ike=aes256-sha256-modp2048,aes128-sha256-modp2048!
     esp=aes256-sha256,aes128-sha256!
-`, ipRange, dns)
+`, leftIDLine, ipRange, dns)
 
 		// Generate EAP secrets
 		a.updateEAPSecrets()
@@ -452,7 +495,8 @@ conn ikev2-mschapv2
 			"-s", subnet, "-j", "MASQUERADE")
 		// Write swanctl secrets for native mode (swanctl --load-all reloads secrets)
 		a.writeSwanctlSecrets(cfg)
-		go a.runIKEv2Proxy(ikev2Ctx, gateway, proxyPort, hooksPort, cfg)
+		a.ikev2Wg.Add(1)
+		go func() { defer a.ikev2Wg.Done(); a.runIKEv2Proxy(ikev2Ctx, gateway, proxyPort, hooksPort, cfg) }()
 	} else {
 		// Compat mode: xfrm interface + TUN capture (swanctl with if_id)
 		log.Printf("[ikev2] mode: compat (iptables unavailable → xfrm interface + AF_PACKET bridge + gvisor netstack)")
@@ -488,7 +532,8 @@ esac
 		a.writeSwanctlIKEv2(cfg, localID, remoteID, ipRange, dns)
 
 		// Hooks server for session tracking
-		go a.serveIKEv2Hooks(ikev2Ctx, gateway, hooksPort, cfg)
+		a.ikev2Wg.Add(1)
+		go func() { defer a.ikev2Wg.Done(); a.serveIKEv2Hooks(ikev2Ctx, gateway, hooksPort, cfg) }()
 	}
 
 	ensureStrongswanRunning()
@@ -540,11 +585,16 @@ esac
 // StopIKEv2 stops the IKEv2 service (kills strongswan connections, removes configs).
 func (a *App) StopIKEv2() {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.ikev2Cancel != nil {
-		a.ikev2Cancel()
-		a.ikev2Cancel = nil
+	cancel := a.ikev2Cancel
+	a.ikev2Cancel = nil
+	a.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
+	// Wait for proxy/hooks listener goroutines to release their sockets;
+	// a fast disable→enable cycle would otherwise hit "address already in
+	// use" on the IKEv2 transparent-proxy port.
+	a.ikev2Wg.Wait()
 	// Remove IKEv2 swanctl config and reload
 	os.Remove("/etc/swanctl/conf.d/ikev2.conf")
 	os.Remove("/etc/swanctl/secrets.d/ikev2.conf")
@@ -557,8 +607,9 @@ func (a *App) StopIKEv2() {
 
 // RestartIKEv2 stops and restarts the IKEv2 service with current config.
 func (a *App) RestartIKEv2() error {
+	a.ikev2RestartMu.Lock()
+	defer a.ikev2RestartMu.Unlock()
 	a.StopIKEv2()
-	time.Sleep(500 * time.Millisecond)
 	cfg := a.store.Get()
 	if cfg.IKEv2 == nil || !cfg.IKEv2.Enabled {
 		return nil
@@ -624,15 +675,68 @@ func resolveEAPIdentity(clientVIP string) string {
 	return ""
 }
 
-// appendToIPSecConf appends a conn block to /etc/ipsec.conf.
+// appendToIPSecConf installs a conn block into /etc/ipsec.conf, replacing
+// any pre-existing block whose name (`conn <name>`) matches the one we're
+// installing. This is the only IKEv2-side writer of ipsec.conf, and a fresh
+// PUT /api/ikev2 lands here without going through L2TP's full-file rewrite,
+// so a naive O_APPEND would let stale connection blocks pile up after every
+// reload — including ones with a previous leftid value that strongswan
+// would still match first. We parse the file into top-level sections
+// (`config setup`, `conn <name>`), drop any sections whose name collides
+// with the new block, then append the new one.
 func appendToIPSecConf(connBlock string) {
-	f, err := os.OpenFile("/etc/ipsec.conf", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Printf("[ikev2] failed to append ipsec.conf: %v", err)
-		return
+	existing, _ := os.ReadFile("/etc/ipsec.conf")
+
+	// Pull out the connection name from the new block ("conn xxx" line).
+	newName := ""
+	for _, line := range strings.Split(connBlock, "\n") {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "conn ") {
+			newName = strings.TrimSpace(strings.TrimPrefix(t, "conn "))
+			break
+		}
 	}
-	defer f.Close()
-	f.WriteString(connBlock)
+
+	// Section-aware parse: a section starts on a line that begins (no
+	// leading whitespace) with `config ` or `conn `, and runs until the
+	// next such line. Drop any section named like the one we're about to
+	// install.
+	type section struct{ header, body string }
+	var sections []section
+	var cur section
+	for _, line := range strings.Split(string(existing), "\n") {
+		ls := strings.TrimRight(line, "\r")
+		if strings.HasPrefix(ls, "config ") || strings.HasPrefix(ls, "conn ") {
+			if cur.header != "" || cur.body != "" {
+				sections = append(sections, cur)
+			}
+			cur = section{header: ls}
+		} else {
+			cur.body += line + "\n"
+		}
+	}
+	if cur.header != "" || cur.body != "" {
+		sections = append(sections, cur)
+	}
+
+	var rebuilt strings.Builder
+	for _, s := range sections {
+		if newName != "" && strings.TrimSpace(s.header) == "conn "+newName {
+			continue // dropped — about to be replaced by the new block
+		}
+		if s.header != "" {
+			rebuilt.WriteString(s.header + "\n")
+		}
+		rebuilt.WriteString(s.body)
+	}
+	final := rebuilt.String()
+	if !strings.HasSuffix(final, "\n") && final != "" {
+		final += "\n"
+	}
+	final += connBlock
+	if err := os.WriteFile("/etc/ipsec.conf", []byte(final), 0644); err != nil {
+		log.Printf("[ikev2] failed to write ipsec.conf: %v", err)
+	}
 }
 
 // appendToIPSecSecrets appends a line to ipsec.secrets if not already present.
@@ -669,6 +773,29 @@ var strongswanRunning bool
 func ensureStrongswanRunning() {
 	strongswanOnce.Do(func() {
 		strongswanRunning = true
+		// Pick the kernel-ipsec backend before charon starts. Both
+		// kernel-libipsec (userspace ESP via ipsec0 TUN) and kernel-netlink
+		// (real kernel xfrm) ship `load = yes` by default; whichever plugin
+		// finishes initialising first claims the kernel-ipsec interface and
+		// the other goes idle. kernel-libipsec, which loads first by name
+		// order, does not implement add_sa() for transport mode, so any
+		// L2TP CHILD_SA install fails with "IPsec SA: unsupported mode".
+		//
+		// Native iptables (host or bundled iKuai binary) means we have a
+		// working kernel-netlink + iptables FORWARD path for both tunnel
+		// (IKEv2) and transport (L2TP) connections — kernel-libipsec is
+		// only needed when iptables is unavailable, e.g. a router firmware
+		// that strips the netfilter modules. Gate the plugin accordingly.
+		if testIptablesAvailable() {
+			os.WriteFile("/etc/strongswan.d/charon/kernel-libipsec.conf",
+				[]byte("kernel-libipsec {\n    load = no\n}\n"), 0644)
+			log.Printf("[ipsec] kernel-libipsec disabled (native iptables present, kernel xfrm in use)")
+		} else {
+			// Restore default in case a previous run wrote load=no
+			os.WriteFile("/etc/strongswan.d/charon/kernel-libipsec.conf",
+				[]byte("kernel-libipsec {\n    load = yes\n}\n"), 0644)
+			log.Printf("[ipsec] kernel-libipsec enabled (compat: no native iptables, userspace ESP via ipsec0)")
+		}
 		// Clean stale PID files that survive container restart
 		os.Remove("/var/run/starter.charon.pid")
 		os.Remove("/var/run/charon.pid")
@@ -708,7 +835,10 @@ func (a *App) runIKEv2Proxy(ctx context.Context, gatewayIP string, proxyPort, ho
 	defer ln.Close()
 	log.Printf("[ikev2] transparent proxy on %s", addr)
 
-	go a.serveIKEv2Hooks(ctx, gatewayIP, hooksPort, cfg)
+	// Hooks listener is tracked by the same waitgroup so StopIKEv2 doesn't
+	// return until both listeners have actually released their sockets.
+	a.ikev2Wg.Add(1)
+	go func() { defer a.ikev2Wg.Done(); a.serveIKEv2Hooks(ctx, gatewayIP, hooksPort, cfg) }()
 	go func() { <-ctx.Done(); ln.Close() }()
 
 	for {

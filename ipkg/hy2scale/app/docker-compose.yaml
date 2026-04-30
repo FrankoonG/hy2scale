@@ -12,7 +12,8 @@ services:
       - NET_ADMIN
       - NET_RAW
     device_cgroup_rules:
-      - 'c 10:200 rwm'
+      - 'c 10:200 rwm'   # /dev/net/tun (TUN/TAP for relay packet capture)
+      - 'c 108:0 rwm'    # /dev/ppp (pppd kernel L2TP, required for L2TP/IPsec PPP layer)
     ports:
       - ${HOST_IP}:${APP_PORT_WEB}:5565/tcp
       - ${HOST_IP}:${APP_PORT_HY2}:5565/udp

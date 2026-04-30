@@ -678,6 +678,14 @@ export default function NodesPage() {
               };
               const data = findData(key) || findData(stripped);
               if (!data) return null;
+              // An inbound first-hop peer is one that dialed us — its
+              // configuration lives on the initiator, not on us, so the
+              // Edit modal would have nothing to load and any Save would
+              // either fail or silently overwrite a non-existent client
+              // entry on our side. Suppress the button entirely; bulk
+              // enable/disable on the row still work for the cases (nested
+              // toggle, etc) that ARE locally adjustable.
+              if (data.direction === 'inbound') return null;
               return (
                 <Button
                   size="sm"
