@@ -255,8 +255,20 @@ func (b *streamBridge) RunRelay(appConn net.Conn, mgr *bridgeManager) {
 		}
 
 		// errSource distinguishes stream-side vs app-side failures.
+		// streamSide=true means the relay (QUIC) stream had a TRANSPORT
+		// failure — worth suspending for a rebind. A *clean* stream
+		// close (io.EOF / net.ErrClosed) means the requester is done
+		// with this connection on purpose: app-close propagated through
+		// HUB → relay-stream → us → exit's copyTwoWay → net.Pipe() c2 →
+		// our pipe-end c1 → here as readErr=io.EOF. Treating that as a
+		// transport failure makes RunRelay suspend and wait the full
+		// 90s bridgeTimeout for a rebind that never comes — which is
+		// exactly the "app-close vs relay-close lag" bug. Mark clean
+		// closes as app-side so the if-!streamSide branch terminates
+		// immediately. Real QUIC drops surface as quic.* errors, NOT
+		// io.EOF, so the resilience case is preserved.
 		type errSource struct {
-			streamSide bool // true = relay stream error (recoverable)
+			streamSide bool // true = recoverable relay-stream failure
 		}
 		errCh := make(chan errSource, 2)
 
@@ -273,7 +285,7 @@ func (b *streamBridge) RunRelay(appConn net.Conn, mgr *bridgeManager) {
 					}
 				}
 				if readErr != nil {
-					errCh <- errSource{streamSide: true}
+					errCh <- errSource{streamSide: !isCleanClose(readErr)}
 					return
 				}
 			}
@@ -287,7 +299,7 @@ func (b *streamBridge) RunRelay(appConn net.Conn, mgr *bridgeManager) {
 				nr, readErr := appConn.Read(buf)
 				if nr > 0 {
 					if _, writeErr := stream.Write(buf[:nr]); writeErr != nil {
-						errCh <- errSource{streamSide: true}
+						errCh <- errSource{streamSide: !isCleanClose(writeErr)}
 						return
 					}
 				}
