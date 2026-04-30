@@ -496,6 +496,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // looks like the graph is being reset on page load. Subsequent changes
   // (another session dragging a dot) still animate.
   const firstSnapshotAppliedRef = useRef(false);
+  // Mirrored as state so the auto-fit effect below can wait for it. We
+  // can't fit on auto-layout positions and then have the SSE swap in
+  // custom positions a few ms later — the pan/zoom would be locked on
+  // the auto bbox, leaving the custom layout visibly off-center. The
+  // gate also drives an opacity fade so the auto→custom flash is
+  // hidden during the brief window between mount and first snapshot.
+  const [snapshotApplied, setSnapshotApplied] = useState(false);
   useEffect(() => {
     const token = sessionStorage.getItem('token:' + getBasePath()) || '';
     const url = getBasePath() + '/api/graph-layout/stream?token=' + encodeURIComponent(token);
@@ -640,6 +647,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     }
     const firstApply = !firstSnapshotAppliedRef.current;
     firstSnapshotAppliedRef.current = true;
+    if (firstApply) setSnapshotApplied(true);
     // Diff against current render positions.
     setOverrides((prev) => {
       const next: Record<string, Pos> = { ...prev };
@@ -1187,6 +1195,19 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     return () => svg.removeEventListener('wheel', handler);
   }, []);
 
+  // Fallback for when the SSE stream never delivers (server down, blocked
+  // by a proxy that strips event-stream, layout endpoint unreachable):
+  // after 800 ms with no snapshot, accept the auto-layout positions and
+  // fit on those. Without this the graph would stay invisible (opacity
+  // 0) indefinitely. 800 ms is well past the typical localhost SSE round
+  // trip (sub-50 ms) but short enough that a real outage doesn't hang
+  // the UI for noticeable time.
+  useEffect(() => {
+    if (snapshotApplied) return;
+    const id = window.setTimeout(() => setSnapshotApplied(true), 800);
+    return () => window.clearTimeout(id);
+  }, [snapshotApplied]);
+
   // didFit is set after the auto-fit-on-mount stabilises. Once true,
   // neither the topology-poll position updates (every ~2 s) nor any
   // later SVG resize will steamroll a user-set pan/zoom. Manual Reset
@@ -1225,6 +1246,12 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   useLayoutEffect(() => {
     if (didFit.current) return;
     if (Object.keys(positions).length === 0) return;
+    // Wait for the first remote snapshot (or the 800 ms fallback) before
+    // committing to a fit. Fitting against auto-layout positions and
+    // then having SSE swap in custom positions afterward leaves the
+    // user's saved layout visibly off-center, because didFit locks the
+    // pan/zoom on the auto bbox.
+    if (!snapshotApplied) return;
     const svg = svgRef.current;
     if (!svg) return;
     let prevW = 0, prevH = 0;
@@ -1246,7 +1273,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     const ro = new ResizeObserver(() => tryFit());
     ro.observe(svg);
     return () => ro.disconnect();
-  }, [positions, fitView]);
+  }, [positions, fitView, snapshotApplied]);
 
   const confirm = useConfirm();
   const resetLayout = useCallback(async () => {
@@ -1559,7 +1586,17 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         </label>
       </div>
       <svg ref={svgRef} className="hy-topo-graph-svg" onPointerDown={onPointerDown}>
-        <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
+        {/*
+          Opacity gate: hides the brief auto-layout render before the
+          first SSE snapshot arrives (or the 800 ms fallback fires).
+          Combined with the snapshotApplied gate on the auto-fit effect,
+          this means the user only ever sees the correctly-fitted custom
+          layout — no flash of auto-layout in the wrong viewport.
+        */}
+        <g
+          transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}
+          style={{ opacity: snapshotApplied ? 1 : 0, transition: 'opacity 180ms ease-out' }}
+        >
           {/* Background grid — rendered as real <line> elements in the main
               transformed group (not via <pattern>/<defs>). Dark-mode
               extensions reliably transform strokes on main-tree elements
