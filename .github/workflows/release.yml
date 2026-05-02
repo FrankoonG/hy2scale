@@ -110,15 +110,24 @@ jobs:
   # the user installed and the embedded image runs natively.
   build-docker:
     name: Build Docker + ipkg (${{ matrix.arch }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
+          # amd64 → x86 in user-facing ipkg filename (matches iKuai router
+          # CPU labels). Native amd64 runner.
           - arch: amd64
+            arch_label: x86
             platform: linux/amd64
+            runner: ubuntu-latest
+          # arm64 native runner (ubuntu-24.04-arm) — avoids QEMU emulation
+          # of strongswan + iptables source compiles, cuts the arm64 leg
+          # from ~13min to ~3min.
           - arch: arm64
+            arch_label: arm64
             platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
 
@@ -132,11 +141,6 @@ jobs:
           fi
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "version=${TAG#v}" >> $GITHUB_OUTPUT
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -156,12 +160,14 @@ jobs:
 
       - name: Build Docker image (${{ matrix.platform }})
         run: |
-          # buildx --load brings the cross-built image into the local
-          # docker daemon so subsequent `docker save` works the same way
-          # the legacy single-arch path did. We tag with both
-          # frankoong/hy2scale:<version> (what users see when they
-          # `docker load` the tarball) AND hy2scale:ikuai (what the ipkg
-          # bootstrap expects).
+          # buildx --load brings the built image into the local docker
+          # daemon so subsequent `docker save` works the same way the
+          # legacy single-arch path did. Both runners are native to
+          # their target arch (amd64 on ubuntu-latest, arm64 on
+          # ubuntu-24.04-arm), so the build is fast and --load is the
+          # natural endpoint. Tags: frankoong/hy2scale:<version> (the
+          # name users see when `docker load`-ing the tarball) and
+          # hy2scale:ikuai (the local tag the ipkg bootstrap expects).
           docker buildx build \
             --platform ${{ matrix.platform }} \
             --tag frankoong/hy2scale:${{ steps.ver.outputs.version }} \
@@ -195,14 +201,18 @@ jobs:
           # Embed Docker image (iKuai bootstrap expects hy2scale:ikuai tag).
           docker save hy2scale:ikuai | gzip > ipkg/hy2scale/docker_image.tar.gz
 
-          # Package ipkg with arch suffix
+          # Package ipkg. Filename: hy2scale-<arch>-<version>.ipkg
+          # (arch first, then version) so installers visually parse the
+          # arch immediately and don't mistake a version-suffix for one.
+          # arch_label uses iKuai's CPU naming convention: "x86" for
+          # amd64 routers, "arm64" for aarch64 routers.
           cd ipkg
-          tar czf "hy2scale-${ASSET_VERSION}-${{ matrix.arch }}.ipkg" hy2scale/
+          tar czf "hy2scale-${{ matrix.arch_label }}-${ASSET_VERSION}.ipkg" hy2scale/
 
           # Clean embedded image
           rm -f hy2scale/docker_image.tar.gz
 
-          echo "IPKG_FILE=ipkg/hy2scale-${ASSET_VERSION}-${{ matrix.arch }}.ipkg" >> $GITHUB_ENV
+          echo "IPKG_FILE=ipkg/hy2scale-${{ matrix.arch_label }}-${ASSET_VERSION}.ipkg" >> $GITHUB_ENV
 
       - uses: actions/upload-artifact@v4
         with:
@@ -316,8 +326,8 @@ jobs:
             ### iKuai Package
 
             Pick the package matching your iKuai router's CPU architecture:
-            - `hy2scale-${{ steps.version.outputs.version }}-amd64.ipkg` — for x86 / x86_64 iKuai
-            - `hy2scale-${{ steps.version.outputs.version }}-arm64.ipkg` — for arm64 / aarch64 iKuai
+            - `hy2scale-x86-${{ steps.version.outputs.version }}.ipkg` — for x86 / x86_64 iKuai
+            - `hy2scale-arm64-${{ steps.version.outputs.version }}.ipkg` — for arm64 / aarch64 iKuai
 
             Install via the iKuai web UI (Advanced Apps → App Market → Local Install).
 
