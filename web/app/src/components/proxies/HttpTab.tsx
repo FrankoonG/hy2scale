@@ -19,15 +19,18 @@ export default function HttpTab() {
 
   const http = proxies.find((p) => p.protocol === 'http');
 
+  // Default to "0.0.0.0:8080" so the form is immediately submittable —
+  // see Socks5Tab for the same rationale (empty `listen` either trips
+  // the backend's POST check or silently persists an unrunnable proxy).
   const [enabled, setEnabled] = useState(false);
-  const [listen, setListen] = useState('');
+  const [listen, setListen] = useState('0.0.0.0:8080');
   const [tlsCert, setTlsCert] = useState('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (http) {
       setEnabled(http.enabled);
-      setListen(http.listen || '');
+      setListen(http.listen || '0.0.0.0:8080');
       setTlsCert(http.tls_cert || '');
     }
   }, [http]);

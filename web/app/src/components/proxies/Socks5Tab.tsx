@@ -19,15 +19,22 @@ export default function Socks5Tab() {
 
   const socks5 = proxies.find((p) => p.protocol === 'socks5');
 
+  // Default to "0.0.0.0:1080" so the form is immediately submittable —
+  // an empty `listen` would either get rejected by the backend's
+  // "id, listen required" check (POST) or silently persist an unrunnable
+  // proxy on the update path. Pre-filling the standard SOCKS5 port also
+  // saves the operator from typing it. The useEffect below overwrites
+  // this with the saved listen as soon as the GET /api/proxies query
+  // resolves, so existing-proxy edits still see the real value.
   const [enabled, setEnabled] = useState(false);
-  const [listen, setListen] = useState('');
+  const [listen, setListen] = useState('0.0.0.0:1080');
   const [tlsCert, setTlsCert] = useState('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (socks5) {
       setEnabled(socks5.enabled);
-      setListen(socks5.listen || '');
+      setListen(socks5.listen || '0.0.0.0:1080');
       setTlsCert(socks5.tls_cert || '');
     }
   }, [socks5]);

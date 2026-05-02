@@ -2358,6 +2358,16 @@ func (s *Server) updateProxy(w http.ResponseWriter, r *http.Request) {
 	if pc.Protocol == "" {
 		pc.Protocol = "socks5"
 	}
+	// Reject empty listen on update too — symmetric with addProxy. Without
+	// this check the operator could clear the field, save, and the proxy
+	// would silently persist as enabled-with-no-listen, refusing to bind
+	// on next restart. The frontend defaults to a sane "0.0.0.0:<port>"
+	// per protocol; this guard catches direct-API callers and edge cases
+	// where an empty string slips through.
+	if pc.Listen == "" {
+		http.Error(w, "listen required", 400)
+		return
+	}
 	if err := s.app.UpdateProxy(pc); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
