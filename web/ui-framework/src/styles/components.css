@@ -425,12 +425,16 @@ a.peer-link:hover{text-decoration:underline}
 .hy-topo-edge-label-halo{stroke-width:3;stroke-linejoin:round;fill:none}
 .hy-topo-edge-label{fill:currentColor;stroke:none}
 .hy-topo-edge-label.rate{color:#6b7280}
-/* Direction-tinted rate label: ↑ blue = upload (away from self), ↓ green = download (toward self).
- * Mirrors .stat-up / .stat-down colour conventions used in the list view.
- * Literal hex (not var) per docs/dark-reader-testing.md: DR's transform
- * skips `color: var(--x)` indirection on SVG `fill: currentColor` rules. */
-.hy-topo-edge-label.rate-up{color:#3b82f6}
-.hy-topo-edge-label.rate-down{color:#22c55e}
+/* Direction arrow on the rate label: only the arrow is tinted, the
+ * rate-value text stays neutral grey. ↑ blue = upload (away from self),
+ * ↓ green = download (toward self). Same colour convention as the list
+ * view's .stat-up / .stat-down. Literal hex (not var) per
+ * docs/dark-reader-testing.md: DR's transform skips `color: var(--x)`
+ * indirection on SVG `fill: currentColor` rules. The arrow is rendered
+ * larger than the rate text so it remains legible at the small label
+ * font-size. */
+.hy-topo-edge-label .rate-arrow-up{color:#3b82f6;font-size:13px;font-weight:700}
+.hy-topo-edge-label .rate-arrow-down{color:#22c55e;font-size:13px;font-weight:700}
 .hy-topo-edge-label.lat-ok{color:#22c55e}
 .hy-topo-edge-label.lat-mid{color:#d97706}
 .hy-topo-edge-label.lat-bad{color:#ef4444}
