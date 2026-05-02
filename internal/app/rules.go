@@ -536,7 +536,13 @@ func (e *ruleEngine) applyDomainRule(r RoutingRule) {
 		if domain == "" {
 			continue
 		}
-		ips, err := net.LookupHost(domain)
+		// Routes through the relay when DNSResolver is enabled — keeps the
+		// DNS query out of the host's polluted resolv.conf so we install
+		// real upstream IPs in iptables/ip-rule, not poisoned ones.
+		// Falls back to net.LookupHost when disabled or upstream fails.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ips, err := e.app.ResolveViaExit(ctx, domain, r.ExitVia)
+		cancel()
 		if err != nil {
 			debugLog("[rules] DNS resolve %s: %v", domain, err)
 			continue

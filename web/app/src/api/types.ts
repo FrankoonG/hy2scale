@@ -248,6 +248,20 @@ export interface UISettings {
   // Off by default; when on, peer-relay-delivered admin requests skip the
   // local password / token check. Trust boundary becomes the relay handshake.
   relay_admin_passthrough: boolean;
+  // DNS resolver (relay-routed) — reroutes hy2scale's own internal name
+  // lookups (rules-engine domain rules etc.) through a clean upstream
+  // DNS reachable via the exit, so a polluted local resolv.conf does
+  // not contaminate which IPs land in iptables. Disabled by default;
+  // when off, hy2scale uses net.LookupHost (host's resolv.conf).
+  dns_resolver_enabled: boolean;
+  dns_resolver_upstream: string;                  // e.g. "1.1.1.1:53"
+  dns_resolver_exit_via: string;                  // peer name; empty = same as rule's exit
+  dns_resolver_cache_min_ttl: number;             // seconds, default 30
+  dns_resolver_cache_max_ttl: number;             // seconds, default 3600
+  dns_resolver_cache_size: number;                // entries, default 1024
+  dns_resolver_negative_ttl: number;              // seconds, default 30
+  dns_resolver_query_timeout_ms: number;          // ms, default 3000
+  dns_resolver_refresh_interval_sec: number;      // seconds, default 60
 }
 
 // ===== Online Update =====
