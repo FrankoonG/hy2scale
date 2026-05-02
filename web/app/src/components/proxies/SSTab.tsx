@@ -11,15 +11,18 @@ export default function SSTab() {
 
   const { data: ss } = useQuery({ queryKey: ['ss'], queryFn: api.getSS });
 
+  // Default to "0.0.0.0:8388" so the form is submittable on a fresh
+  // install — same rationale as Socks5Tab/HttpTab: an empty listen
+  // would silently persist an unrunnable proxy.
   const [enabled, setEnabled] = useState(false);
-  const [listen, setListen] = useState('');
+  const [listen, setListen] = useState('0.0.0.0:8388');
   const [method, setMethod] = useState('aes-256-gcm');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (ss) {
       setEnabled(ss.enabled);
-      setListen(ss.listen || '');
+      setListen(ss.listen || '0.0.0.0:8388');
       setMethod(ss.method || 'aes-256-gcm');
     }
   }, [ss]);
