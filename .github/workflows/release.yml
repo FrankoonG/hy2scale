@@ -165,15 +165,38 @@ jobs:
           # legacy single-arch path did. Both runners are native to
           # their target arch (amd64 on ubuntu-latest, arm64 on
           # ubuntu-24.04-arm), so the build is fast and --load is the
-          # natural endpoint. Tags: frankoong/hy2scale:<version> (the
-          # name users see when `docker load`-ing the tarball) and
-          # hy2scale:ikuai (the local tag the ipkg bootstrap expects).
+          # natural endpoint. Three tags:
+          #   frankoong/hy2scale:<version>           (legacy: same name
+          #                                           ops see when they
+          #                                           docker load the
+          #                                           offline tarball)
+          #   frankoong/hy2scale:<version>-<arch>    (per-arch tag pushed
+          #                                           to Docker Hub; the
+          #                                           publish-manifest
+          #                                           job assembles these
+          #                                           into a multi-arch
+          #                                           manifest)
+          #   hy2scale:ikuai                         (local tag the ipkg
+          #                                           bootstrap expects)
           docker buildx build \
             --platform ${{ matrix.platform }} \
             --tag frankoong/hy2scale:${{ steps.ver.outputs.version }} \
+            --tag frankoong/hy2scale:${{ steps.ver.outputs.version }}-${{ matrix.arch }} \
             --tag hy2scale:ikuai \
             --load \
             .
+
+      - name: Login to Docker Hub
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push per-arch image to Docker Hub
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        run: |
+          docker push frankoong/hy2scale:${{ steps.ver.outputs.version }}-${{ matrix.arch }}
 
       - name: Export Docker image
         run: |
@@ -354,25 +377,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ─── Push multi-arch image to Docker Hub ─────────────────────
-  # Independent of build-docker (which produces offline tarballs +
-  # ipkg). This job does a fresh buildx build with --push so a single
-  # multi-arch manifest lands on Hub. amd64 builds native; arm64 uses
-  # QEMU emulation registered by docker/setup-qemu-action.
-  #
-  # Auth: DOCKERHUB_USERNAME + DOCKERHUB_TOKEN repo secrets. Use a
-  # Docker Hub access token (Read+Write+Delete), never the account
-  # password. Token is masked in logs by GitHub Actions.
-  publish-dockerhub:
-    name: Push frankoong/hy2scale to Docker Hub
+  # ─── Glue per-arch Docker Hub tags into a multi-arch manifest ───
+  # build-docker already pushed `frankoong/hy2scale:<version>-amd64`
+  # and `frankoong/hy2scale:<version>-arm64` from their respective
+  # native runners. We just create + push the multi-arch manifest
+  # (and `:latest` for finalised tags) — no rebuild, ~20s total.
+  publish-manifest:
+    name: Publish multi-arch manifest to Docker Hub
+    needs: build-docker
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Resolve version + tags
+      - name: Resolve version
         id: ver
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -380,32 +398,34 @@ jobs:
           else
             TAG="${GITHUB_REF_NAME}"
           fi
-          VER="${TAG#v}"
-          TAGS="frankoong/hy2scale:${VER}"
-          # Stamp :latest only on a finalised tag (no -rc / -dev / etc.).
-          case "$VER" in
-            *-*) ;;
-            *)   TAGS="${TAGS},frankoong/hy2scale:latest" ;;
-          esac
-          echo "version=${VER}" >> $GITHUB_OUTPUT
-          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
-          echo "Pushing tags: ${TAGS}"
-
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
 
       - uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push (linux/amd64 + linux/arm64)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.ver.outputs.tags }}
-          # Skip provenance/SBOM attachments — they create extra
-          # sha-only artifacts on Hub that clutter the tag list.
-          provenance: false
+      - name: Create + push manifest(s)
+        run: |
+          set -e
+          VER="${{ steps.ver.outputs.version }}"
+          IMG="frankoong/hy2scale"
+
+          # Multi-arch manifest under the version tag.
+          docker manifest create "${IMG}:${VER}" \
+            --amend "${IMG}:${VER}-amd64" \
+            --amend "${IMG}:${VER}-arm64"
+          docker manifest push "${IMG}:${VER}"
+
+          # Stamp :latest only on a finalised tag (no -rc / -dev / etc.).
+          case "$VER" in
+            *-*)
+              echo "Pre-release ${VER} — skipping :latest"
+              ;;
+            *)
+              docker manifest create "${IMG}:latest" \
+                --amend "${IMG}:${VER}-amd64" \
+                --amend "${IMG}:${VER}-arm64"
+              docker manifest push "${IMG}:latest"
+              ;;
+          esac
