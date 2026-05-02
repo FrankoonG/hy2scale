@@ -4,17 +4,26 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Modal, Button, Input, PasswordInput, Toggle, FormGroup, FormGrid, Tabs, TabPanel, useToast } from '@hy2scale/ui';
 import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from './ExitPathList';
 import * as api from '@/api';
+import type { UserConfig } from '@/api';
 import { PROXY_REGISTRY } from '@/config/proxyRegistry';
 import { useNodeStore } from '@/store/node';
 
 interface Props {
   open: boolean;
   onClose: () => void;
-  editingId: string | null;
+  // The user being edited, or null when creating a new one. Pass the
+  // object directly rather than an id — the previous id-based shape
+  // re-fetched the user list inside the modal effect, which raced
+  // when the operator opened a modal while a previous fetch was
+  // still in flight (state would briefly show the previous user's
+  // exit_via, then snap to the right value once the fetch landed).
+  // The page already has the list cached + refetched every 5 s, so
+  // the object it holds is fresh enough.
+  editing: UserConfig | null;
   animateFrom?: { x: number; y: number };
 }
 
-export default function UserModal({ open, onClose, editingId, animateFrom }: Props) {
+export default function UserModal({ open, onClose, editing, animateFrom }: Props) {
   const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -36,26 +45,22 @@ export default function UserModal({ open, onClose, editingId, animateFrom }: Pro
   useEffect(() => {
     if (!open) return;
     setTab('general');
-    if (!editingId) {
+    if (!editing) {
       setUsername(''); setPassword(''); setProxyPasswords({});
       setProxyDisabled(new Set());
       setExitPath({ paths: [''], mode: '' });
       setTrafficLimit(''); setExpiryDate(''); setEnabled(true);
       return;
     }
-    api.getUsers().then((users) => {
-      const u = users.find((u) => u.id === editingId);
-      if (!u) return;
-      setUsername(u.username);
-      setPassword(u.password);
-      setProxyPasswords(u.proxy_passwords || {});
-      setProxyDisabled(new Set(u.proxy_disabled || []));
-      setExitPath(apiToExitPath(u.exit_via, u.exit_paths, u.exit_mode));
-      setTrafficLimit(u.traffic_limit > 0 ? String(u.traffic_limit / 1073741824) : '');
-      setExpiryDate(u.expiry_date || '');
-      setEnabled(u.enabled);
-    });
-  }, [open, editingId]);
+    setUsername(editing.username);
+    setPassword(editing.password);
+    setProxyPasswords(editing.proxy_passwords || {});
+    setProxyDisabled(new Set(editing.proxy_disabled || []));
+    setExitPath(apiToExitPath(editing.exit_via, editing.exit_paths, editing.exit_mode));
+    setTrafficLimit(editing.traffic_limit > 0 ? String(editing.traffic_limit / 1073741824) : '');
+    setExpiryDate(editing.expiry_date || '');
+    setEnabled(editing.enabled);
+  }, [open, editing]);
 
   const handleSubmit = async () => {
     if (!username || !password) {
@@ -90,8 +95,8 @@ export default function UserModal({ open, onClose, editingId, animateFrom }: Pro
     };
 
     try {
-      if (editingId) {
-        await api.updateUser(editingId, data);
+      if (editing) {
+        await api.updateUser(editing.id, data);
         toast.success(t('users.updated', { name: username }));
       } else {
         await api.createUser(data);
@@ -107,7 +112,7 @@ export default function UserModal({ open, onClose, editingId, animateFrom }: Pro
     }
   };
 
-  const title = editingId ? t('users.editPrefix', { name: username }) : t('users.addTitle');
+  const title = editing ? t('users.editPrefix', { name: username }) : t('users.addTitle');
 
   const updateProxyPw = (key: string, val: string) =>
     setProxyPasswords((prev) => ({ ...prev, [key]: val }));

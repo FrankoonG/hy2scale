@@ -330,7 +330,7 @@ export default function UsersPage() {
       <UserModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        editingId={editingId}
+        editing={editingId ? users.find((u) => u.id === editingId) || null : null}
         animateFrom={clickPos}
       />
 

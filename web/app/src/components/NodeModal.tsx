@@ -127,22 +127,32 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
     }
     setAddrError('');
     setNameError('');
+    // Reset every field to defaults synchronously, regardless of whether
+    // we're adding or editing. For edit, the in-flight getClients() will
+    // overwrite with the target's values once it resolves; until then the
+    // form is blank instead of showing the previous edit target's
+    // exit_via / password / etc. Without this, switching from peer A to
+    // peer B would briefly render A's data — the bug pattern this fixes
+    // also showed up in UserModal's exit_via column.
+    setName(editingName || '');
+    setAddrItems([{ id: addrNextId++, host: '', port: '' }]);
+    setPassword(''); setFastOpen(false); setBrutal(false); setBbrProfile('');
+    setMaxTx(''); setMaxRx('');
+    setSni(''); setInsecure(true);
+    setCaSource(''); setCaManual('');
+    setInitStreamWin(''); setMaxStreamWin('');
+    setInitConnWin(''); setMaxConnWin('');
+    setShowQuic(false);
     if (!editingName) {
-      // Reset for add
-      setName('');
-      setAddrItems([{ id: addrNextId++, host: '', port: '' }]);
-      setPassword(''); setFastOpen(false); setBrutal(false); setBbrProfile('');
-      setMaxTx(''); setMaxRx('');
-      setSni(''); setInsecure(true);
-      setCaSource(''); setCaManual('');
-      setInitStreamWin(''); setMaxStreamWin('');
-      setInitConnWin(''); setMaxConnWin('');
-      setShowQuic(false);
       return;
     }
-    setName(editingName);
-    // Fetch client data
+    // cancelled flag closes over per-effect-run scope; when the
+    // operator switches edit targets mid-fetch, the previous run's
+    // cleanup sets it true so its late-resolving response is dropped
+    // instead of clobbering the new target's just-rendered defaults.
+    let cancelled = false;
     api.getClients().then((clients) => {
+      if (cancelled) return;
       const c = clients.find((cl) => cl.name === editingName);
       if (!c) return;
       const addrs = c.addrs && c.addrs.length ? c.addrs : (c.addr ? [c.addr] : ['']);
@@ -176,6 +186,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       const hasQuic = !!(c.init_stream_window || c.max_stream_window || c.init_conn_window || c.max_conn_window);
       setShowQuic(hasQuic);
     });
+    return () => { cancelled = true; };
   }, [open, editingName]);
 
   // Sync connection mode when address count changes

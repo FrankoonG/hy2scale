@@ -31,10 +31,14 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
   const { t } = useTranslation();
   const { exitPaths } = useExitPaths();
 
-  // Items are the source of truth for the form. Initial state is captured from
-  // value.paths at mount time. This component is consumed inside a Modal that
-  // unmounts on close, so a fresh mount always picks up the latest external
-  // value via the initializer — no render-phase sync needed.
+  // Items are the per-row form state. The earlier assumption — that
+  // the consuming Modal unmounts on close, giving a fresh mount with
+  // the right initial value — was wrong: the Modal stays mounted and
+  // toggles open=false, so this component's items would persist across
+  // user switches in UserModal (and rule switches in RulesPage). The
+  // sync-from-value effect below resyncs items whenever the parent
+  // hands us a different value than the one we last emitted — which
+  // is exactly the "operator opened a different row" case.
   const [items, setItems] = useState<PathItem[]>(() => toItems(value.paths.length > 0 ? value.paths : ['']));
   // addPath/removePath need to drive mode transitions alongside items.
   // Stash the desired mode here and let the post-commit effect apply it.
@@ -45,6 +49,21 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
   }));
 
   const mode = value.mode;
+
+  // External-value sync: if `value` differs from what we last emitted,
+  // the parent assigned a new value (e.g. UserModal swapped editing
+  // target). Pull it into items so the rendered rows reflect the new
+  // user. lastEmittedRef is updated here too so the emit-effect that
+  // fires immediately after setItems sees a matching signature and
+  // short-circuits — no echo back to the parent, no loop.
+  useEffect(() => {
+    const incomingPaths = value.paths.length > 0 ? value.paths : [''];
+    const incomingSig = JSON.stringify({ paths: incomingPaths, mode: value.mode });
+    if (incomingSig !== lastEmittedRef.current) {
+      lastEmittedRef.current = incomingSig;
+      setItems(toItems(incomingPaths));
+    }
+  }, [value]);
 
   // Emit AFTER commit, never inside a setItems updater. Mirrors the TargetList
   // fix — calling parent setState from inside an updater races with concurrent
