@@ -95,8 +95,8 @@ export default function SettingsPage() {
   const [nestedExpanded, setNestedExpanded] = useState(false);
   const [relayPassthrough, setRelayPassthrough] = useState(false);
   // DNS resolver (relay-routed) — see UISettings docs.
+  // Upstream list reuses the `dns` field above; no separate state.
   const [dnsResolverEnabled, setDnsResolverEnabled] = useState(false);
-  const [dnsResolverUpstream, setDnsResolverUpstream] = useState('');
   const [dnsResolverCacheTtl, setDnsResolverCacheTtl] = useState('300');
   const [dnsResolverNegativeTtl, setDnsResolverNegativeTtl] = useState('30');
   const [dnsResolverCacheSize, setDnsResolverCacheSize] = useState('1024');
@@ -137,7 +137,6 @@ export default function SettingsPage() {
       setMaxFetchFanOut(String(settings.max_fetch_fan_out || 8));
       setRelayPassthrough(!!settings.relay_admin_passthrough);
       setDnsResolverEnabled(!!settings.dns_resolver_enabled);
-      setDnsResolverUpstream(settings.dns_resolver_upstream || '');
       setDnsResolverCacheTtl(String(settings.dns_resolver_cache_ttl || 300));
       setDnsResolverNegativeTtl(String(settings.dns_resolver_negative_ttl || 30));
       setDnsResolverCacheSize(String(settings.dns_resolver_cache_size || 1024));
@@ -178,8 +177,9 @@ export default function SettingsPage() {
         // PUT handler. Cache is purged on save so a new upstream takes
         // effect on the next ResolveViaExit call. Note: there is no
         // global "DNS exit" — each rule's DNS rides its own exit_via.
+        // Upstream list comes from the `dns` field above; the resolver
+        // shares it with VPN-client DNS push (one operator knob).
         dns_resolver_enabled: dnsResolverEnabled,
-        dns_resolver_upstream: dnsResolverUpstream,
         dns_resolver_cache_ttl: parseInt(dnsResolverCacheTtl) || 300,
         dns_resolver_negative_ttl: parseInt(dnsResolverNegativeTtl) || 30,
         dns_resolver_cache_size: parseInt(dnsResolverCacheSize) || 1024,
@@ -360,12 +360,8 @@ export default function SettingsPage() {
                       />
                     </FormGroup>
 
-                    {/* DNS resolver (relay-routed) — collapsible cluster of
-                        knobs sitting under the plain DNS field. The DNS field
-                        above only feeds VPN clients (IKEv2/L2TP push); this
-                        section is what hy2scale itself uses for internal
-                        domain lookups (rules engine etc.). All hot-reloadable
-                        on Save — see app.ApplyDNSResolver. */}
+                    {/* DNS resolver section — hot-reloaded on Save via
+                        app.ApplyDNSResolver. Default-on; see wiki. */}
                     <div
                       className="section-divider"
                       onClick={() => setDnsResolverExpanded(!dnsResolverExpanded)}
@@ -382,9 +378,6 @@ export default function SettingsPage() {
                         </div>
                         <FormGroup label={t('settings.dnsResolverEnabled')}>
                           <Toggle checked={dnsResolverEnabled} onChange={(e) => setDnsResolverEnabled(e.target.checked)} />
-                        </FormGroup>
-                        <FormGroup label={t('settings.dnsResolverUpstream')}>
-                          <Input value={dnsResolverUpstream} onChange={(e) => setDnsResolverUpstream(e.target.value)} placeholder="1.1.1.1:53" />
                         </FormGroup>
                         <FormGroup label={t('settings.dnsResolverCacheTtl')}>
                           <Input type="number" min={0} max={86400} value={dnsResolverCacheTtl} onChange={(e) => setDnsResolverCacheTtl(e.target.value)} suffix="s" />

@@ -163,15 +163,19 @@ type Config struct {
 // is just a TCP/53 connection forwarded by the relay to the upstream
 // resolver, so this works against any hy2-compatible peer including
 // vanilla hy2 server. No new protocol added.
+//
+// Upstream resolver list is NOT a field here — it reuses the top-level
+// `cfg.DNS` (also used for VPN-client DNS push). Same comma-separated
+// list, port :53 implied. One config knob serves both VPN clients and
+// hy2scale's own lookups.
 type DNSResolverConfig struct {
-	// Enabled turns the resolver on. When false, hy2scale uses
-	// net.LookupHost (host's /etc/resolv.conf).
-	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	// Upstream is the DNS server hy2scale queries via TCP/53. Default
-	// "1.1.1.1:53". Use plain `host:port`; if `host` is itself a name,
-	// it must be resolvable LOCALLY at startup (chicken-and-egg). Pin
-	// to an IP literal in production.
-	Upstream string `yaml:"upstream,omitempty" json:"upstream,omitempty"`
+	// Enabled turns the resolver on. *bool so we can distinguish three
+	// states: nil (config field absent → default ENABLED), explicit
+	// true, explicit false. Defaulting nil to enabled means upgrades
+	// from 1.3.3 (which had no `dns_resolver` section) and fresh
+	// installs both get the safer relay-routed path; only operators
+	// who explicitly turned it off keep their off state.
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	// CacheTTL is how long an answer stays cached (seconds). Default
 	// 300. Fixed window — Go's stdlib resolver path doesn't surface
 	// the upstream's per-record TTL, so we use one operator-tunable
@@ -186,6 +190,14 @@ type DNSResolverConfig struct {
 	// QueryTimeoutMs bounds a single upstream query (milliseconds).
 	// Default 3000.
 	QueryTimeoutMs int `yaml:"query_timeout_ms,omitempty" json:"query_timeout_ms,omitempty"`
+}
+
+// IsEnabled returns the effective Enabled value: nil pointer = default
+// true (resolver is on out of the box). Use this everywhere instead of
+// dereferencing c.Enabled directly so the default-on semantic stays in
+// one place.
+func (c DNSResolverConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 // GraphLayoutPos stores a single node's coordinates in the topology graph.

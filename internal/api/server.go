@@ -618,8 +618,11 @@ func (s *Server) getUISettings(w http.ResponseWriter, r *http.Request) {
 		// Off by default: relay-delivered admin requests still need a token.
 		"relay_admin_passthrough": cfg.RelayAdminPassthrough,
 		// DNS resolver (relay-routed). Defaults baked into app.dnsResolverDefaults.
-		"dns_resolver_enabled":          dr.Enabled,
-		"dns_resolver_upstream":         dr.Upstream,
+		// Upstream resolver list reuses the top-level `dns` field above —
+		// no separate knob. Enabled exposes the *effective* value: nil
+		// pointer in config defaults to true so fresh installs and
+		// 1.3.3 → 1.3.4 upgrades both ship with the resolver on.
+		"dns_resolver_enabled":          dr.IsEnabled(),
 		"dns_resolver_cache_ttl":        dr.CacheTTL,
 		"dns_resolver_negative_ttl":     dr.NegativeTTL,
 		"dns_resolver_cache_size":       dr.CacheSize,
@@ -642,12 +645,13 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 		MaxFetchFanOut   *int    `json:"max_fetch_fan_out"`
 		RelayAdminPassthrough *bool `json:"relay_admin_passthrough"`
 		// DNS resolver (relay-routed) — see app.DNSResolverConfig docs.
-		DNSResolverEnabled        *bool   `json:"dns_resolver_enabled"`
-		DNSResolverUpstream       *string `json:"dns_resolver_upstream"`
-		DNSResolverCacheTTL       *int    `json:"dns_resolver_cache_ttl"`
-		DNSResolverNegativeTTL    *int    `json:"dns_resolver_negative_ttl"`
-		DNSResolverCacheSize      *int    `json:"dns_resolver_cache_size"`
-		DNSResolverQueryTimeoutMs *int    `json:"dns_resolver_query_timeout_ms"`
+		// No separate upstream knob: the resolver uses the top-level
+		// `dns` field above, same as VPN-client DNS push does.
+		DNSResolverEnabled        *bool `json:"dns_resolver_enabled"`
+		DNSResolverCacheTTL       *int  `json:"dns_resolver_cache_ttl"`
+		DNSResolverNegativeTTL    *int  `json:"dns_resolver_negative_ttl"`
+		DNSResolverCacheSize      *int  `json:"dns_resolver_cache_size"`
+		DNSResolverQueryTimeoutMs *int  `json:"dns_resolver_query_timeout_ms"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), 400)
@@ -693,10 +697,10 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 			c.RelayAdminPassthrough = *body.RelayAdminPassthrough
 		}
 		if body.DNSResolverEnabled != nil {
-			c.DNSResolver.Enabled = *body.DNSResolverEnabled
-		}
-		if body.DNSResolverUpstream != nil {
-			c.DNSResolver.Upstream = *body.DNSResolverUpstream
+			// Store as *bool so a future GET keeps round-tripping the
+			// explicit choice; never collapses back to "unset → default".
+			v := *body.DNSResolverEnabled
+			c.DNSResolver.Enabled = &v
 		}
 		if body.DNSResolverCacheTTL != nil {
 			c.DNSResolver.CacheTTL = *body.DNSResolverCacheTTL
@@ -712,10 +716,15 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 		}
 	})
 	// Hot-reload resolver snapshot on any DNS-resolver field touch +
-	// purge cache so the new upstream takes effect on next call.
-	resolverTouched := body.DNSResolverEnabled != nil || body.DNSResolverUpstream != nil ||
+	// purge cache so the new config takes effect on next call.
+	// `body.DNS` is included because the resolver now reads its
+	// upstream list from cfg.DNS — a DNS field save invalidates
+	// cached `<exit>/<name>` entries that may have answered via the
+	// old upstream.
+	resolverTouched := body.DNSResolverEnabled != nil ||
 		body.DNSResolverCacheTTL != nil || body.DNSResolverNegativeTTL != nil ||
-		body.DNSResolverCacheSize != nil || body.DNSResolverQueryTimeoutMs != nil
+		body.DNSResolverCacheSize != nil || body.DNSResolverQueryTimeoutMs != nil ||
+		body.DNS != nil
 	if resolverTouched {
 		app.ApplyDNSResolver(s.app.Store().Get().DNSResolver)
 	}
