@@ -58,8 +58,18 @@ interface GraphEdge {
   to: string;               // dialee side
   directionKnown: boolean;
   disabled: boolean;
-  /** Current tx+rx in bytes/sec (updated every topology poll). */
-  currentRate: number;
+  /** Bytes/sec flowing from `to` toward `from` — i.e., into self when
+   *  the edge points away from self. Sourced from the deeper endpoint's
+   *  `n.tx_rate` during the topology walk. The mid-edge label shows
+   *  whichever of {txRate, rxRate} is currently dominant, with a
+   *  direction arrow to indicate which way; the edge thickness uses
+   *  max(txRate, rxRate) so a one-way flow doesn't look thinner than a
+   *  same-aggregate balanced flow. */
+  txRate: number;
+  /** Bytes/sec flowing from `from` toward `to` — i.e., away from self
+   *  when the edge points away from self. Sourced from the deeper
+   *  endpoint's `n.rx_rate`. */
+  rxRate: number;
   /** Configured bandwidth ceiling for this edge (bytes/sec). Set when
    *  EITHER endpoint reports `max_rate` from cfg.Clients (`MaxTx/MaxRx`).
    *  When non-zero, edgeWidth scales by this instead of the observed
@@ -272,7 +282,7 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
     }
   }
 
-  function addEdge(a: string, b: string, direction: string | undefined, disabled: boolean, rate: number, segmentLatencyMs: number, configuredMaxRate: number) {
+  function addEdge(a: string, b: string, direction: string | undefined, disabled: boolean, txRate: number, rxRate: number, segmentLatencyMs: number, configuredMaxRate: number) {
     if (a === b) return;
     // Directed keying: an edge represents a specific dialer→dialee TCP link.
     // - outbound: parent dialed child → key `a→b`
@@ -288,12 +298,13 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
     }
     const existing = edges.get(ekey);
     if (!existing) {
-      const e: GraphEdge = { key: ekey, from, to, directionKnown, disabled, currentRate: rate, configuredMaxRate, segmentLatencyMs };
+      const e: GraphEdge = { key: ekey, from, to, directionKnown, disabled, txRate, rxRate, configuredMaxRate, segmentLatencyMs };
       edges.set(ekey, e);
       const na = nodes.get(a); if (na) na.degree++;
       const nb = nodes.get(b); if (nb) nb.degree++;
     } else {
-      if (rate > existing.currentRate) existing.currentRate = rate;
+      if (txRate > existing.txRate) existing.txRate = txRate;
+      if (rxRate > existing.rxRate) existing.rxRate = rxRate;
       if (configuredMaxRate > existing.configuredMaxRate) existing.configuredMaxRate = configuredMaxRate;
       if (disabled) existing.disabled = true;
       // keep first-visited segment latency
@@ -310,7 +321,10 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
       // anything deeper is a discovered descendant and stays read-only.
       addOrMergeNode(n, depth, qpath, editableRoot && depth === 1);
       if (parentKey) {
-        const rate = (n.tx_rate || 0) + (n.rx_rate || 0);
+        // tx/rx are stored separately on the edge — see GraphEdge.txRate/rxRate
+        // for the directional semantics. Mid-edge label picks the dominant one.
+        const txRate = n.tx_rate || 0;
+        const rxRate = n.rx_rate || 0;
         const childLat = n.latency_ms;
         // Segment latency: cumulative at child minus cumulative at parent.
         // When either is unknown (0 = not measured, -1 = offline) fall back
@@ -333,7 +347,7 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
         } else if (childLat === -1) {
           segLat = -1;
         }
-        addEdge(parentKey, keyOf(n), n.direction, !!n.disabled, rate, segLat, n.max_rate || 0);
+        addEdge(parentKey, keyOf(n), n.direction, !!n.disabled, txRate, rxRate, segLat, n.max_rate || 0);
       }
       if (n.children && n.children.length > 0) {
         walk(n.children, keyOf(n), n.latency_ms || 0, depth + 1, qpath, false);
@@ -437,8 +451,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     let dirty = false;
     edges.forEach((e) => {
       const prev = maxByEdgeRef.current.get(e.key) || 0;
-      if (e.currentRate > prev) {
-        maxByEdgeRef.current.set(e.key, e.currentRate);
+      const peak = Math.max(e.txRate, e.rxRate);
+      if (peak > prev) {
+        maxByEdgeRef.current.set(e.key, peak);
         dirty = true;
       }
     });
@@ -1395,8 +1410,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       const curNodes = nodesRef.current;
       curEdges.forEach((e) => {
         if (!e.directionKnown) return;
-        const t = Math.min(1, e.currentRate / denom);
-        const target = e.currentRate > 0
+        const peak = Math.max(e.txRate, e.rxRate);
+        const t = Math.min(1, peak / denom);
+        const target = peak > 0
           ? BASE_SPEED + t * (MAX_SPEED - BASE_SPEED)
           : IDLE_SPEED;
         const state = flowStateRef.current.get(e.key) || { phase: 0, speed: IDLE_SPEED };
@@ -1698,7 +1714,11 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             const toOffEarly = nodes.get(e.to)?.offline;
             const edgeReachable = !e.disabled && !fromOffEarly && !toOffEarly && e.segmentLatencyMs >= 0;
             const showLatency = edgeReachable && e.segmentLatencyMs !== 0 && screenLen > 60;
-            const showRate = edgeReachable && screenLen > 110;
+            // Suppress the rate label entirely on idle edges. Showing
+            // "↓ 0 B/s" would be honest but visually noisy on a topology
+            // dominated by quiet links — better to render nothing and let
+            // the (admittedly non-zero) thickness convey "alive but idle".
+            const showRate = edgeReachable && screenLen > 110 && (e.txRate > 0 || e.rxRate > 0);
             const width = edgeWidth(e);
 
             // Path highlight animation: all edges on the active path go
@@ -1836,12 +1856,28 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                           </g>
                         );
                       })()}
-                      {showRate && (
-                        <g>
-                          <HaloText x={0} y={11} stroke={surfaceColor}>{fmtRate(e.currentRate)}</HaloText>
-                          <text x={0} y={11} textAnchor="middle" className="hy-topo-edge-label rate">{fmtRate(e.currentRate)}</text>
-                        </g>
-                      )}
+                      {showRate && (() => {
+                        // Pick the dominant direction: tx = traffic flowing
+                        // TOWARD self (download, ↓ green), rx = traffic flowing
+                        // AWAY from self (upload, ↑ blue). Same colour convention
+                        // as the list view's .stat-up / .stat-down. Showing both
+                        // simultaneously crowded the label and was hard to read,
+                        // so we surface only the larger value with a direction
+                        // arrow as a visual cue. Tie → tx (download).
+                        const tx = e.txRate || 0;
+                        const rx = e.rxRate || 0;
+                        const isDown = tx >= rx;
+                        const value = isDown ? tx : rx;
+                        const arrow = isDown ? '↓' : '↑';
+                        const cls = isDown ? 'rate-down' : 'rate-up';
+                        const text = arrow + ' ' + fmtRate(value);
+                        return (
+                          <g>
+                            <HaloText x={0} y={11} stroke={surfaceColor}>{text}</HaloText>
+                            <text x={0} y={11} textAnchor="middle" className={`hy-topo-edge-label ${cls}`}>{text}</text>
+                          </g>
+                        );
+                      })()}
                     </g>
                   );
                 })()}
