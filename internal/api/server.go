@@ -618,15 +618,12 @@ func (s *Server) getUISettings(w http.ResponseWriter, r *http.Request) {
 		// Off by default: relay-delivered admin requests still need a token.
 		"relay_admin_passthrough": cfg.RelayAdminPassthrough,
 		// DNS resolver (relay-routed). Defaults baked into app.dnsResolverDefaults.
-		"dns_resolver_enabled":              dr.Enabled,
-		"dns_resolver_upstream":             dr.Upstream,
-		"dns_resolver_exit_via":             dr.ExitVia,
-		"dns_resolver_cache_min_ttl":        dr.CacheMinTTL,
-		"dns_resolver_cache_max_ttl":        dr.CacheMaxTTL,
-		"dns_resolver_cache_size":           dr.CacheSize,
-		"dns_resolver_negative_ttl":         dr.NegativeTTL,
-		"dns_resolver_query_timeout_ms":     dr.QueryTimeoutMs,
-		"dns_resolver_refresh_interval_sec": dr.RefreshIntervalSec,
+		"dns_resolver_enabled":          dr.Enabled,
+		"dns_resolver_upstream":         dr.Upstream,
+		"dns_resolver_cache_ttl":        dr.CacheTTL,
+		"dns_resolver_negative_ttl":     dr.NegativeTTL,
+		"dns_resolver_cache_size":       dr.CacheSize,
+		"dns_resolver_query_timeout_ms": dr.QueryTimeoutMs,
 	})
 }
 
@@ -645,15 +642,12 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 		MaxFetchFanOut   *int    `json:"max_fetch_fan_out"`
 		RelayAdminPassthrough *bool `json:"relay_admin_passthrough"`
 		// DNS resolver (relay-routed) — see app.DNSResolverConfig docs.
-		DNSResolverEnabled         *bool   `json:"dns_resolver_enabled"`
-		DNSResolverUpstream        *string `json:"dns_resolver_upstream"`
-		DNSResolverExitVia         *string `json:"dns_resolver_exit_via"`
-		DNSResolverCacheMinTTL     *int    `json:"dns_resolver_cache_min_ttl"`
-		DNSResolverCacheMaxTTL     *int    `json:"dns_resolver_cache_max_ttl"`
-		DNSResolverCacheSize       *int    `json:"dns_resolver_cache_size"`
-		DNSResolverNegativeTTL     *int    `json:"dns_resolver_negative_ttl"`
-		DNSResolverQueryTimeoutMs  *int    `json:"dns_resolver_query_timeout_ms"`
-		DNSResolverRefreshInterval *int    `json:"dns_resolver_refresh_interval_sec"`
+		DNSResolverEnabled        *bool   `json:"dns_resolver_enabled"`
+		DNSResolverUpstream       *string `json:"dns_resolver_upstream"`
+		DNSResolverCacheTTL       *int    `json:"dns_resolver_cache_ttl"`
+		DNSResolverNegativeTTL    *int    `json:"dns_resolver_negative_ttl"`
+		DNSResolverCacheSize      *int    `json:"dns_resolver_cache_size"`
+		DNSResolverQueryTimeoutMs *int    `json:"dns_resolver_query_timeout_ms"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), 400)
@@ -704,35 +698,24 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 		if body.DNSResolverUpstream != nil {
 			c.DNSResolver.Upstream = *body.DNSResolverUpstream
 		}
-		if body.DNSResolverExitVia != nil {
-			c.DNSResolver.ExitVia = *body.DNSResolverExitVia
-		}
-		if body.DNSResolverCacheMinTTL != nil {
-			c.DNSResolver.CacheMinTTL = *body.DNSResolverCacheMinTTL
-		}
-		if body.DNSResolverCacheMaxTTL != nil {
-			c.DNSResolver.CacheMaxTTL = *body.DNSResolverCacheMaxTTL
-		}
-		if body.DNSResolverCacheSize != nil {
-			c.DNSResolver.CacheSize = *body.DNSResolverCacheSize
+		if body.DNSResolverCacheTTL != nil {
+			c.DNSResolver.CacheTTL = *body.DNSResolverCacheTTL
 		}
 		if body.DNSResolverNegativeTTL != nil {
 			c.DNSResolver.NegativeTTL = *body.DNSResolverNegativeTTL
 		}
+		if body.DNSResolverCacheSize != nil {
+			c.DNSResolver.CacheSize = *body.DNSResolverCacheSize
+		}
 		if body.DNSResolverQueryTimeoutMs != nil {
 			c.DNSResolver.QueryTimeoutMs = *body.DNSResolverQueryTimeoutMs
 		}
-		if body.DNSResolverRefreshInterval != nil {
-			c.DNSResolver.RefreshIntervalSec = *body.DNSResolverRefreshInterval
-		}
 	})
 	// Hot-reload resolver snapshot on any DNS-resolver field touch +
-	// purge cache so the new upstream/exit takes effect on next call.
+	// purge cache so the new upstream takes effect on next call.
 	resolverTouched := body.DNSResolverEnabled != nil || body.DNSResolverUpstream != nil ||
-		body.DNSResolverExitVia != nil || body.DNSResolverCacheMinTTL != nil ||
-		body.DNSResolverCacheMaxTTL != nil || body.DNSResolverCacheSize != nil ||
-		body.DNSResolverNegativeTTL != nil || body.DNSResolverQueryTimeoutMs != nil ||
-		body.DNSResolverRefreshInterval != nil
+		body.DNSResolverCacheTTL != nil || body.DNSResolverNegativeTTL != nil ||
+		body.DNSResolverCacheSize != nil || body.DNSResolverQueryTimeoutMs != nil
 	if resolverTouched {
 		app.ApplyDNSResolver(s.app.Store().Get().DNSResolver)
 	}

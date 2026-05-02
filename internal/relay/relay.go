@@ -1362,6 +1362,7 @@ func (n *Node) handleListPeers(stream net.Conn) {
 	stream.Write(data)
 }
 
+
 func (n *Node) handleVia(ctx context.Context, peerName, targetAddr string, stream net.Conn) {
 	// Parse bridge tag from target address for rebind support
 	actualAddr, bridgeID, isBridged := ParseBridgeAddr(targetAddr)

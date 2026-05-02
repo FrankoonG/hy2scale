@@ -94,18 +94,13 @@ export default function SettingsPage() {
   const [savingSystem, setSavingSystem] = useState(false);
   const [nestedExpanded, setNestedExpanded] = useState(false);
   const [relayPassthrough, setRelayPassthrough] = useState(false);
-  // DNS resolver (relay-routed) — see UISettings docs. Defaults track the
-  // app.DNSResolverConfig zero-fallback table; rendering 0 as placeholder
-  // keeps the "unset = inherit default" semantic.
+  // DNS resolver (relay-routed) — see UISettings docs.
   const [dnsResolverEnabled, setDnsResolverEnabled] = useState(false);
   const [dnsResolverUpstream, setDnsResolverUpstream] = useState('');
-  const [dnsResolverExitVia, setDnsResolverExitVia] = useState('');
-  const [dnsResolverCacheMinTtl, setDnsResolverCacheMinTtl] = useState('30');
-  const [dnsResolverCacheMaxTtl, setDnsResolverCacheMaxTtl] = useState('3600');
-  const [dnsResolverCacheSize, setDnsResolverCacheSize] = useState('1024');
+  const [dnsResolverCacheTtl, setDnsResolverCacheTtl] = useState('300');
   const [dnsResolverNegativeTtl, setDnsResolverNegativeTtl] = useState('30');
+  const [dnsResolverCacheSize, setDnsResolverCacheSize] = useState('1024');
   const [dnsResolverQueryTimeoutMs, setDnsResolverQueryTimeoutMs] = useState('3000');
-  const [dnsResolverRefreshInterval, setDnsResolverRefreshInterval] = useState('60');
   const [dnsResolverExpanded, setDnsResolverExpanded] = useState(false);
 
   // Password
@@ -143,13 +138,10 @@ export default function SettingsPage() {
       setRelayPassthrough(!!settings.relay_admin_passthrough);
       setDnsResolverEnabled(!!settings.dns_resolver_enabled);
       setDnsResolverUpstream(settings.dns_resolver_upstream || '');
-      setDnsResolverExitVia(settings.dns_resolver_exit_via || '');
-      setDnsResolverCacheMinTtl(String(settings.dns_resolver_cache_min_ttl || 30));
-      setDnsResolverCacheMaxTtl(String(settings.dns_resolver_cache_max_ttl || 3600));
-      setDnsResolverCacheSize(String(settings.dns_resolver_cache_size || 1024));
+      setDnsResolverCacheTtl(String(settings.dns_resolver_cache_ttl || 300));
       setDnsResolverNegativeTtl(String(settings.dns_resolver_negative_ttl || 30));
+      setDnsResolverCacheSize(String(settings.dns_resolver_cache_size || 1024));
       setDnsResolverQueryTimeoutMs(String(settings.dns_resolver_query_timeout_ms || 3000));
-      setDnsResolverRefreshInterval(String(settings.dns_resolver_refresh_interval_sec || 60));
     }
   }, [settings]);
 
@@ -183,17 +175,15 @@ export default function SettingsPage() {
         max_response_bytes: parseInt(maxResponseBytes) || 1048576,
         max_fetch_fan_out: parseInt(maxFetchFanOut) || 8,
         // DNS resolver — hot-reloaded via app.ApplyDNSResolver in the
-        // PUT handler. Cache is purged on save so a new upstream/exit
-        // takes effect on the next ResolveViaExit call.
+        // PUT handler. Cache is purged on save so a new upstream takes
+        // effect on the next ResolveViaExit call. Note: there is no
+        // global "DNS exit" — each rule's DNS rides its own exit_via.
         dns_resolver_enabled: dnsResolverEnabled,
         dns_resolver_upstream: dnsResolverUpstream,
-        dns_resolver_exit_via: dnsResolverExitVia,
-        dns_resolver_cache_min_ttl: parseInt(dnsResolverCacheMinTtl) || 30,
-        dns_resolver_cache_max_ttl: parseInt(dnsResolverCacheMaxTtl) || 3600,
-        dns_resolver_cache_size: parseInt(dnsResolverCacheSize) || 1024,
+        dns_resolver_cache_ttl: parseInt(dnsResolverCacheTtl) || 300,
         dns_resolver_negative_ttl: parseInt(dnsResolverNegativeTtl) || 30,
+        dns_resolver_cache_size: parseInt(dnsResolverCacheSize) || 1024,
         dns_resolver_query_timeout_ms: parseInt(dnsResolverQueryTimeoutMs) || 3000,
-        dns_resolver_refresh_interval_sec: parseInt(dnsResolverRefreshInterval) || 60,
       });
       toast.success(t('settings.savedHot'));
       queryClient.invalidateQueries({ queryKey: ['settings'] });
@@ -396,26 +386,17 @@ export default function SettingsPage() {
                         <FormGroup label={t('settings.dnsResolverUpstream')}>
                           <Input value={dnsResolverUpstream} onChange={(e) => setDnsResolverUpstream(e.target.value)} placeholder="1.1.1.1:53" />
                         </FormGroup>
-                        <FormGroup label={t('settings.dnsResolverExitVia')}>
-                          <Input value={dnsResolverExitVia} onChange={(e) => setDnsResolverExitVia(e.target.value)} placeholder={t('settings.dnsResolverExitViaPlaceholder')} />
-                        </FormGroup>
-                        <FormGroup label={t('settings.dnsResolverCacheMinTtl')}>
-                          <Input type="number" min={0} max={86400} value={dnsResolverCacheMinTtl} onChange={(e) => setDnsResolverCacheMinTtl(e.target.value)} suffix="s" />
-                        </FormGroup>
-                        <FormGroup label={t('settings.dnsResolverCacheMaxTtl')}>
-                          <Input type="number" min={0} max={86400} value={dnsResolverCacheMaxTtl} onChange={(e) => setDnsResolverCacheMaxTtl(e.target.value)} suffix="s" />
-                        </FormGroup>
-                        <FormGroup label={t('settings.dnsResolverCacheSize')}>
-                          <Input type="number" min={1} max={65536} value={dnsResolverCacheSize} onChange={(e) => setDnsResolverCacheSize(e.target.value)} />
+                        <FormGroup label={t('settings.dnsResolverCacheTtl')}>
+                          <Input type="number" min={0} max={86400} value={dnsResolverCacheTtl} onChange={(e) => setDnsResolverCacheTtl(e.target.value)} suffix="s" />
                         </FormGroup>
                         <FormGroup label={t('settings.dnsResolverNegativeTtl')}>
                           <Input type="number" min={0} max={3600} value={dnsResolverNegativeTtl} onChange={(e) => setDnsResolverNegativeTtl(e.target.value)} suffix="s" />
                         </FormGroup>
+                        <FormGroup label={t('settings.dnsResolverCacheSize')}>
+                          <Input type="number" min={1} max={65536} value={dnsResolverCacheSize} onChange={(e) => setDnsResolverCacheSize(e.target.value)} />
+                        </FormGroup>
                         <FormGroup label={t('settings.dnsResolverQueryTimeout')}>
                           <Input type="number" min={100} max={30000} value={dnsResolverQueryTimeoutMs} onChange={(e) => setDnsResolverQueryTimeoutMs(e.target.value)} suffix="ms" />
-                        </FormGroup>
-                        <FormGroup label={t('settings.dnsResolverRefreshInterval')}>
-                          <Input type="number" min={0} max={3600} value={dnsResolverRefreshInterval} onChange={(e) => setDnsResolverRefreshInterval(e.target.value)} suffix="s" />
                         </FormGroup>
                       </>
                     )}
