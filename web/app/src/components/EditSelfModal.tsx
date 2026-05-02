@@ -4,6 +4,7 @@ import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { Modal, Button, Input, PasswordInput, Select, FormGroup, FormGrid, useToast } from '@hy2scale/ui';
 import * as api from '@/api';
 import { useNodeStore } from '@/store/node';
+import { buildHy2Url, canExportAsHy2Url, copyToClipboard } from '@/utils/buildHy2Url';
 
 interface Props {
   open: boolean;
@@ -23,6 +24,11 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
   const [listenPort, setListenPort] = useState('');
   const [password, setPassword] = useState('');
   const [tlsCertId, setTlsCertId] = useState('');
+  // Share host for the export URL. listenIp is usually a wildcard
+  // (`0.0.0.0` / `::`) which a remote client cannot dial, so we keep
+  // a separate field. Defaults to the browser's current hostname —
+  // which is, by definition, an address that just reached this node.
+  const [shareHost, setShareHost] = useState('');
 
   // Fetch TLS certs for dropdown
   const { data: certs } = useQuery({
@@ -46,15 +52,51 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
       setNodeId(node.node_id || '');
       const listen = node.server?.listen || '0.0.0.0:5565';
       const match = listen.match(/^(.+):(.+)$/);
-      setListenIp(match ? match[1] : '0.0.0.0');
+      const ip = match ? match[1] : '0.0.0.0';
+      setListenIp(ip);
       setListenPort(match ? match[2] : '5565');
       setPassword(node.server?.password || '');
+      // Default share host: bound IP if non-wildcard, else the browser's
+      // current hostname (typed once by the operator to reach this UI,
+      // therefore externally reachable from where they sit).
+      const isWildcard = ip === '0.0.0.0' || ip === '::' || ip === '0:0:0:0:0:0:0:0';
+      setShareHost(isWildcard ? (typeof window !== 'undefined' ? window.location.hostname : '') : ip);
       // Resolve tls_cert path to cert id: /data/tls/{id}.crt → id
       const certPath = node.server?.tls_cert || '';
       const certMatch = certPath.match(/\/data\/tls\/(.+)\.crt$/);
       setTlsCertId(certMatch ? certMatch[1] : '');
     }
   }, [open, node]);
+
+  const handleExport = async () => {
+    const host = shareHost.trim();
+    const port = listenPort.trim();
+    const addr = host && port ? `${host}:${port}` : '';
+    if (!canExportAsHy2Url(addr)) {
+      toast.error(t('nodes.exportNotShareable'));
+      return;
+    }
+    if (!password) {
+      toast.error(t('nodes.passRequired'));
+      return;
+    }
+    let url: string;
+    try {
+      url = buildHy2Url({
+        name: nodeId.trim() || node?.name || 'self',
+        addr,
+        password,
+        // Self exports rarely want to advertise a custom SNI; let
+        // the recipient set it if they need to.
+      });
+    } catch {
+      toast.error(t('nodes.exportNotShareable'));
+      return;
+    }
+    const ok = await copyToClipboard(url);
+    if (ok) toast.success(t('nodes.exportCopied'));
+    else toast.error(t('nodes.exportFailed'));
+  };
 
   const handleSave = async () => {
     if (!nodeId.trim()) {
@@ -106,6 +148,9 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
       footer={
         <>
           <Button onClick={onClose}>{t('app.cancel')}</Button>
+          <Button onClick={handleExport} data-testid="export-self-hy2-url">
+            {t('nodes.exportUrl')}
+          </Button>
           <Button variant="primary" onClick={handleSave} loading={loading}>{t('app.save')}</Button>
         </>
       }
@@ -139,6 +184,14 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             onGenerate={setPassword}
+          />
+        </FormGroup>
+
+        <FormGroup label={t('nodes.shareHost')}>
+          <Input
+            value={shareHost}
+            onChange={(e) => setShareHost(e.target.value)}
+            placeholder={typeof window !== 'undefined' ? window.location.hostname : ''}
           />
         </FormGroup>
 

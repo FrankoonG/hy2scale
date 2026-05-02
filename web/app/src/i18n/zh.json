@@ -42,6 +42,8 @@
   "nodes.exportUrl": "导出链接",
   "nodes.exportCopied": "分享链接已复制到剪贴板",
   "nodes.exportFailed": "无法访问剪贴板 — 请手动复制",
+  "nodes.exportNotShareable": "地址无法共享 — 请先填一个非通配的主机",
+  "nodes.shareHost": "共享主机",
   "nodes.nodeName": "节点名称",
   "nodes.nodeNameHint": "可选 — 留空时使用第一个地址作为名称",
   "nodes.nodeNameRequired": "编辑已有节点时名称不能为空",

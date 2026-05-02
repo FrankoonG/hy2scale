@@ -9,7 +9,7 @@ import {
 import * as api from '@/api';
 import type { ClientEntry, CertInfo, TopologyNode } from '@/api';
 import { useNodeStore } from '@/store/node';
-import { buildHy2Url, copyToClipboard } from '@/utils/buildHy2Url';
+import { buildHy2Url, canExportAsHy2Url, copyToClipboard } from '@/utils/buildHy2Url';
 
 // Characters that would corrupt nested qualified paths (`/`), look weird in
 // topology display (whitespace), or upset YAML/CLI consumers (control chars).
@@ -261,16 +261,26 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
     }
     // First address only — the share-URL format has no native multi-addr
     // slot. validateAddrs returned the formatted list (IPv6-bracketed).
-    const url = buildHy2Url({
-      name: finalName,
-      addr: addrs[0],
-      password: password.trim(),
-      sni: sni.trim() || undefined,
-      insecure: insecure || undefined,
-      max_tx: maxTx ? Math.round(parseFloat(maxTx) * 125000) : undefined,
-      max_rx: maxRx ? Math.round(parseFloat(maxRx) * 125000) : undefined,
-      fast_open: fastOpen || undefined,
-    });
+    if (!canExportAsHy2Url(addrs[0])) {
+      toast.error(t('nodes.exportNotShareable'));
+      return;
+    }
+    let url: string;
+    try {
+      url = buildHy2Url({
+        name: finalName,
+        addr: addrs[0],
+        password: password.trim(),
+        sni: sni.trim() || undefined,
+        insecure: insecure || undefined,
+        max_tx: maxTx ? Math.round(parseFloat(maxTx) * 125000) : undefined,
+        max_rx: maxRx ? Math.round(parseFloat(maxRx) * 125000) : undefined,
+        fast_open: fastOpen || undefined,
+      });
+    } catch {
+      toast.error(t('nodes.exportNotShareable'));
+      return;
+    }
     const ok = await copyToClipboard(url);
     if (ok) toast.success(t('nodes.exportCopied'));
     else toast.error(t('nodes.exportFailed'));
