@@ -176,6 +176,14 @@ function resolveOverlap(
     let moved = false;
     for (const k in others) {
       if (k === key) continue;
+      // Ghost positions: server config has graph_layout entries for
+      // nodes that aren't currently visible (e.g. nested peers under
+      // a collapsed subtree, or peers that have since been removed).
+      // Their coordinates ride in `others` but the user has no way to
+      // see them, so any repulsion they cause feels like the dragged
+      // node hitting an invisible wall. Skip them — only currently
+      // rendered nodes participate in overlap-resolve.
+      if (!nodes.has(k)) continue;
       const other = others[k];
       const rOther = nodeRadiusFor(nodes.get(k));
       const minDist = rSelf + rOther + NODE_PADDING;
