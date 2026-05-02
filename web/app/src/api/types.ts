@@ -257,7 +257,8 @@ export interface UISettings {
   // exit. Wire path is just TCP/53 forwarded by the relay, so it works
   // against any hy2-compatible peer (vanilla hy2 server included).
   dns_resolver_enabled: boolean;
-  dns_resolver_upstream: string;          // e.g. "1.1.1.1:53"
+  // Upstream resolver list reuses the top-level `dns` field above —
+  // no separate knob.
   dns_resolver_cache_ttl: number;         // seconds, default 300
   dns_resolver_negative_ttl: number;      // seconds, default 30
   dns_resolver_cache_size: number;        // entries, default 1024

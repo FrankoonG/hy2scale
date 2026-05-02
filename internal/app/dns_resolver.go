@@ -19,19 +19,24 @@ import (
 // operator leaves a DNSResolverConfig field at zero. Mirrored in the UI
 // "Restore defaults" button so both sides agree on what "unset" means.
 var dnsResolverDefaults = DNSResolverConfig{
-	Upstream:       "1.1.1.1:53",
 	CacheTTL:       300,
 	NegativeTTL:    30,
 	CacheSize:      1024,
 	QueryTimeoutMs: 3000,
 }
 
+// dnsResolverDefaultUpstreams is what we fall back to when cfg.DNS is
+// empty. Mirrors the WireGuard-conf default (server.go) so both surfaces
+// agree on "unset = these public resolvers".
+const dnsResolverDefaultUpstreams = "1.1.1.1, 8.8.8.8"
+
 // resolverConfigSnapshot is the runtime view of DNSResolverConfig with
 // every zero replaced by its default. Held under an atomic.Pointer so
 // updateUISettings can hot-swap it without locking the hot lookup path.
+// Upstream list is NOT in the snapshot — it lives on cfg.DNS and is
+// read live (same as l2tp/ikev2 do); a DNS-field save purges the cache.
 type resolverConfigSnapshot struct {
 	enabled      bool
-	upstream     string
 	cacheTTL     time.Duration
 	negativeTTL  time.Duration
 	cacheSize    int
@@ -45,20 +50,36 @@ func newResolverSnapshot(c DNSResolverConfig) *resolverConfigSnapshot {
 		}
 		return v
 	}
-	pickStr := func(v, d string) string {
-		if v == "" {
-			return d
-		}
-		return v
-	}
 	return &resolverConfigSnapshot{
-		enabled:      c.Enabled,
-		upstream:     pickStr(c.Upstream, dnsResolverDefaults.Upstream),
+		enabled:      c.IsEnabled(),
 		cacheTTL:     time.Duration(pick(c.CacheTTL, dnsResolverDefaults.CacheTTL)) * time.Second,
 		negativeTTL:  time.Duration(pick(c.NegativeTTL, dnsResolverDefaults.NegativeTTL)) * time.Second,
 		cacheSize:    pick(c.CacheSize, dnsResolverDefaults.CacheSize),
 		queryTimeout: time.Duration(pick(c.QueryTimeoutMs, dnsResolverDefaults.QueryTimeoutMs)) * time.Millisecond,
 	}
+}
+
+// parseDNSUpstreams splits cfg.DNS (comma-separated, e.g.
+// "8.8.8.8,1.1.1.1" or "8.8.8.8:53, [::1]:5353") into a list of
+// host:port endpoints suitable for net.Dial. Missing port → :53.
+// Empty input → the dnsResolverDefaultUpstreams baseline so the
+// resolver still has a path even if the operator never set DNS.
+func parseDNSUpstreams(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		s = dnsResolverDefaultUpstreams
+	}
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		p := strings.TrimSpace(part)
+		if p == "" {
+			continue
+		}
+		if _, _, err := net.SplitHostPort(p); err != nil {
+			p = net.JoinHostPort(p, "53")
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // resolverActive holds the live snapshot. Never nil after init.
@@ -146,24 +167,47 @@ func (c *dnsCache) purge() {
 
 var resolverCache = newDNSCache()
 
-// dnsLookupOverExit performs one DNS query for `name` (A records) by
-// dialing the upstream resolver THROUGH the rule's exit. The relay
-// layer just sees a regular TCP target ("upstream:53") — no special
-// peer support required, this works against any TCP-forwarding
-// hy2-compatible peer including vanilla hy2 and pre-1.3.4 hy2scale.
-// The "DNS-via-exit" semantic is implemented purely by virtue of the
-// TCP packet originating at the exit (so the upstream resolver sees a
-// query from a clean source IP, not from the polluted entry's network).
+// dnsLookupOverExit performs DNS queries for `name` (A records) by
+// dialing each configured upstream THROUGH the rule's exit until one
+// answers. The relay layer just sees a regular TCP target
+// ("upstream:53") — no special peer support required, this works
+// against any TCP-forwarding hy2-compatible peer including vanilla hy2
+// and pre-1.3.4 hy2scale. The "DNS-via-exit" semantic is implemented
+// purely by virtue of the TCP packet originating at the exit (so the
+// upstream resolver sees a query from a clean source IP, not from the
+// polluted entry's network).
+//
+// Upstream list comes from cfg.DNS — the same field that feeds
+// VPN-client DNS push. One operator config knob.
 func (a *App) dnsLookupOverExit(ctx context.Context, name, exitVia string) ([]string, error) {
 	snap := dnsResolverSnapshot()
-	dialCtx, cancel := context.WithTimeout(ctx, snap.queryTimeout)
+	upstreams := parseDNSUpstreams(a.store.Get().DNS)
+	if len(upstreams) == 0 {
+		return nil, fmt.Errorf("no upstream DNS configured")
+	}
+	var lastErr error
+	for _, ups := range upstreams {
+		ips, err := a.dnsQueryOne(ctx, name, exitVia, ups, snap.queryTimeout)
+		if err == nil {
+			return ips, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+// dnsQueryOne does a single TCP/53 lookup against `upstream` via the
+// rule's exit. Returns the list of A-record IPs, or an error covering
+// every failure mode (dial, write, framing, RCODE, no-answer).
+func (a *App) dnsQueryOne(ctx context.Context, name, exitVia, upstream string, timeout time.Duration) ([]string, error) {
+	dialCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	conn, err := a.dialExit(dialCtx, exitVia, snap.upstream)
+	conn, err := a.dialExit(dialCtx, exitVia, upstream)
 	if err != nil {
-		return nil, fmt.Errorf("dial upstream %s via %s: %w", snap.upstream, exitVia, err)
+		return nil, fmt.Errorf("dial upstream %s via %s: %w", upstream, exitVia, err)
 	}
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(snap.queryTimeout))
+	conn.SetDeadline(time.Now().Add(timeout))
 
 	var msg dnsmessage.Message
 	msg.Header = dnsmessage.Header{ID: uint16(time.Now().UnixNano()), RecursionDesired: true}
