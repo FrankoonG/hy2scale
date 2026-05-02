@@ -1714,11 +1714,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             const toOffEarly = nodes.get(e.to)?.offline;
             const edgeReachable = !e.disabled && !fromOffEarly && !toOffEarly && e.segmentLatencyMs >= 0;
             const showLatency = edgeReachable && e.segmentLatencyMs !== 0 && screenLen > 60;
-            // Suppress the rate label entirely on idle edges. Showing
-            // "↓ 0 B/s" would be honest but visually noisy on a topology
-            // dominated by quiet links — better to render nothing and let
-            // the (admittedly non-zero) thickness convey "alive but idle".
-            const showRate = edgeReachable && screenLen > 110 && (e.txRate > 0 || e.rxRate > 0);
+            const showRate = edgeReachable && screenLen > 110;
             const width = edgeWidth(e);
 
             // Path highlight animation: all edges on the active path go
@@ -1864,17 +1860,31 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                         // simultaneously crowded the label and was hard to read,
                         // so we surface only the larger value with a direction
                         // arrow as a visual cue. Tie → tx (download).
+                        //
+                        // Only the arrow carries colour — the rate text stays
+                        // neutral grey so the eye reads the magnitude without
+                        // a colour-coded distraction (and so DR's brightness-
+                        // preserving inversion doesn't make a coloured rate
+                        // value clash with surrounding edge strokes). Idle
+                        // edges still render "0 B/s" — no arrow — so an
+                        // edge with rate-suppressed-but-recently-active
+                        // doesn't visually disappear when traffic stops.
                         const tx = e.txRate || 0;
                         const rx = e.rxRate || 0;
-                        const isDown = tx >= rx;
-                        const value = isDown ? tx : rx;
-                        const arrow = isDown ? '↓' : '↑';
-                        const cls = isDown ? 'rate-down' : 'rate-up';
-                        const text = arrow + ' ' + fmtRate(value);
+                        const value = Math.max(tx, rx);
+                        const arrow = value > 0 ? (tx >= rx ? '↓' : '↑') : '';
+                        const arrowCls = value > 0 ? (tx >= rx ? 'rate-arrow-down' : 'rate-arrow-up') : '';
+                        const valueText = fmtRate(value);
+                        // Halo: render full text (arrow + value) so the halo
+                        // outlines both glyphs against the canvas background.
+                        const haloText = arrow ? arrow + ' ' + valueText : valueText;
                         return (
                           <g>
-                            <HaloText x={0} y={11} stroke={surfaceColor}>{text}</HaloText>
-                            <text x={0} y={11} textAnchor="middle" className={`hy-topo-edge-label ${cls}`}>{text}</text>
+                            <HaloText x={0} y={11} stroke={surfaceColor}>{haloText}</HaloText>
+                            <text x={0} y={11} textAnchor="middle" className="hy-topo-edge-label rate">
+                              {arrow && <tspan className={arrowCls}>{arrow + ' '}</tspan>}
+                              {valueText}
+                            </text>
                           </g>
                         );
                       })()}
