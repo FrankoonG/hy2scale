@@ -1965,7 +1965,10 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         // key is what the qualifiedPath is built from (and what `selfId`
         // is compared against to identify the self hop), while the name
         // is what we actually render.
-        const hops = displayPath.map((k) => ({ key: k, name: nodes.get(k)?.name || k }));
+        const hops = displayPath.map((k) => {
+          const gn = nodes.get(k);
+          return { key: k, name: gn?.name || k, native: !!gn?.native };
+        });
         const latClass = offline ? 'lat-bad' : totalLat <= 0 ? 'lat-na' : totalLat < 80 ? 'lat-ok' : totalLat < 200 ? 'lat-mid' : 'lat-bad';
         // Edit button retired from the path-info overlay; selecting a node
         // and pressing the top-right Edit button is now the unified entry
@@ -1989,8 +1992,11 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                 const color = reach ? 'var(--green)' : 'var(--red)';
                 // Self hop: plain colored text — opening "remote into self"
                 // would render the same UI we're already in, so the link
-                // is suppressed there. Every other hop is a link.
-                const hopEl = isSelfHop || !onOpenRemote ? (
+                // is suppressed there.
+                // Native hop: a vanilla hysteria2 server has no relay-API
+                // surface; /remote/<native>/scale/ would hit a peer that
+                // can't answer. v1.2 already gated this; restoring here.
+                const hopEl = isSelfHop || hop.native || !onOpenRemote ? (
                   <span className="hy-topo-pathinfo-hop" style={{ color }}>{hop.name}</span>
                 ) : (
                   <a
