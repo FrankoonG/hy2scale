@@ -99,10 +99,26 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}
           path: ${{ env.ASSET }}
 
-  # ─── Docker image + iKuai ipkg (amd64) ────────────────────────
+  # ─── Docker image + iKuai ipkg (per-arch) ─────────────────────
+  # Matrix builds amd64 + arm64 in parallel, each emitting:
+  #   docker-image-{arch}.tar.gz   (offline-loadable image)
+  #   hy2scale-{version}-{arch}.ipkg  (iKuai package with image embedded)
+  # Both archs run on amd64 GitHub runners; arm64 uses QEMU emulation
+  # via docker buildx. The ipkg's manifest.json `image: hy2scale:ikuai`
+  # tag is the same name on both archs so iKuai's bootstrap script does
+  # not need per-arch logic — it just `docker load`s the per-arch tarball
+  # the user installed and the embedded image runs natively.
   build-docker:
-    name: Build Docker image + ipkg
+    name: Build Docker + ipkg (${{ matrix.arch }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: arm64
+            platform: linux/arm64
     steps:
       - uses: actions/checkout@v4
 
@@ -117,6 +133,14 @@ jobs:
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "version=${TAG#v}" >> $GITHUB_OUTPUT
 
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -130,53 +154,64 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Build Docker image
+      - name: Build Docker image (${{ matrix.platform }})
         run: |
-          # Tag the built image with the same name users get from Docker
-          # Hub (frankoong/hy2scale:<version>) so `docker load < tarball`
-          # lands under the expected name, avoiding a rename step before
-          # `docker run`. The local `hy2scale:ikuai` alias is kept so the
-          # ipkg script below and any other consumer that assumed that
-          # name keep working.
-          DOCKER_BUILDKIT=0 docker build \
-            -t frankoong/hy2scale:${{ steps.ver.outputs.version }} \
-            -t hy2scale:ikuai .
+          # buildx --load brings the cross-built image into the local
+          # docker daemon so subsequent `docker save` works the same way
+          # the legacy single-arch path did. We tag with both
+          # frankoong/hy2scale:<version> (what users see when they
+          # `docker load` the tarball) AND hy2scale:ikuai (what the ipkg
+          # bootstrap expects).
+          docker buildx build \
+            --platform ${{ matrix.platform }} \
+            --tag frankoong/hy2scale:${{ steps.ver.outputs.version }} \
+            --tag hy2scale:ikuai \
+            --load \
+            .
 
       - name: Export Docker image
         run: |
           docker save frankoong/hy2scale:${{ steps.ver.outputs.version }} \
-            | gzip > docker-image-amd64.tar.gz
-          echo "DOCKER_SIZE=$(du -h docker-image-amd64.tar.gz | cut -f1)" >> $GITHUB_ENV
+            | gzip > docker-image-${{ matrix.arch }}.tar.gz
+          echo "DOCKER_SIZE=$(du -h docker-image-${{ matrix.arch }}.tar.gz | cut -f1)" >> $GITHUB_ENV
 
       - name: Build ipkg
         run: |
-          # ipkg version must be X.Y.Z (no rc/beta suffix) — read from Go source
-          IPKG_VERSION=$(grep 'const Version' internal/api/server.go | sed 's/.*"\(.*\)".*/\1/')
-          echo "ipkg version: ${IPKG_VERSION}"
+          # ipkg version must be plain X.Y.Z (iKuai's parser rejects suffixes
+          # like -rc1). Read from Go source then strip any prerelease suffix
+          # so the manifest stays installable even on rc-tagged releases.
+          RAW_VERSION=$(grep 'const Version' internal/api/server.go | sed 's/.*"\(.*\)".*/\1/')
+          IPKG_VERSION=$(echo "$RAW_VERSION" | sed 's/-.*//')
+          echo "Source Version: ${RAW_VERSION} -> ipkg manifest: ${IPKG_VERSION}"
 
-          # Update manifest version
+          # The release-asset filename uses the FULL tag (with -rc1 suffix
+          # if present) so users can tell candidate builds apart, but the
+          # internal manifest version stays plain X.Y.Z.
+          ASSET_VERSION="${{ steps.ver.outputs.version }}"
+
+          # Update manifest version (in-tree, not committed)
           sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${IPKG_VERSION}\"/" ipkg/hy2scale/manifest.json
 
           # Embed Docker image (iKuai bootstrap expects hy2scale:ikuai tag).
           docker save hy2scale:ikuai | gzip > ipkg/hy2scale/docker_image.tar.gz
 
-          # Package ipkg
+          # Package ipkg with arch suffix
           cd ipkg
-          tar czf "hy2scale-${IPKG_VERSION}.ipkg" hy2scale/
+          tar czf "hy2scale-${ASSET_VERSION}-${{ matrix.arch }}.ipkg" hy2scale/
 
           # Clean embedded image
           rm -f hy2scale/docker_image.tar.gz
 
-          echo "IPKG_FILE=ipkg/hy2scale-${IPKG_VERSION}.ipkg" >> $GITHUB_ENV
+          echo "IPKG_FILE=ipkg/hy2scale-${ASSET_VERSION}-${{ matrix.arch }}.ipkg" >> $GITHUB_ENV
 
       - uses: actions/upload-artifact@v4
         with:
-          name: docker-image
-          path: docker-image-amd64.tar.gz
+          name: docker-image-${{ matrix.arch }}
+          path: docker-image-${{ matrix.arch }}.tar.gz
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ipkg
+          name: ipkg-${{ matrix.arch }}
           path: ${{ env.IPKG_FILE }}
 
   # ─── Create GitHub Release ─────────────────────────────────────
@@ -270,14 +305,21 @@ jobs:
 
             ### Docker Image
 
-            Offline image (amd64): `docker-image-amd64.tar.gz`
+            Offline images (one per arch):
             ```bash
+            # amd64 (x86_64)
             docker load < docker-image-amd64.tar.gz
+            # arm64 (aarch64)
+            docker load < docker-image-arm64.tar.gz
             ```
 
             ### iKuai Package
 
-            `hy2scale-${{ steps.version.outputs.version }}.ipkg` — install via the iKuai web UI (Advanced Apps → App Market → Local Install).
+            Pick the package matching your iKuai router's CPU architecture:
+            - `hy2scale-${{ steps.version.outputs.version }}-amd64.ipkg` — for x86 / x86_64 iKuai
+            - `hy2scale-${{ steps.version.outputs.version }}-arm64.ipkg` — for arm64 / aarch64 iKuai
+
+            Install via the iKuai web UI (Advanced Apps → App Market → Local Install).
 
             ### Verify checksums
             ```
