@@ -315,7 +315,12 @@ jobs:
 
             ### Docker Image
 
-            Offline images (one per arch):
+            Pull from Docker Hub (multi-arch manifest, amd64 + arm64):
+            ```bash
+            docker pull frankoong/hy2scale:${{ steps.version.outputs.version }}
+            ```
+
+            Or load offline (one per arch — useful for air-gapped hosts):
             ```bash
             # amd64 (x86_64)
             docker load < docker-image-amd64.tar.gz
@@ -348,3 +353,59 @@ jobs:
           prerelease: ${{ contains(steps.version.outputs.tag, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─── Push multi-arch image to Docker Hub ─────────────────────
+  # Independent of build-docker (which produces offline tarballs +
+  # ipkg). This job does a fresh buildx build with --push so a single
+  # multi-arch manifest lands on Hub. amd64 builds native; arm64 uses
+  # QEMU emulation registered by docker/setup-qemu-action.
+  #
+  # Auth: DOCKERHUB_USERNAME + DOCKERHUB_TOKEN repo secrets. Use a
+  # Docker Hub access token (Read+Write+Delete), never the account
+  # password. Token is masked in logs by GitHub Actions.
+  publish-dockerhub:
+    name: Push frankoong/hy2scale to Docker Hub
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version + tags
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          VER="${TAG#v}"
+          TAGS="frankoong/hy2scale:${VER}"
+          # Stamp :latest only on a finalised tag (no -rc / -dev / etc.).
+          case "$VER" in
+            *-*) ;;
+            *)   TAGS="${TAGS},frankoong/hy2scale:latest" ;;
+          esac
+          echo "version=${VER}" >> $GITHUB_OUTPUT
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+          echo "Pushing tags: ${TAGS}"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push (linux/amd64 + linux/arm64)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.ver.outputs.tags }}
+          # Skip provenance/SBOM attachments — they create extra
+          # sha-only artifacts on Hub that clutter the tag list.
+          provenance: false
