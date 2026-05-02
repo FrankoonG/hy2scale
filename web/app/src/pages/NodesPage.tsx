@@ -320,9 +320,14 @@ export default function NodesPage() {
         const chain = selfId && meta.nodeKey.startsWith(selfId + '/')
           ? meta.nodeKey.slice(selfId.length + 1)
           : meta.nodeKey;
+        // Native peers do NOT speak the hy2scale relay-API protocol — they
+        // are vanilla hysteria2 servers — so opening /remote/<native>/scale/
+        // would just hit a peer that has no idea what to do with it. v1.2's
+        // UI suppressed the click; v1.3 lost that during the React rewrite.
+        // Restore: render the name as plain text, no link.
         const nameEl = n.is_self ? (
           <span className="peer-name-cell" style={{ color: 'var(--primary)' }}>{n.name || node?.name || 'self'}</span>
-        ) : isRemoteView ? (
+        ) : isRemoteView || n.native ? (
           <span className="peer-name-cell">{n.name}</span>
         ) : (
           <a className="peer-link peer-name-cell" href={`${basePath}/remote/${chain}/scale/`} target="_blank" rel="noopener">

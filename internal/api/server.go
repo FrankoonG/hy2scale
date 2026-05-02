@@ -3279,6 +3279,21 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 	// Proxy base: what the remote's __BASE__ should point to
 	proxyBase := s.basePath + "/remote/" + strings.Join(chain, "/")
 
+	// Native peers are vanilla hysteria2 servers — they have no hy2scale
+	// relay-API listener on the other end of `_relay_api_:0`, so opening a
+	// remote-UI tunnel into them just hangs or 502s with a confusing error.
+	// v1.2's web UI suppressed this at the click; the React rewrite lost the
+	// guard. Restore it here so a manually-typed `/remote/<native>/scale/`
+	// URL also gets a clear refusal instead of a useless 502. English-only
+	// by intent — this is a misuse path, not a localised user surface.
+	nativeMap := s.app.Node().NativeMap()
+	if nativeMap[chain[len(chain)-1]] {
+		http.Error(w,
+			"Remote UI is not available for native peers. The selected node is a vanilla hysteria2 server and does not host the hy2scale management API. To route traffic through it, add a user with this peer set as Exit instead of opening it as a remote node.",
+			409)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
