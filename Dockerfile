@@ -50,7 +50,12 @@ COPY --from=swan-builder /out/etc/strongswan.d/ /etc/strongswan.d/
 COPY --from=swan-builder /out/etc/ipsec.conf /etc/ipsec.conf.default
 COPY --from=swan-builder /out/etc/ipsec.d/ /etc/ipsec.d/
 COPY --from=builder /hy2scale /usr/local/bin/hy2scale
-# Platform compatibility: iKuai uClibc-linked iptables bundle
-COPY internal/platform/ikuai-iptables/bundle.tar.gz /opt/platform-compat/ikuai-iptables.tar.gz
+# Platform compatibility: iKuai iptables bundle, per-arch.
+# amd64 iKuai = uClibc; arm64 iKuai = musl. Each bundle contains the
+# arch-matching `xtables-legacy-multi` plus its libc + iptables shared
+# libs. TARGETARCH is set automatically by `docker buildx build
+# --platform linux/<arch>` and matches Go's GOARCH ("amd64", "arm64").
+ARG TARGETARCH
+COPY internal/platform/ikuai-iptables/bundle-${TARGETARCH}.tar.gz /opt/platform-compat/ikuai-iptables.tar.gz
 VOLUME /data
 ENTRYPOINT ["hy2scale", "--data", "/data"]

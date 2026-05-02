@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 )
@@ -134,17 +135,37 @@ func (a *ikuaiAdapter) FixIPTables() bool {
 			log.Printf("[ikuai] extract failed: %v: %s", err, string(out))
 			return false
 		}
-		// Create required symlinks for the uClibc runtime
-		os.Symlink("libuClibc-1.0.40.so", extractDir+"/lib/libc.so.0")
+		// Per-arch runtime symlinks. The amd64 iKuai uses uClibc, the
+		// arm64 iKuai uses musl — different libc layouts, different
+		// names. The shared iptables libs (libip4tc, libxtables, ...)
+		// have the same versioned-name layout in both bundles.
+		switch runtime.GOARCH {
+		case "amd64":
+			os.Symlink("libuClibc-1.0.40.so", extractDir+"/lib/libc.so.0")
+		case "arm64":
+			// musl ships ld-musl-aarch64.so.1 as a symlink to libc.so
+			// (single ELF doubling as linker + libc). The bundle's
+			// `ld-musl-aarch64.so.1` is that symlink — rebuild it
+			// inside extractDir in case tar lost it.
+			os.Symlink("libc.so", extractDir+"/lib/ld-musl-aarch64.so.1")
+		}
 		os.Symlink("libip4tc.so.2.0.0", extractDir+"/usr/lib/libip4tc.so.2")
 		os.Symlink("libip6tc.so.2.0.0", extractDir+"/usr/lib/libip6tc.so.2")
 		os.Symlink("libxtables.so.12.2.0", extractDir+"/usr/lib/libxtables.so.12")
 	}
 
-	// The ELF interpreter is hardcoded as /lib/ld64-uClibc.so.0 in the binary.
-	// Symlink to the extracted copy so the kernel can find it.
-	os.Symlink(extractDir+"/lib/ld64-uClibc-1.0.40.so", "/lib/ld64-uClibc.so.0")
-	os.Symlink(extractDir+"/lib/ld64-uClibc-1.0.40.so", "/lib/ld64-uClibc.so.1")
+	// The ELF interpreter is hardcoded inside the binary; symlink the
+	// extracted copy into the canonical kernel-search path so execve()
+	// resolves it. uClibc on amd64 hardcodes /lib/ld64-uClibc.so.0;
+	// musl on arm64 hardcodes /lib/ld-musl-aarch64.so.1.
+	switch runtime.GOARCH {
+	case "amd64":
+		os.Symlink(extractDir+"/lib/ld64-uClibc-1.0.40.so", "/lib/ld64-uClibc.so.0")
+		os.Symlink(extractDir+"/lib/ld64-uClibc-1.0.40.so", "/lib/ld64-uClibc.so.1")
+	case "arm64":
+		// Bundle's libc.so IS the linker (musl's standard layout).
+		os.Symlink(extractDir+"/lib/libc.so", "/lib/ld-musl-aarch64.so.1")
+	}
 
 	a.iptBin = binPath
 	a.ldPath = extractDir + "/lib:" + extractDir + "/usr/lib"
