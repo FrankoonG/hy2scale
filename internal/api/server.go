@@ -147,6 +147,9 @@ func NewServer(a *app.App, addr, basePath string) *Server {
 	// Install runtime nested limits from cfg + env override; subsequent
 	// updateUISettings calls re-apply on every change for hot-reload.
 	applyNestedLimits(cfg)
+	// Same pattern for the DNS resolver — install at startup so the
+	// next ResolveViaExit call sees the operator-configured snapshot.
+	app.ApplyDNSResolver(cfg.DNSResolver)
 	return &Server{
 		app:        a,
 		addr:       addr,
@@ -230,6 +233,13 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Port check
 	authed.HandleFunc("POST /api/check-ports", s.checkPorts)
+
+	// DNS resolver diagnostic — sanity-check that ResolveViaExit returns
+	// the expected IP through the configured upstream/exit. Used by ops
+	// to verify the relay-routed DNS is healthy without needing to add
+	// a domain rule and watch logs.
+	//   GET /api/diag/resolve?name=example.com&exit_via=us
+	authed.HandleFunc("GET /api/diag/resolve", s.diagResolve)
 
 	// Sessions (active connections)
 	authed.HandleFunc("GET /api/sessions", s.getSessions)
@@ -588,6 +598,10 @@ func (s *Server) getUISettings(w http.ResponseWriter, r *http.Request) {
 	sessionH := cfg.SessionTimeoutH
 	if sessionH == 0 { sessionH = 12 }
 	lim := getNestedLimits() // current runtime values (post-clamp + env override)
+	// DNS resolver: surface raw stored values so the UI's "unset = inherit
+	// default" semantic survives a save (an operator who never touched the
+	// section keeps zeros in config, sees defaults rendered as placeholder).
+	dr := cfg.DNSResolver
 	writeJSON(w, map[string]any{
 		"listen":             s.addr,
 		"base_path":          s.basePath,
@@ -603,6 +617,16 @@ func (s *Server) getUISettings(w http.ResponseWriter, r *http.Request) {
 		"max_fetch_fan_out":  lim.MaxFetchFanOut,
 		// Off by default: relay-delivered admin requests still need a token.
 		"relay_admin_passthrough": cfg.RelayAdminPassthrough,
+		// DNS resolver (relay-routed). Defaults baked into app.dnsResolverDefaults.
+		"dns_resolver_enabled":              dr.Enabled,
+		"dns_resolver_upstream":             dr.Upstream,
+		"dns_resolver_exit_via":             dr.ExitVia,
+		"dns_resolver_cache_min_ttl":        dr.CacheMinTTL,
+		"dns_resolver_cache_max_ttl":        dr.CacheMaxTTL,
+		"dns_resolver_cache_size":           dr.CacheSize,
+		"dns_resolver_negative_ttl":         dr.NegativeTTL,
+		"dns_resolver_query_timeout_ms":     dr.QueryTimeoutMs,
+		"dns_resolver_refresh_interval_sec": dr.RefreshIntervalSec,
 	})
 }
 
@@ -620,6 +644,16 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 		MaxResponseBytes *int    `json:"max_response_bytes"`
 		MaxFetchFanOut   *int    `json:"max_fetch_fan_out"`
 		RelayAdminPassthrough *bool `json:"relay_admin_passthrough"`
+		// DNS resolver (relay-routed) — see app.DNSResolverConfig docs.
+		DNSResolverEnabled         *bool   `json:"dns_resolver_enabled"`
+		DNSResolverUpstream        *string `json:"dns_resolver_upstream"`
+		DNSResolverExitVia         *string `json:"dns_resolver_exit_via"`
+		DNSResolverCacheMinTTL     *int    `json:"dns_resolver_cache_min_ttl"`
+		DNSResolverCacheMaxTTL     *int    `json:"dns_resolver_cache_max_ttl"`
+		DNSResolverCacheSize       *int    `json:"dns_resolver_cache_size"`
+		DNSResolverNegativeTTL     *int    `json:"dns_resolver_negative_ttl"`
+		DNSResolverQueryTimeoutMs  *int    `json:"dns_resolver_query_timeout_ms"`
+		DNSResolverRefreshInterval *int    `json:"dns_resolver_refresh_interval_sec"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), 400)
@@ -664,7 +698,44 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 		if body.RelayAdminPassthrough != nil {
 			c.RelayAdminPassthrough = *body.RelayAdminPassthrough
 		}
+		if body.DNSResolverEnabled != nil {
+			c.DNSResolver.Enabled = *body.DNSResolverEnabled
+		}
+		if body.DNSResolverUpstream != nil {
+			c.DNSResolver.Upstream = *body.DNSResolverUpstream
+		}
+		if body.DNSResolverExitVia != nil {
+			c.DNSResolver.ExitVia = *body.DNSResolverExitVia
+		}
+		if body.DNSResolverCacheMinTTL != nil {
+			c.DNSResolver.CacheMinTTL = *body.DNSResolverCacheMinTTL
+		}
+		if body.DNSResolverCacheMaxTTL != nil {
+			c.DNSResolver.CacheMaxTTL = *body.DNSResolverCacheMaxTTL
+		}
+		if body.DNSResolverCacheSize != nil {
+			c.DNSResolver.CacheSize = *body.DNSResolverCacheSize
+		}
+		if body.DNSResolverNegativeTTL != nil {
+			c.DNSResolver.NegativeTTL = *body.DNSResolverNegativeTTL
+		}
+		if body.DNSResolverQueryTimeoutMs != nil {
+			c.DNSResolver.QueryTimeoutMs = *body.DNSResolverQueryTimeoutMs
+		}
+		if body.DNSResolverRefreshInterval != nil {
+			c.DNSResolver.RefreshIntervalSec = *body.DNSResolverRefreshInterval
+		}
 	})
+	// Hot-reload resolver snapshot on any DNS-resolver field touch +
+	// purge cache so the new upstream/exit takes effect on next call.
+	resolverTouched := body.DNSResolverEnabled != nil || body.DNSResolverUpstream != nil ||
+		body.DNSResolverExitVia != nil || body.DNSResolverCacheMinTTL != nil ||
+		body.DNSResolverCacheMaxTTL != nil || body.DNSResolverCacheSize != nil ||
+		body.DNSResolverNegativeTTL != nil || body.DNSResolverQueryTimeoutMs != nil ||
+		body.DNSResolverRefreshInterval != nil
+	if resolverTouched {
+		app.ApplyDNSResolver(s.app.Store().Get().DNSResolver)
+	}
 	// Hot-reload the runtime atomic pointer if any nested limit changed —
 	// next walkAndCache / assembleDeepTree / fetchSubPeersViaStream call
 	// picks up the new clamped values without a restart.
@@ -683,6 +754,30 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 		note = "listen / base_path / TLS settings require restart to take effect"
 	}
 	writeJSON(w, map[string]string{"status": "ok", "note": note})
+}
+
+// diagResolve runs one ResolveViaExit and reports the outcome. Lets
+// the operator confirm the relay-routed DNS path is wired correctly:
+// upstream reachable, exit dial-able, response parsing OK. Read-only.
+func (s *Server) diagResolve(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	exitVia := r.URL.Query().Get("exit_via")
+	if name == "" {
+		http.Error(w, "name required", 400)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	ips, err := s.app.ResolveViaExit(ctx, name, exitVia)
+	resp := map[string]any{
+		"name":     name,
+		"exit_via": exitVia,
+		"ips":      ips,
+	}
+	if err != nil {
+		resp["error"] = err.Error()
+	}
+	writeJSON(w, resp)
 }
 
 // --- Node ---
