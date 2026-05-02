@@ -250,18 +250,18 @@ export interface UISettings {
   relay_admin_passthrough: boolean;
   // DNS resolver (relay-routed) — reroutes hy2scale's own internal name
   // lookups (rules-engine domain rules etc.) through a clean upstream
-  // DNS reachable via the exit, so a polluted local resolv.conf does
-  // not contaminate which IPs land in iptables. Disabled by default;
-  // when off, hy2scale uses net.LookupHost (host's resolv.conf).
+  // DNS reachable via the rule's own exit, so a polluted local
+  // resolv.conf does not contaminate which IPs land in iptables.
+  // Disabled by default; when off, hy2scale uses net.LookupHost (host's
+  // resolv.conf). No "DNS exit pin" — each rule's DNS rides its own
+  // exit. Wire path is just TCP/53 forwarded by the relay, so it works
+  // against any hy2-compatible peer (vanilla hy2 server included).
   dns_resolver_enabled: boolean;
-  dns_resolver_upstream: string;                  // e.g. "1.1.1.1:53"
-  dns_resolver_exit_via: string;                  // peer name; empty = same as rule's exit
-  dns_resolver_cache_min_ttl: number;             // seconds, default 30
-  dns_resolver_cache_max_ttl: number;             // seconds, default 3600
-  dns_resolver_cache_size: number;                // entries, default 1024
-  dns_resolver_negative_ttl: number;              // seconds, default 30
-  dns_resolver_query_timeout_ms: number;          // ms, default 3000
-  dns_resolver_refresh_interval_sec: number;      // seconds, default 60
+  dns_resolver_upstream: string;          // e.g. "1.1.1.1:53"
+  dns_resolver_cache_ttl: number;         // seconds, default 300
+  dns_resolver_negative_ttl: number;      // seconds, default 30
+  dns_resolver_cache_size: number;        // entries, default 1024
+  dns_resolver_query_timeout_ms: number;  // ms, default 3000
 }
 
 // ===== Online Update =====

@@ -153,9 +153,16 @@ type Config struct {
 }
 
 // DNSResolverConfig controls hy2scale's internal name-resolution behaviour.
-// Hot-reloadable via updateUISettings — applyDNSResolver swaps the runtime
+// Hot-reloadable via updateUISettings — ApplyDNSResolver swaps the runtime
 // atomic pointer so the next ResolveViaExit call picks up new values
-// within ≤1 reconcile tick.
+// without a process restart.
+//
+// Routing model: there is NO "DNS exit pin". Each rule's DNS naturally
+// rides the same exit as its data — `exit_via=us` rules resolve through
+// us, `exit_via=jp` rules resolve through jp. The wire-level mechanism
+// is just a TCP/53 connection forwarded by the relay to the upstream
+// resolver, so this works against any hy2-compatible peer including
+// vanilla hy2 server. No new protocol added.
 type DNSResolverConfig struct {
 	// Enabled turns the resolver on. When false, hy2scale uses
 	// net.LookupHost (host's /etc/resolv.conf).
@@ -165,30 +172,20 @@ type DNSResolverConfig struct {
 	// it must be resolvable LOCALLY at startup (chicken-and-egg). Pin
 	// to an IP literal in production.
 	Upstream string `yaml:"upstream,omitempty" json:"upstream,omitempty"`
-	// ExitVia chooses which peer carries the DNS query. Empty = use the
-	// same exit as the rule whose target we're resolving (so a rule with
-	// exit_via=us resolves through us). A non-empty value pins resolution
-	// to a specific peer regardless of the rule's own exit.
-	ExitVia string `yaml:"exit_via,omitempty" json:"exit_via,omitempty"`
-	// CacheMinTTL clamps the lower bound of the response TTL (seconds).
-	// Default 30. Stops zero-TTL records from causing a query per packet.
-	CacheMinTTL int `yaml:"cache_min_ttl,omitempty" json:"cache_min_ttl,omitempty"`
-	// CacheMaxTTL clamps the upper bound (seconds). Default 3600. Stops
-	// CDN-style days-long TTLs from pinning hy2scale to a stale IP.
-	CacheMaxTTL int `yaml:"cache_max_ttl,omitempty" json:"cache_max_ttl,omitempty"`
+	// CacheTTL is how long an answer stays cached (seconds). Default
+	// 300. Fixed window — Go's stdlib resolver path doesn't surface
+	// the upstream's per-record TTL, so we use one operator-tunable
+	// value rather than honouring per-record TTL with min/max clamps.
+	CacheTTL int `yaml:"cache_ttl,omitempty" json:"cache_ttl,omitempty"`
+	// NegativeTTL is how long failures stay cached (seconds). Default
+	// 30. Avoids hammering upstream on an obviously-broken name.
+	NegativeTTL int `yaml:"negative_ttl,omitempty" json:"negative_ttl,omitempty"`
 	// CacheSize is the maximum number of cached entries (LRU evicted).
 	// Default 1024.
 	CacheSize int `yaml:"cache_size,omitempty" json:"cache_size,omitempty"`
-	// NegativeTTL is how long NXDOMAIN / SERVFAIL responses stay cached
-	// (seconds). Default 30. Avoids hammering upstream on a bad query.
-	NegativeTTL int `yaml:"negative_ttl,omitempty" json:"negative_ttl,omitempty"`
 	// QueryTimeoutMs bounds a single upstream query (milliseconds).
 	// Default 3000.
 	QueryTimeoutMs int `yaml:"query_timeout_ms,omitempty" json:"query_timeout_ms,omitempty"`
-	// RefreshInterval is how often the rules-engine reconciler triggers
-	// re-resolution of domain rules (seconds). 0 = disabled (cache TTL
-	// drives refresh). Default 60.
-	RefreshIntervalSec int `yaml:"refresh_interval_sec,omitempty" json:"refresh_interval_sec,omitempty"`
 }
 
 // GraphLayoutPos stores a single node's coordinates in the topology graph.

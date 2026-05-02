@@ -19,28 +19,23 @@ import (
 // operator leaves a DNSResolverConfig field at zero. Mirrored in the UI
 // "Restore defaults" button so both sides agree on what "unset" means.
 var dnsResolverDefaults = DNSResolverConfig{
-	Upstream:           "1.1.1.1:53",
-	CacheMinTTL:        30,
-	CacheMaxTTL:        3600,
-	CacheSize:          1024,
-	NegativeTTL:        30,
-	QueryTimeoutMs:     3000,
-	RefreshIntervalSec: 60,
+	Upstream:       "1.1.1.1:53",
+	CacheTTL:       300,
+	NegativeTTL:    30,
+	CacheSize:      1024,
+	QueryTimeoutMs: 3000,
 }
 
 // resolverConfigSnapshot is the runtime view of DNSResolverConfig with
 // every zero replaced by its default. Held under an atomic.Pointer so
 // updateUISettings can hot-swap it without locking the hot lookup path.
 type resolverConfigSnapshot struct {
-	enabled         bool
-	upstream        string
-	exitVia         string
-	cacheMinTTL     time.Duration
-	cacheMaxTTL     time.Duration
-	cacheSize       int
-	negativeTTL     time.Duration
-	queryTimeout    time.Duration
-	refreshInterval time.Duration
+	enabled      bool
+	upstream     string
+	cacheTTL     time.Duration
+	negativeTTL  time.Duration
+	cacheSize    int
+	queryTimeout time.Duration
 }
 
 func newResolverSnapshot(c DNSResolverConfig) *resolverConfigSnapshot {
@@ -57,15 +52,12 @@ func newResolverSnapshot(c DNSResolverConfig) *resolverConfigSnapshot {
 		return v
 	}
 	return &resolverConfigSnapshot{
-		enabled:         c.Enabled,
-		upstream:        pickStr(c.Upstream, dnsResolverDefaults.Upstream),
-		exitVia:         c.ExitVia,
-		cacheMinTTL:     time.Duration(pick(c.CacheMinTTL, dnsResolverDefaults.CacheMinTTL)) * time.Second,
-		cacheMaxTTL:     time.Duration(pick(c.CacheMaxTTL, dnsResolverDefaults.CacheMaxTTL)) * time.Second,
-		cacheSize:       pick(c.CacheSize, dnsResolverDefaults.CacheSize),
-		negativeTTL:     time.Duration(pick(c.NegativeTTL, dnsResolverDefaults.NegativeTTL)) * time.Second,
-		queryTimeout:    time.Duration(pick(c.QueryTimeoutMs, dnsResolverDefaults.QueryTimeoutMs)) * time.Millisecond,
-		refreshInterval: time.Duration(pick(c.RefreshIntervalSec, dnsResolverDefaults.RefreshIntervalSec)) * time.Second,
+		enabled:      c.Enabled,
+		upstream:     pickStr(c.Upstream, dnsResolverDefaults.Upstream),
+		cacheTTL:     time.Duration(pick(c.CacheTTL, dnsResolverDefaults.CacheTTL)) * time.Second,
+		negativeTTL:  time.Duration(pick(c.NegativeTTL, dnsResolverDefaults.NegativeTTL)) * time.Second,
+		cacheSize:    pick(c.CacheSize, dnsResolverDefaults.CacheSize),
+		queryTimeout: time.Duration(pick(c.QueryTimeoutMs, dnsResolverDefaults.QueryTimeoutMs)) * time.Millisecond,
 	}
 }
 
@@ -76,72 +68,68 @@ func init() {
 	resolverActive.Store(newResolverSnapshot(DNSResolverConfig{}))
 }
 
-// ApplyDNSResolver is called by updateUISettings whenever the operator
-// touches the DNS-resolver section. Hot-reloads the live snapshot and
-// purges the cache so a new upstream/exitVia takes effect immediately
-// rather than after the existing TTLs naturally expire.
+// ApplyDNSResolver hot-reloads the runtime snapshot and purges the
+// cache. Called from updateUISettings so the operator's edits land
+// without a process restart.
 func ApplyDNSResolver(c DNSResolverConfig) {
 	resolverActive.Store(newResolverSnapshot(c))
 	resolverCache.purge()
 }
 
-// DNSResolverActive returns the current live snapshot — the read side
-// of the atomic-pointer hot-reload pattern.
 func dnsResolverSnapshot() *resolverConfigSnapshot {
 	s := resolverActive.Load()
 	if s == nil {
-		// Defensive: should never happen because of init() above.
 		return newResolverSnapshot(DNSResolverConfig{})
 	}
 	return s
 }
 
-// dnsCacheEntry is one resolved name's IPs and the absolute time at which
-// the entry expires. Negative caching uses ips=nil + expireAt.
+// dnsCacheEntry is one (exit, name) tuple's IPs. ips=nil + a TTL value
+// = negative cache entry (recently failed, don't keep retrying).
 type dnsCacheEntry struct {
-	ips      []net.IP
+	ips      []string
 	expireAt time.Time
 }
 
-// dnsCache is a tiny LRU + TTL cache. Lookup returns (entry, fresh) where
-// fresh=true means the entry is still within its TTL. Stale entries are
-// also returned (stale-while-revalidate) but the caller is expected to
-// kick off an async refresh.
+// dnsCache is a tiny LRU + TTL cache. Keyed by `<exit>/<name>` because
+// the same name resolved through two different exits can legitimately
+// return different IPs (CDN region selection, etc.). Cache MUST scope
+// to exit identity or you get cross-pollination between rules that
+// target the same domain via different peers.
 type dnsCache struct {
 	mu      sync.Mutex
 	entries map[string]*dnsCacheEntry
-	order   []string // LRU order, head = oldest
+	order   []string
 }
 
 func newDNSCache() *dnsCache {
 	return &dnsCache{entries: make(map[string]*dnsCacheEntry)}
 }
 
-func (c *dnsCache) get(name string) (*dnsCacheEntry, bool) {
+func (c *dnsCache) get(key string) (*dnsCacheEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.entries[name]
+	e, ok := c.entries[key]
 	if !ok {
 		return nil, false
 	}
-	// Bubble to MRU
 	for i, k := range c.order {
-		if k == name {
+		if k == key {
 			c.order = append(append([]string{}, c.order[:i]...), c.order[i+1:]...)
 			break
 		}
 	}
-	c.order = append(c.order, name)
+	c.order = append(c.order, key)
 	return e, time.Now().Before(e.expireAt)
 }
 
-func (c *dnsCache) set(name string, e *dnsCacheEntry, capacity int) {
+func (c *dnsCache) set(key string, e *dnsCacheEntry, capacity int) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, exists := c.entries[name]; !exists {
-		c.order = append(c.order, name)
+	if _, exists := c.entries[key]; !exists {
+		c.order = append(c.order, key)
 	}
-	c.entries[name] = e
+	c.entries[key] = e
 	for len(c.entries) > capacity && len(c.order) > 0 {
 		oldest := c.order[0]
 		c.order = c.order[1:]
@@ -149,8 +137,6 @@ func (c *dnsCache) set(name string, e *dnsCacheEntry, capacity int) {
 	}
 }
 
-// purge drops every cached entry. Called when the operator changes
-// upstream / exit so old answers don't haunt the new config.
 func (c *dnsCache) purge() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -158,87 +144,69 @@ func (c *dnsCache) purge() {
 	c.order = nil
 }
 
-// resolverCache lives at app scope; one cache, lifetime = process.
 var resolverCache = newDNSCache()
 
 // dnsLookupOverExit performs one DNS query for `name` (A records) by
-// opening a TCP/53 connection to the configured upstream THROUGH the
-// relay (entry → exit → upstream). Returns the resolved IPs and the
-// raw (un-clamped) TTL the upstream reported.
-//
-// `exitForRule` is the exit_via from the calling rule; the resolver
-// either pins to its own ExitVia setting (if non-empty) or reuses the
-// rule's exit so the DNS query travels the same chain as the data path.
-func (a *App) dnsLookupOverExit(ctx context.Context, name, exitForRule string) ([]net.IP, time.Duration, error) {
+// dialing the upstream resolver THROUGH the rule's exit. The relay
+// layer just sees a regular TCP target ("upstream:53") — no special
+// peer support required, this works against any TCP-forwarding
+// hy2-compatible peer including vanilla hy2 and pre-1.3.4 hy2scale.
+// The "DNS-via-exit" semantic is implemented purely by virtue of the
+// TCP packet originating at the exit (so the upstream resolver sees a
+// query from a clean source IP, not from the polluted entry's network).
+func (a *App) dnsLookupOverExit(ctx context.Context, name, exitVia string) ([]string, error) {
 	snap := dnsResolverSnapshot()
-	if !snap.enabled {
-		return nil, 0, fmt.Errorf("resolver disabled")
-	}
-	exitVia := snap.exitVia
-	if exitVia == "" {
-		exitVia = exitForRule
-	}
-	if exitVia == "" {
-		return nil, 0, fmt.Errorf("no exit specified for DNS lookup")
-	}
-
 	dialCtx, cancel := context.WithTimeout(ctx, snap.queryTimeout)
 	defer cancel()
 	conn, err := a.dialExit(dialCtx, exitVia, snap.upstream)
 	if err != nil {
-		return nil, 0, fmt.Errorf("dial upstream %s via %s: %w", snap.upstream, exitVia, err)
+		return nil, fmt.Errorf("dial upstream %s via %s: %w", snap.upstream, exitVia, err)
 	}
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(snap.queryTimeout))
 
-	// Build A query
 	var msg dnsmessage.Message
 	msg.Header = dnsmessage.Header{ID: uint16(time.Now().UnixNano()), RecursionDesired: true}
 	q, err := dnsmessage.NewName(dnsName(name))
 	if err != nil {
-		return nil, 0, fmt.Errorf("encode name: %w", err)
+		return nil, fmt.Errorf("encode name: %w", err)
 	}
 	msg.Questions = []dnsmessage.Question{{Name: q, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}}
 	wire, err := msg.Pack()
 	if err != nil {
-		return nil, 0, fmt.Errorf("pack: %w", err)
+		return nil, fmt.Errorf("pack: %w", err)
 	}
-	// TCP/53 framing: 2-byte length prefix, big-endian.
 	frame := make([]byte, 2+len(wire))
 	binary.BigEndian.PutUint16(frame[:2], uint16(len(wire)))
 	copy(frame[2:], wire)
 	if _, err := conn.Write(frame); err != nil {
-		return nil, 0, fmt.Errorf("write query: %w", err)
+		return nil, fmt.Errorf("write query: %w", err)
 	}
 
-	// Read response. Use io.ReadFull rather than a hand-rolled loop —
-	// io.ReadFull treats "got the bytes but the next read would EOF" as
-	// success (returns nil), which is exactly what happens when the
-	// upstream DNS server closes the TCP connection after writing the
-	// reply (common, especially when the relay-side hysteria server
-	// half-closes after the exit's outbound finishes).
+	// io.ReadFull treats "read all bytes, then EOF" as success — which
+	// is what happens when the relay-side TCP server closes the conn
+	// after writing the reply.
 	var lenBuf [2]byte
 	if _, err := io.ReadFull(conn, lenBuf[:]); err != nil {
-		return nil, 0, fmt.Errorf("read response length: %w", err)
+		return nil, fmt.Errorf("read response length: %w", err)
 	}
 	respLen := binary.BigEndian.Uint16(lenBuf[:])
 	if respLen == 0 || respLen > 65535 {
-		return nil, 0, fmt.Errorf("bad response length %d", respLen)
+		return nil, fmt.Errorf("bad response length %d", respLen)
 	}
 	respBuf := make([]byte, respLen)
 	if _, err := io.ReadFull(conn, respBuf); err != nil {
-		return nil, 0, fmt.Errorf("read response body: %w", err)
+		return nil, fmt.Errorf("read response body: %w", err)
 	}
 	var resp dnsmessage.Message
 	if err := resp.Unpack(respBuf); err != nil {
-		return nil, 0, fmt.Errorf("unpack: %w", err)
+		return nil, fmt.Errorf("unpack: %w", err)
 	}
 	if resp.RCode != dnsmessage.RCodeSuccess {
-		return nil, 0, fmt.Errorf("rcode %s", resp.RCode.String())
+		return nil, fmt.Errorf("rcode %s", resp.RCode.String())
 	}
 
-	var ips []net.IP
-	var minTTL uint32 = ^uint32(0)
+	var ips []string
 	for _, ans := range resp.Answers {
 		if ans.Header.Type != dnsmessage.TypeA {
 			continue
@@ -247,15 +215,12 @@ func (a *App) dnsLookupOverExit(ctx context.Context, name, exitForRule string) (
 		if !ok {
 			continue
 		}
-		ips = append(ips, net.IP(ar.A[:]))
-		if ans.Header.TTL < minTTL {
-			minTTL = ans.Header.TTL
-		}
+		ips = append(ips, net.IP(ar.A[:]).String())
 	}
-	if minTTL == ^uint32(0) {
-		minTTL = 0
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("no A records in response")
 	}
-	return ips, time.Duration(minTTL) * time.Second, nil
+	return ips, nil
 }
 
 func dnsName(s string) string {
@@ -264,74 +229,69 @@ func dnsName(s string) string {
 }
 
 // ResolveViaExit is the public entry point. Returns IPs the way
-// net.LookupHost does, but uses the relay-routed resolver when enabled
-// in config. Caller passes `exitForRule` so the DNS query naturally
-// travels the same exit chain as the data it's resolving for (unless
-// DNSResolver.ExitVia is set, in which case that pin wins).
+// net.LookupHost does. Behaviour:
 //
-// Falls back to net.LookupHost when:
-//   - DNSResolverConfig.Enabled == false
-//   - the upstream call fails (any reason — unreachable, timeout,
-//     SERVFAIL, …) and no fresh cache entry exists. Stale cache wins
-//     over fallback so a transient blip doesn't flip every rule back
-//     to the polluted host resolver.
-func (a *App) ResolveViaExit(ctx context.Context, name, exitForRule string) ([]string, error) {
+//   - if DNSResolver.Enabled == false, fall straight through to
+//     net.LookupHost on this node (legacy / off-by-default path).
+//   - else, dial the configured upstream resolver THROUGH the rule's
+//     own `exitVia` and speak DNS-over-TCP. Each rule's DNS naturally
+//     rides the same exit chain as its data plane — a rule with
+//     exit_via=us resolves through us, a rule with exit_via=jp
+//     resolves through jp. No global "DNS exit pin"; the per-rule
+//     exit is the only routing dimension.
+//   - the relay-layer plumbing is just plain TCP forwarding to
+//     upstream:53, so this works against ANY hy2-compatible peer
+//     (vanilla hy2 server, older hy2scale, etc.). No new wire
+//     protocol is added — the "DNS via exit" semantic falls out
+//     naturally from the upstream seeing the query coming from the
+//     exit's clean IP rather than from the polluted entry.
+//
+// Cache key is `<exit>/<name>` so the same domain queried through
+// different exits is cached independently — geo-DNS / CDN region
+// answers stay distinct per route.
+//
+// Falls back to net.LookupHost if the relay query fails AND no fresh
+// cache entry exists (stale-while-revalidate; an upstream blip won't
+// abruptly flip a rule back to the polluted host resolver).
+func (a *App) ResolveViaExit(ctx context.Context, name, exitVia string) ([]string, error) {
 	snap := dnsResolverSnapshot()
 	if !snap.enabled {
 		return net.LookupHost(name)
 	}
-
-	if e, fresh := resolverCache.get(name); fresh {
-		return ipStrings(e.ips), nilOrEmptyErr(e)
-	}
-
-	ips, ttl, err := a.dnsLookupOverExit(ctx, name, exitForRule)
-	if err != nil {
-		// Stale-while-revalidate: prefer stale cache hit over a
-		// fallback to the polluted local resolver.
-		if e, _ := resolverCache.get(name); e != nil && e.ips != nil {
-			log.Printf("[dns] %s: upstream failed (%v), serving stale cache", name, err)
-			return ipStrings(e.ips), nil
-		}
-		// Negative-cache: don't hammer upstream on a bad name.
-		resolverCache.set(name, &dnsCacheEntry{ips: nil, expireAt: time.Now().Add(snap.negativeTTL)}, snap.cacheSize)
-		// As a last resort, try the host resolver — better to leak
-		// to local DNS once than to break the rule entirely. The
-		// operator already opted IN to relay-resolved DNS so this is
-		// a soft fallback for diagnostic clarity, not a regression.
-		log.Printf("[dns] %s: upstream failed (%v), falling back to net.LookupHost", name, err)
+	if exitVia == "" {
+		// Resolver enabled but caller passed no exit — there's no
+		// remote side to ride, so fall back to local lookup. Covers
+		// rules with empty exit_via (e.g. direct-to-internet entries
+		// that bypass the relay entirely).
 		return net.LookupHost(name)
 	}
 
-	// Clamp TTL into [min, max].
-	if ttl < snap.cacheMinTTL {
-		ttl = snap.cacheMinTTL
+	cacheKey := exitVia + "/" + name
+	if e, fresh := resolverCache.get(cacheKey); fresh {
+		if e.ips == nil {
+			return nil, fmt.Errorf("cached lookup failure for %s via %s", name, exitVia)
+		}
+		return append([]string(nil), e.ips...), nil
 	}
-	if ttl > snap.cacheMaxTTL {
-		ttl = snap.cacheMaxTTL
-	}
-	resolverCache.set(name, &dnsCacheEntry{ips: ips, expireAt: time.Now().Add(ttl)}, snap.cacheSize)
-	return ipStrings(ips), nil
-}
 
-func ipStrings(ips []net.IP) []string {
-	out := make([]string, 0, len(ips))
-	for _, ip := range ips {
-		out = append(out, ip.String())
+	ips, err := a.dnsLookupOverExit(ctx, name, exitVia)
+	if err != nil {
+		// Stale-while-revalidate
+		if e, _ := resolverCache.get(cacheKey); e != nil && e.ips != nil {
+			log.Printf("[dns] %s via %s: lookup failed (%v), serving stale cache", name, exitVia, err)
+			return append([]string(nil), e.ips...), nil
+		}
+		resolverCache.set(cacheKey, &dnsCacheEntry{ips: nil, expireAt: time.Now().Add(snap.negativeTTL)}, snap.cacheSize)
+		log.Printf("[dns] %s via %s: lookup failed (%v), falling back to net.LookupHost", name, exitVia, err)
+		return net.LookupHost(name)
 	}
-	return out
-}
-
-func nilOrEmptyErr(e *dnsCacheEntry) error {
-	if e.ips == nil {
-		return fmt.Errorf("no answer")
-	}
-	return nil
+	resolverCache.set(cacheKey, &dnsCacheEntry{ips: ips, expireAt: time.Now().Add(snap.cacheTTL)}, snap.cacheSize)
+	return append([]string(nil), ips...), nil
 }
 
 // PurgeDNSCache wipes every entry. Wired into updateUISettings so
-// switching upstream/exitVia takes effect on the next call rather than
-// after the existing TTLs naturally expire.
+// switching upstream takes effect on the next call rather than after
+// the existing TTLs naturally expire.
 func PurgeDNSCache() {
 	resolverCache.purge()
 }
