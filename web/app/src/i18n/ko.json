@@ -42,6 +42,8 @@
   "nodes.exportUrl": "URL 내보내기",
   "nodes.exportCopied": "공유 URL이 클립보드에 복사됨",
   "nodes.exportFailed": "클립보드에 접근할 수 없음 — 수동으로 복사해 주세요",
+  "nodes.exportNotShareable": "공유할 수 없는 주소입니다 — 와일드카드가 아닌 호스트를 먼저 지정하세요",
+  "nodes.shareHost": "공유 호스트",
   "nodes.nodeName": "노드 이름",
   "nodes.nodeNameHint": "선택사항 — 비우면 첫 번째 주소가 이름으로 사용됨",
   "nodes.nodeNameRequired": "기존 노드 편집 시 이름이 필요합니다",

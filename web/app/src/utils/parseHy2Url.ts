@@ -102,6 +102,11 @@ export function parseHy2Url(input: string): ParsedHy2 | null {
     }
   }
   if (!host) return null;
+  // Refuse to import URLs whose host is a hy2scale-internal relay
+  // sentinel (e.g. `_relay_api_` or sing-box-stripped `relay_api`).
+  // These can only originate from a buggy share-URL builder and would
+  // poison ClientEntry.addr if accepted, propagating the leak further.
+  if (isRelayInternalHost(host)) return null;
 
   const params = new URLSearchParams(query);
   const get = (k: string) => params.get(k) ?? undefined;
@@ -142,6 +147,39 @@ export function parseHy2Url(input: string): ParsedHy2 | null {
 
 function safeDecode(s: string): string {
   try { return decodeURIComponent(s); } catch { return s; }
+}
+
+// isRelayInternalHost matches the same set as buildHy2Url's guard, plus
+// the underscore-stripped variants that some clients (sing-box, mihomo)
+// produce when their URL parser drops `_` from hostnames per RFC.
+function isRelayInternalHost(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, '');
+  if (
+    h === '_relay_api_' ||
+    h === '_relay_register_' ||
+    h === '_relay_ctrl_s2c_' ||
+    h === '_relay_listpeers_' ||
+    h === '_relay_ping_' ||
+    h === '_relay_latency_' ||
+    h === '_relay_rebind_' ||
+    h.startsWith('_relay_via_') ||
+    h.startsWith('_relay_data_') ||
+    h.startsWith('_relay_iptun_')
+  ) return true;
+  // Underscore-stripped (sing-box / mihomo path):
+  if (
+    h === 'relay_api' || h === 'relayapi' ||
+    h === 'relay_register' || h === 'relayregister' ||
+    h === 'relay_ctrl_s2c' || h === 'relayctrls2c' ||
+    h === 'relay_listpeers' || h === 'relaylistpeers' ||
+    h === 'relay_ping' || h === 'relayping' ||
+    h === 'relay_latency' || h === 'relaylatency' ||
+    h === 'relay_rebind' || h === 'relayrebind' ||
+    h.startsWith('relay_via_') || h.startsWith('relayvia') ||
+    h.startsWith('relay_data_') || h.startsWith('relaydata') ||
+    h.startsWith('relay_iptun_') || h.startsWith('relayiptun')
+  ) return true;
+  return false;
 }
 
 // parseBwMbps converts a Hysteria-style bandwidth literal to Mbps. Accepts
