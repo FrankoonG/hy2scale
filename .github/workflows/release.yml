@@ -416,8 +416,12 @@ jobs:
             --amend "${IMG}:${VER}-amd64" \
             --amend "${IMG}:${VER}-arm64"
           docker manifest push "${IMG}:${VER}"
+          echo "Published multi-arch manifest ${IMG}:${VER}"
 
           # Stamp :latest only on a finalised tag (no -rc / -dev / etc.).
+          # Detect via dash in the version string — anything like
+          # 1.3.4-rc1 / 1.3.4-dev1 / 1.3.4-bondfix is a pre-release;
+          # plain 1.3.4 is finalised.
           case "$VER" in
             *-*)
               echo "Pre-release ${VER} — skipping :latest"
@@ -427,5 +431,41 @@ jobs:
                 --amend "${IMG}:${VER}-amd64" \
                 --amend "${IMG}:${VER}-arm64"
               docker manifest push "${IMG}:latest"
+              echo "Aligned :latest to ${IMG}:${VER}"
               ;;
           esac
+
+      - name: Delete intermediate per-arch tags from Docker Hub
+        # `docker manifest create` requires real registry references for
+        # each architecture, so the build-docker matrix legs pushed
+        # `${IMG}:${VER}-amd64` and `${IMG}:${VER}-arm64` as visible
+        # tags. After the multi-arch manifest is published these are
+        # clutter on the Hub tag list — the digests they pointed to
+        # remain accessible through the parent manifest tag, so it's
+        # safe to delete the per-arch tags. Done via the Hub web API
+        # (the registry API doesn't expose tag deletion).
+        run: |
+          set -e
+          VER="${{ steps.ver.outputs.version }}"
+          REPO="frankoong/hy2scale"
+          # Docker Hub web API uses JWT auth (separate from the
+          # registry push token). Exchange the PAT for a JWT.
+          JWT=$(curl -fsS -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"username\":\"${{ secrets.DOCKERHUB_USERNAME }}\",\"password\":\"${{ secrets.DOCKERHUB_TOKEN }}\"}" \
+            https://hub.docker.com/v2/users/login/ | jq -r .token)
+          if [ -z "$JWT" ] || [ "$JWT" = "null" ]; then
+            echo "::warning::Hub API login failed; per-arch tags left in place"
+            exit 0
+          fi
+          for arch in amd64 arm64; do
+            TAG="${VER}-${arch}"
+            HTTP=$(curl -sS -o /tmp/del.out -w "%{http_code}" \
+              -X DELETE \
+              -H "Authorization: JWT ${JWT}" \
+              "https://hub.docker.com/v2/repositories/${REPO}/tags/${TAG}/" || echo 000)
+            case "$HTTP" in
+              204|404) echo "deleted (or already gone): ${REPO}:${TAG} (HTTP ${HTTP})" ;;
+              *)       echo "::warning::failed to delete ${REPO}:${TAG} (HTTP ${HTTP}): $(cat /tmp/del.out)" ;;
+            esac
+          done
