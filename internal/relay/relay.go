@@ -234,6 +234,61 @@ type peer struct {
 	connAddrs    []string          // address per connection (index 0 = primary, 1+ = extras)
 	connStatuses []string          // per-IP status: "online", "offline", "mismatch", "native"
 	connSeq      atomic.Uint64    // round-robin counter for stream distribution
+
+	// ─── Diagnostic counters (exposed via /api/diag/peer-*) ───
+	// Application-level proxies for the QUIC-class signals we wish we'd
+	// had during the cn-xinchang +82ms drift investigation. The hysteria
+	// `Client` interface is strictly TCP/UDP/Close and exposes no raw
+	// quic-go retransmit / RTT-srtt / pacer-bandwidth — but the *shape*
+	// of those problems is observable at the application layer:
+	//   - QUIC degraded → ping streams open slowly or time out
+	//   - QUIC stream pressure → streamBridge rebind-check spikes
+	//   - Standing CC queue → latency_ms creeps up over time
+	// All counters reset only on peer disconnect (peer struct teardown).
+	// Cumulative since the QUIC session began.
+	pingOK       atomic.Uint64 // ping stream completed within timeout (also a stream-open success)
+	pingFail     atomic.Uint64 // ping stream timed out / errored (also a stream-open failure)
+	rebindChecks atomic.Uint64 // [via] rebind-probe arrivals routed at this peer
+	// Per-peer ring of recent latency samples. SetLatency is the only
+	// writer and it's called from a handful of goroutines (probe loop,
+	// inbound report handler), so a small mutex is fine — no need for
+	// a lock-free design at this rate (<1 sample/sec/peer).
+	latencyMu   sync.Mutex
+	latencyHist []LatencySample
+}
+
+// LatencySample is one entry in the per-peer time series. ms < 0 means
+// the probe failed; the operator can render those as gaps. Capped to
+// LatencyHistoryCap entries — older samples slide off the head.
+type LatencySample struct {
+	At time.Time `json:"at"`
+	Ms int       `json:"ms"`
+}
+
+// LatencyHistoryCap bounds the per-peer ring. With ~5 s probe cadence
+// this gives ~10 minutes of history per peer, ~1.5 KB/peer at most —
+// trivial even with dozens of peers.
+const LatencyHistoryCap = 120
+
+// recordLatency appends a sample to the peer's ring and trims to cap.
+func (p *peer) recordLatency(ms int) {
+	p.latencyMu.Lock()
+	defer p.latencyMu.Unlock()
+	p.latencyHist = append(p.latencyHist, LatencySample{At: time.Now(), Ms: ms})
+	if len(p.latencyHist) > LatencyHistoryCap {
+		// Drop oldest in-place; cheap copy at this size.
+		drop := len(p.latencyHist) - LatencyHistoryCap
+		p.latencyHist = append(p.latencyHist[:0], p.latencyHist[drop:]...)
+	}
+}
+
+// latencyHistorySnapshot returns a defensive copy of the ring.
+func (p *peer) latencyHistorySnapshot() []LatencySample {
+	p.latencyMu.Lock()
+	defer p.latencyMu.Unlock()
+	out := make([]LatencySample, len(p.latencyHist))
+	copy(out, p.latencyHist)
+	return out
 }
 
 // pickClient returns the next QUIC client using round-robin across healthy connections.
@@ -456,6 +511,17 @@ func (n *Node) SetLatency(peerName string, ms int) {
 		n.latencies[peerName] = ms
 	}
 	n.latencyMu.Unlock()
+	// Append to per-peer ring regardless of source (outbound prober call
+	// site OR inbound _relay_latency_ report). The history then captures
+	// the same time series the topology API reads from `n.latencies`,
+	// just retained over time so an operator can see when a peer's
+	// ping started creeping up.
+	n.mu.RLock()
+	pp, ok := n.peers[peerName]
+	n.mu.RUnlock()
+	if ok {
+		pp.recordLatency(ms)
+	}
 }
 
 // GetLatency returns stored latency for a peer. For multi-addr peers, returns
@@ -585,12 +651,14 @@ func (n *Node) StartLatencyProber(ctx context.Context) {
 						if rtt >= 0 {
 							n.SetLatency(name, int(rtt.Milliseconds()))
 							p.failCount.Store(0)
+							p.pingOK.Add(1)
 							// Store per-addr latency for primary
 							if len(p.connAddrs) > 0 {
 								n.setAddrLatency(name, p.connAddrs[0], int(rtt.Milliseconds()))
 							}
 						} else {
 							n.SetLatency(name, -1)
+							p.pingFail.Add(1)
 							// If the peer pushed/pulled bytes since the last probe,
 							// the link is alive — the ping just got queued behind
 							// data on a saturated QUIC connection (e.g. long upload
@@ -1370,6 +1438,17 @@ func (n *Node) handleVia(ctx context.Context, peerName, targetAddr string, strea
 	// Check if this is a rebind to an existing via bridge
 	if isBridged {
 		log.Printf("[via] checking rebind %s for peer %s", bridgeID, peerName)
+		// Diagnostic counter — exposed via /api/diag/peer-rebinds. A
+		// rebind probe arriving from a peer means one of that peer's
+		// downstream streamBridge instances saw its underlying QUIC
+		// stream go bad and is asking to be reattached. Spikes here
+		// correlate with chronic UDP loss / connection-level
+		// instability on that one peer's tunnel.
+		n.mu.RLock()
+		if pp, ok := n.peers[peerName]; ok {
+			pp.rebindChecks.Add(1)
+		}
+		n.mu.RUnlock()
 		if rebindConn := n.bridges.TryRebind(bridgeID); rebindConn != nil {
 			log.Printf("[via] rebind accepted: %s (peer %s)", bridgeID, peerName)
 			defer rebindConn.Close()
@@ -1938,6 +2017,105 @@ func (n *Node) IsInbound(name string) bool {
 	defer n.mu.RUnlock()
 	p, ok := n.peers[name]
 	return ok && p.client == nil
+}
+
+// PeerHealthSnapshot is one row of /api/diag/peer-health (the
+// ping-ok/fail axis — application-level proxy for QUIC-tunnel health
+// since the hysteria `Client` interface doesn't expose raw quic-go
+// retransmit / pacer-bandwidth fields).
+type PeerHealthSnapshot struct {
+	Name      string `json:"name"`
+	Direction string `json:"direction"` // "outbound" / "inbound"
+	PingOK    uint64 `json:"ping_ok"`
+	PingFail  uint64 `json:"ping_fail"`
+	FailCount int32  `json:"fail_count"` // consecutive failures (existing field)
+	TxBytes   uint64 `json:"tx_bytes"`
+	RxBytes   uint64 `json:"rx_bytes"`
+}
+
+// PeerRebindSnapshot is one row of /api/diag/peer-rebinds — counts
+// of [via] rebind-probe arrivals at this peer's tunnel since session
+// start. Spikes correlate with chronic per-stream disruption on a
+// QUIC connection that hasn't fully dropped.
+type PeerRebindSnapshot struct {
+	Name         string `json:"name"`
+	Direction    string `json:"direction"`
+	RebindChecks uint64 `json:"rebind_checks"`
+}
+
+// PeerLatencySnapshot is one row of /api/diag/peer-latency — the
+// rolling time series of recent latency samples per peer. Ring is
+// LatencyHistoryCap entries (~10 min at 5 s probe cadence).
+type PeerLatencySnapshot struct {
+	Name      string          `json:"name"`
+	Direction string          `json:"direction"`
+	LatencyMs int             `json:"latency_ms"` // most recent point value
+	History   []LatencySample `json:"history"`
+}
+
+// directionOf returns "outbound" / "inbound" for the diag endpoints.
+// Caller must hold n.mu at least RLock.
+func (n *Node) directionOf(p *peer) string {
+	if p.client != nil {
+		return "outbound"
+	}
+	return "inbound"
+}
+
+// HealthSnapshots returns the QUIC-health proxy axis for every peer.
+func (n *Node) HealthSnapshots() []PeerHealthSnapshot {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	out := make([]PeerHealthSnapshot, 0, len(n.peers))
+	for name, p := range n.peers {
+		out = append(out, PeerHealthSnapshot{
+			Name:      name,
+			Direction: n.directionOf(p),
+			PingOK:    p.pingOK.Load(),
+			PingFail:  p.pingFail.Load(),
+			FailCount: p.failCount.Load(),
+			TxBytes:   p.txBytes.Load(),
+			RxBytes:   p.rxBytes.Load(),
+		})
+	}
+	return out
+}
+
+// RebindSnapshots returns the rebind-check counter axis for every peer.
+func (n *Node) RebindSnapshots() []PeerRebindSnapshot {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	out := make([]PeerRebindSnapshot, 0, len(n.peers))
+	for name, p := range n.peers {
+		out = append(out, PeerRebindSnapshot{
+			Name:         name,
+			Direction:    n.directionOf(p),
+			RebindChecks: p.rebindChecks.Load(),
+		})
+	}
+	return out
+}
+
+// LatencySnapshots returns the latency-time-series axis for every
+// peer. Includes the current point value (matching what the topology
+// API surfaces) plus the rolling history ring.
+func (n *Node) LatencySnapshots() []PeerLatencySnapshot {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	out := make([]PeerLatencySnapshot, 0, len(n.peers))
+	for name, p := range n.peers {
+		ms := -1
+		if v, ok := n.latencies[name]; ok {
+			ms = v
+		}
+		out = append(out, PeerLatencySnapshot{
+			Name:      name,
+			Direction: n.directionOf(p),
+			LatencyMs: ms,
+			History:   p.latencyHistorySnapshot(),
+		})
+	}
+	return out
 }
 
 // NativeMap returns a map of peer names to their native status.
