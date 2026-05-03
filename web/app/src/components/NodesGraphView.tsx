@@ -1883,15 +1883,14 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                         const arrow = value > 0 ? (tx >= rx ? '↓' : '↑') : '';
                         const arrowCls = value > 0 ? (tx >= rx ? 'rate-arrow-down' : 'rate-arrow-up') : '';
                         const valueText = fmtRate(value);
-                        // Halo: render full text (arrow + value) so the halo
-                        // outlines both glyphs against the canvas background.
-                        const haloText = arrow ? arrow + ' ' + valueText : valueText;
+                        const labelChildren = arrow
+                          ? <><tspan className={arrowCls}>{arrow}</tspan>{valueText}</>
+                          : <>{valueText}</>;
                         return (
                           <g>
-                            <HaloText x={0} y={11} stroke={surfaceColor}>{haloText}</HaloText>
+                            <HaloText x={0} y={11} stroke={surfaceColor}>{labelChildren}</HaloText>
                             <text x={0} y={11} textAnchor="middle" className="hy-topo-edge-label rate">
-                              {arrow && <tspan className={arrowCls}>{arrow + ' '}</tspan>}
-                              {valueText}
+                              {labelChildren}
                             </text>
                           </g>
                         );

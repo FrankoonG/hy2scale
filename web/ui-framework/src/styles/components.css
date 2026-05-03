@@ -433,8 +433,13 @@ a.peer-link:hover{text-decoration:underline}
  * indirection on SVG `fill: currentColor` rules. The arrow is rendered
  * larger than the rate text so it remains legible at the small label
  * font-size. */
-.hy-topo-edge-label .rate-arrow-up{color:#3b82f6;font-size:13px;font-weight:700}
-.hy-topo-edge-label .rate-arrow-down{color:#22c55e;font-size:13px;font-weight:700}
+/* letter-spacing pulls the rate value into the arrow's glyph cell so
+ * the pair reads as a single token. The cell on a unicode arrow has
+ * built-in horizontal padding that, even at advance-width 0, leaves a
+ * visible gap; -0.15em closes that without overlapping legible parts. */
+.rate-arrow-up,.rate-arrow-down{font-size:13px;font-weight:700;letter-spacing:-.1em}
+.hy-topo-edge-label .rate-arrow-up,.hy-topo-edge-label-halo .rate-arrow-up{color:#3b82f6}
+.hy-topo-edge-label .rate-arrow-down,.hy-topo-edge-label-halo .rate-arrow-down{color:#22c55e}
 .hy-topo-edge-label.lat-ok{color:#22c55e}
 .hy-topo-edge-label.lat-mid{color:#d97706}
 .hy-topo-edge-label.lat-bad{color:#ef4444}
