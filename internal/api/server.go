@@ -241,6 +241,23 @@ func (s *Server) Start(ctx context.Context) error {
 	//   GET /api/diag/resolve?name=example.com&exit_via=us
 	authed.HandleFunc("GET /api/diag/resolve", s.diagResolve)
 
+	// Per-peer relay diagnostics — three axes of state we wish we'd had
+	// during the cn-xinchang +82ms drift investigation. None of these
+	// touch peer state; all are read-only counters / rings on the live
+	// peer struct.
+	//   GET /api/diag/peer-health   QUIC-tunnel proxy: ping ok/fail,
+	//                                consecutive failCount, tx/rx bytes
+	//   GET /api/diag/peer-rebinds  per-peer count of [via] rebind-probe
+	//                                arrivals — chronic per-stream
+	//                                disruption signal
+	//   GET /api/diag/peer-latency  rolling time series of recent
+	//                                latency_ms samples (~10 min ring),
+	//                                so an operator can pinpoint when
+	//                                a peer's RTT started creeping up
+	authed.HandleFunc("GET /api/diag/peer-health", s.diagPeerHealth)
+	authed.HandleFunc("GET /api/diag/peer-rebinds", s.diagPeerRebinds)
+	authed.HandleFunc("GET /api/diag/peer-latency", s.diagPeerLatency)
+
 	// Sessions (active connections)
 	authed.HandleFunc("GET /api/sessions", s.getSessions)
 	authed.HandleFunc("DELETE /api/sessions/{id}", s.kickSession)
@@ -770,6 +787,35 @@ func (s *Server) diagResolve(w http.ResponseWriter, r *http.Request) {
 		resp["error"] = err.Error()
 	}
 	writeJSON(w, resp)
+}
+
+// diagPeerHealth — ping ok/fail counters per peer (QUIC-tunnel
+// application-level proxy). The hysteria.Client interface doesn't
+// expose raw quic-go retransmit / RTT-srtt / pacer-bandwidth, so we
+// surface the application-level shape of the same problem: ping
+// stream success rate, consecutive failures, and recent byte counts.
+// Cumulative since the peer's QUIC session began (counters reset on
+// disconnect, not per-window).
+func (s *Server) diagPeerHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]any{"peers": s.app.Node().HealthSnapshots()})
+}
+
+// diagPeerRebinds — count of [via] rebind-probe arrivals at each
+// peer. A stream-level signal: when a peer's QUIC connection
+// experiences chronic per-stream disruption (without the connection
+// itself dying), downstream streamBridge instances send rebind
+// probes at high cadence. Spikes here are the canonical "this one
+// peer's tunnel is unhappy but won't admit it" signal.
+func (s *Server) diagPeerRebinds(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]any{"peers": s.app.Node().RebindSnapshots()})
+}
+
+// diagPeerLatency — rolling time series of recent latency_ms samples
+// per peer (~10 min ring at the 5 s probe cadence). Lets an operator
+// pinpoint when a peer's RTT started drifting up, instead of seeing
+// only the current point value the topology API surfaces.
+func (s *Server) diagPeerLatency(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]any{"peers": s.app.Node().LatencySnapshots()})
 }
 
 // --- Node ---
