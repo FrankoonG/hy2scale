@@ -369,7 +369,10 @@ func (a *App) findPathsTo(target string) []string {
 				// also be nested=true on our side — otherwise paths
 				// below it are not authorised and we don't need the
 				// BFS state.
-				cycle := sp.Name == a.node.Name() || sp.Name == cfg.NodeID
+				// node.Name() is now the same string as cfg.NodeID (the
+				// schema merge unified them); the duplicate compare was
+				// kept as a belt-and-braces guard pre-merge.
+				cycle := sp.Name == cfg.NodeID
 				for _, c := range item.chain {
 					if c == sp.Name {
 						cycle = true

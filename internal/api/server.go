@@ -848,7 +848,11 @@ func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 	limited := !capOK
 	writeJSON(w, map[string]any{
 		"node_id":       cfg.NodeID,
-		"name":          cfg.Name,
+		// `name` was the legacy display label kept divergent from
+		// node_id. The schema collapsed those — front-end consumers
+		// that still read `name` keep working, just always equal to
+		// node_id now.
+		"name":          cfg.NodeID,
 		"exit_node":     cfg.ExitNode,
 		"server":        cfg.Server,
 		"version":       Version,
@@ -892,12 +896,12 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 	oldID := s.app.Store().Get().NodeID
 
 	s.app.Store().Update(func(c *app.Config) {
+		// node_id is the single identity. Accept either body field for
+		// backward compat with old clients that still send `name`.
 		if body.NodeID != nil && *body.NodeID != "" {
 			c.NodeID = *body.NodeID
-			c.Name = *body.NodeID
-		}
-		if body.Name != nil {
-			c.Name = *body.Name
+		} else if body.Name != nil && *body.Name != "" {
+			c.NodeID = *body.Name
 		}
 		if body.ExitNode != nil {
 			c.ExitNode = *body.ExitNode
@@ -915,23 +919,22 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 	})
 
 	cfg := s.app.Store().Get()
-	oldName := s.app.Node().Name()
-	s.app.Node().SetName(cfg.Name)
+	oldWireName := s.app.Node().Name()
+	s.app.Node().SetName(cfg.NodeID)
 	s.app.Node().SetNodeID(cfg.NodeID)
 	s.app.Node().SetExit(cfg.ExitNode)
 
 	needReconnect := false
-	if body.NodeID != nil {
+	if oldID != cfg.NodeID {
 		s.app.PersistNodeID(cfg.NodeID)
-		if oldID != cfg.NodeID {
-			s.mu.Lock()
-			s.oldNodeIDs[oldID] = cfg.NodeID
-			s.mu.Unlock()
-			needReconnect = true
-		}
+		s.mu.Lock()
+		s.oldNodeIDs[oldID] = cfg.NodeID
+		s.mu.Unlock()
+		needReconnect = true
 	}
-	// Reconnect if name or ID changed so peers see the new identity
-	if cfg.Name != oldName {
+	// Reconnect if the wire-name (== NodeID after the merge) changed,
+	// so peers see the new identity.
+	if cfg.NodeID != oldWireName {
 		needReconnect = true
 	}
 	// Hot-restart server if server config or identity changed
@@ -1798,7 +1801,6 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 				// response — we never bypass to query the target.
 				ancestors := map[string]bool{
 					cfg.NodeID: true,
-					cfg.Name:   true,
 					r.name:     true,
 				}
 				walkAndCache(r.name, r.children, ancestors, 0, newCache)
@@ -1975,7 +1977,7 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 	}
 	parentLatency := s.app.Node().GetLatency(peerName)
 	cfg := s.app.Store().Get()
-	selfNames := map[string]bool{cfg.NodeID: true, cfg.Name: true, peerName: true}
+	selfNames := map[string]bool{cfg.NodeID: true, peerName: true}
 	children := make([]topoSubPeer, 0, len(remotePeers))
 	for _, rp := range remotePeers {
 		childLatency := rp.LatencyMs
@@ -2144,7 +2146,7 @@ func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName
 // Always contains the local node's ID and name so neither can ever appear as
 // a sub-peer at any depth.
 func selfAncestors(cfg app.Config, extra ...string) map[string]bool {
-	a := map[string]bool{cfg.NodeID: true, cfg.Name: true}
+	a := map[string]bool{cfg.NodeID: true}
 	for _, e := range extra {
 		if e != "" {
 			a[e] = true
