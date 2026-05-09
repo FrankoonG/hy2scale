@@ -315,14 +315,13 @@ export default function NodesPage() {
     {
       key: 'node', title: t('nodes.node'), className: 'col-name',
       render: (n, meta) => {
-        const basePath = getBasePath();
         // Already viewing a remote node through the local proxy — don't
         // offer to chain another /remote/ hop from here. Chained proxy
         // paths stack double-proxy overhead and make auth/routing hard to
         // reason about; the user should drive from their own local UI.
         const isRemoteView = !!(window as any).__PROXY__;
         const selfId = node?.node_id || '';
-        const chain = selfId && meta.nodeKey.startsWith(selfId + '/')
+        const chainStr = selfId && meta.nodeKey.startsWith(selfId + '/')
           ? meta.nodeKey.slice(selfId.length + 1)
           : meta.nodeKey;
         // Native peers do NOT speak the hy2scale relay-API protocol — they
@@ -330,12 +329,31 @@ export default function NodesPage() {
         // would just hit a peer that has no idea what to do with it. v1.2's
         // UI suppressed the click; v1.3 lost that during the React rewrite.
         // Restore: render the name as plain text, no link.
+        // Offline peers render plain too — chained remote into something
+        // that won't answer would land in a hung tunnel; same gate the
+        // graph view's path-info bar uses.
+        const offline = n.latency_ms !== undefined && n.latency_ms < 0;
         const nameEl = n.is_self ? (
           <span className="peer-name-cell" style={{ color: 'var(--primary)' }}>{n.name || node?.name || 'self'}</span>
-        ) : isRemoteView || n.native ? (
+        ) : isRemoteView || n.native || offline ? (
           <span className="peer-name-cell">{n.name}</span>
         ) : (
-          <a className="peer-link peer-name-cell" href={`${basePath}/remote/${chain}/scale/`} target="_blank" rel="noopener">
+          // Click goes through the same RemoteConnectModal the graph view
+          // uses — auto-login + plain-text expired screen handling all live
+          // there. Direct window.open(/remote/<chain>/scale/) used to bypass
+          // that modal entirely and dump users on the remote LoginPage.
+          <a
+            className="peer-link peer-name-cell"
+            href="#"
+            onClick={(e) => {
+              e.preventDefault();
+              const chain = chainStr.split('/').filter(Boolean);
+              if (chain.length === 0) return;
+              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              setClickPos({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+              setRemoteConnect({ chain, label: chain.join(' / ') });
+            }}
+          >
             {n.name}
           </a>
         );
