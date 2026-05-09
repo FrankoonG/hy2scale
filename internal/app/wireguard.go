@@ -386,8 +386,21 @@ func installUDPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 				return
 			}
 			defer remote.Close()
-			remote.SetDeadline(time.Now().Add(30 * time.Second))
-			udpConn.SetDeadline(time.Now().Add(30 * time.Second))
+			// Idle reap: gvisor netstack has no conntrack, so this forwarder
+			// owns the lifetime of each UDP flow. The deadline must be
+			// refreshed on every packet from either side — using a fixed
+			// `now+30s` (the previous code) cut off any unidirectional
+			// server-push stream after exactly 30s, regardless of activity.
+			// gvisor's UDPConn.Read only checks the deadline on the blocking
+			// path (no buffered packets), so symmetric bidirectional traffic
+			// hides the bug; subscribe-then-receive streams expose it.
+			const udpIdleTimeout = 60 * time.Second
+			refresh := func() {
+				d := time.Now().Add(udpIdleTimeout)
+				udpConn.SetDeadline(d)
+				remote.SetDeadline(d)
+			}
+			refresh()
 
 			done := make(chan struct{})
 			go func() {
@@ -397,6 +410,7 @@ func installUDPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 					if e != nil || n == 0 {
 						break
 					}
+					refresh()
 					remote.Write(buf[:n])
 				}
 				done <- struct{}{}
@@ -407,6 +421,7 @@ func installUDPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 				if e != nil || n == 0 {
 					break
 				}
+				refresh()
 				udpConn.Write(buf[:n])
 			}
 			<-done
