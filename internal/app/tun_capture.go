@@ -311,8 +311,20 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 				return
 			}
 			defer remote.Close()
-			remote.SetDeadline(time.Now().Add(30 * time.Second))
-			udpConn.SetDeadline(time.Now().Add(30 * time.Second))
+			// Idle-refreshed deadline: gvisor netstack has no conntrack, so
+			// this forwarder owns each UDP flow's lifetime. A fixed
+			// `now+30s` (the previous code) cut off any unidirectional
+			// server-push stream at exactly 30s regardless of activity —
+			// gvisor's UDPConn.Read only consults the deadline on the
+			// blocking-no-data path, so symmetric bidirectional traffic
+			// hides the bug. Same fix as wireguard.go's installUDPForwarder.
+			const udpIdleTimeout = 60 * time.Second
+			refresh := func() {
+				d := time.Now().Add(udpIdleTimeout)
+				udpConn.SetDeadline(d)
+				remote.SetDeadline(d)
+			}
+			refresh()
 
 			done := make(chan struct{})
 			go func() {
@@ -322,6 +334,7 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 					if e != nil || n == 0 {
 						break
 					}
+					refresh()
 					remote.Write(buf[:n])
 				}
 				done <- struct{}{}
@@ -332,6 +345,7 @@ func installCaptureForwarders(s *stack.Stack, a *App) {
 				if e != nil || n == 0 {
 					break
 				}
+				refresh()
 				udpConn.Write(buf[:n])
 			}
 			<-done
