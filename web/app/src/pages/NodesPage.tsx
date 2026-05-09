@@ -743,7 +743,13 @@ export default function NodesPage() {
               selection.clear();
               if (qpath) selection.toggle(qpath);
             }}
-            onOpenRemote={(qpath) => {
+            // In proxy mode (already viewing a remote node's UI through
+            // /scale/remote/...), don't offer a further hop into another
+            // remote — the list view drops the node-id link there for the
+            // same reason. Leaving onOpenRemote undefined makes the path-
+            // info bar's `!onOpenRemote` branch render each hop as a
+            // plain span instead of a clickable link.
+            onOpenRemote={(window as any).__PROXY__ ? undefined : (qpath) => {
               const selfId = node?.node_id || '';
               const chainStr = selfId && qpath.startsWith(selfId + '/') ? qpath.slice(selfId.length + 1) : qpath;
               const chain = chainStr.split('/').filter(Boolean);
