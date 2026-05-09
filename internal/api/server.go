@@ -3438,7 +3438,30 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 			1)
 		w.Write([]byte(html))
 	} else {
-		io.Copy(w, resp.Body)
+		// Stream non-HTML responses with an explicit flush after each
+		// chunk. plain io.Copy(w, resp.Body) leaves chunks sitting in
+		// Go's ~4 KB ResponseWriter buffer until enough data accumulates,
+		// which made SSE endpoints (text/event-stream) silently fail
+		// through the proxy: the remote graph-layout snapshot is the
+		// first event, ~100 bytes, so it never reached the browser and
+		// the remote-graph node-drag positions appeared not to persist
+		// on page reload.
+		fl, _ := w.(http.Flusher)
+		buf := make([]byte, 16*1024)
+		for {
+			n, rerr := resp.Body.Read(buf)
+			if n > 0 {
+				if _, werr := w.Write(buf[:n]); werr != nil {
+					return
+				}
+				if fl != nil {
+					fl.Flush()
+				}
+			}
+			if rerr != nil {
+				return
+			}
+		}
 	}
 }
 
