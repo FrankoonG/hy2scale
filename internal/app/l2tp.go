@@ -397,61 +397,11 @@ wget -qO- "http://` + gateway + fmt.Sprintf(`:%d/ppp/down?ip=$5&iface=$1" 2>/dev
 	os.WriteFile("/etc/ppp/ip-up.local", []byte(ipUpScript), 0755)
 	os.WriteFile("/etc/ppp/ip-down.local", []byte(ipDownScript), 0755)
 
-	// 6. Generate strongswan IPsec config (supports both IKEv1 for L2TP and IKEv2)
-	ipsecConf := `config setup
-    uniqueids=never
-
-conn l2tp-psk
-    keyexchange=ikev1
-    type=transport
-    authby=secret
-    auto=add
-    rekey=no
-    forceencaps=yes
-    left=%any
-    leftid=%any
-    leftprotoport=17/1701
-    right=%any
-    rightprotoport=17/%any
-    ike=aes256-sha256-modp3072,aes256-sha256-modp2048,aes128-sha256-modp3072,aes128-sha256-modp2048,aes128-sha1-modp1024,3des-sha1-modp1024!
-    esp=aes256-sha256,aes128-sha256,aes128-sha1,3des-sha1!
-    dpdaction=clear
-    dpddelay=300s
-
-`
-	ipsecSecrets := fmt.Sprintf(`%%any %%any : PSK "%s"
-`, cfg.PSK)
-
-	// strongswan.conf: fix IKEv1 iOS compatibility
-	// strongswan.conf: increase log level when DEBUG is set
-	charonLog := ""
-	if debugMode() {
-		charonLog = `
-    filelog {
-        /dev/stderr {
-            ike = 2
-            cfg = 2
-            net = 1
-            enc = 1
-            knl = 1
-            default = 1
-            flush_line = yes
-        }
-    }`
-	}
-	strongswanConf := fmt.Sprintf(`charon {
-    load_modular = yes
-    max_ikev1_exchanges = 100%s
-    plugins {
-        include strongswan.d/charon/*.conf
-    }
-}
-`, charonLog)
-
-	os.MkdirAll("/etc/ipsec.d", 0755)
-	os.WriteFile("/etc/strongswan.conf", []byte(strongswanConf), 0644)
-	os.WriteFile("/etc/ipsec.conf", []byte(ipsecConf), 0644)
-	os.WriteFile("/etc/ipsec.secrets", []byte(ipsecSecrets), 0600)
+	// 6. /etc/ipsec.{conf,secrets,strongswan.conf} are owned by regenIPSec —
+	// it reads cfg.L2TP and cfg.IKEv2 together so neither side clobbers the
+	// other's PSK on a hot-reload, and it triggers `ipsec rereadsecrets` /
+	// `ipsec update` / `swanctl --load-all` when charon is already running.
+	a.regenIPSec()
 
 	// 7. Setup traffic forwarding
 	os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
@@ -546,6 +496,11 @@ func (a *App) RestartL2TP() error {
 	a.StopL2TP()
 	cfg := a.store.Get()
 	if cfg.L2TP == nil || !cfg.L2TP.Enabled {
+		// Disable path — regen so the freshly-empty L2TP block disappears
+		// from /etc/ipsec.conf and charon stops accepting it. Start is
+		// idempotent for this case (it'd return nil), so we do the regen
+		// inline.
+		a.regenIPSec()
 		return nil
 	}
 	return a.StartL2TP(*cfg.L2TP)

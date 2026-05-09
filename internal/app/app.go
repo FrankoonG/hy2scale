@@ -233,6 +233,7 @@ type App struct {
 	ikev2Cancel  context.CancelFunc
 	ikev2Wg      sync.WaitGroup // tracks all goroutines spawned by StartIKEv2
 	ikev2RestartMu sync.Mutex   // serializes concurrent RestartIKEv2
+	ipsecRegenMu  sync.Mutex    // serializes /etc/ipsec.{conf,secrets} writes (L2TP+IKEv2 share)
 	usersMu       sync.RWMutex
 	userIndex     map[string]*UserConfig           // username → user (for fast auth lookup)
 	pwConflicted  map[string]map[string]bool       // username → proxy → conflicted

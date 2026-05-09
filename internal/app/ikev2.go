@@ -299,15 +299,8 @@ esac
 	// Resolve Local/Remote IDs.
 	//
 	// The cert always needs a CN, so we fall back to NodeID for `localID`
-	// (the cert-CN seed). But the explicit-vs-implicit distinction matters
-	// for IKE peer matching: when the operator deliberately sets
-	// cfg.LocalID we want strongswan to publish *that* as our IKE
-	// identity (leftid) so a client with `rightid=<localID>` matches and
-	// `rightid=<wrong>` is rejected. With cfg.LocalID empty, omit the
-	// leftid clause entirely — strongswan then derives the identity from
-	// the cert subject DN, and a client with `rightid=` blank gets the
-	// "accept anything" behaviour the operator opted into.
-	cfgLocalIDExplicit := cfg.LocalID != ""
+	// (the cert-CN seed). The explicit-vs-implicit distinction (leftid policy
+	// described in regenIPSec → buildIKEv2ConnBlock) is now handled there.
 	localID := cfg.LocalID
 	if localID == "" {
 		localID = a.store.Get().NodeID
@@ -317,32 +310,14 @@ esac
 		remoteID = "%any"
 	}
 
-	// Generate IKEv2 connection config (strongswan format)
-	var connConf string
 	dns := a.getDNS()
+
+	// Mode-specific setup. The actual `conn ikev2-*` block in /etc/ipsec.conf
+	// is composed by regenIPSec from cfg; this switch only does mode-side
+	// state that the conn block depends on (cert install for mschapv2).
 	switch cfg.Mode {
 	case "psk":
-		connConf = fmt.Sprintf(`
-conn ikev2-psk
-    keyexchange=ikev2
-    auto=add
-    type=tunnel
-    left=%%any
-    leftid=%s
-    leftsubnet=0.0.0.0/0
-    right=%%any
-    rightid=%s
-    authby=secret
-    rightsourceip=%s
-    rightdns=%s
-    leftupdown=/etc/ipsec.d/ikev2-updown.sh
-    fragmentation=yes
-    rekey=no
-    dpdaction=clear
-    dpddelay=300s
-    ike=aes256-sha256-modp2048,aes128-sha256-modp2048!
-    esp=aes256-sha256,aes128-sha256!
-`, localID, remoteID, ipRange, dns)
+		// Nothing extra — regenIPSec writes the conn block + PSK from cfg.
 
 	case "mschapv2":
 		// cert_id points to a CA cert — auto-sign a server cert on each startup
@@ -378,91 +353,16 @@ conn ikev2-psk
 		// Clean up temp cert from TLS store (keep only in ipsec dirs)
 		a.tls.Delete("__ikev2_auto__")
 
-		// leftid policy:
-		//   * cfg.LocalID set → leftid=@<localID>. strongswan publishes
-		//     <localID> as our IKE identity, accepts only clients whose
-		//     `rightid` is empty or matches <localID>, and rejects
-		//     `rightid=<wrong>` with AUTH_FAILED. The cert CN is also
-		//     <localID>, so the cert chain validates the same name.
-		//   * cfg.LocalID empty → leftid=%any. strongswan still proves
-		//     itself with the full cert subject DN, but at the IKE peer-
-		//     config matcher it accepts ANY value the client puts in
-		//     IDr (rightid) — including arbitrary strings, which would
-		//     otherwise fail the implicit DN-vs-string compare. This
-		//     gives operators a clean opt-out from rightid enforcement.
-		// leftid policy:
-		//   * cfg.LocalID set → emit `leftid=@<localID>`. strongswan
-		//     publishes <localID> as our IKE identity; a client whose
-		//     rightid is empty or equals <localID> matches, and any
-		//     other rightid (including typos) gets AUTH_FAILED.
-		//   * cfg.LocalID empty → emit no leftid clause at all.
-		//     strongswan derives the identity from the cert subject DN.
-		//     A client with empty rightid matches (it tells strongswan
-		//     "I don't enforce a specific server name"); a client with
-		//     a non-empty rightid matches only if that rightid happens
-		//     to equal the cert DN — i.e. unset on hy2scale side =
-		//     "rightid must be blank on the client side" in practice.
-		//     strongswan has no wildcard ID syntax that would let us
-		//     advertise "match any IDr the client sends" while still
-		//     having a real cert; `leftid=%any` is parsed as the
-		//     literal FQDN "%any" and does not match arbitrary values.
-		leftIDLine := ""
-		if cfgLocalIDExplicit {
-			leftIDLine = fmt.Sprintf("    leftid=@%s\n", localID)
-		}
-		connConf = fmt.Sprintf(`
-conn ikev2-mschapv2
-    keyexchange=ikev2
-    auto=add
-    type=tunnel
-    left=%%any
-%s    leftcert=ikev2-server.cert.pem
-    leftsendcert=always
-    leftsubnet=0.0.0.0/0
-    right=%%any
-    rightauth=eap-mschapv2
-    eap_identity=%%identity
-    rightsourceip=%s
-    rightdns=%s
-    leftupdown=/etc/ipsec.d/ikev2-updown.sh
-    fragmentation=yes
-    rekey=no
-    dpdaction=clear
-    dpddelay=300s
-    ike=aes256-sha256-modp2048,aes128-sha256-modp2048!
-    esp=aes256-sha256,aes128-sha256!
-`, leftIDLine, ipRange, dns)
-
-		// Generate EAP secrets
+		// Refresh per-user EAP entries (orthogonal to PSK lines, lives in
+		// the same ipsec.secrets file but managed by updateEAPSecrets which
+		// preserves PSK lines).
 		a.updateEAPSecrets()
 
 	default:
 		return fmt.Errorf("ikev2: unknown mode %q", cfg.Mode)
 	}
 
-	// Compat mode: empty ipsec.conf (no stroke connection), no stroke EAP secrets.
-	// All secrets come exclusively from swanctl to avoid duplicate EAP entries
-	// that cause MSCHAPv2 verification failure on strongSwan 5.8.4.
 	iptablesOK := testIptablesAvailable()
-	// Always write ipsec.conf. In compat mode with kernel-libipsec, the stroke
-	// connection handles EAP MSCHAPv2 auth (vici MSCHAPv2 is broken on 5.8.4).
-	// kernel-libipsec handles ESP in userspace via ipsec0 TUN.
-	// AF_PACKET bridge on ipsec0 captures decrypted packets, bypassing FORWARD DROP.
-	appendToIPSecConf(connConf)
-
-	// Update secrets — compat mode skips ipsec.secrets EAP entries
-	if cfg.Mode == "psk" && cfg.PSK != "" {
-		appendPSKSecret(cfg.PSK)
-	}
-	if cfg.Mode == "mschapv2" && iptablesOK {
-		kd, _ := os.ReadFile("/etc/ipsec.d/private/ikev2-server.key.pem")
-		keyType := "ECDSA"
-		if strings.Contains(string(kd), "RSA PRIVATE KEY") {
-			keyType = "RSA"
-		}
-		appendToIPSecSecrets(fmt.Sprintf(": %s ikev2-server.key.pem\n", keyType))
-		a.updateEAPSecrets()
-	}
 
 	// Setup iptables (same dual-stack approach as L2TP)
 	os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1"), 0644)
@@ -536,6 +436,11 @@ esac
 		go func() { defer a.ikev2Wg.Done(); a.serveIKEv2Hooks(ikev2Ctx, gateway, hooksPort, cfg) }()
 	}
 
+	// Regenerate /etc/ipsec.{conf,secrets} from current cfg (covers L2TP+IKEv2
+	// in one shot, no stale PSK accumulation, triggers reload if charon is
+	// already running). On the first call this is a no-op for reload — the
+	// ensureStrongswanRunning below picks up the freshly-written files.
+	a.regenIPSec()
 	ensureStrongswanRunning()
 	time.Sleep(time.Second)
 	run("ipsec", "update")
@@ -612,6 +517,9 @@ func (a *App) RestartIKEv2() error {
 	a.StopIKEv2()
 	cfg := a.store.Get()
 	if cfg.IKEv2 == nil || !cfg.IKEv2.Enabled {
+		// Disable path — regen so the IKEv2 conn block disappears from
+		// /etc/ipsec.conf and charon stops accepting it.
+		a.regenIPSec()
 		return nil
 	}
 	return a.StartIKEv2(*cfg.IKEv2)
@@ -675,96 +583,11 @@ func resolveEAPIdentity(clientVIP string) string {
 	return ""
 }
 
-// appendToIPSecConf installs a conn block into /etc/ipsec.conf, replacing
-// any pre-existing block whose name (`conn <name>`) matches the one we're
-// installing. This is the only IKEv2-side writer of ipsec.conf, and a fresh
-// PUT /api/ikev2 lands here without going through L2TP's full-file rewrite,
-// so a naive O_APPEND would let stale connection blocks pile up after every
-// reload — including ones with a previous leftid value that strongswan
-// would still match first. We parse the file into top-level sections
-// (`config setup`, `conn <name>`), drop any sections whose name collides
-// with the new block, then append the new one.
-func appendToIPSecConf(connBlock string) {
-	existing, _ := os.ReadFile("/etc/ipsec.conf")
-
-	// Pull out the connection name from the new block ("conn xxx" line).
-	newName := ""
-	for _, line := range strings.Split(connBlock, "\n") {
-		t := strings.TrimSpace(line)
-		if strings.HasPrefix(t, "conn ") {
-			newName = strings.TrimSpace(strings.TrimPrefix(t, "conn "))
-			break
-		}
-	}
-
-	// Section-aware parse: a section starts on a line that begins (no
-	// leading whitespace) with `config ` or `conn `, and runs until the
-	// next such line. Drop any section named like the one we're about to
-	// install.
-	type section struct{ header, body string }
-	var sections []section
-	var cur section
-	for _, line := range strings.Split(string(existing), "\n") {
-		ls := strings.TrimRight(line, "\r")
-		if strings.HasPrefix(ls, "config ") || strings.HasPrefix(ls, "conn ") {
-			if cur.header != "" || cur.body != "" {
-				sections = append(sections, cur)
-			}
-			cur = section{header: ls}
-		} else {
-			cur.body += line + "\n"
-		}
-	}
-	if cur.header != "" || cur.body != "" {
-		sections = append(sections, cur)
-	}
-
-	var rebuilt strings.Builder
-	for _, s := range sections {
-		if newName != "" && strings.TrimSpace(s.header) == "conn "+newName {
-			continue // dropped — about to be replaced by the new block
-		}
-		if s.header != "" {
-			rebuilt.WriteString(s.header + "\n")
-		}
-		rebuilt.WriteString(s.body)
-	}
-	final := rebuilt.String()
-	if !strings.HasSuffix(final, "\n") && final != "" {
-		final += "\n"
-	}
-	final += connBlock
-	if err := os.WriteFile("/etc/ipsec.conf", []byte(final), 0644); err != nil {
-		log.Printf("[ikev2] failed to write ipsec.conf: %v", err)
-	}
-}
-
-// appendToIPSecSecrets appends a line to ipsec.secrets if not already present.
-func appendToIPSecSecrets(line string) {
-	data, _ := os.ReadFile("/etc/ipsec.secrets")
-	if strings.Contains(string(data), strings.TrimSpace(line)) {
-		return
-	}
-	f, _ := os.OpenFile("/etc/ipsec.secrets", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-	if f != nil {
-		f.WriteString(line)
-		f.Close()
-	}
-}
-
-// appendPSKSecret appends a PSK entry to ipsec.secrets if not already present.
-func appendPSKSecret(psk string) {
-	data, _ := os.ReadFile("/etc/ipsec.secrets")
-	entry := fmt.Sprintf(`%%any %%any : PSK "%s"`, psk)
-	if strings.Contains(string(data), entry) {
-		return
-	}
-	f, _ := os.OpenFile("/etc/ipsec.secrets", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-	if f != nil {
-		f.WriteString(entry + "\n")
-		f.Close()
-	}
-}
+// /etc/ipsec.{conf,secrets} are now owned by regenIPSec (see ipsec_regen.go).
+// The earlier appendToIPSecConf / appendPSKSecret / appendToIPSecSecrets
+// accumulator helpers were removed because they leaked stale PSKs across
+// hot-reloads (the accumulator was the bug behind L2TP/IKEv2 PSK changes
+// only taking effect on container restart).
 
 var strongswanOnce sync.Once
 var strongswanRunning bool
