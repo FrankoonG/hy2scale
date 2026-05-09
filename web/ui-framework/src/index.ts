@@ -19,6 +19,8 @@ export { Select } from './components/Select';
 export type { SelectProps, SelectOption } from './components/Select';
 export { Textarea } from './components/Textarea';
 export type { TextareaProps } from './components/Textarea';
+export { FileDropZone } from './components/FileDropZone';
+export type { FileDropZoneProps } from './components/FileDropZone';
 export { FormGroup, FormGrid } from './components/FormGroup';
 export type { FormGroupProps, FormGridProps } from './components/FormGroup';
 export { Autocomplete } from './components/Autocomplete';
