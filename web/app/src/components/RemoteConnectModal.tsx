@@ -81,48 +81,52 @@ export default function RemoteConnectModal({ open, onClose, chain, targetLabel, 
     }
   };
 
-  const launchRemote = (token: string) => {
+  const launchRemote = (token?: string) => {
     setPhase('done');
-    // Token rides via URL hash so the new tab's handoff module can copy
-    // it into ITS OWN sessionStorage on the first tick. Parent and child
-    // tabs do not share sessionStorage, so we cannot pre-populate the
-    // child's storage directly from here.
-    const url = proxyBase + '/scale/#tok=' + encodeURIComponent(token);
+    // If we already have a token from a manual-creds submit, ride it
+    // over via the URL hash — the new tab's bootstrap picks it up
+    // before the auth-store's first read. Otherwise just open the
+    // tab and let the bootstrap self-mint via the hub-session cookie
+    // plus the relay-passthrough endpoint.
+    const url = token
+      ? proxyBase + '/scale/#tok=' + encodeURIComponent(token)
+      : proxyBase + '/scale/';
     window.open(url, '_blank');
-    // Close the modal a hair later so the new-tab focus animation has time
-    // to start — closing instantly looks like nothing happened.
     setTimeout(onClose, 200);
   };
 
   // Confirm handler — clicked once when the modal first appears (idle).
+  //
+  // Flow: probe whether the new tab will be able to authenticate by
+  // itself before opening it. Two paths can succeed silently:
+  //   (1) remote has relay_admin_passthrough on — the bootstrap module
+  //       on the new tab will mint a token via the system-authed relay
+  //       channel, no web password involved.
+  //   (2) saved-credentials match the remote's web password — the
+  //       LoginPage on the new tab auto-logs-in via loginWithHash.
+  // If either path is going to work, just open the tab; the SPA
+  // handles the rest. If neither works (remote password differs and
+  // passthrough is off), fall back to the in-modal credentials form
+  // so the user enters the password once, here, before opening the
+  // tab. Passing the token via URL hash is unnecessary now: the
+  // bootstrap can fetch its own using the hub-session cookie.
   const handleConfirm = async () => {
     if (triedAutoRef.current) return;
     triedAutoRef.current = true;
     setPhase('auto');
     setErrorMsg(null);
 
-    // Step 1: ask the remote to mint a token via the relay-passthrough
-    // endpoint. The remote-proxy on this hub is already authenticated to
-    // the upstream peer with our system password, so if the remote has
-    // RelayAdminPassthrough enabled it returns a token here without ever
-    // looking at a web password — and the modal can skip the credentials
-    // form entirely. 401/403 just means passthrough isn't on for this
-    // node; fall through to the credentials path.
+    // Probe path 1: passthrough mint via the proxy. 200 means the new
+    // tab's bootstrap will successfully self-mint, so we can open it.
     try {
-      const r = await fetch(proxyBase + '/api/relay-passthrough-token', { method: 'POST' });
+      const r = await fetch(proxyBase + '/api/relay-passthrough-token', { method: 'POST', credentials: 'same-origin' });
       if (r.ok) {
-        const data = await r.json();
-        if (data?.token) {
-          launchRemote(data.token);
-          return;
-        }
+        launchRemote();
+        return;
       }
-    } catch {
-      // network error — let the credential path produce the user-facing
-      // error message instead of failing silently here.
-    }
+    } catch { /* fall through */ }
 
-    // Step 2: try this-tab session hash, then saved (remember-me) creds.
+    // Probe path 2: saved-creds login. If it works, the SPA will too.
     const candidates: { u: string; h: string }[] = [];
     const sess = getSessionHash();
     if (sess) candidates.push(sess);
@@ -131,8 +135,8 @@ export default function RemoteConnectModal({ open, onClose, chain, targetLabel, 
 
     for (const c of candidates) {
       const res = await tryLogin(c.u, c.h);
-      if (res.ok && res.token) {
-        launchRemote(res.token);
+      if (res.ok) {
+        launchRemote();
         return;
       }
       if (res.status === 0) {
@@ -143,7 +147,6 @@ export default function RemoteConnectModal({ open, onClose, chain, targetLabel, 
       // 401 / other auth failure — keep trying remaining candidates.
     }
 
-    // No auto-login succeeded — prompt for credentials.
     setPhase('creds');
   };
 

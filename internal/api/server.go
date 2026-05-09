@@ -339,13 +339,20 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Remote node proxy — no local auth, remote handles its own
 	// Block if accessed through proxy (prevent proxy chaining)
-	apiMux.HandleFunc("/remote/", func(w http.ResponseWriter, r *http.Request) {
+	// /remote/ is the relay-tunneling proxy from this hub to a managed
+	// peer. It MUST be hub-authenticated: an unauthenticated /remote/
+	// would let any external HTTP caller use this hub as a free
+	// admin tunnel into every passthrough-trusted peer (the remote's
+	// authMiddleware bypasses on system-relay + passthrough, so an
+	// anonymous /remote/<peer>/scale/api/node would otherwise return
+	// the peer's full server config including its system password).
+	apiMux.Handle("/remote/", s.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Hy2scale-Proxy") == "true" {
 			http.Error(w, "proxy chaining not allowed", 403)
 			return
 		}
 		s.remoteProxy(w, r)
-	})
+	})))
 
 	apiMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/")
@@ -610,27 +617,44 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		token := r.Header.Get("Authorization")
-		if len(token) > 7 && token[:7] == "Bearer " {
-			token = token[7:]
+		// Collect every token the request might carry, then accept the
+		// first one we recognize. The Authorization header, the
+		// `?token=` query (used by SSE / EventSource which can't set
+		// headers), and the `hy2_session` cookie (used by new tabs
+		// that can't pre-populate sessionStorage) are all valid carriers
+		// of the same secret. They're listed in parallel rather than
+		// "first non-empty wins" because a remote-proxy tab carries
+		// THREE different tokens at once: its own remote-node Bearer
+		// (for the eventual remote authMiddleware), and its hub-origin
+		// cookie (for THIS hub's /remote/ gate). The hub gate must
+		// succeed on the cookie even when an unrecognized Bearer is
+		// also present.
+		candidates := make([]string, 0, 3)
+		if h := r.Header.Get("Authorization"); len(h) > 7 && h[:7] == "Bearer " {
+			candidates = append(candidates, h[7:])
 		}
-		// EventSource and similar SSE clients can't set Authorization
-		// headers, so accept an equivalent ?token= query parameter as a
-		// fallback. Only the exact token value leaks into the URL, which
-		// is the same secret as the Bearer header.
-		if token == "" {
-			token = r.URL.Query().Get("token")
+		if q := r.URL.Query().Get("token"); q != "" {
+			candidates = append(candidates, q)
 		}
+		if c, err := r.Cookie("hy2_session"); err == nil && c.Value != "" {
+			candidates = append(candidates, c.Value)
+		}
+		var matched string
 		s.mu.RLock()
-		expiry, ok := s.sessions[token]
+		for _, t := range candidates {
+			if expiry, ok := s.sessions[t]; ok && time.Now().Before(expiry) {
+				matched = t
+				break
+			}
+		}
 		s.mu.RUnlock()
-		if !ok || time.Now().After(expiry) {
+		if matched == "" {
 			http.Error(w, "unauthorized", 401)
 			return
 		}
 		// Refresh session on activity
 		s.mu.Lock()
-		s.sessions[token] = time.Now().Add(s.sessionTimeout())
+		s.sessions[matched] = time.Now().Add(s.sessionTimeout())
 		s.mu.Unlock()
 		next.ServeHTTP(w, r)
 	})
