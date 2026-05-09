@@ -2332,7 +2332,17 @@ type nodeOutbound struct {
 }
 
 func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
-	if relay.IsRelayStream(reqAddr) {
+	// Strip any "#bridge=<id>" tag BEFORE the relay-stream dispatch.
+	// On a multi-hop forward (hub→us→us-east) the intermediate node
+	// uses DialTCPBridged so the request reaches us-east as
+	// `_relay_api_:0#bridge=<id>`; without the strip, IsRelayStream's
+	// exact-match against `_relay_api_:0` fails, the call falls
+	// through to the TCP-dial path below, and `net.DialTimeout("tcp",
+	// "_relay_api_:0", …)` burns ~4s walking glibc DNS search domains
+	// before erroring — observed as a fixed ~4 s wait on every 2-hop
+	// /api/* request through the remote-proxy, while 1-hop is sub-ms.
+	actualAddr, bridgeID, isBridged := relay.ParseBridgeAddr(reqAddr)
+	if relay.IsRelayStream(actualAddr) {
 		// Capture the authID stashed by hy2Auth.TCPRequest for THIS goroutine
 		// (hyserver invokes EventLogger.TCPRequest immediately before
 		// Outbound.TCP in the same goroutine). For `_relay_api_:0` we wrap
@@ -2346,25 +2356,23 @@ func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
 		authID := takeGoIDAuth()
 		c1, c2 := net.Pipe()
 		var local net.Conn = c1
-		if reqAddr == relay.StreamAPI {
+		if actualAddr == relay.StreamAPI {
 			local = &RelayAuthConn{Conn: c1, AuthID: authID}
 		}
-		go o.node.HandleStream(o.ctx, reqAddr, local)
+		go o.node.HandleStream(o.ctx, actualAddr, local)
 		return c2, nil
 	}
 	// Bond stream: exit node receives multi-path bond connections
-	if IsBondStream(reqAddr) {
+	if IsBondStream(actualAddr) {
 		c1, c2 := net.Pipe()
 		go func() {
-			if err := o.app.handleBondStream(reqAddr, c1); err != nil {
+			if err := o.app.handleBondStream(actualAddr, c1); err != nil {
 				log.Printf("[bond-rx] handle error: %v", err)
 				c1.Close()
 			}
 		}()
 		return c2, nil
 	}
-	// Parse bridge tag for stream rebind support: "addr#bridge=sb_X"
-	actualAddr, bridgeID, isBridged := relay.ParseBridgeAddr(reqAddr)
 
 	// Check if this is a rebind to an existing bridge
 	if isBridged {
