@@ -19,6 +19,31 @@ export function clearToken() {
   sessionStorage.removeItem(tokenKey());
 }
 
+// hy2_session is a cookie that mirrors the hub-origin session token.
+// Auth-store calls setHubSessionCookie() on hub login (non-proxy mode
+// only) so that any tab opened against this origin — including the
+// new-tab spawned by RemoteConnectModal — can hit hub-origin endpoints
+// like /scale/remote/<peer>/scale/ without an Authorization header.
+// The browser sends Cookies on the initial HTML navigation, which
+// `Authorization: Bearer` fundamentally can't reach.
+//
+// SECURITY: SameSite=Strict prevents cross-site requests (CSRF). The
+// path is scoped to the hub's basePath so the cookie is only attached
+// when the request is for this app. Max-Age matches the default
+// 12-hour session timeout (the server still enforces the real expiry,
+// this is just to keep the cookie from outliving useful sessions in
+// the browser store).
+const hubCookieName = 'hy2_session';
+export function setHubSessionCookie(token: string) {
+  const path = (window as any).__BASE__ || '/';
+  document.cookie = `${hubCookieName}=${encodeURIComponent(token)}; Path=${path}; SameSite=Strict; Max-Age=43200`;
+}
+
+export function clearHubSessionCookie() {
+  const path = (window as any).__BASE__ || '/';
+  document.cookie = `${hubCookieName}=; Path=${path}; SameSite=Strict; Max-Age=0`;
+}
+
 export function getSessionHash(): { u: string; h: string } | null {
   try {
     const raw = sessionStorage.getItem(sessionHashKey);

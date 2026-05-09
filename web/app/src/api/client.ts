@@ -25,7 +25,14 @@ export async function api<T = any>(
     headers['Content-Type'] = 'application/json';
   }
 
-  const res = await fetch(`${basePath}/api${path}`, { ...opts, headers });
+  // credentials: 'same-origin' makes the hub-session cookie travel
+  // with every request — proxy tabs (loaded under a /scale/remote/...
+  // path) start with no Bearer because their proxy-scoped sessionStorage
+  // is empty until the user logs in OR a passthrough flow primes it,
+  // so the cookie is the only auth carrier on those first hits. Same-
+  // origin is also the fetch default, but spelling it out keeps the
+  // intent visible alongside the Authorization-header path.
+  const res = await fetch(`${basePath}/api${path}`, { ...opts, headers, credentials: 'same-origin' });
 
   if (res.status === 401) {
     // Session expired
