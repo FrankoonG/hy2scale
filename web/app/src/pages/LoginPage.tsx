@@ -17,23 +17,27 @@ export default function LoginPage() {
   useEffect(() => {
     document.title = `${t('app.signin')} - HY2 SCALE`;
   }, [t]);
+
+  // In proxy mode (a remote node's UI rendered inside /scale/remote/.../)
+  // we never show the login UI. The remote-connect handshake happens on
+  // the parent tab's RemoteConnectModal BEFORE this tab is opened, so the
+  // only ways we reach this page are: direct URL typing, session expiry,
+  // or the user clicked Logout. All three should land on a plain-text
+  // "session expired" screen — the user has to go back to the parent tab
+  // to re-establish a session.
+  const isProxy = !!(window as any).__PROXY__;
+
   const { login, loginWithHash, loading, error } = useAuthStore();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [remember, setRemember] = useState(false);
   const [hasSaved, setHasSaved] = useState(false);
 
-  // Pre-fill from saved credentials (don't auto-login).
-  // Exception: in proxy mode (viewing a remote node's UI through the local
-  // one) try the local node's credentials against the remote. If they match
-  // (same admin/password), we skip the login step entirely. If the remote
-  // rejects them, the user is left on the login form as normal.
-  //
-  // Auto-login tries saved "remember me" credentials first, then falls back
-  // to the current tab's session hash (stored on local login regardless of
-  // remember-me). Either path makes visiting a peer node frictionless when
-  // they share the same password.
+  // Local login: pre-fill from saved credentials (don't auto-submit).
+  // Skip entirely in proxy mode — the plain-text screen rendered below
+  // doesn't use these state values.
   useEffect(() => {
+    if (isProxy) return;
     const saved = getSavedCredentials();
     if (saved) {
       setUsername(saved.u);
@@ -41,16 +45,9 @@ export default function LoginPage() {
       setRemember(true);
       setHasSaved(true);
     }
-    if ((window as any).__PROXY__) {
-      const attempt = saved || getSessionHash();
-      if (attempt) {
-        (async () => {
-          const ok = await loginWithHash(attempt.u, attempt.h, !!saved);
-          if (ok) navigate('/nodes', { replace: true });
-        })();
-      }
-    }
-  }, [loginWithHash, navigate]);
+  }, [isProxy]);
+  // Suppress unused-var warning for the no-op proxy branch.
+  void getSessionHash; void loginWithHash; void navigate;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,6 +67,23 @@ export default function LoginPage() {
     }
     if (ok) navigate('/nodes', { replace: true });
   };
+
+  if (isProxy) {
+    return (
+      <div
+        style={{
+          position: 'fixed', inset: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: 24, fontFamily: 'var(--mono)',
+          fontSize: 14, lineHeight: 1.6, color: 'var(--text-secondary)',
+          textAlign: 'center', whiteSpace: 'pre-wrap',
+          background: 'var(--bg)',
+        }}
+      >
+        {t('remote.expired')}
+      </div>
+    );
+  }
 
   return (
     <div className="hy-login-wrap">
