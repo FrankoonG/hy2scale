@@ -170,6 +170,14 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Login (no auth)
 	apiMux.HandleFunc("POST /api/login", s.login)
+	// Relay-passthrough token mint: a peer that already proved itself
+	// with our system password (authID == "system" on the relay-API
+	// stream) can ask for a session token here, bypassing the local
+	// web password — but only when RelayAdminPassthrough is enabled.
+	// Used by RemoteConnectModal so that the hub's "open remote UI"
+	// flow on a passthrough-trusted peer doesn't prompt for that
+	// peer's web password just to mint the token the new tab needs.
+	apiMux.HandleFunc("POST /api/relay-passthrough-token", s.relayPassthroughToken)
 	// Internal peer list (no auth, used for reverse nested discovery)
 	apiMux.HandleFunc("GET /api/internal/peers", s.internalPeers)
 	// Build-id probe (no auth) — a long-lived SPA tab polls this to detect
@@ -527,6 +535,57 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	// Check if password is still the default (admin)
 	forceChange := body.Password == sha256Hex("admin")
 	writeJSON(w, map[string]any{"token": token, "force_password_change": forceChange})
+}
+
+// relayPassthroughToken issues a session token to a caller that has
+// already authenticated with our system password on the relay-API
+// stream — but only when RelayAdminPassthrough is on. This lets a
+// trusted upstream peer (the operator's hub) open this node's web UI
+// without re-entering the local web password.
+//
+// SECURITY — this endpoint mints a token without checking a password,
+// so a public-listener request MUST never be able to reach a success
+// path. Three independent gates enforce that:
+//
+//  1. Public-listener path: the public TCP server (srv) has no
+//     ConnContext hook, so r.Context().Value(relayCtxKey{}) is nil.
+//     We bail with 404 — same response shape any unmapped path gets,
+//     so the endpoint isn't even discoverable from the open internet.
+//  2. Relay-listener path with non-system auth (e.g. a user-level
+//     `user:<name>` relay caller): rejected with 403.
+//  3. Operator hasn't opted in to RelayAdminPassthrough on THIS node:
+//     rejected with 403, regardless of who's calling.
+//
+// Only when all three pass do we mint and return a session token.
+func (s *Server) relayPassthroughToken(w http.ResponseWriter, r *http.Request) {
+	// Gate 1: the relay-context value MUST be present. Absence proves
+	// the request came in on the public listener, never the apiBridge,
+	// so the caller never authenticated with our system password and
+	// must not be able to mint a token here. 404 instead of 401 to
+	// hide the endpoint from external scans.
+	rawCtx := r.Context().Value(relayCtxKey{})
+	if rawCtx == nil {
+		http.NotFound(w, r)
+		return
+	}
+	// Gate 2: relay-routed, but must be system-level (peer system
+	// password). User-level relay traffic doesn't grant admin even
+	// with passthrough on.
+	authID, _ := rawCtx.(string)
+	if authID != "system" {
+		http.Error(w, "forbidden", 403)
+		return
+	}
+	// Gate 3: operator must have explicitly enabled passthrough.
+	if !s.app.Store().Get().RelayAdminPassthrough {
+		http.Error(w, "passthrough disabled", 403)
+		return
+	}
+	token := s.generateToken()
+	s.mu.Lock()
+	s.sessions[token] = time.Now().Add(s.sessionTimeout())
+	s.mu.Unlock()
+	writeJSON(w, map[string]any{"token": token})
 }
 
 func (s *Server) sessionTimeout() time.Duration {
