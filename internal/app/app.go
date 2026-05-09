@@ -93,7 +93,12 @@ type SOCKS5Config struct {
 
 type Config struct {
 	NodeID     string                `yaml:"node_id" json:"node_id"`
-	Name       string                `yaml:"name" json:"name"`
+	// Legacy `name` field, retained ONLY for one-version migration: when
+	// loading an older config that had `name` divergent from `node_id`,
+	// LoadOrInitConfig adopts Name as the new NodeID and clears Name. New
+	// configs never write this field (omitempty + always blank after
+	// migration). Kept off JSON entirely — the API exposes only node_id.
+	Name       string                `yaml:"name,omitempty" json:"-"`
 	ExitNode     bool                  `yaml:"exit_node" json:"exit_node"`
 	Hy2UserAuth  bool                  `yaml:"hy2_user_auth,omitempty" json:"hy2_user_auth"`
 	Server     *ServerConfig         `yaml:"server" json:"server"`
@@ -250,7 +255,9 @@ func New(dataDir string) (*App, error) {
 
 	persistPath := dataDir + "/config.yaml"
 
-	node := relay.NewNode(cfg.Name, cfg.ExitNode)
+	// NodeID is the single identity now — wire name and stable handle
+	// were the same field-on-disk after the schema merge.
+	node := relay.NewNode(cfg.NodeID, cfg.ExitNode)
 	node.SetNodeID(cfg.NodeID) // expose stable id to register handshakes
 	return &App{
 		store:        NewConfigStore(cfg, persistPath),
@@ -333,7 +340,7 @@ func (a *App) Run(ctx context.Context) error {
 | | | | | |  ___) |____) | |__| | | | |___| |___
 |_| |_| |_| |____/|_____/\____/_| |_|_____|_____|`)
 	fmt.Printf("  v%s\n\n", AppVersion)
-	log.Printf("[%s] starting node id=%s (exit=%v)", cfg.Name, cfg.NodeID, cfg.ExitNode)
+	log.Printf("[%s] starting node id=%s (exit=%v)", cfg.NodeID, cfg.NodeID, cfg.ExitNode)
 	if debugMode() {
 		log.Printf("[debug] DEBUG mode enabled (set DEBUG=true in environment)")
 	}
@@ -359,7 +366,7 @@ func (a *App) Run(ctx context.Context) error {
 	for peerName, pc := range cfg.Peers {
 		if pc.Nested {
 			a.node.SetNestedDiscovery(peerName, true)
-			log.Printf("[%s] nested discovery enabled for %q", cfg.Name, peerName)
+			log.Printf("[%s] nested discovery enabled for %q", cfg.NodeID, peerName)
 		}
 	}
 

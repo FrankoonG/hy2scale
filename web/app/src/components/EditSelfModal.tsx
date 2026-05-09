@@ -117,7 +117,6 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
       const tls_key = tlsCertId ? `/data/tls/${tlsCertId}.key` : '';
       await api.updateNode({
         node_id: nodeId.trim(),
-        name: nodeId.trim(),
         server: { listen, password, tls_cert, tls_key },
       });
       toast.success(t('nodes.settingsSaved'));

@@ -3,6 +3,7 @@ package app
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -182,9 +183,25 @@ func LoadOrInitConfig(dataDir string) (Config, error) {
 		if cfg.NodeID == "" {
 			cfg.NodeID = nodeID
 		}
-		if cfg.Name == "" {
-			cfg.Name = cfg.NodeID
+		// Legacy `name` field migration: cfg.Name and cfg.NodeID used to be
+		// independent, but the UI conflated them on save (every PUT
+		// /api/node sent name = node_id), so in practice every deployed
+		// node ended up with name == node_id. The field is now a one-way
+		// migration shim: if a hand-edited YAML has `name` divergent from
+		// `node_id`, adopt the friendlier Name as the canonical NodeID
+		// (preserving the wire identity peers know us by — handleRegister
+		// announces n.name which is set from cfg.NodeID). The legacy field
+		// is then cleared so the next persist drops `name:` entirely.
+		if cfg.Name != "" && cfg.Name != cfg.NodeID {
+			log.Printf("[config] migrating legacy cfg.Name=%q → cfg.NodeID (was %q); peers will continue to address us as %q", cfg.Name, cfg.NodeID, cfg.Name)
+			cfg.NodeID = cfg.Name
+			// Keep the persistent /data/node-id file in sync so subsequent
+			// boots agree on the new identity.
+			if werr := os.WriteFile(filepath.Join(dataDir, "node-id"), []byte(cfg.Name), 0644); werr != nil {
+				log.Printf("[config] writing migrated node-id: %v", werr)
+			}
 		}
+		cfg.Name = ""
 		if cfg.Peers == nil {
 			cfg.Peers = make(map[string]PeerConfig)
 		}
@@ -220,7 +237,6 @@ func LoadOrInitConfig(dataDir string) (Config, error) {
 
 	cfg := Config{
 		NodeID:   nodeID,
-		Name:     nodeID,
 		ExitNode: true,
 		Server: &ServerConfig{
 			Listen:  "0.0.0.0:5565",
