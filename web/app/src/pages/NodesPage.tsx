@@ -15,6 +15,7 @@ import { getBasePath } from '@/api/client';
 import NodeModal from '@/components/NodeModal';
 import NodeImportModal from '@/components/NodeImportModal';
 import EditSelfModal from '@/components/EditSelfModal';
+import RemoteConnectModal from '@/components/RemoteConnectModal';
 import ResponsiveActions from '@/components/ResponsiveActions';
 import ImportExportButton from '@/components/ImportExportButton';
 import NodesGraphView from '@/components/NodesGraphView';
@@ -33,6 +34,10 @@ export default function NodesPage() {
   const [editSelfOpen, setEditSelfOpen] = useState(false);
   const [editingName, setEditingName] = useState<string | null>(null);
   const [clickPos, setClickPos] = useState<{ x: number; y: number } | undefined>();
+  // Remote-connect modal: confirm + (auto / manual) login happens HERE on
+  // the local page, then a fresh tab is opened with a token already in
+  // sessionStorage so the remote SPA never has to render its own LoginPage.
+  const [remoteConnect, setRemoteConnect] = useState<{ chain: string[]; label: string } | null>(null);
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
   // Default to graph view on first visit (no stored preference) since the
   // topology graph is the more informative presentation; list view remains
@@ -739,10 +744,11 @@ export default function NodesPage() {
               if (qpath) selection.toggle(qpath);
             }}
             onOpenRemote={(qpath) => {
-              const basePath = getBasePath();
               const selfId = node?.node_id || '';
-              const chain = selfId && qpath.startsWith(selfId + '/') ? qpath.slice(selfId.length + 1) : qpath;
-              window.open(`${basePath}/remote/${chain}/scale/`, '_blank', 'noopener');
+              const chainStr = selfId && qpath.startsWith(selfId + '/') ? qpath.slice(selfId.length + 1) : qpath;
+              const chain = chainStr.split('/').filter(Boolean);
+              if (chain.length === 0) return;
+              setRemoteConnect({ chain, label: chain.join(' / ') });
             }}
           />
         ) : (
@@ -773,6 +779,14 @@ export default function NodesPage() {
       <EditSelfModal
         open={editSelfOpen}
         onClose={() => setEditSelfOpen(false)}
+        animateFrom={clickPos}
+      />
+
+      <RemoteConnectModal
+        open={!!remoteConnect}
+        onClose={() => setRemoteConnect(null)}
+        chain={remoteConnect?.chain ?? []}
+        targetLabel={remoteConnect?.label ?? ''}
         animateFrom={clickPos}
       />
     </div>
