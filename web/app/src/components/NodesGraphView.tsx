@@ -1994,8 +1994,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                 // name=`sg-home`), so the two paths must be distinct.
                 const qpForReach = hops.slice(0, i + 1).map((h) => h.name).join('/');
                 const qpForOpen = hops.slice(0, i + 1).map((h) => h.key).join('/');
-                const reach = i === 0 || isReachableAt(qpForReach);
                 const isSelfHop = hop.key === selfId;
+                // Reach: self is trivially reachable from itself; everyone
+                // else is checked via the topology store. The previous
+                // `i === 0` shortcut also skipped the check when the first
+                // hop was the SELECTED outbound peer (displayPath then is
+                // just [peerName]), painting offline peers green.
+                const reach = isSelfHop || isReachableAt(qpForReach);
                 const color = reach ? 'var(--green)' : 'var(--red)';
                 // Self hop: plain colored text — opening "remote into self"
                 // would render the same UI we're already in, so the link
@@ -2003,7 +2008,10 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                 // Native hop: a vanilla hysteria2 server has no relay-API
                 // surface; /remote/<native>/scale/ would hit a peer that
                 // can't answer. v1.2 already gated this; restoring here.
-                const hopEl = isSelfHop || hop.native || !onOpenRemote ? (
+                // Unreachable hop: refuse the click — chained remote into
+                // an offline target would just hang in the proxy with a
+                // 502 with no useful failure surface.
+                const hopEl = isSelfHop || hop.native || !onOpenRemote || !reach ? (
                   <span className="hy-topo-pathinfo-hop" style={{ color }}>{hop.name}</span>
                 ) : (
                   <a
