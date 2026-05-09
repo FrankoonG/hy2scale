@@ -101,7 +101,28 @@ export default function RemoteConnectModal({ open, onClose, chain, targetLabel, 
     setPhase('auto');
     setErrorMsg(null);
 
-    // Try in order: this-tab session hash, then saved (remember-me) creds.
+    // Step 1: ask the remote to mint a token via the relay-passthrough
+    // endpoint. The remote-proxy on this hub is already authenticated to
+    // the upstream peer with our system password, so if the remote has
+    // RelayAdminPassthrough enabled it returns a token here without ever
+    // looking at a web password — and the modal can skip the credentials
+    // form entirely. 401/403 just means passthrough isn't on for this
+    // node; fall through to the credentials path.
+    try {
+      const r = await fetch(proxyBase + '/api/relay-passthrough-token', { method: 'POST' });
+      if (r.ok) {
+        const data = await r.json();
+        if (data?.token) {
+          launchRemote(data.token);
+          return;
+        }
+      }
+    } catch {
+      // network error — let the credential path produce the user-facing
+      // error message instead of failing silently here.
+    }
+
+    // Step 2: try this-tab session hash, then saved (remember-me) creds.
     const candidates: { u: string; h: string }[] = [];
     const sess = getSessionHash();
     if (sess) candidates.push(sess);
