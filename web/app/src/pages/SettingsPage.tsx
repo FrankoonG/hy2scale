@@ -8,6 +8,7 @@ import {
 import * as api from '@/api';
 import { useAuthStore } from '@/store/auth';
 import { sha256 } from '@/hooks/useAuth';
+import UpgradeUploadModal from '@/components/UpgradeUploadModal';
 
 /**
  * LicensePanel — renders the project's umbrella licence, the two
@@ -112,8 +113,9 @@ export default function SettingsPage() {
 
   // Restore & Upgrade
   const restoreRef = useRef<HTMLInputElement>(null);
-  const upgradeRef = useRef<HTMLInputElement>(null);
   const [upgrading, setUpgrading] = useState(false);
+  const [upgradeUploadOpen, setUpgradeUploadOpen] = useState(false);
+  const [upgradeUploadAnchor, setUpgradeUploadAnchor] = useState<{ x: number; y: number } | undefined>();
 
   // Online-update state — server-side singleton; SSE keeps every tab in
   // sync without duplicate downloads. State is null until the first
@@ -300,27 +302,11 @@ export default function SettingsPage() {
     }
   };
 
-  const handleUpgrade = async (file: File) => {
-    if (!file.name.endsWith('.tar.gz') && !file.name.endsWith('.tgz')) {
-      toast.error(t('settings.upgradeFailed') + ': expected .tar.gz');
-      return;
-    }
-    const ok = await confirm({
-      title: t('settings.upgradeTitle'),
-      message: t('settings.upgradeConfirm'),
-      danger: true, confirmText: t('app.confirm'), cancelText: t('app.cancel'),
-    });
-    if (!ok) return;
-    setUpgrading(true);
-    try {
-      toast.info(t('settings.upgradeUploading'));
-      await api.uploadUpgrade(file);
-      toast.success(t('settings.upgradeComplete'));
-      setTimeout(() => window.location.reload(), 5000);
-    } catch (e: any) {
-      toast.error(t('settings.upgradeFailed') + ': ' + String(e.message || e));
-    } finally { setUpgrading(false); }
-  };
+  // Upload-package upgrade flow now lives entirely inside
+  // UpgradeUploadModal — drag-drop zone, file-picker fallback, the
+  // confirm-before-upload dialog, the api.uploadUpgrade call, and the
+  // post-success page reload are all handled there. This component
+  // only owns the open/close state above.
 
   const certOptions = [
     { value: '', label: '\u2014' },
@@ -578,20 +564,16 @@ export default function SettingsPage() {
                     )}
 
                     <div>
-                      <Button onClick={() => upgradeRef.current?.click()} loading={upgrading}>
+                      <Button
+                        onClick={(e: any) => {
+                          const r = (e?.currentTarget as HTMLElement)?.getBoundingClientRect?.();
+                          if (r) setUpgradeUploadAnchor({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+                          setUpgradeUploadOpen(true);
+                        }}
+                        loading={upgrading}
+                      >
                         {t('settings.uploadPackage')}
                       </Button>
-                      <input
-                        ref={upgradeRef}
-                        type="file"
-                        accept=".tar.gz,.tgz"
-                        style={{ display: 'none' }}
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) handleUpgrade(file);
-                          e.target.value = '';
-                        }}
-                      />
                     </div>
                   </>
                 ) : (
@@ -625,6 +607,12 @@ export default function SettingsPage() {
           </>
         )}
       </TabPanel>
+
+      <UpgradeUploadModal
+        open={upgradeUploadOpen}
+        onClose={() => setUpgradeUploadOpen(false)}
+        animateFrom={upgradeUploadAnchor}
+      />
     </div>
   );
 }
