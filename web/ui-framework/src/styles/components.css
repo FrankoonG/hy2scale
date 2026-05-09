@@ -261,6 +261,58 @@ a.peer-link:hover{text-decoration:underline}
 .hy-textarea:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(67,97,238,.1)}
 .hy-textarea::placeholder{color:var(--text-muted)}
 
+/* ====== File drop zone ====== */
+/* Border colour is a LITERAL mid-grey, not a CSS var: Dark Reader's
+ * brightness-preserving inversion lifts near-white var(--border) back
+ * to near-white in dark mode, which lights the dotted line up against
+ * the dark surface. #9ca3af stays mid-grey through DR's transform
+ * (same trick as the topology grid lines). The drag-over highlight is
+ * a literal blue + alpha-tinted background that composes legibly over
+ * either base. */
+.hy-dropzone{
+  border:2px dashed #9ca3af;
+  border-radius:8px;
+  padding:28px 20px;
+  /* Real token (defined in tokens.css) — `var(--bg-secondary)` was used
+   * earlier but is not defined anywhere and resolved to transparent,
+   * so the dropzone had no contrast against the modal body. */
+  background:var(--surface-hover);
+  text-align:center;
+  cursor:pointer;
+  transition:border-color .15s, background .15s, opacity .15s;
+  user-select:none;
+  opacity:.85;
+  outline:none;
+}
+.hy-dropzone:hover, .hy-dropzone:focus-visible{ opacity:1 }
+.hy-dropzone.is-drag-over{
+  border-color:#3b82f6;
+  background:rgba(59,130,246,.08);
+  opacity:1;
+}
+.hy-dropzone.is-disabled{
+  cursor:not-allowed;
+  opacity:.5;
+}
+.hy-dropzone-name{
+  font-size:14px;
+  font-family:var(--mono);
+  word-break:break-all;
+}
+.hy-dropzone-meta{
+  font-size:12px;
+  color:var(--text-muted);
+  margin-top:4px;
+}
+.hy-dropzone-replace{
+  font-size:12px;
+  color:var(--text-muted);
+  margin-top:8px;
+}
+.hy-dropzone-hint{
+  font-size:14px;
+}
+
 /* ====== Password ====== */
 .hy-pw-wrap{position:relative;display:flex;width:100%}
 .hy-pw-wrap .hy-input{flex:1;padding-right:34px}
