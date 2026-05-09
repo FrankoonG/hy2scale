@@ -12,7 +12,7 @@ interface Props {
   /** Local node_id — used as the key for the self-node. */
   selfId: string;
   selfName?: string;
-  onOpenRemote?: (qpath: string) => void;
+  onOpenRemote?: (qpath: string, anchor?: { x: number; y: number }) => void;
   /** Invoked with the bare node name (or '__self__' for the local node)
    *  when the user clicks the edit button in the selected-path overlay.
    *  The click coords let the parent anchor the edit-modal enter animation
@@ -2022,7 +2022,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
-                      onOpenRemote!(qpForOpen);
+                      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                      onOpenRemote!(qpForOpen, { x: r.left + r.width / 2, y: r.top + r.height / 2 });
                     }}
                   >{hop.name}</a>
                 );

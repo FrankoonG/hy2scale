@@ -74,7 +74,15 @@ function extractPeers(topo: TopologyNode[]) {
         continue;
       }
       const qp = parent ? parent + '/' + n.name : n.name;
-      if (n.connected || isChild) connected.add(n.name);
+      // Reachability: treat the canonical `n.connected === false` signal
+      // from the backend as authoritative for sub-children too. The
+      // previous `|| isChild` fallback added every sub-row to the
+      // connected set unconditionally, which made the path-info reach
+      // check paint offline multi-hop targets (e.g. sg-home/us/us-east
+      // when demo-us-east is down) green and clickable. Treat missing
+      // `connected` as reachable so an old backend that omits the field
+      // still works the same way.
+      if (n.connected !== false) connected.add(n.name);
       if (n.disabled) {
         if (parent === '') {
           // Root-level disable (root outbound or direct inbound under self)

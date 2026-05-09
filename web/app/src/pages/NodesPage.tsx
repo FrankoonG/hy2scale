@@ -331,8 +331,11 @@ export default function NodesPage() {
         // Restore: render the name as plain text, no link.
         // Offline peers render plain too — chained remote into something
         // that won't answer would land in a hung tunnel; same gate the
-        // graph view's path-info bar uses.
-        const offline = n.latency_ms !== undefined && n.latency_ms < 0;
+        // graph view's path-info bar uses. `n.connected === false` is the
+        // canonical "this hop is broken" signal the backend fills for
+        // both top-level peers and sub-rows; latency_ms can lag for a
+        // tick when a peer drops out so it's not the right gate.
+        const offline = n.connected === false;
         const nameEl = n.is_self ? (
           <span className="peer-name-cell" style={{ color: 'var(--primary)' }}>{n.name || node?.name || 'self'}</span>
         ) : isRemoteView || n.native || offline ? (
@@ -767,11 +770,12 @@ export default function NodesPage() {
             // same reason. Leaving onOpenRemote undefined makes the path-
             // info bar's `!onOpenRemote` branch render each hop as a
             // plain span instead of a clickable link.
-            onOpenRemote={(window as any).__PROXY__ ? undefined : (qpath) => {
+            onOpenRemote={(window as any).__PROXY__ ? undefined : (qpath, anchor) => {
               const selfId = node?.node_id || '';
               const chainStr = selfId && qpath.startsWith(selfId + '/') ? qpath.slice(selfId.length + 1) : qpath;
               const chain = chainStr.split('/').filter(Boolean);
               if (chain.length === 0) return;
+              if (anchor) setClickPos(anchor);
               setRemoteConnect({ chain, label: chain.join(' / ') });
             }}
           />
