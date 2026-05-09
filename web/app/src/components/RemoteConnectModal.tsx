@@ -17,16 +17,22 @@ interface Props {
 }
 
 // RemoteConnectModal handles the entire login handshake for a remote node
-// IN-PLACE on the local page, then opens the remote tab with a token already
-// in sessionStorage so the remote SPA never has to render its own login UI.
+// IN-PLACE on the local page, then opens the remote tab with a token
+// pinned into the URL hash. The new tab's bootstrap/handoff module
+// extracts that hash on the very first synchronous tick, drops it into
+// sessionStorage under the proxy basePath key, and strips the fragment —
+// so by the time the auth store's create() reads getToken(), the new
+// tab is already "logged in" and the remote SPA never renders its own
+// LoginPage. SessionStorage is per-tab; we cannot pre-populate the new
+// tab's sessionStorage from this tab, which is why the URL hash is the
+// transport — hashes are never sent over HTTP, so the token doesn't
+// land in any proxy or server access log.
 // Flow on confirm:
 //   1. Try saved-credentials-on-this-tab (sessionHash) and remember-me
 //      credentials in turn — if either matches the remote's web password,
 //      the auto-login succeeds silently.
 //   2. Otherwise expose a username/password form right here.
-//   3. On success, sessionStorage.setItem('token:' + proxyBase, <token>)
-//      then window.open(proxyBase + '/scale/').
-// The remote tab boots, finds the token, skips its LoginPage entirely.
+//   3. On success, window.open(proxyBase + '/scale/#tok=<token>').
 export default function RemoteConnectModal({ open, onClose, chain, targetLabel, animateFrom }: Props) {
   const { t } = useTranslation();
   const toast = useToast();
@@ -57,9 +63,8 @@ export default function RemoteConnectModal({ open, onClose, chain, targetLabel, 
   }, [open, chain.join('/')]);
 
   // POSTs /api/login through the proxy with a pre-hashed password and, on
-  // success, stores the token under the proxy's basePath key so the remote
-  // SPA's getToken() will pick it up.
-  const tryLogin = async (u: string, passHash: string): Promise<{ ok: boolean; status: number; msg?: string }> => {
+  // success, returns the token to the caller for handoff to the new tab.
+  const tryLogin = async (u: string, passHash: string): Promise<{ ok: boolean; status: number; token?: string; msg?: string }> => {
     try {
       const r = await fetch(proxyBase + '/api/login', {
         method: 'POST',
@@ -70,16 +75,20 @@ export default function RemoteConnectModal({ open, onClose, chain, targetLabel, 
       if (!r.ok) return { ok: false, status: r.status, msg: `HTTP ${r.status}` };
       const data = await r.json();
       if (!data.token) return { ok: false, status: r.status, msg: 'no token' };
-      sessionStorage.setItem('token:' + proxyBase, data.token);
-      return { ok: true, status: 200 };
+      return { ok: true, status: 200, token: data.token };
     } catch (e: any) {
       return { ok: false, status: 0, msg: String(e?.message || e) };
     }
   };
 
-  const launchRemote = () => {
+  const launchRemote = (token: string) => {
     setPhase('done');
-    window.open(proxyBase + '/scale/', '_blank', 'noopener');
+    // Token rides via URL hash so the new tab's handoff module can copy
+    // it into ITS OWN sessionStorage on the first tick. Parent and child
+    // tabs do not share sessionStorage, so we cannot pre-populate the
+    // child's storage directly from here.
+    const url = proxyBase + '/scale/#tok=' + encodeURIComponent(token);
+    window.open(url, '_blank');
     // Close the modal a hair later so the new-tab focus animation has time
     // to start — closing instantly looks like nothing happened.
     setTimeout(onClose, 200);
@@ -101,8 +110,8 @@ export default function RemoteConnectModal({ open, onClose, chain, targetLabel, 
 
     for (const c of candidates) {
       const res = await tryLogin(c.u, c.h);
-      if (res.ok) {
-        launchRemote();
+      if (res.ok && res.token) {
+        launchRemote(res.token);
         return;
       }
       if (res.status === 0) {
@@ -125,8 +134,8 @@ export default function RemoteConnectModal({ open, onClose, chain, targetLabel, 
     setErrorMsg(null);
     const passHash = await sha256(password);
     const res = await tryLogin(username, passHash);
-    if (res.ok) {
-      launchRemote();
+    if (res.ok && res.token) {
+      launchRemote(res.token);
       return;
     }
     setPhase('creds');

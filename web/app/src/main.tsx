@@ -1,3 +1,8 @@
+// Imported first so its side effect (consume any `#tok=…` URL fragment
+// handed to a fresh tab by RemoteConnectModal) runs BEFORE the auth
+// store module body, which reads sessionStorage synchronously inside
+// its create() call.
+import './bootstrap/handoff';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
