@@ -2450,6 +2450,22 @@ func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
 		}
 	}
 
+	// DNS-pollution recovery for the hy2 server path: if a user's hy2
+	// client supplied an IP-form destination (because its own resolver
+	// was poisoned), we want to peek the first client bytes to recover
+	// the real hostname via TLS Client Hello SNI / HTTP Host before the
+	// upstream net.Dial. The hysteria server requires a synchronously-
+	// returned net.Conn here, so we hand back a deferredDialConn that
+	// performs the actual dial on first Write (which carries the
+	// client's data). See sniff_override.go for the wrapper and the
+	// server-speaks-first fallback.
+	if host, _, splitErr := net.SplitHostPort(actualAddr); splitErr == nil && net.ParseIP(host) != nil && !isBridged {
+		dialer := func(addr string) (net.Conn, error) {
+			return net.DialTimeout("tcp", rewriteLocalAddr(addr), 10*time.Second)
+		}
+		return newDeferredDialConn(actualAddr, dialer), nil
+	}
+
 	conn, err := net.DialTimeout("tcp", rewriteLocalAddr(actualAddr), 10*time.Second)
 	if err != nil {
 		return nil, err
