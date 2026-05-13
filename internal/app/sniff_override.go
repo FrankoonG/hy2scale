@@ -3,6 +3,7 @@ package app
 import (
 	"log"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/FrankoonG/hy2scale/internal/sniff"
@@ -29,6 +30,161 @@ func peekFirstChunk(conn net.Conn) []byte {
 		return nil
 	}
 	return buf[:n]
+}
+
+// deferredDialConn defers the upstream net.Dial until the first call to
+// Write (which carries the first client-supplied bytes) — giving the
+// sniffer a chance to recover a hostname from a TLS Client Hello / HTTP
+// Host header and replace an IP-form destination with the real name
+// before any TCP SYN goes out. Used by the hy2 server path where the
+// listener requires a synchronously-returned net.Conn before it knows
+// what bytes the client will send.
+//
+// Read blocks until the first Write completes the dial. If the
+// underlying protocol is server-speaks-first (SSH/SMTP), the first Read
+// from the upstream will be ahead of any client Write — to keep that
+// from hanging forever, Read enforces a 300 ms wall-clock budget on the
+// "no-write-seen-yet" case and then dials with the original destination
+// (preserving legacy behaviour for these protocols).
+//
+// Close cancels everything; Set*Deadline are best-effort plumb-throughs
+// once the upstream exists.
+type deferredDialConn struct {
+	dialFn func(addr string) (net.Conn, error)
+	target string // original "host:port" from the proxy request
+
+	mu     sync.Mutex
+	done   chan struct{} // closed once `actual` (or `dialErr`) is set
+	actual net.Conn
+	dialErr error
+
+	rDeadline, wDeadline time.Time
+}
+
+// newDeferredDialConn returns a wrapper that will dial `target` (or a
+// sniff-overridden form of it) lazily on first Write. `dial` must accept
+// the maybe-overridden address and return the real upstream conn.
+func newDeferredDialConn(target string, dial func(addr string) (net.Conn, error)) *deferredDialConn {
+	return &deferredDialConn{
+		dialFn: dial,
+		target: target,
+		done:   make(chan struct{}),
+	}
+}
+
+// completeDial commits the upstream — exactly one of (actual, dialErr)
+// is set, and `done` is closed so blocked Reads / Closes can proceed.
+// Repeated calls are a no-op.
+func (c *deferredDialConn) completeDial(addr string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	select {
+	case <-c.done:
+		return
+	default:
+	}
+	conn, err := c.dialFn(addr)
+	c.actual = conn
+	c.dialErr = err
+	if conn != nil {
+		if !c.rDeadline.IsZero() {
+			_ = conn.SetReadDeadline(c.rDeadline)
+		}
+		if !c.wDeadline.IsZero() {
+			_ = conn.SetWriteDeadline(c.wDeadline)
+		}
+	}
+	close(c.done)
+}
+
+func (c *deferredDialConn) Write(b []byte) (int, error) {
+	select {
+	case <-c.done:
+		// Already dialed (e.g. server-speaks-first triggered a fallback
+		// dial). Just forward.
+		if c.dialErr != nil {
+			return 0, c.dialErr
+		}
+		return c.actual.Write(b)
+	default:
+	}
+	// First write — peek `b` for sniffing, then dial.
+	dst := sniffOverrideHost(c.target, b)
+	c.completeDial(dst)
+	if c.dialErr != nil {
+		return 0, c.dialErr
+	}
+	return c.actual.Write(b)
+}
+
+func (c *deferredDialConn) Read(b []byte) (int, error) {
+	select {
+	case <-c.done:
+	case <-time.After(300 * time.Millisecond):
+		// Server-speaks-first guard: we've been asked to Read before any
+		// Write happened. Dial with original target now so the upstream
+		// can produce its greeting.
+		c.completeDial(c.target)
+	}
+	if c.dialErr != nil {
+		return 0, c.dialErr
+	}
+	return c.actual.Read(b)
+}
+
+func (c *deferredDialConn) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	select {
+	case <-c.done:
+	default:
+		c.dialErr = net.ErrClosed
+		close(c.done)
+	}
+	if c.actual != nil {
+		return c.actual.Close()
+	}
+	return nil
+}
+
+// LocalAddr / RemoteAddr / SetDeadline are best-effort. Pre-dial they
+// can't reflect a real socket, so we return placeholders or buffer the
+// deadline for post-dial application. Hysteria treats these as opaque.
+func (c *deferredDialConn) LocalAddr() net.Addr {
+	if c.actual != nil {
+		return c.actual.LocalAddr()
+	}
+	return &net.TCPAddr{}
+}
+func (c *deferredDialConn) RemoteAddr() net.Addr {
+	if c.actual != nil {
+		return c.actual.RemoteAddr()
+	}
+	return &net.TCPAddr{}
+}
+func (c *deferredDialConn) SetDeadline(t time.Time) error {
+	c.SetReadDeadline(t)
+	return c.SetWriteDeadline(t)
+}
+func (c *deferredDialConn) SetReadDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.rDeadline = t
+	actual := c.actual
+	c.mu.Unlock()
+	if actual != nil {
+		return actual.SetReadDeadline(t)
+	}
+	return nil
+}
+func (c *deferredDialConn) SetWriteDeadline(t time.Time) error {
+	c.mu.Lock()
+	c.wDeadline = t
+	actual := c.actual
+	c.mu.Unlock()
+	if actual != nil {
+		return actual.SetWriteDeadline(t)
+	}
+	return nil
 }
 
 // sniffOverrideHost replaces an IP-form `host:port` destination with one
