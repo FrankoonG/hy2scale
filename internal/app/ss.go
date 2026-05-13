@@ -105,18 +105,30 @@ func (a *App) handleSS(conn net.Conn, method string) {
 	}
 
 	// Try each user's key against the buffered salt + first frame.
+	// Diagnostic counters so a "no user matched" outcome can distinguish
+	// "every user got skipped by policy" (config issue, log loud) from
+	// "AEAD trial-decrypt failed" (bad password / wrong cipher, normal
+	// quiet rejection).
+	skippedConflict := 0
+	skippedDisabled := 0
+	tried := 0
 	for _, u := range cfg.Users {
 		if !u.Enabled {
 			continue
 		}
 		// Per-proxy disable: admin UI can revoke a user from ss only.
 		if !u.IsProxyEnabled("ss") {
+			skippedDisabled++
 			continue
 		}
-		// Skip if this user's SS password conflicts with another user
+		// Skip if this user's SS password conflicts with another user.
+		// We log this case at end-of-loop so the operator sees a single
+		// clear line per failed connection rather than silence.
 		if a.IsPasswordConflicted(u.Username, "ss") {
+			skippedConflict++
 			continue
 		}
+		tried++
 		key := evpBytesToKey(u.EffectivePassword("ss"), keySize(method))
 
 		// Derive session key from this user's master key + connection salt
@@ -157,6 +169,17 @@ func (a *App) handleSS(conn net.Conn, method string) {
 		if err != nil {
 			return
 		}
+
+		// DNS-pollution recovery: when the client supplied an IPv4/IPv6
+		// (typically because its own resolver was poisoned and it dialed
+		// the fake IP), peek at `remaining` — which is the first chunk of
+		// the actual application payload — and try to recover the real
+		// hostname from a TLS Client Hello SNI or an HTTP Host header.
+		// Hostname-ATYP requests are passed through unchanged. The peeked
+		// bytes are forwarded verbatim below (`remote.Write(remaining)`),
+		// so the dialed server sees the original packet untouched.
+		// See docs/dns-pollution-real-world.md for the rationale.
+		addr = sniffOverrideHost(addr, remaining)
 
 		// User identified! Route via their exit_via
 		exitVia := u.ExitVia
@@ -253,6 +276,15 @@ func (a *App) handleSS(conn net.Conn, method string) {
 			a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))
 		}
 		return
+	}
+	// User-loop exited with no match — explain WHY (silent rejection
+	// otherwise looks like a network glitch to the operator). Heuristic:
+	// "all users skipped by policy" vs "AEAD decrypt failed for every
+	// tried user". The first one is a misconfig the operator can fix.
+	if tried == 0 && skippedConflict > 0 {
+		log.Printf("[ss] no eligible user: every enabled user is in a password-conflict group (%d skipped). Set a per-user proxy_passwords.ss override to unblock SS auth.", skippedConflict)
+	} else if tried == 0 && skippedDisabled > 0 {
+		log.Printf("[ss] no eligible user: every enabled user has SS disabled (%d skipped via per-user proxy_disabled toggle).", skippedDisabled)
 	}
 }
 
