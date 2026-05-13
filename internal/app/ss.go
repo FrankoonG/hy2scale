@@ -171,15 +171,29 @@ func (a *App) handleSS(conn net.Conn, method string) {
 		}
 
 		// DNS-pollution recovery: when the client supplied an IPv4/IPv6
-		// (typically because its own resolver was poisoned and it dialed
-		// the fake IP), peek at `remaining` — which is the first chunk of
-		// the actual application payload — and try to recover the real
-		// hostname from a TLS Client Hello SNI or an HTTP Host header.
-		// Hostname-ATYP requests are passed through unchanged. The peeked
-		// bytes are forwarded verbatim below (`remote.Write(remaining)`),
-		// so the dialed server sees the original packet untouched.
-		// See docs/dns-pollution-real-world.md for the rationale.
-		addr = sniffOverrideHost(addr, remaining)
+		// (its resolver was poisoned, the IP it sent us is fake), peek
+		// at the actual application payload for a TLS Client Hello SNI
+		// or HTTP Host header. The hostname-ATYP path is left alone —
+		// sniffOverrideHost no-ops when host is already a name. The
+		// peeked bytes are forwarded verbatim below so the dialed server
+		// sees the original packet untouched. Docs: dns-pollution-real-world.md
+		//
+		// Why we may need to read another AEAD frame here: mihomo and
+		// most SS clients send `address` in the FIRST encrypted frame
+		// and the client's first data byte in the SECOND frame. If we
+		// only sniff `remaining` (residual from frame 1) it's typically
+		// empty and we miss the Client Hello. Read one more frame when
+		// the parsed address is IP-form and we have <32 bytes of
+		// residual. The extra frame is buffered and forwarded together
+		// with `remaining` once the upstream is dialed.
+		if host, _, splitErr := net.SplitHostPort(addr); splitErr == nil && net.ParseIP(host) != nil {
+			if len(remaining) < 32 {
+				if extra, err2 := readSSFrame(conn, sessionAEAD, nonce, overhead); err2 == nil && len(extra) > 0 {
+					remaining = append(remaining, extra...)
+				}
+			}
+			addr = sniffOverrideHost(addr, remaining)
+		}
 
 		// User identified! Route via their exit_via
 		exitVia := u.ExitVia
@@ -433,4 +447,46 @@ func parseSocksAddr(buf []byte) (string, []byte, error) {
 		return "", nil, fmt.Errorf("unknown addr type: %d", buf[0])
 	}
 	return addr, buf[pos:], nil
+}
+
+// readSSFrame reads ONE Shadowsocks AEAD frame from conn, advancing the
+// caller-supplied nonce in place. Used only on the DNS-sniff path when
+// the address-only first frame had no application-layer bytes to peek;
+// we pull one more frame so we have the client's TLS Client Hello /
+// HTTP request line. A 300 ms read deadline keeps us from stalling on
+// server-speaks-first protocols (SMTP/FTP/SSH) — in that case we return
+// what we have (possibly nil) and the sniffer no-ops; the dial then
+// proceeds with the original IP, preserving legacy behaviour.
+//
+// Caller is responsible for forwarding the returned bytes to the
+// upstream after dialing — exactly the same way the legacy `remaining`
+// slice from parseSocksAddr is forwarded.
+func readSSFrame(conn net.Conn, aead cipher.AEAD, nonce []byte, overhead int) ([]byte, error) {
+	_ = conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	defer conn.SetReadDeadline(time.Time{})
+
+	lenBuf := make([]byte, 2+overhead)
+	if _, err := io.ReadFull(conn, lenBuf); err != nil {
+		return nil, err
+	}
+	plainLen, err := aead.Open(lenBuf[:0], nonce, lenBuf, nil)
+	if err != nil {
+		return nil, err
+	}
+	increment(nonce)
+
+	payloadLen := int(binary.BigEndian.Uint16(plainLen))
+	if payloadLen == 0 || payloadLen > 16384 {
+		return nil, fmt.Errorf("bad ss frame length %d", payloadLen)
+	}
+	encPayload := make([]byte, payloadLen+overhead)
+	if _, err := io.ReadFull(conn, encPayload); err != nil {
+		return nil, err
+	}
+	plain, err := aead.Open(encPayload[:0], nonce, encPayload, nil)
+	if err != nil {
+		return nil, err
+	}
+	increment(nonce)
+	return plain, nil
 }
