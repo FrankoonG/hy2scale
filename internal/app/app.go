@@ -1554,6 +1554,17 @@ func (a *App) serveProxy(ctx context.Context, ln net.Listener, pc ProxyConfig) {
 		switch pc.Protocol {
 		case "http":
 			go a.handleHTTP(c, &pc)
+		case "shadowsocks", "ss":
+			// proxies[shadowsocks] previously fell through to handleSOCKS5,
+			// silently serving SOCKS5 on a port the UI advertised as SS —
+			// so any SS client (sing-box, mihomo, ss-libev) got protocol
+			// mismatches and timed out. The cipher comes from a per-proxy
+			// override in pc.Method; default aes-256-gcm if unset.
+			method := pc.Method
+			if method == "" {
+				method = "aes-256-gcm"
+			}
+			go a.handleSS(c, method)
 		default:
 			go a.handleSOCKS5(c, &pc)
 		}
@@ -1647,6 +1658,24 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 		exitPaths = pc.ExitPaths
 	}
 
+	// DNS-pollution recovery for SOCKS5: when the client supplied an IPv4
+	// or IPv6 destination (ATYP=0x01/0x04), peek up to 1500 bytes of the
+	// first application-layer chunk and try to recover the original
+	// hostname from a TLS Client Hello SNI or an HTTP Host header. This
+	// is precisely what xray-core's `sniffing.destOverride: [tls, http]`
+	// does. We send the SOCKS5 SUCCESS reply BEFORE the dial (and the
+	// peek) so the client starts transmitting; on dial failure the
+	// connection just RSTs — the same fate the client would see for any
+	// mid-session network failure. Hostname ATYP requests skip the peek
+	// entirely (sniffOverrideHost no-ops when host is already a name) so
+	// existing well-configured clients pay zero latency.
+	var peeked []byte
+	if buf[3] == 0x01 || buf[3] == 0x04 {
+		conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		peeked = peekFirstChunk(conn)
+		addr = sniffOverrideHost(addr, peeked)
+	}
+
 	var remote net.Conn
 	var err error
 	if exitVia == "" {
@@ -1655,11 +1684,23 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 		remote, err = a.dialExitWithPaths(context.Background(), exitVia, exitPaths, exitMode, addr)
 	}
 	if err != nil {
-		conn.Write([]byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		if peeked == nil {
+			conn.Write([]byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		}
 		return
 	}
 	defer remote.Close()
-	conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+	if peeked == nil {
+		// Hostname ATYP path — old behaviour, send SUCCESS now after the
+		// dial succeeded (no sniffing was attempted).
+		conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+	} else if len(peeked) > 0 {
+		// Forward the peeked first chunk before relay starts; the dialed
+		// server sees the original Client Hello / request unchanged.
+		if _, werr := remote.Write(peeked); werr != nil {
+			return
+		}
+	}
 
 	// Session tracking — aggregated per device (username+IP+protocol)
 	remoteIP := ""
@@ -1831,11 +1872,22 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 	}
 
 	var addr string
+	var connectPeeked []byte
 	if method == "CONNECT" {
 		// CONNECT method: tunnel mode
 		addr = target
 		if !strings.Contains(addr, ":") {
 			addr += ":443"
+		}
+		// DNS-pollution recovery for HTTP CONNECT: if the client supplied
+		// `CONNECT <ip>:<port>` (because its own resolver was poisoned),
+		// reply 200 immediately, peek the first TLS chunk, sniff SNI, and
+		// override addr with the recovered hostname before dialing the
+		// exit. Same flow as SOCKS5 above; see sniff_override.go.
+		if host, _, splitErr := net.SplitHostPort(addr); splitErr == nil && net.ParseIP(host) != nil {
+			conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+			connectPeeked = peekFirstChunk(conn)
+			addr = sniffOverrideHost(addr, connectPeeked)
 		}
 	} else {
 		// Plain HTTP: extract host from URL or Host header
@@ -1869,13 +1921,29 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 		remote, err = a.dialExitWithPaths(context.Background(), exitVia, exitPaths, exitMode, addr)
 	}
 	if err != nil {
-		conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+		// On the IP-form CONNECT path the 200 reply has already been
+		// sent (so the client can produce a Client Hello for us to peek);
+		// we can't send a 502 anymore — just close. The client sees a
+		// TCP reset which is what they'd see for any in-flight outage.
+		if connectPeeked == nil {
+			conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
+		}
 		return
 	}
 	defer remote.Close()
 
 	if method == "CONNECT" {
-		conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+		// 200 reply was already sent BEFORE the peek in the IP-form path;
+		// only send it now if we skipped the peek (hostname target).
+		if connectPeeked == nil {
+			conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
+		} else if len(connectPeeked) > 0 {
+			// Forward the peeked Client Hello bytes to the upstream so the
+			// dialed server sees the original handshake.
+			if _, werr := remote.Write(connectPeeked); werr != nil {
+				return
+			}
+		}
 	} else {
 		// Forward the original request to the remote
 		fmt.Fprintf(remote, "%s %s %s\r\n", method, target, parts[2])

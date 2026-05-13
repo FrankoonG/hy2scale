@@ -62,10 +62,13 @@ func (u *UserConfig) IsProxyEnabled(proxy string) bool {
 // ProxyConfig defines a protocol listener.
 type ProxyConfig struct {
 	ID       string `yaml:"id" json:"id"`
-	Protocol string `yaml:"protocol" json:"protocol"` // "socks5", "http"
+	Protocol string `yaml:"protocol" json:"protocol"` // "socks5", "http", "shadowsocks"
 	Listen   string `yaml:"listen" json:"listen"`
 	Enabled  bool   `yaml:"enabled" json:"enabled"`
 	TLSCert  string `yaml:"tls_cert,omitempty" json:"tls_cert,omitempty"` // TLS cert ID (enables TLS wrapping)
+	// Method is the AEAD cipher for the shadowsocks protocol. Ignored for
+	// other protocols. Empty → "aes-256-gcm".
+	Method   string `yaml:"method,omitempty" json:"method,omitempty"`
 	ExitVia   string   `yaml:"exit_via,omitempty" json:"exit_via,omitempty"`
 	ExitPaths []string `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
 	ExitMode  string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"`
