@@ -2465,26 +2465,101 @@ func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, err
 	}
 }
 
-// dialExitUDP opens a UDP connection through the specified exit node.
+// dialExitUDP opens a UDP connection through the specified exit chain.
+// Multi-hop is now supported via Node.DialUDPVia (the UDP analog of
+// TCP's DialVia) — each intermediate hop's nodeOutbound.UDP parses the
+// via-encoded target address and forwards along the chain.
 func (a *App) dialExitUDP(ctx context.Context, exitVia, addr string) (net.Conn, error) {
 	parts := splitPath(exitVia)
-	if len(parts) > 0 && parts[0] == a.node.Name() {
+	cfg := a.store.Get()
+	if len(parts) > 0 && (parts[0] == a.node.Name() || parts[0] == cfg.NodeID) {
 		parts = parts[1:]
 	}
 	if len(parts) == 0 {
 		return net.DialTimeout("udp", rewriteLocalAddr(addr), 5*time.Second)
 	}
-	if len(parts) == 1 {
-		if !a.node.HasPeer(parts[0]) {
-			paths := a.findPathsTo(parts[0])
-			if len(paths) > 0 {
-				return a.dialExitUDP(ctx, paths[mrand.IntN(len(paths))], addr)
-			}
+	// Indirect single-hop: target peer is reachable only through a known
+	// path. Re-enter via the resolved path.
+	if len(parts) == 1 && !a.node.HasPeer(parts[0]) {
+		paths := a.findPathsTo(parts[0])
+		if len(paths) > 0 {
+			return a.dialExitUDP(ctx, paths[mrand.IntN(len(paths))], addr)
 		}
-		return a.node.DialUDP(ctx, parts[0], addr)
 	}
-	// Multi-hop UDP not supported, use first hop
-	return a.node.DialUDP(ctx, parts[0], addr)
+	return a.node.DialUDPVia(ctx, parts, addr)
+}
+
+// dialExitUDPPaths races UDP exit_paths concurrently with the same
+// 2-second stagger as dialExitWithPaths (TCP). Falls back to single
+// dialExitUDP when only one path is active. The UDP equivalent of
+// dialExitWithPaths used by IKEv2 / L2TP transparent UDP proxies.
+func (a *App) dialExitUDPPaths(ctx context.Context, exitVia string, exitPaths []string, exitMode, addr string) (net.Conn, error) {
+	paths := exitPaths
+	if len(paths) == 0 {
+		paths = []string{exitVia}
+	}
+	var active []string
+	for _, p := range paths {
+		if !a.isExitPathDisabled(p) {
+			active = append(active, p)
+		}
+	}
+	if len(active) == 0 {
+		return nil, fmt.Errorf("all UDP exit paths disabled")
+	}
+	if len(active) == 1 {
+		return a.dialExitUDP(ctx, active[0], addr)
+	}
+	type result struct {
+		conn net.Conn
+		err  error
+		path string
+	}
+	raceCtx, raceCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer raceCancel()
+	ch := make(chan result, len(active))
+	for i, p := range active {
+		p := p
+		go func(idx int) {
+			if idx > 0 {
+				select {
+				case <-time.After(2 * time.Second):
+				case <-raceCtx.Done():
+					ch <- result{nil, raceCtx.Err(), p}
+					return
+				}
+			}
+			pathCtx, pathCancel := context.WithTimeout(raceCtx, 10*time.Second)
+			defer pathCancel()
+			conn, err := a.dialExitUDP(pathCtx, p, addr)
+			ch <- result{conn, err, p}
+		}(i)
+	}
+	var lastErr error
+	returned := 0
+	for returned < len(active) {
+		r := <-ch
+		returned++
+		if r.err != nil {
+			lastErr = r.err
+			continue
+		}
+		raceCancel()
+		go func() {
+			for returned < len(active) {
+				late := <-ch
+				returned++
+				if late.conn != nil {
+					late.conn.Close()
+				}
+			}
+		}()
+		return r.conn, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("all UDP exit paths exhausted")
 }
 
 func splitOn(s string, sep byte) []string {
@@ -2599,13 +2674,47 @@ func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
 	return conn, nil
 }
 
-func (o *nodeOutbound) UDP(addr string) (hyserver.UDPConn, error) {
-	conn, err := net.DialTimeout("udp", rewriteLocalAddr(addr), 5*time.Second)
+func (o *nodeOutbound) UDP(reqAddr string) (hyserver.UDPConn, error) {
+	// Multi-hop UDP via: receiving peer parses the via-encoded target
+	// address and forwards through the next hop's UDP path. The UDP
+	// analog of TCP's handleVia. Without this, multi-hop UDP from WG /
+	// IKEv2 / L2TP would silently stop at the first hop —
+	// dialExitUDP encodes the chain and each intermediate hop strips
+	// one level here.
+	if chain, targetAddr, isVia := relay.ParseVia(reqAddr); isVia {
+		path := strings.Split(chain, "/")
+		c, err := o.node.DialUDPVia(o.ctx, path, targetAddr)
+		if err != nil {
+			return nil, err
+		}
+		return &netConnUDPAdapter{nc: c, addr: targetAddr}, nil
+	}
+	conn, err := net.DialTimeout("udp", rewriteLocalAddr(reqAddr), 5*time.Second)
 	if err != nil {
 		return nil, err
 	}
-	return &realUDP{conn: conn.(*net.UDPConn), addr: addr}, nil
+	return &realUDP{conn: conn.(*net.UDPConn), addr: reqAddr}, nil
 }
+
+// netConnUDPAdapter adapts a net.Conn (returned by relay.Node.DialUDP
+// / DialUDPVia) to the hyserver.UDPConn interface — the receive
+// addr returned by ReadFrom is fixed to the conn's target, since
+// hy2's UDP session wrapper carries a single dst per conn.
+type netConnUDPAdapter struct {
+	nc   net.Conn
+	addr string
+}
+
+func (a *netConnUDPAdapter) ReadFrom(b []byte) (int, string, error) {
+	n, err := a.nc.Read(b)
+	return n, a.addr, err
+}
+
+func (a *netConnUDPAdapter) WriteTo(b []byte, _ string) (int, error) {
+	return a.nc.Write(b)
+}
+
+func (a *netConnUDPAdapter) Close() error { return a.nc.Close() }
 
 // hy2Auth handles authentication for the hy2 server.
 // - User password → accept as user proxy client (identified by username)

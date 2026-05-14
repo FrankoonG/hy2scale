@@ -416,6 +416,11 @@ wget -qO- "http://` + gateway + fmt.Sprintf(`:%d/ppp/down?ip=$5&iface=$1" 2>/dev
 		iptRun(iptVariant(), "-t", "nat", "-I", "PREROUTING",
 			"-i", "ppp+", "-p", "tcp",
 			"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%s", gateway, portStr))
+		// UDP DNAT mirror — without this, UDP from L2TP clients bypasses
+		// the transparent proxy. See docs/udp-cross-tunnel-investigation.md.
+		iptRun(iptVariant(), "-t", "nat", "-I", "PREROUTING",
+			"-i", "ppp+", "-p", "udp",
+			"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%s", gateway, portStr))
 		iptRun(iptVariant(), "-t", "nat", "-A", "POSTROUTING",
 			"-s", subnet, "-o", "eth0", "-j", "MASQUERADE")
 		iptRun(iptVariant(), "-I", "FORWARD", "-i", "ppp+", "-o", "eth0", "-j", "ACCEPT")
@@ -424,6 +429,9 @@ wget -qO- "http://` + gateway + fmt.Sprintf(`:%d/ppp/down?ip=$5&iface=$1" 2>/dev
 		iptRun(iptVariant(), "-A", "INPUT", "-p", "tcp", "--dport", portStr,
 			"-s", subnet, "-j", "ACCEPT")
 		iptRun(iptVariant(), "-A", "INPUT", "-p", "tcp", "--dport", portStr, "-j", "DROP")
+		iptRun(iptVariant(), "-A", "INPUT", "-p", "udp", "--dport", portStr,
+			"-s", subnet, "-j", "ACCEPT")
+		iptRun(iptVariant(), "-A", "INPUT", "-p", "udp", "--dport", portStr, "-j", "DROP")
 		hooksPortStr := fmt.Sprintf("%d", hooksPort)
 		iptRun(iptVariant(), "-A", "INPUT", "-p", "tcp", "--dport", hooksPortStr,
 			"-i", "lo", "-j", "ACCEPT")
@@ -434,6 +442,30 @@ wget -qO- "http://` + gateway + fmt.Sprintf(`:%d/ppp/down?ip=$5&iface=$1" 2>/dev
 			"-s", subnet, "-j", "MASQUERADE")
 		a.l2tpWg.Add(1)
 		go func() { defer a.l2tpWg.Done(); a.runTransparentProxy(l2tpCtx, gateway, proxyPort) }()
+		// UDP transparent proxy for L2TP — mirrors handleL2TPTransparent's
+		// user lookup via pppSessions.
+		udpListen := fmt.Sprintf("%s:%d", gateway, proxyPort)
+		a.l2tpWg.Add(1)
+		go func() {
+			defer a.l2tpWg.Done()
+			a.runUDPTransparentProxy(l2tpCtx, udpListen, "l2tp", func(srcIP string) (string, string, []string, string, bool) {
+				username, sessOK := pppSessions.Lookup(srcIP)
+				if !sessOK {
+					// Unknown PPP source — same fallback as TCP path: direct exit.
+					return "", "", nil, "", true
+				}
+				if user, err := a.LookupUser(username, "", "l2tp"); err == nil && user != nil {
+					return username, user.ExitVia, user.ExitPaths, user.ExitMode, true
+				}
+				c := a.store.Get()
+				for _, u := range c.Users {
+					if u.Username == username && u.Enabled && u.IsProxyEnabled("l2tp") {
+						return username, u.ExitVia, u.ExitPaths, u.ExitMode, true
+					}
+				}
+				return username, "", nil, "", true
+			})
+		}()
 	} else {
 		// Compat mode: TUN capture with gvisor netstack (no iptables needed)
 		log.Printf("[l2tp] iptables unavailable, using TUN capture mode (compat)")
