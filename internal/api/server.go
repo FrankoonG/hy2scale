@@ -1891,70 +1891,17 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 			}
 		}
 
-		// Detect nested peer renames by comparing old and new caches.
-		// If a parent had child "X" and now has child "Y" at the same position,
-		// rename all config references from X to Y.
-		s.subPeersMu.RLock()
-		oldCache := s.subPeersCache
-		s.subPeersMu.RUnlock()
-		for parentName, newChildren := range newCache {
-			oldChildren, ok := oldCache[parentName]
-			if !ok || len(oldChildren) == 0 {
-				continue
-			}
-			// Log for debugging
-			if len(oldChildren) != len(newChildren) {
-				log.Printf("[topology] %s children changed: %d → %d", parentName, len(oldChildren), len(newChildren))
-			}
-			// Build old name set
-			oldNames := make(map[string]bool)
-			for _, c := range oldChildren {
-				oldNames[c.Name] = true
-			}
-			// Build new name set
-			newNames := make(map[string]bool)
-			for _, c := range newChildren {
-				newNames[c.Name] = true
-			}
-			// Find names that disappeared and appeared
-			for _, c := range newChildren {
-				if oldNames[c.Name] {
-					continue // name unchanged
-				}
-				// New name appeared. Check if an old name disappeared (rename).
-				for _, oc := range oldChildren {
-					if newNames[oc.Name] {
-						continue // old name still exists
-					}
-					// oc.Name disappeared, c.Name appeared → likely rename
-					log.Printf("[topology] nested peer rename detected: %s → %s (via %s)", oc.Name, c.Name, parentName)
-					s.app.Store().Update(func(cfg *app.Config) {
-						rename := func(s string) string {
-							return strings.ReplaceAll(s, oc.Name, c.Name)
-						}
-						newPeers := make(map[string]app.PeerConfig)
-						for k, v := range cfg.Peers {
-							newPeers[rename(k)] = v
-						}
-						cfg.Peers = newPeers
-						for i := range cfg.Proxies {
-							cfg.Proxies[i].ExitVia = rename(cfg.Proxies[i].ExitVia)
-							for j := range cfg.Proxies[i].ExitPaths {
-								cfg.Proxies[i].ExitPaths[j] = rename(cfg.Proxies[i].ExitPaths[j])
-							}
-						}
-						for i := range cfg.Users {
-							cfg.Users[i].ExitVia = rename(cfg.Users[i].ExitVia)
-							for j := range cfg.Users[i].ExitPaths {
-								cfg.Users[i].ExitPaths[j] = rename(cfg.Users[i].ExitPaths[j])
-							}
-						}
-					})
-					break // only one rename per new name
-				}
-			}
-		}
-
+		// Sub-peer rename heuristic removed (see docs/peer-identity-sync-bugs.md
+		// Bug A). The previous block here used set-difference of sub-peer name
+		// lists between cache cycles to infer "peer X renamed to Y" and then
+		// strings.ReplaceAll-rewrote cfg.Peers keys, cfg.Proxies.ExitVia, and
+		// cfg.Users.ExitVia. The trigger fires constantly on transient blips
+		// (one sub-peer momentarily disappears while an unrelated one appears),
+		// silently corrupting operator-configured config. Authoritative NodeID
+		// renames are handled at the direct-peer layer (outbound: app.go's
+		// AttachTo callback; inbound: handleRegister's onInboundIdentity, Bug B
+		// fix); they propagate to all upstream nodes on the next poll via the
+		// natural newCache replacement below.
 		s.subPeersMu.Lock()
 		s.subPeersCache = newCache
 		s.subPeersMu.Unlock()
