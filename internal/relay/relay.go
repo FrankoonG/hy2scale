@@ -2329,6 +2329,44 @@ func (n *Node) wrapConnPath(peerName, pathKey string, conn net.Conn) net.Conn {
 
 // --- Dial ---
 
+// ParseVia decodes a via-encoded multi-hop relay target address.
+// Returns (chain, targetAddr, true) when reqAddr has the via-prefix.
+// `chain` is the slash-joined remaining hops (e.g. "aub/cn/2400");
+// `targetAddr` is the final destination ("host:port"). The receiving
+// peer should split `chain` on "/" and forward via its first hop with
+// the remainder re-encoded. Exported so the application's UDP
+// outbound callback (nodeOutbound.UDP in internal/app/app.go) can
+// implement multi-hop UDP routing, mirroring TCP's handleVia.
+func ParseVia(reqAddr string) (chain, targetAddr string, ok bool) {
+	return parseVia(reqAddr)
+}
+
+// BuildViaAddr constructs a via-encoded relay address used as the
+// "target" passed to a first-hop DialUDP / DialTCP. `remaining` is the
+// slash-joined chain of hops AFTER the immediate first hop; `addr` is
+// the final target ("host:port"). The first hop's handler parses with
+// ParseVia and forwards down the chain.
+func BuildViaAddr(remaining, addr string) string {
+	return streamViaPrefix + remaining + "_" + addr + ":0"
+}
+
+// DialUDPVia opens a multi-hop UDP relay connection. `path` is the
+// chain of peer names [hop1, hop2, ..., exit]; `addr` is the final
+// destination ("host:port"). For single-hop, this is DialUDP. For
+// multi-hop, the target address is via-encoded and each intermediate
+// hop's nodeOutbound.UDP re-encodes and forwards to the next hop —
+// the UDP analog of TCP's DialVia.
+func (n *Node) DialUDPVia(ctx context.Context, path []string, addr string) (net.Conn, error) {
+	if len(path) == 0 {
+		return nil, fmt.Errorf("relay: empty path")
+	}
+	if len(path) == 1 {
+		return n.DialUDP(ctx, path[0], addr)
+	}
+	remaining := strings.Join(path[1:], "/")
+	return n.DialUDP(ctx, path[0], BuildViaAddr(remaining, addr))
+}
+
 // DialTCP dials addr through a directly connected peer's network.
 // DialUDP opens a UDP session through a peer's Hysteria2 QUIC connection.
 // Returns a net.Conn-compatible wrapper for a single destination address.

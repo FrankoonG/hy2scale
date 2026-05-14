@@ -377,6 +377,14 @@ esac
 		iptRun(iptVariant(), "-t", "nat", "-I", "PREROUTING",
 			"-s", subnet, "-p", "tcp",
 			"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%s", gateway, portStr))
+		// UDP DNAT mirror — without this, UDP from IKEv2 clients
+		// bypasses the transparent proxy and gets MASQUERADE'd
+		// straight out the host's WAN, never traversing the
+		// configured exit_via chain. See
+		// docs/udp-cross-tunnel-investigation.md.
+		iptRun(iptVariant(), "-t", "nat", "-I", "PREROUTING",
+			"-s", subnet, "-p", "udp",
+			"-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%s", gateway, portStr))
 		iptRun(iptVariant(), "-t", "nat", "-A", "POSTROUTING",
 			"-s", subnet, "-o", "eth0", "-j", "MASQUERADE")
 		iptRun(iptVariant(), "-I", "FORWARD", "-s", subnet, "-o", "eth0", "-j", "ACCEPT")
@@ -385,6 +393,9 @@ esac
 		iptRun(iptVariant(), "-I", "INPUT", "-p", "tcp", "--dport", portStr,
 			"-s", subnet, "-j", "ACCEPT")
 		iptRun(iptVariant(), "-A", "INPUT", "-p", "tcp", "--dport", portStr, "-j", "DROP")
+		iptRun(iptVariant(), "-I", "INPUT", "-p", "udp", "--dport", portStr,
+			"-s", subnet, "-j", "ACCEPT")
+		iptRun(iptVariant(), "-A", "INPUT", "-p", "udp", "--dport", portStr, "-j", "DROP")
 		hooksPortStr := fmt.Sprintf("%d", hooksPort)
 		iptRun(iptVariant(), "-I", "INPUT", "-p", "tcp", "--dport", hooksPortStr,
 			"-i", "lo", "-j", "ACCEPT")
@@ -397,6 +408,35 @@ esac
 		a.writeSwanctlSecrets(cfg)
 		a.ikev2Wg.Add(1)
 		go func() { defer a.ikev2Wg.Done(); a.runIKEv2Proxy(ikev2Ctx, gateway, proxyPort, hooksPort, cfg) }()
+		// UDP transparent proxy — same gateway:proxyPort as TCP, mirrors
+		// handleIKEv2Transparent's user / exit_via lookup. Closes the
+		// long-standing TCP-only gap that let UDP from IKEv2 clients
+		// MASQUERADE straight out the host's WAN instead of riding the
+		// configured exit_via chain.
+		udpListen := fmt.Sprintf("%s:%d", gateway, proxyPort)
+		a.ikev2Wg.Add(1)
+		go func() {
+			defer a.ikev2Wg.Done()
+			a.runUDPTransparentProxy(ikev2Ctx, udpListen, "ikev2", func(srcIP string) (string, string, []string, string, bool) {
+				username, sessOK := ikev2Sessions.Lookup(srcIP)
+				if !sessOK {
+					return "", "", nil, "", false
+				}
+				if username == "__psk__" {
+					return username, cfg.DefaultExit, nil, cfg.DefaultExitMode, true
+				}
+				if user, err := a.LookupUser(username, "", "ikev2"); err == nil && user != nil {
+					return username, user.ExitVia, user.ExitPaths, user.ExitMode, true
+				}
+				c := a.store.Get()
+				for _, u := range c.Users {
+					if u.Username == username && u.Enabled && u.IsProxyEnabled("ikev2") {
+						return username, u.ExitVia, u.ExitPaths, u.ExitMode, true
+					}
+				}
+				return username, "", nil, "", true
+			})
+		}()
 	} else {
 		// Compat mode: xfrm interface + TUN capture (swanctl with if_id)
 		log.Printf("[ikev2] mode: compat (iptables unavailable → xfrm interface + AF_PACKET bridge + gvisor netstack)")
