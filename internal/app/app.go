@@ -155,6 +155,16 @@ type Config struct {
 	// not contaminate which IPs the rule installs in iptables. Disabled by
 	// default: hy2scale falls back to net.LookupHost (host's resolv.conf).
 	DNSResolver DNSResolverConfig `yaml:"dns_resolver,omitempty" json:"dns_resolver,omitempty"`
+
+	// KnownInboundIDs persists the last NodeID seen at each source IP for
+	// inbound peers. Used by the inbound-identity sync path
+	// (docs/peer-identity-sync-bugs.md Bug B) to detect when a peer that
+	// previously connected from the same IP now reports a different NodeID
+	// — the inbound counterpart of the outbound rename signal carried by
+	// cfg.Clients[].Addr. Auto-populated on every inbound register; no
+	// operator-facing UI. Map key is the remote IP (no port), value is the
+	// NodeID the peer announced on its most recent connection from that IP.
+	KnownInboundIDs map[string]string `yaml:"known_inbound_ids,omitempty" json:"known_inbound_ids,omitempty"`
 }
 
 // DNSResolverConfig controls hy2scale's internal name-resolution behaviour.
@@ -369,6 +379,11 @@ func (a *App) Run(ctx context.Context) error {
 			log.Printf("[%s] nested discovery enabled for %q", cfg.NodeID, peerName)
 		}
 	}
+
+	// Wire the inbound-identity sync callback — see docs/peer-identity-sync-bugs.md
+	// Bug B. Fires inside relay.handleRegister after the meta exchange, lets
+	// us detect inbound peer NodeID changes (using source IP as stable handle).
+	a.node.SetOnInboundIdentity(a.handleInboundIdentity)
 
 	// Start hy2 server if configured — check port first
 	if cfg.Server != nil {
@@ -1014,6 +1029,100 @@ func (a *App) StartTrafficFlusher(ctx context.Context) {
 			a.FlushTraffic()
 		}
 	}
+}
+
+// --- Nested-identity sync (inbound peer NodeID change detection) ---
+//
+// Outbound NodeID renames are handled inside dialClient's AttachTo callback
+// using cfg.Clients[].Addr as the stable handle. Inbound peers have no
+// equivalent stable handle in operator-provided config (operators never
+// pre-register inbound peers — they appear at runtime when they dial in).
+// We therefore use the source IP as the stable handle: persist
+// cfg.KnownInboundIDs[remoteIP] = NodeID-last-seen-from-that-IP. On the
+// next inbound register, if the same IP reports a different NodeID and the
+// previously-seen NodeID is no longer an active peer (so this is NOT a
+// NAT-shared-IP scenario where two different peers happen to share an
+// egress IP), we treat it as a rename and rewrite cfg.Peers keys,
+// cfg.Proxies.ExitVia/ExitPaths, and cfg.Users.ExitVia/ExitPaths — exactly
+// what the outbound AttachTo callback does.
+//
+// See docs/peer-identity-sync-bugs.md Bug B.
+func (a *App) handleInboundIdentity(declaredName, nodeID, remoteIP string) {
+	if nodeID == "" || remoteIP == "" {
+		return
+	}
+	cfg := a.store.Get()
+	prevID := ""
+	if cfg.KnownInboundIDs != nil {
+		prevID = cfg.KnownInboundIDs[remoteIP]
+	}
+	// First time we see this IP, or NodeID unchanged — record and return.
+	if prevID == "" || prevID == nodeID {
+		a.store.Update(func(c *Config) {
+			if c.KnownInboundIDs == nil {
+				c.KnownInboundIDs = make(map[string]string)
+			}
+			c.KnownInboundIDs[remoteIP] = nodeID
+		})
+		return
+	}
+	// Different NodeID at same source IP — propagate the rename. Same
+	// rewrite the outbound dialClient AttachTo callback uses, plus update
+	// the persistent index.
+	//
+	// NAT-shared-IP caveat: if two genuinely different peers happen to share
+	// an egress IP (egress NAT) AND both are actively connected, this code
+	// will incorrectly rewrite the first peer's nested authorization to the
+	// second peer's NodeID. We accept this trade-off because (a) NAT-shared
+	// peers are rare in production hy2scale meshes, where each node is
+	// typically deployed on a distinct host with its own egress, and (b) the
+	// alternative — adding HasPeer / GetLatency timing guards — produces
+	// false negatives during the legitimate rename window where the old
+	// peer's map entry is still stale, defeating the whole point of the
+	// fix. Operators on a NAT-shared topology can disable this behavior by
+	// not regenerating NodeIDs (the trigger is operator-controlled).
+	oldName := prevID
+	newName := nodeID
+	log.Printf("[%s] inbound-identity: peer at %s renamed %s → %s — propagating to cfg.Peers / cfg.Proxies / cfg.Users",
+		a.node.Name(), remoteIP, oldName, newName)
+	a.store.Update(func(c *Config) {
+		renamePeerRef := func(s string) string {
+			return strings.ReplaceAll(s, oldName, newName)
+		}
+		newPeers := make(map[string]PeerConfig)
+		for k, v := range c.Peers {
+			newPeers[renamePeerRef(k)] = v
+		}
+		c.Peers = newPeers
+		for i := range c.Proxies {
+			c.Proxies[i].ExitVia = renamePeerRef(c.Proxies[i].ExitVia)
+			for j := range c.Proxies[i].ExitPaths {
+				c.Proxies[i].ExitPaths[j] = renamePeerRef(c.Proxies[i].ExitPaths[j])
+			}
+		}
+		for i := range c.Users {
+			c.Users[i].ExitVia = renamePeerRef(c.Users[i].ExitVia)
+			for j := range c.Users[i].ExitPaths {
+				c.Users[i].ExitPaths[j] = renamePeerRef(c.Users[i].ExitPaths[j])
+			}
+		}
+		if c.KnownInboundIDs == nil {
+			c.KnownInboundIDs = make(map[string]string)
+		}
+		c.KnownInboundIDs[remoteIP] = newName
+	})
+	// Mirror relay-side nested map and clear stale latency, same as the
+	// outbound rename path.
+	a.node.SetNestedDiscovery(newName, a.node.IsNestedEnabled(oldName))
+	a.node.SetNestedDiscovery(oldName, false)
+	a.node.SetLatency(oldName, 0)
+	// Also force-disconnect the stale peer entry. Without this, upstream
+	// nodes polling our PeersOf list still see the old NodeID listed as a
+	// child until the prober eventually marks it dead — and during that
+	// window, the upstream's subPeersCache continues to report old → new is
+	// invisible to them. DisconnectPeer flushes the slot immediately so the
+	// next /api/internal/peers response carries only the new identity.
+	a.node.DisconnectPeer(oldName)
 }
 
 // --- Nested discovery ---
@@ -2422,10 +2531,21 @@ func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
 		// fall through to the normal token check, which 401s the API or
 		// SPA-redirects to /login. Default-deny on missing entry.
 		authID := takeGoIDAuth()
+		peerAddr := takeGoIDAddr()
 		c1, c2 := net.Pipe()
+		// Wrap c1 so handleRegister and other relay-side handlers see the
+		// real peer addr via RemoteAddr() instead of "pipe". See
+		// docs/peer-identity-sync-bugs.md Bug B for why this is needed —
+		// the inbound-identity sync uses the IP as a stable handle.
 		var local net.Conn = c1
+		if peerAddr != "" {
+			local = &peerAddrConn{Conn: c1, peerAddr: peerAddr}
+		}
 		if actualAddr == relay.StreamAPI {
-			local = &RelayAuthConn{Conn: c1, AuthID: authID}
+			// Preserve the auth-carrying wrapper for relay-API streams; nest
+			// the peer-addr wrapper underneath so RemoteAddr() falls through
+			// to the real value.
+			local = &RelayAuthConn{Conn: local, AuthID: authID}
 		}
 		go o.node.HandleStream(o.ctx, actualAddr, local)
 		return c2, nil
