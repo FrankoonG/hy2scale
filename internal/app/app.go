@@ -2486,7 +2486,36 @@ func (a *App) dialExitUDP(ctx context.Context, exitVia, addr string) (net.Conn, 
 			return a.dialExitUDP(ctx, paths[mrand.IntN(len(paths))], addr)
 		}
 	}
-	return a.node.DialUDPVia(ctx, parts, addr)
+	// Retry-with-backoff: when the first hop is an INBOUND peer, its
+	// reverse-control stream (p.ctrlW) is populated asynchronously
+	// after the peer registers — DialUDPVia can return
+	// "peer X control not ready" during the convergence window
+	// (typically <5s in production, longer after a fresh compose
+	// recreate). Mirror the 30s/2s pattern dialExit uses for TCP
+	// DialViaBridged → DialVia fallback.
+	deadline := time.Now().Add(30 * time.Second)
+	var lastErr error
+	for {
+		conn, err := a.node.DialUDPVia(ctx, parts, addr)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+		// Only retry on the specific transient errors. Other errors
+		// (e.g. peer not connected at all) bubble up immediately.
+		es := err.Error()
+		if !strings.Contains(es, "control not ready") && !strings.Contains(es, "not connected") {
+			return nil, err
+		}
+		if time.Now().After(deadline) {
+			return nil, lastErr
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 // dialExitUDPPaths races UDP exit_paths concurrently with the same
