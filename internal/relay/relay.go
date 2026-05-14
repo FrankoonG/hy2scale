@@ -448,6 +448,15 @@ type Node struct {
 	// local HTTP API listener without routing through rewriteLocalAddr.
 	apiHandler func(stream net.Conn)
 
+	// Inbound-identity callback. Fires inside handleRegister AFTER the meta
+	// exchange but BEFORE the peer is registered in n.peers. Lets the app
+	// layer detect "same source addr, different NodeID" — the inbound
+	// equivalent of the outbound rename signal carried by AttachTo's onID
+	// callback. See docs/peer-identity-sync-bugs.md Bug B for the design
+	// rationale: source remoteAddrIP is the stable handle (symmetric to how
+	// cfg.Clients[].Addr is the stable handle on the outbound side).
+	onInboundIdentity func(declaredName, nodeID, remoteAddrIP string)
+
 	// Stream bridge manager for connection persistence across QUIC reconnects
 	bridges *bridgeManager
 }
@@ -1240,6 +1249,28 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 		log.Printf("[%s] register: %s is blocked, rejecting", n.name, name)
 		stream.Close()
 		return
+	}
+
+	// Inbound-identity hook: let the app layer detect "same source IP, new
+	// NodeID" so cfg.Peers / cfg.Proxies.ExitVia / cfg.Users.ExitVia can be
+	// rewritten symmetrically to the outbound AttachTo path. Source IP is
+	// the stable handle for inbound peers (no operator-configured Addr like
+	// outbound). See docs/peer-identity-sync-bugs.md Bug B.
+	if n.onInboundIdentity != nil && remoteMeta.NodeID != "" {
+		remoteIP := ""
+		if ra := stream.RemoteAddr(); ra != nil {
+			// stream.RemoteAddr() returns host:port; we want just the host.
+			s := ra.String()
+			if h, _, splitErr := net.SplitHostPort(s); splitErr == nil {
+				remoteIP = h
+			} else {
+				remoteIP = s
+			}
+		}
+		// Don't block register on the callback — fire async-style by inlining
+		// (the callback is expected to complete quickly: it's a config-store
+		// Update on a single map lookup).
+		n.onInboundIdentity(name, remoteMeta.NodeID, remoteIP)
 	}
 
 	compat := isCompatible(remoteMeta.Version)
@@ -2564,6 +2595,17 @@ func (n *Node) SetIPTunHandler(handler func(peerName string, stream net.Conn)) {
 // web-UI proxy tunneling).
 func (n *Node) SetAPIHandler(handler func(stream net.Conn)) {
 	n.apiHandler = handler
+}
+
+// SetOnInboundIdentity registers a callback that fires when an inbound peer
+// completes its register-stream meta exchange. The app layer uses this to
+// detect when an inbound peer that previously connected from the same source
+// IP now reports a different NodeID, and to propagate the rename through
+// cfg.Peers / cfg.Proxies.ExitVia / cfg.Users.ExitVia (the inbound
+// counterpart of AttachTo's outbound rename). See docs/peer-identity-sync-bugs.md
+// Bug B.
+func (n *Node) SetOnInboundIdentity(handler func(declaredName, nodeID, remoteAddrIP string)) {
+	n.onInboundIdentity = handler
 }
 
 // DialIPTun opens a bidirectional IP packet tunnel stream to a peer.

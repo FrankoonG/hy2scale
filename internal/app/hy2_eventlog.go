@@ -23,6 +23,7 @@ import (
 // will fail safe (default-deny). The vendored hyserver version is pinned
 // in go.mod so we'd notice during a deliberate upgrade.
 var goidAuthID sync.Map // map[uint64]string  goroutine ID → hyserver auth ID
+var goidAddr sync.Map   // map[uint64]string  goroutine ID → hyserver client addr (IP:port)
 
 // goid parses runtime.Stack output to recover the current goroutine's
 // numeric identifier. The format "goroutine <N> [<state>]:" has been
@@ -70,8 +71,35 @@ func takeGoIDAuth() string {
 
 func (a *hy2Auth) Connect(addr net.Addr, id string, tx uint64)            {}
 func (a *hy2Auth) Disconnect(addr net.Addr, id string, err error)         {}
-func (a *hy2Auth) TCPRequest(addr net.Addr, id, reqAddr string)           { setGoIDAuth(id) }
-func (a *hy2Auth) TCPError(addr net.Addr, id, reqAddr string, err error)  { takeGoIDAuth() }
+func (a *hy2Auth) TCPRequest(addr net.Addr, id, reqAddr string) {
+	setGoIDAuth(id)
+	// Also stash the peer's network addr (QUIC remote addr). Used by the
+	// inbound-identity sync path (docs/peer-identity-sync-bugs.md Bug B) to
+	// distinguish "same peer reconnecting from same source IP" from "different
+	// peer happens to share an egress IP". Without this stash, stream
+	// processing inside the relay only sees a "pipe" RemoteAddr because the
+	// stream is delivered via net.Pipe from nodeOutbound.TCP. Cleared by
+	// takeGoIDAddr in nodeOutbound.TCP / TCPError to avoid stale entries.
+	if addr != nil {
+		goidAddr.Store(goid(), addr.String())
+	}
+}
+func (a *hy2Auth) TCPError(addr net.Addr, id, reqAddr string, err error) {
+	takeGoIDAuth()
+	goidAddr.Delete(goid())
+}
+
+// takeGoIDAddr atomically reads and deletes the peer addr for the current
+// goroutine. Companion to takeGoIDAuth — same stash mechanism, different
+// payload. Returns "" if no entry.
+func takeGoIDAddr() string {
+	v, ok := goidAddr.LoadAndDelete(goid())
+	if !ok {
+		return ""
+	}
+	s, _ := v.(string)
+	return s
+}
 func (a *hy2Auth) UDPRequest(addr net.Addr, id string, sessionID uint32, reqAddr string) {
 }
 func (a *hy2Auth) UDPError(addr net.Addr, id string, sessionID uint32, err error) {}
@@ -91,3 +119,30 @@ type RelayAuthConn struct {
 // import this package's concrete type — they can use the small interface
 // `interface{ RelayAuthID() string }` instead.
 func (c *RelayAuthConn) RelayAuthID() string { return c.AuthID }
+
+// peerAddrConn wraps a net.Pipe end so RemoteAddr() returns the original
+// QUIC peer's network address (host:port) instead of "pipe". The address is
+// stashed by hy2Auth.TCPRequest into goidAddr and unstashed in
+// nodeOutbound.TCP. This lets the inbound-identity sync path
+// (docs/peer-identity-sync-bugs.md Bug B) see a real source IP to use as a
+// stable handle for detecting NodeID changes.
+type peerAddrConn struct {
+	net.Conn
+	peerAddr string
+}
+
+type strAddr string
+
+func (s strAddr) Network() string { return "tcp" }
+func (s strAddr) String() string  { return string(s) }
+
+func (c *peerAddrConn) RemoteAddr() net.Addr {
+	if c.peerAddr == "" {
+		return c.Conn.RemoteAddr()
+	}
+	return strAddr(c.peerAddr)
+}
+
+// PeerAddr returns the stashed peer addr without requiring callers to know
+// the concrete type. Returns "" if not set.
+func (c *peerAddrConn) PeerAddr() string { return c.peerAddr }
