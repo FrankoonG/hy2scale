@@ -3302,7 +3302,17 @@ func (s *Server) deleteCert(w http.ResponseWriter, r *http.Request) {
 // Maps to remote: /scale/{remaining} (auto-prepends remote's base path)
 // Rewrites __BASE__ in HTML so JS API calls route back through the proxy.
 func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
-	raw := strings.TrimPrefix(r.URL.Path, "/remote/")
+	// Use the ESCAPED path so percent-encoded slashes inside a single
+	// path segment (e.g. a sub-peer addressed as `aub%2Fcn`) survive the
+	// split-rejoin we do below. r.URL.Path would have decoded the %2F
+	// into a real "/" before we ever see it, fusing the sub-peer name
+	// with its parent and producing a remote URL with too many segments
+	// — making routes like `PUT /api/peers/{name}/nested` 404 because
+	// `{name}` matches one segment, not two. r.URL.RawPath is populated
+	// only when the request actually had escaping; EscapedPath() handles
+	// both that case and the no-escaping fast path uniformly.
+	rawPath := r.URL.EscapedPath()
+	raw := strings.TrimPrefix(rawPath, "/remote/")
 	if raw == "" || raw == "/" {
 		http.Error(w, "usage: /remote/{peer}/{path}", 400)
 		return
@@ -3310,6 +3320,8 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 
 	// Split into chain + remaining. Chain = contiguous peer names (no dots, no slashes in names).
 	// First segment with a dot or known as a file extension ends the chain.
+	// Splitting the escaped form means %2F-inside-a-segment is preserved
+	// as part of that segment rather than promoted to a path separator.
 	segments := strings.Split(strings.TrimSuffix(raw, "/"), "/")
 	// Known path prefixes that mark the end of the peer chain.
 	// The frontend builds links like "/scale/remote/{peer}/scale/..." so
