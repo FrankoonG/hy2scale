@@ -16,6 +16,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -3343,7 +3344,20 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chain := segments[:chainLen]
+	// Decode each chain segment back to its canonical peer-name form.
+	// A chain segment is a SINGLE peer identifier — it never legitimately
+	// contains "/" (the path separator) — so PathUnescape is lossless
+	// here. We need the decoded form for n.peers lookups, oldNodeIDs
+	// resolution, and the proxyBase URL (which we re-encode below as
+	// part of URL.String()).
+	chain := make([]string, chainLen)
+	for i, seg := range segments[:chainLen] {
+		if decoded, err := url.PathUnescape(seg); err == nil {
+			chain[i] = decoded
+		} else {
+			chain[i] = seg
+		}
+	}
 	// Resolve old node IDs to current ones
 	s.mu.RLock()
 	for i, name := range chain {
