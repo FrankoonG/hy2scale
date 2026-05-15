@@ -214,7 +214,10 @@ func readMeta(r net.Conn, timeout time.Duration) peerMeta {
 type peer struct {
 	info      PeerInfo
 	client    hyclient.Client // primary outbound client (first IP)
-	ctrlW     net.Conn        // write dial requests to this peer
+	// Reverse-control stream for inbound peers used to be stored here as
+	// ctrlW, but it's now name-keyed on Node.ctrlS2C so the binding
+	// survives peer-struct replacement on re-register. Read via
+	// Node.peerCtrlS2C(name).
 	writeMu   sync.Mutex
 	waiting   map[string]chan net.Conn
 	txBytes   atomic.Uint64
@@ -404,6 +407,17 @@ type Node struct {
 
 	blockedMu sync.RWMutex
 	blocked   map[string]bool
+
+	// ctrlS2C is the reverse-control stream registry for inbound peers,
+	// keyed by peer NAME (which is stable across re-register events).
+	// Stored on the Node rather than on the peer struct because the
+	// peer struct gets replaced on every re-register, and an s2c
+	// stream that bound to the pre-replace struct is invisible to
+	// dial-side readers that look up the post-replace struct (the
+	// "0↔3MB throughput oscillation" bug — see
+	// docs/s2c-ctrl-race-bug.md).
+	ctrlS2CMu sync.Mutex
+	ctrlS2C   map[string]net.Conn
 
 	// Traffic counters
 	txBytes   atomic.Uint64
@@ -868,6 +882,7 @@ func NewNode(name string, exitNode bool) *Node {
 		peersAlt:  make(map[string]*peer),
 		nested:    make(map[string]bool),
 		blocked:   make(map[string]bool),
+		ctrlS2C:   make(map[string]net.Conn),
 		peerRates: make(map[string]PeerTraffic),
 		pathBytes: make(map[string]*pathCounters),
 		pathRates: make(map[string]PeerTraffic),
@@ -1157,12 +1172,40 @@ func (n *Node) HandleStream(ctx context.Context, reqAddr string, stream net.Conn
 			stream.Close()
 			return
 		}
-		n.mu.Lock()
-		if p, ok := n.peers[name]; ok {
-			p.ctrlW = stream
+		// Bind by NAME, not by peer-struct pointer. The previous
+		// "set p.ctrlW on the peer-struct that happens to be in
+		// n.peers[name] at lookup time" was racy two ways:
+		//   1) The s2c stream sometimes arrived before handleRegister
+		//      finished installing the peer (n.peers[name] absent →
+		//      binding silently dropped → ctrlW nil forever on the
+		//      eventually-installed struct).
+		//   2) A subsequent re-register (line "re-registering …")
+		//      replaces the *peer at n.peers[name]; the old struct
+		//      still has the s2c stream but no caller reads that
+		//      struct anymore — every reader fetches via n.peers[name].
+		// Both windows produced permanent "control not ready" errors
+		// on the new peer struct until the NEXT reconnect happened to
+		// win the race. That broke multi-hop chains through inbound
+		// peers and showed up in production as the 0↔3MB throughput
+		// oscillation pattern on long downloads. See
+		// docs/s2c-ctrl-race-bug.md.
+		n.ctrlS2CMu.Lock()
+		old := n.ctrlS2C[name]
+		n.ctrlS2C[name] = stream
+		n.ctrlS2CMu.Unlock()
+		if old != nil {
+			old.Close()
 		}
-		n.mu.Unlock()
 		<-ctx.Done()
+		// Cleanup: only delete if we're still the current entry. A
+		// concurrent newer s2c stream from a reconnect may have
+		// already replaced us; in that case the newer entry must
+		// survive.
+		n.ctrlS2CMu.Lock()
+		if n.ctrlS2C[name] == stream {
+			delete(n.ctrlS2C, name)
+		}
+		n.ctrlS2CMu.Unlock()
 
 	case streamLatencyReport:
 		n.handleLatencyReport(stream)
@@ -2034,8 +2077,9 @@ func (n *Node) ConnectedPeerNames() []string {
 	defer n.mu.RUnlock()
 	var names []string
 	for name, p := range n.peers {
-		// Include both outbound (has client) and inbound (has ctrlW) peers
-		if p.client != nil || p.ctrlW != nil {
+		// Include both outbound (has client) and inbound (has ctrlW) peers.
+		// ctrlW is now name-keyed on the Node, not stored on the peer struct.
+		if p.client != nil || n.peerCtrlS2C(name) != nil {
 			names = append(names, name)
 		}
 	}
@@ -2389,7 +2433,8 @@ func (n *Node) DialUDP(ctx context.Context, peerName string, addr string) (net.C
 	}
 
 	// Inbound peer: request UDP dial via control stream (same as TCP but with "udp:" prefix)
-	if p.ctrlW == nil {
+	ctrlW := n.peerCtrlS2C(peerName)
+	if ctrlW == nil {
 		return nil, fmt.Errorf("relay: peer %q control not ready", peerName)
 	}
 
@@ -2397,7 +2442,7 @@ func (n *Node) DialUDP(ctx context.Context, peerName string, addr string) (net.C
 	ch := make(chan net.Conn, 1)
 	p.writeMu.Lock()
 	p.waiting[id] = ch
-	err := writeRequest(p.ctrlW, id, "udp:"+addr)
+	err := writeRequest(ctrlW, id, "udp:"+addr)
 	p.writeMu.Unlock()
 	if err != nil {
 		return nil, err
@@ -2568,6 +2613,16 @@ func (n *Node) DialTCPIdx(ctx context.Context, peerName string, addr string, cli
 	return n.DialTCP(ctx, peerName, addr)
 }
 
+// peerCtrlS2C returns the name-keyed reverse-control stream for an
+// inbound peer (or nil if none has been bound yet). Always read via
+// this helper rather than a per-peer field — the binding is intentionally
+// detached from the peer struct so it survives re-register replacements.
+func (n *Node) peerCtrlS2C(peerName string) net.Conn {
+	n.ctrlS2CMu.Lock()
+	defer n.ctrlS2CMu.Unlock()
+	return n.ctrlS2C[peerName]
+}
+
 func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.Conn, error) {
 	n.mu.RLock()
 	p, ok := n.peers[peerName]
@@ -2590,7 +2645,8 @@ func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.C
 	}
 
 	// Inbound peer: send dial request via control stream
-	if p.ctrlW == nil {
+	ctrlW := n.peerCtrlS2C(peerName)
+	if ctrlW == nil {
 		return nil, fmt.Errorf("relay: peer %q control not ready", peerName)
 	}
 
@@ -2598,7 +2654,7 @@ func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.C
 	ch := make(chan net.Conn, 1)
 	p.writeMu.Lock()
 	p.waiting[id] = ch
-	err := writeRequest(p.ctrlW, id, addr)
+	err := writeRequest(ctrlW, id, addr)
 	p.writeMu.Unlock()
 	if err != nil {
 		return nil, err
@@ -2677,14 +2733,15 @@ func (n *Node) DialIPTun(ctx context.Context, peerName string) (net.Conn, error)
 	}
 
 	// Inbound peer: send request via control stream
-	if p.ctrlW == nil {
+	ctrlW := n.peerCtrlS2C(peerName)
+	if ctrlW == nil {
 		return nil, fmt.Errorf("relay: peer %q control not ready", peerName)
 	}
 	id := fmt.Sprintf("%d", n.seq.Add(1))
 	ch := make(chan net.Conn, 1)
 	p.writeMu.Lock()
 	p.waiting[id] = ch
-	err := writeRequest(p.ctrlW, id, addr)
+	err := writeRequest(ctrlW, id, addr)
 	p.writeMu.Unlock()
 	if err != nil {
 		return nil, err
@@ -2793,7 +2850,8 @@ func (n *Node) DialVia(ctx context.Context, path []string, addr string) (net.Con
 
 	// Inbound peer: send via address as a dial request through control stream.
 	// The inbound peer receives viaAddr, its handleVia will parse and forward.
-	if p.ctrlW == nil {
+	ctrlW := n.peerCtrlS2C(firstPeer)
+	if ctrlW == nil {
 		return nil, fmt.Errorf("relay: peer %q control not ready", firstPeer)
 	}
 
@@ -2801,7 +2859,7 @@ func (n *Node) DialVia(ctx context.Context, path []string, addr string) (net.Con
 	ch := make(chan net.Conn, 1)
 	p.writeMu.Lock()
 	p.waiting[id] = ch
-	err := writeRequest(p.ctrlW, id, viaAddr)
+	err := writeRequest(ctrlW, id, viaAddr)
 	p.writeMu.Unlock()
 	if err != nil {
 		return nil, err
