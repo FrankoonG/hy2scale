@@ -83,10 +83,12 @@ function onlineColor(pct: number): string {
 }
 
 /** Bandwidth peak → color tier based on a windowed maximum so the same
- *  row reads as "relative intensity". Empty bucket → gray. */
+ *  row reads as "relative intensity". Gray is reserved for missing data
+ *  only; a real 0 bps bucket renders as the faintest blue (peer online
+ *  but idle) — same as the "below 10% of window max" tier. */
 function rateColor(bps: number, windowMax: number): string {
-  if (bps < 0)  return '#6b7280';
-  if (bps === 0 || windowMax === 0) return '#6b7280';
+  if (bps < 0) return '#6b7280';
+  if (windowMax === 0) return '#93c5fd';
   const frac = bps / windowMax;
   if (frac >= 0.66) return '#1d4ed8';
   if (frac >= 0.33) return '#3b82f6';
@@ -224,45 +226,53 @@ export function PathInfoExpand({
     obs.observe(firstRowRef.current);
     return () => obs.disconnect();
   }, []);
-  /** Slice the newest `visibleCount` buckets from an array. The
-   *  buckets are stored oldest-on-the-left, so .slice(-N) gives us
-   *  the most-recent N — exactly what an operator wants to see. */
-  const tail = <T,>(arr: T[]) => arr.slice(-visibleCount);
-
   const precLabels: Record<Precision, string> = {
     m1: t('nodes.graph.precisionMinute'),
     h1: t('nodes.graph.precisionHour'),
     d1: t('nodes.graph.precisionDay'),
   };
 
-  // Build ticks from only the most-recent `visibleCount` buckets. The
-  // bucketAgeLabel total stays at BUCKETS_PER_ROW so "X min ago" math
-  // remains aligned to the full bucket window — index `i` here is the
-  // position WITHIN the visible slice, and the displayed slot equals
-  // (BUCKETS_PER_ROW - visibleCount + i), so we shift accordingly.
-  const ageShift = BUCKETS_PER_ROW - visibleCount;
-  const latTicks: TickProps[] = tail(latency[latPrec]).map((b, i) => ({
-    color: latColor(b.ms),
-    ageLabel: bucketAgeLabel(i + ageShift, BUCKETS_PER_ROW, latPrec),
-    valueLabel: b.ms < 0 ? 'offline' : b.ms + ' ms',
-  }));
-  const onlineTicks: TickProps[] = tail(online[onlinePrec]).map((b, i) => ({
-    color: onlineColor(b.pct),
-    ageLabel: bucketAgeLabel(i + ageShift, BUCKETS_PER_ROW, onlinePrec),
-    valueLabel: b.pct < 0 ? 'no data' : Math.round(b.pct * 100) + '%',
-  }));
-  const txWinMax = Math.max(0, ...txPeak[txPrec].map(b => b.bps));
-  const txTicks: TickProps[] = tail(txPeak[txPrec]).map((b, i) => ({
-    color: rateColor(b.bps, txWinMax),
-    ageLabel: bucketAgeLabel(i + ageShift, BUCKETS_PER_ROW, txPrec),
-    valueLabel: fmtRate(b.bps),
-  }));
-  const rxWinMax = Math.max(0, ...rxPeak[rxPrec].map(b => b.bps));
-  const rxTicks: TickProps[] = tail(rxPeak[rxPrec]).map((b, i) => ({
-    color: rateColor(b.bps, rxWinMax),
-    ageLabel: bucketAgeLabel(i + ageShift, BUCKETS_PER_ROW, rxPrec),
-    valueLabel: fmtRate(b.bps),
-  }));
+  // Build a row of `visibleCount` ticks. The right end is "now"; older
+  // slots fall to the left. When the data array has fewer entries than
+  // visibleCount, we pad the LEFT (older) side with gray placeholders
+  // labeled "no data" — because gray-as-offline is a per-bucket signal,
+  // not a stand-in for "this slot is before recording started".
+  function buildRow<T>(
+    data: T[],
+    toColor: (b: T) => string,
+    toValueLabel: (b: T) => string,
+    prec: Precision,
+  ): TickProps[] {
+    const out: TickProps[] = [];
+    const shown = data.slice(-visibleCount);
+    const gap = Math.max(0, visibleCount - shown.length);
+    for (let i = 0; i < gap; i++) {
+      out.push({
+        color: '#6b7280',
+        ageLabel: bucketAgeLabel(i, visibleCount, prec),
+        valueLabel: 'no data',
+      });
+    }
+    for (let i = 0; i < shown.length; i++) {
+      out.push({
+        color: toColor(shown[i]),
+        ageLabel: bucketAgeLabel(gap + i, visibleCount, prec),
+        valueLabel: toValueLabel(shown[i]),
+      });
+    }
+    return out;
+  }
+
+  const latTicks    = buildRow(latency[latPrec],  b => latColor(b.ms),
+                                b => b.ms < 0 ? 'offline' : b.ms + ' ms', latPrec);
+  const onlineTicks = buildRow(online[onlinePrec], b => onlineColor(b.pct),
+                                b => b.pct < 0 ? 'no data' : Math.round(b.pct * 100) + '%', onlinePrec);
+  // Window-max excludes negatives (placeholders / missing samples) so
+  // the colour scale is set by real observed peaks only.
+  const txWinMax = Math.max(0, ...txPeak[txPrec].map(b => Math.max(0, b.bps)));
+  const txTicks  = buildRow(txPeak[txPrec], b => rateColor(b.bps, txWinMax), b => fmtRate(b.bps), txPrec);
+  const rxWinMax = Math.max(0, ...rxPeak[rxPrec].map(b => Math.max(0, b.bps)));
+  const rxTicks  = buildRow(rxPeak[rxPrec], b => rateColor(b.bps, rxWinMax), b => fmtRate(b.bps), rxPrec);
 
   return (
     <div className="hy-topo-pathinfo-expanded">
