@@ -1257,34 +1257,46 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // mode (i.e. user hasn't grabbed the handle yet). When user resizes,
   // we lock this value.
   const compactRowRef = useRef<HTMLDivElement | null>(null);
-  const compactNaturalRef = useRef<number>(0);
-  // Mirror `pathInfoWidth === null` into a ref so the ResizeObserver
-  // callback below reads the current mode at fire-time, not the stale
-  // value captured when the effect ran.
+  // Mirror `pathInfoWidth === null` into a ref so any layout-time
+  // callbacks read the current mode at fire-time, not the stale value
+  // captured when an effect ran.
   const isAutoModeRef = useRef(true);
   useEffect(() => { isAutoModeRef.current = pathInfoWidth === null; }, [pathInfoWidth]);
-  // Callback-ref for the compact row: a regular `ref={…}` is null on
-  // first mount (the path-info panel renders conditionally when a path
-  // is selected), so a one-shot useLayoutEffect can't attach a
-  // ResizeObserver to it. The callback variant fires every time the
-  // element mounts/unmounts, so the observer is wired the moment the
-  // compact row appears.
-  const compactObsRef = useRef<ResizeObserver | null>(null);
   const setCompactRowRef = useCallback((el: HTMLDivElement | null) => {
     compactRowRef.current = el;
-    if (compactObsRef.current) {
-      compactObsRef.current.disconnect();
-      compactObsRef.current = null;
+  }, []);
+  /** Precise measurement of the compact row's "max-content" width —
+   *  what the row would need to keep the path chain on a single line.
+   *  scrollWidth doesn't help here: when the row's content fits the
+   *  current panel (no overflow), scrollWidth === clientWidth, which
+   *  is just the current panel width. Instead we temporarily force
+   *  chain to nowrap, then sum each flex child's offsetWidth + the
+   *  flex gap. offsetWidth of a flex child with `flex: 0 1 auto` is
+   *  the child's natural max-content size when the row is wider than
+   *  its total content — exactly what we want. */
+  const measureCompactNatural = useCallback((): number => {
+    const row = compactRowRef.current;
+    if (!row) return 0;
+    const chain = row.querySelector('.hy-topo-pathinfo-chain') as HTMLElement | null;
+    const prev = chain?.style.flexWrap;
+    if (chain) chain.style.flexWrap = 'nowrap';
+    // Force layout after style change so offsetWidth reads correct values.
+    void row.offsetHeight;
+    let total = 0;
+    let count = 0;
+    for (const child of Array.from(row.children) as HTMLElement[]) {
+      // Skip absolutely-positioned children (e.g. the resize handle):
+      // they sit on top, not in flow, so they don't add to the row's
+      // intrinsic width.
+      if (getComputedStyle(child).position === 'absolute') continue;
+      total += child.offsetWidth;
+      count++;
     }
-    if (el) {
-      const obs = new ResizeObserver(entries => {
-        if (isAutoModeRef.current) {
-          compactNaturalRef.current = entries[0].contentRect.width;
-        }
-      });
-      obs.observe(el);
-      compactObsRef.current = obs;
-    }
+    const ROW_GAP = 10;
+    total += Math.max(0, count - 1) * ROW_GAP;
+    if (chain && prev !== undefined) chain.style.flexWrap = prev;
+    // Add 2 px slack for sub-pixel rounding.
+    return total + 2;
   }, []);
   // Drag state for the right-edge resize handle.
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
@@ -1293,20 +1305,22 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     e.stopPropagation();
     const panel = (e.currentTarget.parentElement) as HTMLElement | null;
     if (!panel) return;
-    // Switch the observer OFF synchronously so it can't overwrite
-    // compactNaturalRef with the post-drag (wider) compact-row width
-    // during this drag session. The state-driven useEffect that sets
-    // this ref runs AFTER React commits the next render — too late if
-    // the observer fires first during layout. The setPathInfoWidth
-    // call below schedules the state update; the ref flip here makes
-    // the freeze immediate.
+    // Measure the compact-row's natural one-line width BEFORE flipping
+    // out of auto mode. measureCompactNatural temporarily forces the
+    // chain to nowrap so the reading reflects how wide the row needs
+    // to be to keep the path on one line — independent of however
+    // the chain may currently be wrapped under a narrow panel.
+    const natural = measureCompactNatural();
+    // Add the panel chrome: padding (12 + 12) + borders (1 + 1). The
+    // +2 slack measureCompactNatural already adds covers sub-pixel
+    // rounding so the clamp sits a hair above the wrap threshold.
     isAutoModeRef.current = false;
     const startW = panel.getBoundingClientRect().width;
     resizeDragRef.current = { startX: e.clientX, startW };
     // 60 ticks * (10 + 2) px - 2 (no trailing gap) + 24 panel padding
     // + ~6 slack for borders/scrollbars
     const MAX = 60 * 12 - 2 + 24 + 6;
-    const MIN = Math.max(160, (compactNaturalRef.current || 0) + 24);
+    const MIN = Math.max(160, natural + 24 + 2);
     const onMove = (ev: PointerEvent) => {
       if (!resizeDragRef.current) return;
       const dx = ev.clientX - resizeDragRef.current.startX;
