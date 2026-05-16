@@ -424,6 +424,17 @@ func (s *Server) Start(ctx context.Context) error {
 	s.app.Node().SetAPIHandler(func(stream net.Conn) {
 		apiBridge.push(stream)
 	})
+	// Wrap API streams arriving via the s2c-ctrl dial-request path
+	// (inbound-only peer) with a RelayAuthConn carrying the peer's
+	// effective auth ID. nodeOutbound.TCP already does the equivalent
+	// for the direct outbound-peer path. Without this hook the api
+	// server's relayConnContext sees a plain conn on the inbound-only
+	// branch, relayCtxKey stays nil, and relayPassthroughToken's Gate 1
+	// fires 404 — which is exactly the
+	// "remote-connect from inbound peer redirects to /login" symptom.
+	s.app.Node().SetAPIStreamWrap(func(stream net.Conn, authID string) net.Conn {
+		return &app.RelayAuthConn{Conn: stream, AuthID: authID}
+	})
 	relaySrv := &http.Server{
 		Handler:     root,
 		ConnContext: relayConnContext,

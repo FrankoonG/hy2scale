@@ -462,6 +462,16 @@ type Node struct {
 	// local HTTP API listener without routing through rewriteLocalAddr.
 	apiHandler func(stream net.Conn)
 
+	// apiStreamWrap is the app-layer hook that wraps an inbound API stream
+	// so the api server can recover the peer-relay auth ID (used by the
+	// RelayAdminPassthrough gate). Set by the app layer; called by
+	// dialAndStream when a `_relay_api_:0` arrives via the s2c-ctrl
+	// dial-request path (inbound-only peer) — in that path nodeOutbound.TCP
+	// doesn't see the stream, so the app-side wrap there can't fire and we
+	// have to wrap here instead. Empty authID falls through to no-wrap so
+	// callers that pass through a plain peer connection are still safe.
+	apiStreamWrap func(stream net.Conn, authID string) net.Conn
+
 	// Inbound-identity callback. Fires inside handleRegister AFTER the meta
 	// exchange but BEFORE the peer is registered in n.peers. Lets the app
 	// layer detect "same source addr, different NodeID" — the inbound
@@ -1668,7 +1678,21 @@ func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclie
 		if err != nil {
 			return
 		}
-		n.HandleStream(ctx, addr, stream)
+		// The dial-request came through the peer's s2c-ctrl stream, which
+		// is only open after handleRegister authenticated the peer with
+		// the system password. So tagging the API stream as "system"-auth
+		// is sound: any caller able to push a dial request here already
+		// proved system-level trust. Without this wrap the api server's
+		// relayConnContext sees a plain conn, relayCtxKey stays nil, and
+		// the RelayAdminPassthrough endpoint gates with 404 — making
+		// remote-connect from an inbound-only neighbour redirect to
+		// /login instead of riding the trust the operator already
+		// configured.
+		var wrapped net.Conn = stream
+		if addr == StreamAPI && n.apiStreamWrap != nil {
+			wrapped = n.apiStreamWrap(stream, "system")
+		}
+		n.HandleStream(ctx, addr, wrapped)
 		return
 	}
 
@@ -2698,6 +2722,15 @@ func (n *Node) SetIPTunHandler(handler func(peerName string, stream net.Conn)) {
 // web-UI proxy tunneling).
 func (n *Node) SetAPIHandler(handler func(stream net.Conn)) {
 	n.apiHandler = handler
+}
+
+// SetAPIStreamWrap registers the app-layer wrapper that tags a peer-relay
+// API stream with its auth ID so the api server can apply the
+// RelayAdminPassthrough bypass. Required so streams that arrive via the
+// s2c-ctrl dial-request path (inbound-only peer) carry the same
+// identification the direct nodeOutbound.TCP path already wraps for.
+func (n *Node) SetAPIStreamWrap(fn func(stream net.Conn, authID string) net.Conn) {
+	n.apiStreamWrap = fn
 }
 
 // SetOnInboundIdentity registers a callback that fires when an inbound peer
