@@ -24,6 +24,7 @@ import (
 
 	hyclient "github.com/apernet/hysteria/core/v2/client"
 	hyserver "github.com/apernet/hysteria/core/v2/server"
+	"github.com/FrankoonG/hy2scale/internal/history"
 	"github.com/FrankoonG/hy2scale/internal/relay"
 )
 
@@ -235,6 +236,8 @@ type App struct {
 	mu           sync.Mutex
 	clientCancel map[string]context.CancelFunc
 
+	hist *history.Store
+
 	// Track last successful exit path per primary exit_via (for UI display)
 	activePathMu sync.RWMutex
 	activePaths  map[string]string // exitVia → last winning path
@@ -269,12 +272,20 @@ func New(dataDir string) (*App, error) {
 	// were the same field-on-disk after the schema merge.
 	node := relay.NewNode(cfg.NodeID, cfg.ExitNode)
 	node.SetNodeID(cfg.NodeID) // expose stable id to register handshakes
+	histPath := ""
+	if dataDir != "" {
+		histPath = dataDir + "/history.json"
+	}
+	hist := history.New(histPath)
+	_ = hist.Load()
+
 	return &App{
 		store:        NewConfigStore(cfg, persistPath),
 		node:         node,
 		tls:          NewTLSStore(dataDir),
 		dataDir:      dataDir,
 		clientCancel: make(map[string]context.CancelFunc),
+		hist:         hist,
 		activePaths:  make(map[string]string),
 		proxyHandles: make(map[string]*proxyHandle),
 		Sessions:     NewSessionManager(),
@@ -285,6 +296,7 @@ func (a *App) Store() *ConfigStore { return a.store }
 func (a *App) Node() *relay.Node   { return a.node }
 func (a *App) TLS() *TLSStore     { return a.tls }
 func (a *App) DataDir() string     { return a.dataDir }
+func (a *App) History() *history.Store { return a.hist }
 
 func (a *App) GetConfig() Config { return a.store.Get() }
 
@@ -367,6 +379,7 @@ func (a *App) Run(ctx context.Context) error {
 	go a.node.StartRateTicker(ctx)
 	go a.node.StartLatencyProber(ctx)
 	go a.StartTrafficFlusher(ctx)
+	go a.runHistoryRecorder(ctx)
 
 	// Register IP tunnel handler on all nodes (any node can be an exit for TUN mode)
 	a.registerExitIPTunHandler(ctx)

@@ -1,16 +1,17 @@
 // Status-graph rows for the bottom-left selected-path overlay.
 //
-// Concept-only: data is currently mocked. Wiring to /api/diag/peer-latency
-// (raw 1-minute ring already exists, ~120 samples × 5 s = 10 min) and a
-// new downsampled history endpoint for 1-hour and 1-day rows comes after
-// concept approval.
+// Data flows from `/api/diag/peer-history` (the in-process recorder in
+// internal/history records 1m/1h/1d rings per direct peer). The caller
+// converts the backend Snapshot shape into the metric-typed buckets
+// this component renders.
 //
-// Bar semantics: in every precision tab there are exactly BUCKETS_PER_ROW
-// (=24) ticks. The CURRENT precision selects what each tick represents:
-//   1m → each tick = 1 minute  (so 24 ticks = last 24 minutes)
-//   1h → each tick = 1 hour    (so 24 ticks = last 24 hours)
-//   1d → each tick = 1 day     (so 24 ticks = last 24 days)
-// Newer time is on the right.
+// Bar semantics: each tick represents one unit of the SELECTED precision —
+//   1m → each tick = 1 minute  (last 60 minutes ago)
+//   1h → each tick = 1 hour    (last 60 hours ago)
+//   1d → each tick = 1 day     (last 60 days ago, the retention horizon)
+// Newer time is on the right. The visible tick count adapts to the
+// panel's width (ResizeObserver-driven), with a hard cap at
+// BUCKETS_PER_ROW.
 //
 // Color literals (NOT vars) so Dark Reader picks them up reliably — see
 // docs/dark-reader-testing.md.
@@ -337,70 +338,3 @@ export function PathInfoExpand({
   );
 }
 
-/** Concept-stage mock generator. Replaced by real /api/diag/peer-history
- *  buckets once the backend lands. Deterministic via seeded LCG so
- *  screenshots stay reproducible. */
-export function mockPathHistory(seed: number): PathInfoExpandProps {
-  let s = seed | 0;
-  const rand = () => { s = (s * 1664525 + 1013904223) | 0; return ((s >>> 0) % 10000) / 10000; };
-
-  const N = BUCKETS_PER_ROW;
-  const latRow = (baseMs: number, jitter: number, dropRate: number): LatBucket[] => {
-    const out: LatBucket[] = [];
-    for (let i = 0; i < N; i++) {
-      if (rand() < dropRate) out.push({ ms: -1 });
-      else out.push({ ms: Math.max(1, Math.round(baseMs + (rand() - 0.5) * 2 * jitter)) });
-    }
-    return out;
-  };
-  const onlineRow = (dropRate: number): OnlineBucket[] => {
-    const out: OnlineBucket[] = [];
-    for (let i = 0; i < N; i++) {
-      const dip = Math.sin(i / Math.max(2, N / 6)) * 0.15 + (rand() - 0.5) * 0.1;
-      const pct = Math.max(0, Math.min(1, 1 - dropRate * 1.5 - Math.max(0, dip)));
-      out.push({ pct });
-    }
-    return out;
-  };
-  const rateRow = (peakBps: number, idleRate: number): RateBucket[] => {
-    const out: RateBucket[] = [];
-    for (let i = 0; i < N; i++) {
-      if (rand() < idleRate) { out.push({ bps: 0 }); continue; }
-      const wave = (Math.sin(i / Math.max(2, N / 5)) + 1) / 2;
-      const noise = rand() * 0.4;
-      const bps = Math.round(peakBps * (wave * 0.7 + noise * 0.3));
-      out.push({ bps });
-    }
-    return out;
-  };
-
-  return {
-    latency: {
-      m1: latRow(22, 8,  0.0),
-      h1: latRow(40, 25, 0.05),
-      d1: latRow(80, 60, 0.10),
-    },
-    online: {
-      m1: onlineRow(0.0),
-      h1: onlineRow(0.04),
-      d1: onlineRow(0.12),
-    },
-    txPeak: {
-      m1: rateRow(8_000_000,  0.10),
-      h1: rateRow(12_000_000, 0.15),
-      d1: rateRow(50_000_000, 0.20),
-    },
-    rxPeak: {
-      m1: rateRow(25_000_000, 0.05),
-      h1: rateRow(40_000_000, 0.10),
-      d1: rateRow(90_000_000, 0.15),
-    },
-    // Info-zone mocks. Caller (NodesGraphView) overrides these with
-    // real per-hop / final-hop values when they're available.
-    perHopLatencyMs: [],
-    realtimeUpBps: 0,
-    realtimeDownBps: 0,
-    totalUpBytes: 0,
-    totalDownBytes: 0,
-  };
-}
