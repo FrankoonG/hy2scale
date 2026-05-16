@@ -1278,9 +1278,17 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     const row = compactRowRef.current;
     if (!row) return 0;
     const chain = row.querySelector('.hy-topo-pathinfo-chain') as HTMLElement | null;
-    const prev = chain?.style.flexWrap;
-    if (chain) chain.style.flexWrap = 'nowrap';
-    // Force layout after style change so offsetWidth reads correct values.
+    const prevWrap = chain?.style.flexWrap;
+    const prevShrink = chain?.style.flexShrink;
+    if (chain) {
+      chain.style.flexWrap = 'nowrap';
+      // Without `flex-shrink: 0`, the chain element is still subject
+      // to flex-shrink inside a constrained row — offsetWidth would
+      // then reflect the shrunk width, not the chain's true natural
+      // content. Pin shrink to 0 so chain stays at its content size.
+      chain.style.flexShrink = '0';
+    }
+    // Force layout after style changes so reads see the new geometry.
     void row.offsetHeight;
     let total = 0;
     let count = 0;
@@ -1289,14 +1297,24 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       // they sit on top, not in flow, so they don't add to the row's
       // intrinsic width.
       if (getComputedStyle(child).position === 'absolute') continue;
-      total += child.offsetWidth;
+      // getBoundingClientRect().width keeps sub-pixel precision; both
+      // offsetWidth and scrollWidth round-down to integers, which
+      // accumulates a 4-8 px shortfall over a 4-element row. Use the
+      // float reading and Math.ceil it at the end so the result is
+      // always ≥ the true content width.
+      const r = child.getBoundingClientRect();
+      total += r.width;
       count++;
     }
     const ROW_GAP = 10;
     total += Math.max(0, count - 1) * ROW_GAP;
-    if (chain && prev !== undefined) chain.style.flexWrap = prev;
-    // Add 2 px slack for sub-pixel rounding.
-    return total + 2;
+    if (chain) {
+      if (prevWrap !== undefined) chain.style.flexWrap = prevWrap;
+      if (prevShrink !== undefined) chain.style.flexShrink = prevShrink;
+    }
+    // Round up, then add 4 px slack for any remaining sub-pixel
+    // discrepancy between the rect-sum and the actual flex layout.
+    return Math.ceil(total) + 4;
   }, []);
   // Drag state for the right-edge resize handle.
   const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
@@ -1345,6 +1363,31 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     isAutoModeRef.current = true;
     setPathInfoWidth(null);
   }, []);
+  // When the user picks a different path while the panel is in manual
+  // (user-resized) mode, the previously-chosen explicit width may no
+  // longer be enough to fit the new path on one line — causing the
+  // chain to wrap until the user manually re-resizes. Re-clamp here
+  // against the new path's natural width so manual width grows as
+  // needed but never shrinks below the user's preference (the
+  // `> pathInfoWidth` branch only grows it).
+  const displayPathKey = displayPath?.join('/') ?? '';
+  useLayoutEffect(() => {
+    if (pathInfoWidth === null) return;
+    if (!compactRowRef.current) return;
+    const natural = measureCompactNatural();
+    const newMin = Math.max(160, natural + 24);
+    // Iterate until convergence: the first measurement after a path
+    // change is taken with the panel still at the OLD width, so the
+    // row's flex-shrunk geometry can underreport the chain's natural
+    // by a few pixels. After setPathInfoWidth re-renders with the
+    // new width, this effect re-fires (pathInfoWidth dep) and
+    // re-measures against the new layout. The `newMin > pathInfoWidth`
+    // condition is the stop signal: once the panel is wide enough,
+    // newMin <= current and we stop growing.
+    if (newMin > pathInfoWidth) {
+      setPathInfoWidth(newMin);
+    }
+  }, [displayPathKey, pathInfoWidth, measureCompactNatural]);
   useEffect(() => {
     if (!snapshotApplied) return;
     let r2 = 0;
