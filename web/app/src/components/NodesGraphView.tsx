@@ -2314,7 +2314,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
             >
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
                 <path
-                  d={pathInfoExpanded ? 'M2 8L6 4L10 8' : 'M2 4L6 8L10 4'}
+                  d={pathInfoExpanded ? 'M2 4L6 8L10 4' : 'M2 8L6 4L10 8'}
                   stroke="currentColor"
                   strokeWidth="1.5"
                   strokeLinecap="round"
