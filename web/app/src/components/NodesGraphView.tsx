@@ -2192,15 +2192,16 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         // and pressing the top-right Edit button is now the unified entry
         // point for both list and graph views. Per-hop remote-open is now
         // handled inline by clicking the hop itself.
-        // History bars: feed from the FIRST direct outbound peer in the
-        // selected path. The local node only records latency/online for
-        // peers it pings itself, so nested hops (us/us-east/us-east-va)
-        // share their head peer's series — a fair proxy for path health
-        // since a degraded direct hop breaks every downstream relay
-        // anyway. fullPath[0] is always selfId; fullPath[1] is the
-        // entry peer if the path has at least one hop.
-        const directPeerKey = fullPath.length >= 2 ? fullPath[1] : '';
-        const snap = peerHistory[directPeerKey];
+        // History bars: feed from the QUALIFIED path (self prefix
+        // stripped). The backend recorder walks every cfg.Peers key
+        // and every ExitPaths entry the operator declared, summing
+        // per-hop latency and ANDing online flags — so a multi-hop
+        // path with a broken final hop registers as offline / -1ms,
+        // not as "first hop is fine". fullPath[0] is always selfId;
+        // the remaining elements form the qualified-path key the
+        // recorder uses.
+        const qualifiedPath = fullPath.length >= 2 ? fullPath.slice(1).join('/') : '';
+        const snap = peerHistory[qualifiedPath];
         const history = snap
           ? snapshotToHistoryProps(snap)
           : emptyHistoryProps();
