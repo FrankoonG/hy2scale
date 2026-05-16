@@ -20,6 +20,12 @@ import { useState, useRef, useLayoutEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Tooltip } from '@hy2scale/ui';
 
+/** Loose alias for the i18next translate function returned by
+ *  useTranslation(); matches the runtime call signatures we use here
+ *  (key-only, key+interpolation) without depending on the deeper
+ *  generics react-i18next exposes. */
+type Tx = (key: string, opts?: Record<string, unknown>) => string;
+
 /** Maximum number of ticks generated per precision. The actual visible
  *  count adapts to whatever the bar-row width can hold at TICK_WIDTH_PX
  *  + GAP_PX per tick — narrower panel → fewer bars, wider panel → more
@@ -118,16 +124,19 @@ function fmtBytes(bytes: number): string {
   return v.toFixed(v < 10 ? 1 : 0) + ' ' + units[i];
 }
 
-/** "N <unit> ago" / "now" label. Each tick is exactly one unit of the
+/** Build a `bucketAgeLabel(idx, total, prec) → string` closure bound to
+ *  the active i18n function. Each tick is exactly one unit of the
  *  selected precision, so the spans-ago math is just (total-1) - idx. */
-function bucketAgeLabel(idx: number, total: number, prec: Precision): string {
-  const ago = total - 1 - idx;
-  if (ago <= 0) return 'now';
-  switch (prec) {
-    case 'm1': return `${ago} min ago`;
-    case 'h1': return `${ago} h ago`;
-    case 'd1': return `${ago} d ago`;
-  }
+function makeBucketAgeLabel(t: Tx) {
+  return (idx: number, total: number, prec: Precision): string => {
+    const ago = total - 1 - idx;
+    if (ago <= 0) return t('nodes.graph.tooltipNow');
+    switch (prec) {
+      case 'm1': return t('nodes.graph.tooltipAgoMin',  { n: ago });
+      case 'h1': return t('nodes.graph.tooltipAgoHour', { n: ago });
+      case 'd1': return t('nodes.graph.tooltipAgoDay',  { n: ago });
+    }
+  };
 }
 
 interface PrecisionTabsProps {
@@ -231,6 +240,9 @@ export function PathInfoExpand({
     h1: t('nodes.graph.precisionHour'),
     d1: t('nodes.graph.precisionDay'),
   };
+  const bucketAgeLabel = makeBucketAgeLabel(t as unknown as Tx);
+  const labelOffline = t('nodes.offline');
+  const labelNoData  = t('nodes.graph.tooltipNoData');
 
   // Build a row of `visibleCount` ticks. The right end is "now"; older
   // slots fall to the left. When the data array has fewer entries than
@@ -250,7 +262,7 @@ export function PathInfoExpand({
       out.push({
         color: '#6b7280',
         ageLabel: bucketAgeLabel(i, visibleCount, prec),
-        valueLabel: 'no data',
+        valueLabel: labelNoData,
       });
     }
     for (let i = 0; i < shown.length; i++) {
@@ -264,9 +276,9 @@ export function PathInfoExpand({
   }
 
   const latTicks    = buildRow(latency[latPrec],  b => latColor(b.ms),
-                                b => b.ms < 0 ? 'offline' : b.ms + ' ms', latPrec);
+                                b => b.ms < 0 ? labelOffline : b.ms + ' ms', latPrec);
   const onlineTicks = buildRow(online[onlinePrec], b => onlineColor(b.pct),
-                                b => b.pct < 0 ? 'no data' : Math.round(b.pct * 100) + '%', onlinePrec);
+                                b => b.pct < 0 ? labelNoData : Math.round(b.pct * 100) + '%', onlinePrec);
   // Window-max excludes negatives (placeholders / missing samples) so
   // the colour scale is set by real observed peaks only.
   const txWinMax = Math.max(0, ...txPeak[txPrec].map(b => Math.max(0, b.bps)));
