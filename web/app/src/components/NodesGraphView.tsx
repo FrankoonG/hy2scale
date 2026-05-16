@@ -6,6 +6,8 @@ import { getBasePath } from '@/api/client';
 import { fmtRate } from '@/hooks/useFormat';
 import { useExitPaths } from '@/hooks/useExitPaths';
 import { useConfirm } from '@hy2scale/ui';
+import { motion, AnimatePresence } from 'framer-motion';
+import { PathInfoExpand, mockPathHistory } from './PathInfoExpand';
 
 interface Props {
   topology: TopologyNode[];
@@ -1241,6 +1243,94 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // to commit the new transform, one for the browser to paint it. After
   // that, drag-driven label glides work normally.
   const [labelsAnim, setLabelsAnim] = useState(false);
+  // Expanded path-info overlay (status-bar history). Default collapsed
+  // so the bottom-left widget stays compact for normal use; operator
+  // expands when they want to look at the time-series.
+  const [pathInfoExpanded, setPathInfoExpanded] = useState(false);
+  // User-resizable panel width (only meaningful when expanded). null =
+  // auto-size by compact-row content; number = explicit width set by
+  // dragging the right-edge handle. Clamped to [compactRowNatWidth,
+  // 60-bar-max] in the drag handler.
+  const [pathInfoWidth, setPathInfoWidth] = useState<number | null>(null);
+  // Track the compact-row's natural max-content width so we can use it
+  // as the resize MIN. Refreshed whenever the panel is in auto-size
+  // mode (i.e. user hasn't grabbed the handle yet). When user resizes,
+  // we lock this value.
+  const compactRowRef = useRef<HTMLDivElement | null>(null);
+  const compactNaturalRef = useRef<number>(0);
+  // Mirror `pathInfoWidth === null` into a ref so the ResizeObserver
+  // callback below reads the current mode at fire-time, not the stale
+  // value captured when the effect ran.
+  const isAutoModeRef = useRef(true);
+  useEffect(() => { isAutoModeRef.current = pathInfoWidth === null; }, [pathInfoWidth]);
+  // Callback-ref for the compact row: a regular `ref={…}` is null on
+  // first mount (the path-info panel renders conditionally when a path
+  // is selected), so a one-shot useLayoutEffect can't attach a
+  // ResizeObserver to it. The callback variant fires every time the
+  // element mounts/unmounts, so the observer is wired the moment the
+  // compact row appears.
+  const compactObsRef = useRef<ResizeObserver | null>(null);
+  const setCompactRowRef = useCallback((el: HTMLDivElement | null) => {
+    compactRowRef.current = el;
+    if (compactObsRef.current) {
+      compactObsRef.current.disconnect();
+      compactObsRef.current = null;
+    }
+    if (el) {
+      const obs = new ResizeObserver(entries => {
+        if (isAutoModeRef.current) {
+          compactNaturalRef.current = entries[0].contentRect.width;
+        }
+      });
+      obs.observe(el);
+      compactObsRef.current = obs;
+    }
+  }, []);
+  // Drag state for the right-edge resize handle.
+  const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const handleResizePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const panel = (e.currentTarget.parentElement) as HTMLElement | null;
+    if (!panel) return;
+    // Switch the observer OFF synchronously so it can't overwrite
+    // compactNaturalRef with the post-drag (wider) compact-row width
+    // during this drag session. The state-driven useEffect that sets
+    // this ref runs AFTER React commits the next render — too late if
+    // the observer fires first during layout. The setPathInfoWidth
+    // call below schedules the state update; the ref flip here makes
+    // the freeze immediate.
+    isAutoModeRef.current = false;
+    const startW = panel.getBoundingClientRect().width;
+    resizeDragRef.current = { startX: e.clientX, startW };
+    // 60 ticks * (10 + 2) px - 2 (no trailing gap) + 24 panel padding
+    // + ~6 slack for borders/scrollbars
+    const MAX = 60 * 12 - 2 + 24 + 6;
+    const MIN = Math.max(160, (compactNaturalRef.current || 0) + 24);
+    const onMove = (ev: PointerEvent) => {
+      if (!resizeDragRef.current) return;
+      const dx = ev.clientX - resizeDragRef.current.startX;
+      let w = resizeDragRef.current.startW + dx;
+      w = Math.min(MAX, Math.max(MIN, w));
+      setPathInfoWidth(w);
+    };
+    const onUp = () => {
+      resizeDragRef.current = null;
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
+  }, []);
+  // Reset to auto-size on double-click of the handle (UX rescue).
+  const handleResizeDoubleClick = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    isAutoModeRef.current = true;
+    setPathInfoWidth(null);
+  }, []);
   useEffect(() => {
     if (!snapshotApplied) return;
     let r2 = 0;
@@ -1981,8 +2071,47 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         // and pressing the top-right Edit button is now the unified entry
         // point for both list and graph views. Per-hop remote-open is now
         // handled inline by clicking the hop itself.
+        // Mock history seeded by the path's terminal hop, so two adjacent
+        // selections produce visually distinct bars. Replace with real
+        // data fetch when the backend bucket-ring endpoint lands (task #312).
+        const mockSeed = displayPath[displayPath.length - 1]?.split('').reduce((a, c) => a * 31 + c.charCodeAt(0), 7) ?? 7;
+        const history = mockPathHistory(mockSeed);
+        // Per-hop latency segments for the Info zone. Re-walks the
+        // same edges as `totalLat` above so the displayed sum reads
+        // identically. Each entry is a single hop's contribution.
+        const perHopLatencyMs: number[] = [];
+        for (let i = 1; i < fullPath.length; i++) {
+          const a = fullPath[i - 1], b = fullPath[i];
+          const e = edges.get(`${a}→${b}`) ?? edges.get(`${b}→${a}`)
+            ?? edges.get(`?${a < b ? a : b}|${a < b ? b : a}`);
+          perHopLatencyMs.push(e?.segmentLatencyMs ?? -1);
+        }
+        // Realtime / total bytes — take the LAST edge's rates as the
+        // path's current throughput. Per-path totals come from the
+        // backend in task #312; for the concept we derive a plausible
+        // estimate from the same mock seed so the rendering is stable.
+        let realtimeUpBps = 0;
+        let realtimeDownBps = 0;
+        if (fullPath.length >= 2) {
+          const a = fullPath[fullPath.length - 2];
+          const b = fullPath[fullPath.length - 1];
+          const lastE = edges.get(`${a}→${b}`) ?? edges.get(`${b}→${a}`)
+            ?? edges.get(`?${a < b ? a : b}|${a < b ? b : a}`);
+          realtimeUpBps = lastE?.txRate ?? 0;
+          realtimeDownBps = lastE?.rxRate ?? 0;
+        }
+        // Mock cumulative totals for concept (real values come from
+        // task #312's per-path byte counters).
+        const totalUpBytes = Math.round(50_000_000 + (mockSeed & 0x3fffffff) % 5_000_000_000);
+        const totalDownBytes = Math.round(150_000_000 + (mockSeed & 0x3fffffff) % 12_000_000_000);
         return (
-          <div className="hy-topo-graph-pathinfo" role="status" aria-live="polite">
+          <div
+            className={`hy-topo-graph-pathinfo ${pathInfoExpanded ? 'is-expanded' : ''}`}
+            role="status"
+            aria-live="polite"
+            style={pathInfoExpanded && pathInfoWidth !== null ? { width: pathInfoWidth } : undefined}
+          >
+            <div className="hy-topo-pathinfo-row" ref={setCompactRowRef}>
             <span className="hy-topo-pathinfo-label">{t('nodes.graph.selectedPath')}</span>
             <span className="hy-topo-pathinfo-chain">
               {hops.map((hop, i) => {
@@ -2045,6 +2174,77 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                */}
               {offline ? t('nodes.offline') : fmtLatency(totalLat)}
             </span>
+            <button
+              type="button"
+              className="hy-topo-pathinfo-toggle"
+              aria-expanded={pathInfoExpanded}
+              aria-label={pathInfoExpanded ? t('nodes.graph.collapseHistory') : t('nodes.graph.expandHistory')}
+              title={pathInfoExpanded ? t('nodes.graph.collapseHistory') : t('nodes.graph.expandHistory')}
+              onClick={() => setPathInfoExpanded(v => !v)}
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                <path
+                  d={pathInfoExpanded ? 'M2 8L6 4L10 8' : 'M2 4L6 8L10 4'}
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+            </div>
+            {/*
+              * Non-linear expand/collapse — framer-motion height animation
+              * with an ease-out-expo curve. The same curve the framework's
+              * Tooltip uses, so the chrome feels consistent across surfaces.
+              * `overflow:hidden` on the motion wrapper hides the partial
+              * contents while height interpolates.
+              */}
+            {/*
+              * Right-edge resize handle. Only present when expanded so a
+              * collapsed panel stays edge-cleaner. Drag horizontally to set
+              * explicit width; double-click to reset to auto-size.
+              * Min-width = compact-row natural width (captured at drag start).
+              * Max-width = 60 ticks worth of bar-row chrome + panel padding.
+              */}
+            {pathInfoExpanded && (
+              <div
+                className="hy-topo-pathinfo-resize-handle"
+                onPointerDown={handleResizePointerDown}
+                onDoubleClick={handleResizeDoubleClick}
+                aria-label={t('nodes.graph.resizeHandle')}
+                title={t('nodes.graph.resizeHandleTitle')}
+                role="separator"
+                aria-orientation="vertical"
+              />
+            )}
+            <AnimatePresence initial={false}>
+              {pathInfoExpanded && (
+                <motion.div
+                  key="pi-expand"
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{
+                    height:  { duration: 0.32, ease: [0.16, 1, 0.3, 1] },
+                    opacity: { duration: 0.22, ease: [0.16, 1, 0.3, 1] },
+                  }}
+                  style={{ overflow: 'hidden' }}
+                >
+                  <PathInfoExpand
+                    latency={history.latency}
+                    online={history.online}
+                    txPeak={history.txPeak}
+                    rxPeak={history.rxPeak}
+                    perHopLatencyMs={perHopLatencyMs}
+                    realtimeUpBps={realtimeUpBps}
+                    realtimeDownBps={realtimeDownBps}
+                    totalUpBytes={totalUpBytes}
+                    totalDownBytes={totalDownBytes}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         );
       })()}

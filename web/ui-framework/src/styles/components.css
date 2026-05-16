@@ -395,7 +395,109 @@ a.peer-link:hover{text-decoration:underline}
 /* Selected-path info overlay — bottom-left of the graph canvas. Matches
    ExitViaCell styling: monospace, 12px, green/red per-hop colour, muted
    slash separator. Total latency or "unreachable" appears on the right. */
-.hy-topo-graph-pathinfo{position:absolute;left:10px;bottom:10px;z-index:2;display:inline-flex;align-items:center;gap:10px;padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);font-family:var(--mono);font-size:12px;max-width:calc(100% - 20px);overflow:hidden}
+/* Bottom-left selected-path overlay — "live" frosted-glass following
+   the standard Apple Vibrancy / web.dev backdrop-blur recipe:
+   1. rgba surface + backdrop-filter for the actual blur
+   2. `will-change: backdrop-filter` forces the element into its own
+      compositor layer so Chromium re-samples per-frame instead of
+      caching the blur until the next layout-level composite trigger
+   3. `transform: translateZ(0)` as a GPU-promotion fallback hint for
+      browsers that ignore will-change
+   4. `isolation: isolate` so the panel's blur stacking context is
+      independent of the parent's
+   5. `saturate(180%)` boost makes the frost look chromatically alive
+      even if the backdrop is mostly static
+   6. An ambient inner highlight via ::before with a slow drift
+      animation — gives intrinsic motion so the eye reads "live"
+      regardless of how often the backdrop re-samples
+   Dark Reader inverts the rgba into a dark-transparent surface and
+   keeps the blur, so the same recipe holds in both modes. */
+.hy-topo-graph-pathinfo{position:absolute;left:10px;bottom:10px;z-index:2;display:flex;flex-direction:column;gap:8px;padding:6px 10px;background:rgba(255,255,255,.42);backdrop-filter:blur(20px) saturate(180%);-webkit-backdrop-filter:blur(20px) saturate(180%);will-change:backdrop-filter;transform:translateZ(0);isolation:isolate;border:1px solid rgba(228,231,237,.5);border-radius:var(--radius-sm);font-family:var(--mono);font-size:12px;max-width:calc(100% - 20px);transition:padding .12s ease;box-shadow:0 4px 18px rgba(0,0,0,.08)}
+.hy-topo-graph-pathinfo::before{content:"";position:absolute;inset:0;border-radius:inherit;background:linear-gradient(120deg,rgba(255,255,255,.18) 0%,rgba(255,255,255,0) 35%,rgba(255,255,255,0) 65%,rgba(255,255,255,.10) 100%);background-size:220% 220%;animation:hy-topo-pathinfo-sheen 14s ease-in-out infinite;pointer-events:none;z-index:-1}
+@keyframes hy-topo-pathinfo-sheen{0%,100%{background-position:0% 0%}50%{background-position:100% 100%}}
+/* No min-width on the expanded panel — width is driven by content.
+   Shorter paths → narrower panel → fewer bars fit (older bars clip
+   off the left via overflow + flex-end). Longer paths → wider panel
+   → more bars naturally visible. */
+.hy-topo-graph-pathinfo.is-expanded{padding:8px 12px 10px}
+.hy-topo-pathinfo-row{display:flex;align-items:center;gap:10px;flex-wrap:nowrap}
+/* Chevron toggle on the right of the compact row. Borderless ghost so
+   it disappears into the panel chrome until hover. Same DR-safe colour
+   pattern as the rest of the graph palette (literal hex on `color`,
+   `stroke: currentColor`). */
+/* Right-edge resize handle. 6 px wide invisible hit-area extending the
+   full height of the panel, anchored to the right edge. On hover the
+   inner 2 px strip becomes faintly visible so operators can find it.
+   Only rendered when the panel is expanded; collapsed state has no
+   resizing semantics. */
+.hy-topo-pathinfo-resize-handle{position:absolute;top:0;right:0;width:6px;height:100%;cursor:col-resize;z-index:3;touch-action:none}
+.hy-topo-pathinfo-resize-handle::after{content:"";position:absolute;top:8px;bottom:8px;right:1px;width:2px;border-radius:1px;background:#6b7280;opacity:0;transition:opacity .14s ease}
+.hy-topo-pathinfo-resize-handle:hover::after,.hy-topo-pathinfo-resize-handle:active::after{opacity:.45}
+.hy-topo-pathinfo-toggle{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;margin-left:auto;border:none;background:transparent;color:#6b7280;cursor:pointer;border-radius:var(--radius-sm);transition:background .12s,color .12s}
+.hy-topo-pathinfo-toggle:hover{background:var(--primary-light);color:var(--primary)}
+.hy-topo-pathinfo-toggle svg{display:block}
+/* Expanded panel — four metric sections (latency / online / tx peak /
+   rx peak). Each section has a header row with the metric name on the
+   left and a precision-tab strip on the right; below the header is a
+   single status-bar row whose buckets reflect the selected precision. */
+/* `contain: inline-size` is the critical piece: it tells the layout
+   engine that this element's WIDTH is determined by its container,
+   NOT by its descendants. Without it the 60-tick bar row's
+   max-content (720 px) propagates up through .section → .expanded →
+   the absolutely-positioned panel and forces the panel ~720 px wide
+   regardless of how short the path text is. With `contain: inline-size`
+   the panel sizes purely by the compact row at top; .expanded fills
+   100% of that width and the bar rows then have a finite parent
+   width to measure against via ResizeObserver.
+   `min-width: 0` is the flex-context companion for the same goal. */
+.hy-topo-pathinfo-expanded{display:flex;flex-direction:column;gap:10px;border-top:1px solid rgba(0,0,0,.06);padding-top:8px;font-family:var(--font-sans);min-width:0;width:100%;contain:inline-size}
+/* Info zone — per-hop latency sum, realtime speed, total traffic.
+   Sits above the status-bar zone and is separated from it by its
+   own bottom border. */
+.hy-topo-pathinfo-info{display:flex;flex-direction:column;gap:4px;padding-bottom:8px;border-bottom:1px solid rgba(0,0,0,.06)}
+.hy-topo-pathinfo-info-row{display:flex;align-items:flex-start;gap:10px;font-size:11px;line-height:1.4}
+.hy-topo-pathinfo-info-label{flex-shrink:0;width:52px;color:#6b7280;font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding-top:1px}
+/* The per-hop latency sum can wrap onto multiple lines for chains
+   that don't fit on one row. Each `<span>` is a single "20ms" token
+   so flex-wrap breaks cleanly between tokens. */
+.hy-topo-pathinfo-info-hopsum{display:flex;flex-wrap:wrap;gap:2px 4px;font-family:var(--mono);font-weight:600;font-size:11px;min-width:0}
+.hy-topo-pathinfo-info-plus{color:#9ca3af;font-weight:400;margin:0 2px}
+.hy-topo-pathinfo-info-vals{display:inline-flex;align-items:center;gap:3px;font-family:var(--mono);font-weight:600;font-size:11px;color:#1e2330}
+.hy-topo-pathinfo-info-arrow{font-size:12px;line-height:1}
+.hy-topo-pathinfo-info-val{min-width:60px}
+.hy-topo-pathinfo-section{display:flex;flex-direction:column;gap:4px}
+.hy-topo-pathinfo-section-header{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:18px}
+.hy-topo-pathinfo-section-title{font-size:10px;color:#6b7280;letter-spacing:.04em;text-transform:uppercase;font-weight:600}
+/* Precision tab strip: three small text buttons. Active tab gets a
+   filled background; inactive is muted. Literal hex on `color` keeps
+   DR happy. */
+.hy-topo-pathinfo-precision-tabs{display:inline-flex;gap:2px;background:rgba(0,0,0,.04);border-radius:6px;padding:2px}
+.hy-topo-pathinfo-precision-tab{appearance:none;border:none;background:transparent;color:#6b7280;font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.04em;padding:2px 8px;border-radius:4px;cursor:pointer;transition:background .12s,color .12s;min-width:24px}
+.hy-topo-pathinfo-precision-tab:hover{color:#1e2330}
+.hy-topo-pathinfo-precision-tab.active{background:#ffffff;color:#1e2330;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+/* Adaptive-count bar row: each tick is FIXED 10px wide and the React
+   component renders only as many ticks as the row width can hold
+   (ResizeObserver-driven `visibleCount` in PathInfoExpand). Two CSS
+   pieces matter:
+   1. `min-width: 0` so flex children's intrinsic size doesn't push
+      the panel wider than other content wants it to be.
+   2. `overflow: hidden` as a safety net in case the ResizeObserver
+      hasn't fired yet on first paint — without it the initial render
+      would briefly overflow before the observer trims `visibleCount`. */
+.hy-topo-pathinfo-statusrow-bars{display:flex;gap:2px;align-items:stretch;height:18px;width:100%;min-width:0;overflow:hidden}
+/* Each tick is one time bucket. Fixed 10px wide — readable, hoverable. */
+.hy-topo-pathinfo-statusbar-tick{display:inline-block;flex:0 0 10px;height:100%;background:currentColor;border-radius:2px;cursor:default;transition:transform .08s ease}
+.hy-topo-pathinfo-statusbar-tick:hover{transform:scaleY(1.15)}
+/* Tooltip wrapper inherits the same fixed sizing so flex layout
+   measures by wrapper width, not by the inner tick. */
+.hy-topo-pathinfo-statusrow-bars .hy-tooltip-wrap{display:flex;flex:0 0 10px;align-items:stretch}
+/* Tooltip payload — small two-line card. Age label on top, value on
+   bottom. Lives inside .hy-tooltip (portal-rendered) so picks up the
+   framework's tooltip chrome automatically; this is just content
+   layout. */
+.hy-topo-pathinfo-tooltip{display:flex;flex-direction:column;gap:1px;font-family:var(--font-sans);line-height:1.2;min-width:90px}
+.hy-topo-pathinfo-tooltip-age{font-size:10px;color:#9ca3af;letter-spacing:.02em}
+.hy-topo-pathinfo-tooltip-value{font-size:12px;font-weight:600;font-family:var(--mono)}
 .hy-topo-pathinfo-label{color:var(--text-muted);font-family:var(--font-sans);font-size:11px;letter-spacing:.02em;text-transform:uppercase}
 .hy-topo-pathinfo-chain{display:inline-flex;align-items:center;flex-wrap:wrap;font-weight:600}
 .hy-topo-pathinfo-sep{color:var(--text-muted);margin:0 2px;font-weight:400}
