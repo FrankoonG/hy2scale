@@ -1189,13 +1189,22 @@ func (n *Node) HandleStream(ctx context.Context, reqAddr string, stream net.Conn
 		// peers and showed up in production as the 0↔3MB throughput
 		// oscillation pattern on long downloads. See
 		// docs/s2c-ctrl-race-bug.md.
+		// Replace the binding by NAME without force-closing the previous
+		// stream. The previous stream is owned by an earlier handler
+		// goroutine that's still parked on its own <-ctx.Done(); it will
+		// exit naturally when that stream's QUIC connection dies (its
+		// cleanup branch below sees the map points elsewhere and skips
+		// the delete). Force-closing it here propagates a premature EOF
+		// up to the peer's s2cCtrl reader at relay.go:1098, which makes
+		// AttachTo's errCh fire and tears down the *entire QUIC
+		// connection* to that peer — the cascade behind the v1.3.6
+		// "connection ~1 min disconnect/reconnect" regression observed
+		// in production after the 2026-05-16 upgrade. Letting the old
+		// stream sit idle until its own ctx ends is cheap and avoids
+		// the cascade entirely.
 		n.ctrlS2CMu.Lock()
-		old := n.ctrlS2C[name]
 		n.ctrlS2C[name] = stream
 		n.ctrlS2CMu.Unlock()
-		if old != nil {
-			old.Close()
-		}
 		<-ctx.Done()
 		// Cleanup: only delete if we're still the current entry. A
 		// concurrent newer s2c stream from a reconnect may have
