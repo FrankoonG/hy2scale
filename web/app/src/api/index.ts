@@ -211,3 +211,22 @@ export const applyUpgrade = () => api('/upgrade/apply', { method: 'POST' });
 // Port Check
 export const checkPorts = (ports: PortConflict[]) =>
   api<{ conflicts: PortConflict[] }>('/check-ports', { method: 'POST', body: JSON.stringify({ ports }) });
+
+// Diag — peer history rings (1m / 1h / 1d). Backs the PathInfoExpand
+// status bars. ts is unix-seconds aligned to the precision; arrays are
+// ordered oldest→newest and capped at 60 entries per precision.
+export interface DiagHistoryBucket {
+  ts: number;
+  latencyMs: number;
+  onlinePct: number;
+  txPeak: number;
+  rxPeak: number;
+  samples: number;
+}
+export interface DiagPeerHistory {
+  m1: DiagHistoryBucket[];
+  h1: DiagHistoryBucket[];
+  d1: DiagHistoryBucket[];
+}
+export const getPeerHistory = () =>
+  api<{ peers: Record<string, DiagPeerHistory> }>('/diag/peer-history');

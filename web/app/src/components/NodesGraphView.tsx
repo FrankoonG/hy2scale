@@ -7,7 +7,49 @@ import { fmtRate } from '@/hooks/useFormat';
 import { useExitPaths } from '@/hooks/useExitPaths';
 import { useConfirm } from '@hy2scale/ui';
 import { motion, AnimatePresence } from 'framer-motion';
-import { PathInfoExpand, mockPathHistory } from './PathInfoExpand';
+import { PathInfoExpand, type PathInfoExpandProps, type Precision } from './PathInfoExpand';
+
+// Backend Snapshot → PathInfoExpandProps shape. The four metric props
+// drop everything except the relevant field per bucket; info-zone
+// props are left at their empty defaults because the caller fills
+// them in from live edges, not from the recorded rings.
+function snapshotToHistoryProps(snap: api.DiagPeerHistory): PathInfoExpandProps {
+  const buckets: Record<Precision, api.DiagHistoryBucket[]> = {
+    m1: snap.m1 ?? [],
+    h1: snap.h1 ?? [],
+    d1: snap.d1 ?? [],
+  };
+  const project = <T,>(fn: (b: api.DiagHistoryBucket) => T): Record<Precision, T[]> => ({
+    m1: buckets.m1.map(fn),
+    h1: buckets.h1.map(fn),
+    d1: buckets.d1.map(fn),
+  });
+  return {
+    latency: project((b) => ({ ms: b.latencyMs })),
+    online:  project((b) => ({ pct: b.onlinePct })),
+    txPeak:  project((b) => ({ bps: b.txPeak })),
+    rxPeak:  project((b) => ({ bps: b.rxPeak })),
+    perHopLatencyMs: [],
+    realtimeUpBps: 0,
+    realtimeDownBps: 0,
+    totalUpBytes: 0,
+    totalDownBytes: 0,
+  };
+}
+function emptyHistoryProps(): PathInfoExpandProps {
+  const empty: Record<Precision, never[]> = { m1: [], h1: [], d1: [] };
+  return {
+    latency: empty,
+    online: empty,
+    txPeak: empty,
+    rxPeak: empty,
+    perHopLatencyMs: [],
+    realtimeUpBps: 0,
+    realtimeDownBps: 0,
+    totalUpBytes: 0,
+    totalDownBytes: 0,
+  };
+}
 
 interface Props {
   topology: TopologyNode[];
@@ -1247,6 +1289,28 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // so the bottom-left widget stays compact for normal use; operator
   // expands when they want to look at the time-series.
   const [pathInfoExpanded, setPathInfoExpanded] = useState(false);
+  // Real per-peer history snapshot — keyed by peer name as the relay
+  // sees it. Empty until the first poll completes. Refreshed every 30 s
+  // while the panel is expanded; closes the poll loop when it collapses
+  // so dormant tabs don't keep hitting the API.
+  const [peerHistory, setPeerHistory] = useState<Record<string, api.DiagPeerHistory>>({});
+  useEffect(() => {
+    if (!pathInfoExpanded) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await api.getPeerHistory();
+        if (!cancelled) setPeerHistory(res.peers || {});
+      } catch {
+        // Silently ignore — the next tick retries. The fallback render
+        // shows empty bars (no data yet) which is the correct UX for
+        // either a recorder still warming up or a transient API blip.
+      }
+    };
+    tick();
+    const id = setInterval(tick, 30_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [pathInfoExpanded]);
   // User-resizable panel width (only meaningful when expanded). null =
   // auto-size by compact-row content; number = explicit width set by
   // dragging the right-edge handle. Clamped to [compactRowNatWidth,
@@ -2128,11 +2192,18 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         // and pressing the top-right Edit button is now the unified entry
         // point for both list and graph views. Per-hop remote-open is now
         // handled inline by clicking the hop itself.
-        // Mock history seeded by the path's terminal hop, so two adjacent
-        // selections produce visually distinct bars. Replace with real
-        // data fetch when the backend bucket-ring endpoint lands (task #312).
-        const mockSeed = displayPath[displayPath.length - 1]?.split('').reduce((a, c) => a * 31 + c.charCodeAt(0), 7) ?? 7;
-        const history = mockPathHistory(mockSeed);
+        // History bars: feed from the FIRST direct outbound peer in the
+        // selected path. The local node only records latency/online for
+        // peers it pings itself, so nested hops (us/us-east/us-east-va)
+        // share their head peer's series — a fair proxy for path health
+        // since a degraded direct hop breaks every downstream relay
+        // anyway. fullPath[0] is always selfId; fullPath[1] is the
+        // entry peer if the path has at least one hop.
+        const directPeerKey = fullPath.length >= 2 ? fullPath[1] : '';
+        const snap = peerHistory[directPeerKey];
+        const history = snap
+          ? snapshotToHistoryProps(snap)
+          : emptyHistoryProps();
         // Per-hop latency segments for the Info zone. Re-walks the
         // same edges as `totalLat` above so the displayed sum reads
         // identically. Each entry is a single hop's contribution.
@@ -2157,10 +2228,12 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
           realtimeUpBps = lastE?.txRate ?? 0;
           realtimeDownBps = lastE?.rxRate ?? 0;
         }
-        // Mock cumulative totals for concept (real values come from
-        // task #312's per-path byte counters).
-        const totalUpBytes = Math.round(50_000_000 + (mockSeed & 0x3fffffff) % 5_000_000_000);
-        const totalDownBytes = Math.round(150_000_000 + (mockSeed & 0x3fffffff) % 12_000_000_000);
+        // Cumulative path bytes are not recorded in the history rings —
+        // per-path bytes are an O(N²) tracking surface and the user's
+        // primary ask was the four time-bucketed metrics. Surfaced as 0
+        // so the info zone reads "0 B" rather than a fabricated total.
+        const totalUpBytes = 0;
+        const totalDownBytes = 0;
         return (
           <div
             className={`hy-topo-graph-pathinfo ${pathInfoExpanded ? 'is-expanded' : ''}`}

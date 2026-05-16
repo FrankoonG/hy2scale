@@ -266,6 +266,7 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("GET /api/diag/peer-health", s.diagPeerHealth)
 	authed.HandleFunc("GET /api/diag/peer-rebinds", s.diagPeerRebinds)
 	authed.HandleFunc("GET /api/diag/peer-latency", s.diagPeerLatency)
+	authed.HandleFunc("GET /api/diag/peer-history", s.diagPeerHistory)
 
 	// Sessions (active connections)
 	authed.HandleFunc("GET /api/sessions", s.getSessions)
@@ -900,6 +901,23 @@ func (s *Server) diagPeerRebinds(w http.ResponseWriter, r *http.Request) {
 // only the current point value the topology API surfaces.
 func (s *Server) diagPeerLatency(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"peers": s.app.Node().LatencySnapshots()})
+}
+
+// diagPeerHistory — rolled-up time-bucketed metrics (1m / 1h / 1d
+// precisions) backing the PathInfoExpand status bars. With ?peer=NAME
+// only that peer is returned; otherwise all peers are surfaced so the
+// frontend can build per-path views in one round trip.
+func (s *Server) diagPeerHistory(w http.ResponseWriter, r *http.Request) {
+	h := s.app.History()
+	if h == nil {
+		writeJSON(w, map[string]any{"peers": map[string]any{}})
+		return
+	}
+	if name := r.URL.Query().Get("peer"); name != "" {
+		writeJSON(w, map[string]any{"peer": name, "snapshot": h.Snapshot(name)})
+		return
+	}
+	writeJSON(w, map[string]any{"peers": h.SnapshotAll()})
 }
 
 // --- Node ---
