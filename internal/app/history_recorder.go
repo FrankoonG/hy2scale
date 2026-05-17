@@ -111,6 +111,19 @@ func (a *App) recordOnce(now time.Time) {
 // qualified) plus the self-stripped form of every ExitPaths entry on
 // users and proxies. The local node id and the legacy name field are
 // recognised as "self" prefixes.
+//
+// Topology-visible deep paths (the slash-joined keys the api server's
+// walkAndCache writes into relay.peersOfCache when it walks each direct
+// peer's nested tree) are unioned in too. Operators who only toggle
+// nested on the direct peer — leaving the deeper qualified-path keys
+// unset in cfg.Peers — used to see the graph render those deep paths
+// (AUB/tz-cm-temp/cn-shandong is the canonical example) but every
+// PathInfoExpand history bar came back empty, because the recorder's
+// roots came exclusively from cfg.Peers. Pulling from peersOfCache as
+// well closes that gap without forcing operators to click every
+// generated sub-path. Filter back below: the path is only recorded if
+// it descends from a cfg.Peers root whose own .Nested is true, so we
+// don't record sub-trees of disabled peers.
 func (a *App) collectPaths(cfg Config) []string {
 	selfPrefix := cfg.NodeID + "/"
 	legacySelf := cfg.Name + "/"
@@ -120,6 +133,89 @@ func (a *App) collectPaths(cfg Config) []string {
 			continue
 		}
 		set[k] = struct{}{}
+	}
+	// Union in topology-visible deep paths whose root direct-peer has
+	// .Nested = true in cfg.Peers. This catches paths the api server's
+	// deep walk discovered (subPeersCache → relay.peersOfCache) but the
+	// operator never explicitly toggled.
+	//
+	// peersOfCache is keyed by the *parent* qualified path; the entry
+	// value is the list of *direct children*. The leaf qualified path
+	// for each child is therefore parentKey + "/" + child.Name, which
+	// is what the recorder + history rings index by. Iterating keys
+	// alone only yields parents (and parent==direct-peer for level-1
+	// entries, which cfg.Peers already covers), so the bug-fix value
+	// shows up only after we expand to leaves.
+	//
+	// Two filters keep this bounded:
+	//   1. Rule 1 (docs/nested-rules.md) — no node may appear twice on
+	//      the same path. Walks the leaf's components and drops it if
+	//      any duplicate is detected. Without this, the api server's
+	//      deep walk can hand us cyclic keys (production AUB showed
+	//      e.g. tz-cm-temp/cn-shandong/tz-cm-temp from a remote node
+	//      reporting its own ancestors back). Recording those would
+	//      pollute the rings with paths the routing layer would
+	//      refuse anyway.
+	//   2. Depth cap — operator-meaningful paths are 2-5 hops in
+	//      practice; deeper chains add little signal and lots of
+	//      rings. We cap at the standard maxDepth (default 8) so a
+	//      single direct peer can't explode the record store.
+	const maxLeafDepth = 8
+	for _, parent := range a.node.PeersOfCacheKeys() {
+		if parent == "" {
+			continue
+		}
+		parts := strings.Split(parent, "/")
+		root := parts[0]
+		// Only enroll deep paths that descend from a nested-enabled
+		// root the operator has already authorised. Otherwise we'd
+		// record paths from disabled / unauthorised peers too.
+		if pc, ok := cfg.Peers[root]; !ok || !pc.Nested {
+			continue
+		}
+		if len(parts) >= maxLeafDepth {
+			continue
+		}
+		// Build the ancestor set once per parent for the cycle check,
+		// AND skip the parent entirely if it is itself cyclic — without
+		// this guard, peersOfCache parents like
+		//   2400/cn-shandong/cn-xinchang/2400
+		// (cn-shandong/cn-xinchang re-entering 2400) would still produce
+		// non-trivially-cyclic leaves whose immediate child happens not
+		// to collide with the immediate ancestor set. Rejecting cyclic
+		// parents up front is the cheaper invariant: a non-cyclic
+		// ancestor map paired with the dup-child check is then sufficient
+		// to keep every enrolled leaf rule-1 clean.
+		ancestors := make(map[string]struct{}, len(parts)+1)
+		ancestors[cfg.NodeID] = struct{}{}
+		if cfg.Name != "" {
+			ancestors[cfg.Name] = struct{}{}
+		}
+		cyclicParent := false
+		for _, h := range parts {
+			if _, dup := ancestors[h]; dup {
+				cyclicParent = true
+				break
+			}
+			ancestors[h] = struct{}{}
+		}
+		if cyclicParent {
+			continue
+		}
+		children, hasCache := a.node.PeersOfCached(parent)
+		if !hasCache {
+			continue
+		}
+		for _, c := range children {
+			if c.Name == "" {
+				continue
+			}
+			if _, dup := ancestors[c.Name]; dup {
+				continue // Rule 1: would form a cycle
+			}
+			leaf := parent + "/" + c.Name
+			set[leaf] = struct{}{}
+		}
 	}
 	add := func(p string) {
 		p = strings.TrimSpace(p)
