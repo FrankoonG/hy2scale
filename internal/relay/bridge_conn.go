@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/apernet/quic-go"
 )
 
 // bridgedConn wraps a relay stream in a bridge-aware net.Conn.
@@ -38,6 +40,15 @@ type bridgedConn struct {
 	// flooding both ends' logs and wasting QUIC stream churn. We
 	// reset this counter on any successful Read (n > 0).
 	rebindsWithoutData atomic.Int32
+	// lastRebindAt records the unix-nanos when the most recent rebind
+	// succeeded. Used to decay rebindsWithoutData: two rebinds spaced
+	// far apart in time are not a self-spin storm — they reflect a
+	// genuinely slow recovery (e.g. local prober disconnected the peer
+	// and the outer reconnect loop is taking >30 s to re-establish
+	// QUIC). Without the decay, a single long peer-reconnect window
+	// burns through maxZombieRebinds before the new QUIC even
+	// stabilises, killing every user TCP that was riding the bridge.
+	lastRebindAt atomic.Int64
 
 	// For multi-hop via: re-open via chain on rebind instead of using _relay_rebind_
 	viaPath       []string
@@ -267,6 +278,32 @@ func isCleanClose(err error) bool {
 	if err == nil {
 		return false
 	}
+	// QUIC transport-level failures masquerade as net.ErrClosed via the
+	// quic-go error chain — IdleTimeoutError, ApplicationError with the
+	// non-zero close code from the peer's prober-driven disconnect,
+	// HandshakeTimeoutError, etc. None of these are "remote app finished
+	// with this stream cleanly"; they're "the underlying tunnel died and
+	// the bridge needs to rebind onto the next QUIC connection". Treating
+	// them as clean propagates EOF to the user TCP, which surfaces as the
+	// "~1 min after a peer flap, every long-lived connection through that
+	// peer dies" symptom. Surface them as transport failures so Read /
+	// Write fall through to the rebind path.
+	var idleTimeoutErr *quic.IdleTimeoutError
+	if errors.As(err, &idleTimeoutErr) {
+		return false
+	}
+	var handshakeTimeoutErr *quic.HandshakeTimeoutError
+	if errors.As(err, &handshakeTimeoutErr) {
+		return false
+	}
+	var appErr *quic.ApplicationError
+	if errors.As(err, &appErr) {
+		return false
+	}
+	var transportErr *quic.TransportError
+	if errors.As(err, &transportErr) {
+		return false
+	}
 	return errors.Is(err, io.EOF) ||
 		errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, net.ErrClosed)
@@ -277,6 +314,16 @@ func isCleanClose(err error) bool {
 // conclude the exit-side bridge is gone and give up; bigger values
 // let the storm run longer before we break the loop.
 const maxZombieRebinds = 2
+
+// rebindCooldown is the minimum elapsed time between two
+// successful rebinds for them to count as a self-spin storm. A
+// genuine prober-disconnect-and-reconnect cycle takes much longer
+// than this (QUIC idle timeout + AttachTo's outer backoff), so two
+// rebinds across that window should NOT trigger the zombie cap.
+// The original storm pattern this guards against (cn-xinchang →
+// AUB, exit-bridge already gone, hub spins) issues rebinds every
+// ~500 ms — well below this threshold.
+const rebindCooldown = 30 * time.Second
 
 // tryRebind is the legacy zero-arg wrapper used by Read/Write hot paths.
 // Equivalent to tryRebindWith(RebindOpts{}).
@@ -385,6 +432,19 @@ func (c *bridgedConn) tryRebindWith(opts RebindOpts) bool {
 			// a byte of payload on the new stream. Two consecutive
 			// rebinds without any payload trigger the zombie cap in
 			// Read/Write and stop the spin.
+			//
+			// Decay heuristic: if this rebind succeeded long after
+			// the previous one (≥ rebindCooldown), the bridge is in
+			// a slow-recovery regime — local peer flapped and the
+			// reconnect loop is still working — not the rapid
+			// "rebind rejected immediately, retry, rejected again"
+			// storm pattern the cap was added for. Reset the
+			// counter so prolonged peer reconnects don't burn
+			// through the budget before the new QUIC stabilises.
+			prev := c.lastRebindAt.Swap(now)
+			if prev != 0 && time.Duration(now-prev) >= rebindCooldown {
+				c.rebindsWithoutData.Store(0)
+			}
 			c.rebindsWithoutData.Add(1)
 			// Monitor goroutine still watches same bridge.ctx — no restart needed
 			log.Printf("[bridge] %s rebound on requester side (peer %s)", c.bridge.id, c.peerName)
