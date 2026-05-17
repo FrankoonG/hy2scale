@@ -18,7 +18,7 @@ require (
 exclude golang.zx2c4.com/wireguard/tun/netstack v0.0.0-20220703234212-c31a7b1ab478
 
 require (
-	github.com/apernet/quic-go v0.59.1-0.20260330051153-c402ee641eb6 // indirect
+	github.com/apernet/quic-go v0.59.1-0.20260330051153-c402ee641eb6
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/google/btree v1.1.2 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
