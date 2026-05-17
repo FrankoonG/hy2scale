@@ -126,7 +126,14 @@ export default function RemoteConnectModal({ open, onClose, chain, targetLabel, 
       }
     } catch { /* fall through */ }
 
-    // Probe path 2: saved-creds login. If it works, the SPA will too.
+    // Probe path 2: saved-creds login. If it works, hand the minted
+    // token to the new tab via the URL hash. Don't rely on the bootstrap
+    // to self-mint — that path needs the remote node to have
+    // RelayAdminPassthrough on, which "same password as local" doesn't
+    // imply. Without the hand-off, the new tab has no token in
+    // sessionStorage, the passthrough self-mint then 403s, and the SPA
+    // routes to /login — the exact "session expired" symptom on a
+    // remote whose password actually matches.
     const candidates: { u: string; h: string }[] = [];
     const sess = getSessionHash();
     if (sess) candidates.push(sess);
@@ -135,8 +142,8 @@ export default function RemoteConnectModal({ open, onClose, chain, targetLabel, 
 
     for (const c of candidates) {
       const res = await tryLogin(c.u, c.h);
-      if (res.ok) {
-        launchRemote();
+      if (res.ok && res.token) {
+        launchRemote(res.token);
         return;
       }
       if (res.status === 0) {
