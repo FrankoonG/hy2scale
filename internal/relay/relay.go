@@ -659,6 +659,23 @@ func (n *Node) PeersOfCached(peerName string) ([]PeerInfo, bool) {
 	return peers, ok
 }
 
+// PeersOfCacheKeys snapshots every qualified-path key currently held in
+// peersOfCache (both bare direct-peer names and the slash-joined deep keys
+// the api server's walkAndCache populates). Callers that want to enumerate
+// the full set of topology-visible paths beyond cfg.Peers — e.g. the
+// PathInfoExpand history recorder, which used to miss any qualified path
+// the operator hadn't explicitly toggled even though the topology graph
+// rendered it — read this list and union it with their own roots.
+func (n *Node) PeersOfCacheKeys() []string {
+	n.peerRateMu.RLock()
+	defer n.peerRateMu.RUnlock()
+	keys := make([]string, 0, len(n.peersOfCache))
+	for k := range n.peersOfCache {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // StartLatencyProber periodically pings outbound peers and caches their peer lists.
 func (n *Node) StartLatencyProber(ctx context.Context) {
 	t := time.NewTicker(5 * time.Second)
