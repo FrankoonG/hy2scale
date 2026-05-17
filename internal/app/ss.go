@@ -26,7 +26,16 @@ type SSConfig struct {
 	Method  string `yaml:"method" json:"method"` // aes-128-gcm, aes-256-gcm, chacha20-ietf-poly1305
 }
 
-// StartSS starts the Shadowsocks server.
+// StartSS starts the Shadowsocks server (TCP + UDP on the same address).
+//
+// UDP is paired with TCP for two reasons: (1) the SS protocol clients
+// universally assume `server:port` is reachable on both transports — a
+// mihomo / sing-box / ss-libev client configured with port 443 expects
+// UDP datagrams to land on UDP/443 too — and (2) the user/auth model is
+// per-key, not per-transport, so binding both ports under one
+// StartSS/RestartSS lifecycle avoids the inconsistency of "user enabled
+// for TCP but not UDP." Methods that don't support UDP framing (currently
+// just "none") opt out inside runSSUDP and the UDP listener is skipped.
 func (a *App) StartSS(cfg SSConfig) {
 	if !cfg.Enabled || cfg.Listen == "" {
 		return
@@ -50,6 +59,7 @@ func (a *App) StartSS(cfg SSConfig) {
 			go a.handleSS(conn, cfg.Method)
 		}
 	}()
+	go a.runSSUDP(ctx, cfg.Listen, cfg.Method)
 }
 
 // RestartSS stops and restarts the SS server with current config.
