@@ -1295,6 +1295,36 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 	// Send back our name
 	writeString(stream, n.name)
 
+	// Verification probe: verifyExtraConn (app.go) opens a register stream
+	// on each extra-IP QUIC client to confirm the remote is the expected
+	// node. It writes flags=0x00 (no exit, no metadata) and only reads our
+	// node name back. Without this guard, the slot-replace logic below
+	// treats every such probe as a real peer re-register, cancels the
+	// existing peer's context, installs a placeholder peer (Version=1.0.0,
+	// TunCapable=false, no NodeID — all defaults from skipped meta), and
+	// when the probe stream closes the watchdog deletes the entry — wiping
+	// the legitimate inbound peer from n.peers.
+	//
+	// Each extra IP issues such a probe on initial connect and on every
+	// reconnect, so on a peer with 4-5 extras these probes spray in
+	// bursts (visible in production logs as repeated lines like
+	//   register: AUB re-registering (replacing stale inbound ctrl,
+	//   ver 1.3.7→1.0.0, tun true→false)
+	// every few seconds). Production effect: bridges and streams that
+	// were wrapped with wrapIdleTimeoutCtx(peerCtx, ...) on the previous
+	// peer-struct ctx tear down the next time the peer entry is wiped,
+	// surfacing to operators as "inbound peer ~1-2 min long-lived TCP
+	// drops" on the receiving (server) side. See
+	// docs/v137-inbound-120s-drop-investigation.md.
+	//
+	// Probe semantics: we've already written our name (the only data
+	// verifyExtraConn reads). Close the stream and return without
+	// touching peer state.
+	if flags[0] == 0 {
+		stream.Close()
+		return
+	}
+
 	// Metadata exchange: only if client set the metadata flag (bit 1)
 	var remoteMeta peerMeta
 	if flags[0]&0x02 != 0 {

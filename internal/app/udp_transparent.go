@@ -147,7 +147,21 @@ func (a *App) runUDPTransparentProxy(ctx context.Context, listenAddr, tag string
 				now := time.Now()
 				for k, f := range flows {
 					if now.Sub(f.lastUsed.t) > 90*time.Second {
-						f.remote.Close()
+						// f.remote is set asynchronously by the dial goroutine
+						// (line ~221) AFTER the upstream UDP dial returns. If
+						// the dial is slow or hung past 90 s, the flow entry
+						// exists with f.remote==nil and the reaper would NPE
+						// here, crashing the whole process — observed in
+						// production cn-shandong logs as the cause of
+						// "long-lived TCP drops at ~120 s" (process restart
+						// kills every relay connection, not just UDP). Guard
+						// the Close. Removing the map entry is still correct
+						// because the dial goroutine itself drops its slot
+						// reference on the next mu.Lock — it sees `cur != flow`
+						// and exits without re-installing.
+						if f.remote != nil {
+							f.remote.Close()
+						}
 						delete(flows, k)
 					}
 				}
