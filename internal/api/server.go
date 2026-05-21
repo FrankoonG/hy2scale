@@ -1958,18 +1958,47 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 
 			var infos []relay.PeerInfo
 			for _, c := range children {
+				// Carry LatencyMs and Connected forward — pathLatencyAndOnline
+				// in the history recorder checks LatencyMs < 0 to detect an
+				// offline hop on a multi-hop chain. Pre-fix, this loop
+				// dropped both fields: LatencyMs defaulted to 0, so an
+				// offline end-hop got recorded as "the path is online with
+				// the previous hop's latency", which is exactly the
+				// PathInfoExpand multihop offline mis-attribution symptom.
+				// !c.Connected pins the sentinel to -1 so the offline check
+				// fires even when c.LatencyMs happens to be 0 (the offline
+				// topology shape — connected=false latency=0).
+				lat := c.LatencyMs
+				if !c.Connected {
+					lat = -1
+				}
 				infos = append(infos, relay.PeerInfo{
 					Name:       c.Name,
 					ExitNode:   c.ExitNode,
 					Native:     c.Native,
 					Version:    c.Version,
 					TunCapable: c.TunCapable,
+					LatencyMs:  lat,
 				})
 			}
 			if len(infos) > 0 {
 				s.app.Node().SetPeersOfCache(qualifiedPath, infos)
 				if strings.Contains(qualifiedPath, "/") {
-					if _, exists := s.app.Node().PeersOfCached(bare); !exists {
+					// Direct peers get their `peersOfCache[bare]` entry
+					// refreshed every 5s by StartLatencyProber with live
+					// latency from the peer's own listPeers reply; we
+					// must not overwrite that. Indirect peers (e.g.
+					// "au-r1" two hops away) have walkAndCache as the
+					// ONLY writer, so the previous "only if not exists"
+					// guard pinned them to the first observation — when
+					// the indirect peer's grandchild later went offline,
+					// the stale online-with-latency entry never got
+					// updated, and the history recorder kept producing
+					// online=true latency=<sum-to-prev-hop> for paths
+					// whose end was actually offline. Always refresh
+					// indirect entries; only skip when bare is a direct
+					// peer so prober ownership is preserved.
+					if !s.app.Node().HasPeer(bare) {
 						s.app.Node().SetPeersOfCache(bare, infos)
 					}
 				}
