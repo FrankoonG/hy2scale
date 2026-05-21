@@ -38,7 +38,7 @@ export default function HttpTab() {
   const handleSave = async () => {
     setLoading(true);
     try {
-      const data = { protocol: 'http' as const, listen, enabled, tls_cert: tlsCert || undefined };
+      const data = { id: http?.id ?? 'http', protocol: 'http' as const, listen, enabled, tls_cert: tlsCert || undefined };
       if (http) {
         await api.updateProxy(http.id, { ...http, ...data });
       } else {
