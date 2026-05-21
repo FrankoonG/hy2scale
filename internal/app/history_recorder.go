@@ -47,13 +47,22 @@ func (a *App) runHistoryRecorder(ctx context.Context) {
 	flush := time.NewTicker(60 * time.Second)
 	defer flush.Stop()
 
+	// Track per-direct-peer cumulative ping-fail count between recorder
+	// ticks. When the count goes up since the previous tick, a probe
+	// failed in that window — even if the current latency reading is
+	// positive again (transient flap recovered before this tick). The
+	// recorder treats the affected sample as offline so the bucket's
+	// onlinePct reflects ALL detected probe failures, not only those
+	// the recorder happens to sample while the path is still in the
+	// failed state.
+	prevPingFails := make(map[string]uint64)
 	for {
 		select {
 		case <-ctx.Done():
 			_ = a.hist.Persist()
 			return
 		case now := <-tick.C:
-			a.recordOnce(now)
+			a.recordOnce(now, prevPingFails)
 		case now := <-flush.C:
 			a.hist.GC(now)
 			a.hist.MaybePersist(now)
@@ -62,14 +71,41 @@ func (a *App) runHistoryRecorder(ctx context.Context) {
 }
 
 // recordOnce gathers a Sample for every known qualified path and
-// pushes the batch into the history store.
-func (a *App) recordOnce(now time.Time) {
+// pushes the batch into the history store. `prevPingFails` is updated
+// in place — the caller owns it across ticks so we can spot transient
+// probe failures that recovered between samples.
+func (a *App) recordOnce(now time.Time, prevPingFails map[string]uint64) {
 	cfg := a.store.Get()
 	rates := a.node.PeerRates()
 	pathRates := a.node.PathRates()
 
+	// Sensitive-offline detection: snapshot every direct peer's
+	// cumulative PingFail counter and compute the delta against the
+	// previous tick. A non-zero delta means the prober logged at least
+	// one probe failure in this 5 s window — capture it even if the
+	// path is currently online again.
+	healthByName := make(map[string]uint64)
+	flapsByName := make(map[string]bool)
+	for _, h := range a.node.HealthSnapshots() {
+		healthByName[h.Name] = h.PingFail
+		if prev, ok := prevPingFails[h.Name]; ok && h.PingFail > prev {
+			flapsByName[h.Name] = true
+		}
+	}
+
 	paths := a.collectPaths(cfg)
 	if len(paths) == 0 {
+		// Still update the prev map so the next tick computes deltas
+		// against the freshest snapshot, not a stale one.
+		for name, v := range healthByName {
+			prevPingFails[name] = v
+		}
+		// Purge names no longer present.
+		for name := range prevPingFails {
+			if _, ok := healthByName[name]; !ok {
+				delete(prevPingFails, name)
+			}
+		}
 		return
 	}
 	samples := make([]history.Sample, 0, len(paths))
@@ -77,6 +113,16 @@ func (a *App) recordOnce(now time.Time) {
 	for _, p := range paths {
 		hops := strings.Split(p, "/")
 		latMs, online := a.pathLatencyAndOnline(hops)
+		// If the path's first hop (the direct peer we own probing of)
+		// logged a transient ping failure in this window, treat the
+		// sample as offline. Multi-hop paths share this fate: if the
+		// nearest hop just flapped, the chain past it can't have been
+		// healthy throughout the window either, so the sample should
+		// reflect "had at least one probe failure".
+		_ = online
+		if len(hops) > 0 && flapsByName[hops[0]] {
+			latMs = -1
+		}
 		var tx, rx int64
 		if pr, ok := pathRates[p]; ok {
 			tx = int64(pr.TxRate)
@@ -96,14 +142,18 @@ func (a *App) recordOnce(now time.Time) {
 			RxBps:     rx,
 		})
 		keep[p] = struct{}{}
-		if !online {
-			// Online% comes from per-bucket counts: a sample with
-			// negative latency is counted as offline, which is exactly
-			// what we want for a partially-broken chain.
-		}
 	}
 	a.hist.Record(samples)
 	a.hist.Forget(keep)
+	// Roll forward delta tracking AFTER samples are recorded.
+	for name, v := range healthByName {
+		prevPingFails[name] = v
+	}
+	for name := range prevPingFails {
+		if _, ok := healthByName[name]; !ok {
+			delete(prevPingFails, name)
+		}
+	}
 }
 
 // collectPaths returns the de-duplicated set of qualified paths the
