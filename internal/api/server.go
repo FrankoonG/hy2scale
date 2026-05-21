@@ -2523,12 +2523,19 @@ func (s *Server) addProxy(w http.ResponseWriter, r *http.Request) {
 	} else if pc.ExitVia != "" {
 		pc.ExitPaths = []string{pc.ExitVia}
 	}
+	if pc.Protocol == "" {
+		pc.Protocol = "socks5"
+	}
+	// Singleton-protocol fallback: SOCKS5 / HTTP tabs in the UI manage
+	// one proxy each, so a missing id is unambiguous — use protocol as
+	// the id. Without this, the very first save of a fresh node returns
+	// 400 "id, listen required" because the UI didn't synthesize an id.
+	if pc.ID == "" {
+		pc.ID = pc.Protocol
+	}
 	if pc.ID == "" || pc.Listen == "" {
 		http.Error(w, "id, listen required", 400)
 		return
-	}
-	if pc.Protocol == "" {
-		pc.Protocol = "socks5"
 	}
 	if err := s.app.AddProxy(pc); err != nil {
 		http.Error(w, err.Error(), 500)

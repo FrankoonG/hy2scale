@@ -42,7 +42,7 @@ export default function Socks5Tab() {
   const handleSave = async () => {
     setLoading(true);
     try {
-      const data = { protocol: 'socks5' as const, listen, enabled, tls_cert: tlsCert || undefined };
+      const data = { id: socks5?.id ?? 'socks5', protocol: 'socks5' as const, listen, enabled, tls_cert: tlsCert || undefined };
       if (socks5) {
         await api.updateProxy(socks5.id, { ...socks5, ...data });
       } else {
