@@ -78,13 +78,27 @@ function latColor(ms: number): string {
   return '#ef4444';
 }
 
-/** Online% → color per user spec. */
+/** Online% → color per user spec.
+ *
+ * Sensitivity bias: any sample-level offline event in the bucket window
+ * should be visually obvious. Previously pct=0 collided with pct<0 on
+ * gray (so fully-offline read the same as "no data"), and the
+ * intermediate tiers were loose enough that 11-of-12 online (= one
+ * dropped probe) still painted light-green. New tiers:
+ *
+ *   pct < 0   → gray   (no data — fresh recorder, no samples yet)
+ *   pct = 0   → red    (every sample offline — was gray, BUG)
+ *   pct = 1   → green  (every sample online — unchanged)
+ *   pct ≥ .95 → light green (≤ 1 dropped probe per 20)
+ *   pct ≥ .50 → amber  (any meaningful flapping)
+ *   pct < .50 → red    (mostly offline)
+ */
 function onlineColor(pct: number): string {
   if (pct < 0)     return '#6b7280';
-  if (pct === 0)   return '#6b7280';
+  if (pct === 0)   return '#ef4444';
   if (pct >= 1)    return '#22c55e';
-  if (pct >= 0.75) return '#86efac';
-  if (pct >= 0.35) return '#eab308';
+  if (pct >= 0.95) return '#86efac';
+  if (pct >= 0.50) return '#eab308';
   return '#ef4444';
 }
 
