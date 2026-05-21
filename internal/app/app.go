@@ -635,6 +635,20 @@ func (a *App) UpdateClientByAddr(oldName string, cl ClientEntry) error {
 
 func (a *App) RemoveClient(name string) error {
 	a.StopClient(name)
+	// Clear any block placed by a prior SetClientDisabled. Without this,
+	// a disable-then-delete sequence leaves the peer name in n.blocked
+	// forever (RemoveClient was asymmetric to SetClientDisabled), so a
+	// later inbound connection from that same name gets rejected with
+	// "register: <name> is blocked, rejecting". Look up by name OR addr
+	// to mirror the deletion loop below; UnblockPeer is idempotent so
+	// passing a never-blocked name is safe.
+	cfg := a.store.Get()
+	for _, cl := range cfg.Clients {
+		if cl.Name == name || cl.Addr == name {
+			a.node.UnblockPeer(cl.Name)
+			break
+		}
+	}
 	return a.store.Update(func(c *Config) {
 		for i, cl := range c.Clients {
 			if cl.Name == name || cl.Addr == name {
