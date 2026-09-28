@@ -46,7 +46,7 @@ func (s *TLSStore) List() ([]CertInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	var result []CertInfo
+	result := []CertInfo{} // never nil: JSON null crashed the Settings page
 	for _, e := range entries {
 		if filepath.Ext(e.Name()) != ".crt" {
 			continue

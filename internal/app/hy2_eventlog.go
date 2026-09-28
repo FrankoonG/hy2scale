@@ -101,6 +101,13 @@ func takeGoIDAddr() string {
 	return s
 }
 func (a *hy2Auth) UDPRequest(addr net.Addr, id string, sessionID uint32, reqAddr string) {
+	// hyserver calls this right before Outbound.UDP on the same goroutine;
+	// nodeOutbound.UDP takes it to route hy2 users by their exit (and the
+	// peer addr for their device row).
+	setGoIDAuth(id)
+	if addr != nil {
+		goidAddr.Store(goid(), addr.String())
+	}
 }
 func (a *hy2Auth) UDPError(addr net.Addr, id string, sessionID uint32, err error) {}
 
@@ -146,3 +153,10 @@ func (c *peerAddrConn) RemoteAddr() net.Addr {
 // PeerAddr returns the stashed peer addr without requiring callers to know
 // the concrete type. Returns "" if not set.
 func (c *peerAddrConn) PeerAddr() string { return c.peerAddr }
+
+// syncMapLen counts entries of a sync.Map (diagnostics only — O(n)).
+func syncMapLen(m *sync.Map) int {
+	n := 0
+	m.Range(func(_, _ any) bool { n++; return true })
+	return n
+}

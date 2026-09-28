@@ -52,6 +52,12 @@ func wrapIdleTimeout(conn net.Conn) net.Conn {
 	return wrapIdleTimeoutCtx(context.Background(), conn)
 }
 
+// NoHalfClose passes the wrapped conn's half-close capability through.
+func (c *idleTimeoutConn) NoHalfClose() bool {
+	nh, ok := c.Conn.(interface{ NoHalfClose() bool })
+	return ok && nh.NoHalfClose()
+}
+
 func wrapIdleTimeoutCtx(ctx context.Context, conn net.Conn) net.Conn {
 	return &idleTimeoutConn{Conn: conn, timeout: defaultIdleTimeout, ctx: ctx}
 }
