@@ -6,6 +6,8 @@ import {
   Card, Button, Input, PasswordInput, Toggle, Select, FormGroup, FormGrid, Tabs, TabPanel, Badge, useToast, useConfirm,
 } from '@hy2scale/ui';
 import * as api from '@/api';
+import { getBasePath } from '@/api/client';
+import { useServerFormInit } from '@/hooks/useFormInit';
 import { useAuthStore } from '@/store/auth';
 import { sha256 } from '@/hooks/useAuth';
 import UpgradeUploadModal from '@/components/UpgradeUploadModal';
@@ -72,7 +74,7 @@ export default function SettingsPage() {
   const logout = useAuthStore((s) => s.logout);
   const forcePasswordChange = useAuthStore((s) => s.forcePasswordChange);
 
-  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getUISettings });
+  const settingsQ = useQuery({ queryKey: ['settings'], queryFn: api.getUISettings });
   const { data: certs = [] } = useQuery({ queryKey: ['certs'], queryFn: api.getCerts });
   const { data: archInfo } = useQuery({ queryKey: ['systemArch'], queryFn: api.getSystemArch });
 
@@ -84,6 +86,7 @@ export default function SettingsPage() {
   const [forceHttps, setForceHttps] = useState(false);
   const [httpsCertId, setHttpsCertId] = useState('');
   const [sessionTimeout, setSessionTimeout] = useState('12');
+  const [pathLossGrace, setPathLossGrace] = useState('15');
   const [dns, setDns] = useState('');
   const [savingUI, setSavingUI] = useState(false);
   // Nested-discovery hard limits (hot-reloadable, no restart needed)
@@ -124,38 +127,50 @@ export default function SettingsPage() {
   const [checking, setChecking] = useState(false);
   const [applying, setApplying] = useState(false);
 
-  useEffect(() => {
-    if (settings) {
-      setListen(settings.listen || '');
-      setBasePath(settings.base_path || '');
-      setForceHttps(settings.force_https || false);
-      setHttpsCertId(settings.https_cert_id || '');
-      setSessionTimeout(String(settings.session_timeout_h || 12));
-      setDns(settings.dns || '');
-      setMaxNestedDepth(String(settings.max_nested_depth || 5));
-      setMaxResponseNodes(String(settings.max_response_nodes || 1024));
-      setMaxCacheEntries(String(settings.max_cache_entries || 5000));
-      setMaxResponseBytes(String(settings.max_response_bytes || 1048576));
-      setMaxFetchFanOut(String(settings.max_fetch_fan_out || 8));
-      setRelayPassthrough(!!settings.relay_admin_passthrough);
-      setDnsResolverEnabled(!!settings.dns_resolver_enabled);
-      setDnsResolverCacheTtl(String(settings.dns_resolver_cache_ttl || 300));
-      setDnsResolverNegativeTtl(String(settings.dns_resolver_negative_ttl || 30));
-      setDnsResolverCacheSize(String(settings.dns_resolver_cache_size || 1024));
-      setDnsResolverQueryTimeoutMs(String(settings.dns_resolver_query_timeout_ms || 3000));
-    }
-  }, [settings]);
+  // Each card seeds its own fields and re-seeds only after its own save, so
+  // saving one card never reverts unsaved edits in another.
+  const resyncWeb = useServerFormInit(settingsQ, (settings) => {
+    setListen(settings.listen || '');
+    setBasePath(settings.base_path || '');
+    setForceHttps(settings.force_https || false);
+    setHttpsCertId(settings.https_cert_id || '');
+    setSessionTimeout(String(settings.session_timeout_h || 12));
+  });
+  const resyncSystem = useServerFormInit(settingsQ, (settings) => {
+    setDns(settings.dns || '');
+    setMaxNestedDepth(String(settings.max_nested_depth || 5));
+    setMaxResponseNodes(String(settings.max_response_nodes || 1024));
+    setMaxCacheEntries(String(settings.max_cache_entries || 5000));
+    setMaxResponseBytes(String(settings.max_response_bytes || 1048576));
+    setMaxFetchFanOut(String(settings.max_fetch_fan_out || 8));
+    setRelayPassthrough(!!settings.relay_admin_passthrough);
+    setPathLossGrace(String(settings.path_loss_grace_s || 15));
+    setDnsResolverEnabled(!!settings.dns_resolver_enabled);
+    setDnsResolverCacheTtl(String(settings.dns_resolver_cache_ttl || 300));
+    setDnsResolverNegativeTtl(String(settings.dns_resolver_negative_ttl || 30));
+    setDnsResolverCacheSize(String(settings.dns_resolver_cache_size || 1024));
+    setDnsResolverQueryTimeoutMs(String(settings.dns_resolver_query_timeout_ms || 3000));
+  });
 
   const handleSaveWeb = async () => {
+    if (forceHttps && !httpsCertId) {
+      toast.error(t('settings.httpsCertRequired'));
+      return;
+    }
     setSavingUI(true);
     try {
       await api.updateUISettings({
         listen, base_path: basePath, force_https: forceHttps,
         https_cert_id: httpsCertId, session_timeout_h: parseInt(sessionTimeout) || 12,
-        dns,
       });
       toast.success(t('settings.saved'));
+      resyncWeb();
       queryClient.invalidateQueries({ queryKey: ['settings'] });
+      // HTTPS applies immediately; move this tab over (not for /remote/ tabs,
+      // whose origin is the proxying node).
+      if (forceHttps && window.location.protocol === 'http:' && !getBasePath().includes('/remote/')) {
+        window.location.href = `https://${window.location.host}${window.location.pathname}`;
+      }
     } catch (e: any) { toast.error(String(e.message || e)); }
     finally { setSavingUI(false); }
   };
@@ -170,6 +185,7 @@ export default function SettingsPage() {
       await api.updateUISettings({
         dns,
         relay_admin_passthrough: relayPassthrough,
+        path_loss_grace_s: parseInt(pathLossGrace) || 15,
         max_nested_depth: parseInt(maxNestedDepth) || 5,
         max_response_nodes: parseInt(maxResponseNodes) || 1024,
         max_cache_entries: parseInt(maxCacheEntries) || 5000,
@@ -188,6 +204,7 @@ export default function SettingsPage() {
         dns_resolver_query_timeout_ms: parseInt(dnsResolverQueryTimeoutMs) || 3000,
       });
       toast.success(t('settings.savedHot'));
+      resyncSystem();
       queryClient.invalidateQueries({ queryKey: ['settings'] });
     } catch (e: any) { toast.error(String(e.message || e)); }
     finally { setSavingSystem(false); }
@@ -229,6 +246,43 @@ export default function SettingsPage() {
       a.href = url; a.download = 'hy2scale-backup.tar'; a.click();
       URL.revokeObjectURL(url);
     } catch (e: any) { toast.error(String(e.message || e)); }
+  };
+
+  const [restarting, setRestarting] = useState(false);
+  const handleRestart = async () => {
+    const ok = await confirm({
+      title: t('settings.restart'),
+      message: t('settings.restartConfirm'),
+      danger: true, confirmText: t('settings.restart'), cancelText: t('app.cancel'),
+    });
+    if (!ok) return;
+    setRestarting(true);
+    try {
+      await api.restartNode();
+    } catch (e: any) {
+      toast.error(String(e.message || e));
+      setRestarting(false);
+      return;
+    }
+    toast.info(t('settings.restarting'));
+    // Reload once the node answers again (seen down, or after 5 s if the
+    // restart was quicker than the first poll).
+    const t0 = Date.now();
+    let wentDown = false;
+    while (Date.now() - t0 < 120_000) {
+      await new Promise((r) => setTimeout(r, 1000));
+      let up = false;
+      try {
+        up = (await fetch(getBasePath() + '/api/build-id', { cache: 'no-store' })).ok;
+      } catch { /* down */ }
+      if (!up) wentDown = true;
+      else if (wentDown || Date.now() - t0 > 5000) {
+        window.location.reload();
+        return;
+      }
+    }
+    toast.error(t('settings.restartTimeout'));
+    setRestarting(false);
   };
 
   const handleRestore = async (file: File) => {
@@ -310,22 +364,25 @@ export default function SettingsPage() {
 
   const certOptions = [
     { value: '', label: '\u2014' },
-    ...certs.map((c) => ({ value: c.id, label: c.name || c.id })),
+    ...(certs || []).map((c) => ({ value: c.id, label: c.name || c.id })),
+  ];
+
+  // One list for the tab bar and the panel: the slide direction follows it.
+  const settingsTabs = [
+    { key: 'system', label: t('settings.system') },
+    { key: 'web', label: t('settings.web'), disabled: forcePasswordChange },
+    { key: 'upgrade', label: t('settings.upgrade'), disabled: forcePasswordChange },
   ];
 
   return (
     <div className="hy-page">
       <Tabs
-        items={[
-          { key: 'web', label: t('settings.web'), disabled: forcePasswordChange },
-          { key: 'system', label: t('settings.system') },
-          { key: 'upgrade', label: t('settings.upgrade'), disabled: forcePasswordChange },
-        ]}
+        items={settingsTabs}
         activeKey={activeTab}
         onChange={(key) => { if (!forcePasswordChange || key === 'system') setActiveTab(key as any); }}
       />
 
-      <TabPanel fill activeKey={activeTab} keys={['web', 'system', 'upgrade']}>
+      <TabPanel fill activeKey={activeTab} keys={settingsTabs.map((tb) => tb.key)}>
         {activeTab === 'system' ? (
           <>
             {forcePasswordChange && (
@@ -390,6 +447,13 @@ export default function SettingsPage() {
                       </div>
                     </FormGroup>
 
+                    <FormGroup label={t('settings.pathLossGrace')}>
+                      <Input type="number" min={3} max={300} value={pathLossGrace} onChange={(e) => setPathLossGrace(e.target.value)} suffix="s" />
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.4 }}>
+                        {t('settings.pathLossGraceDesc')}
+                      </div>
+                    </FormGroup>
+
                     <div
                       className="section-divider"
                       onClick={() => setNestedExpanded(!nestedExpanded)}
@@ -447,6 +511,9 @@ export default function SettingsPage() {
                   <PasswordInput value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)} />
                 </FormGroup>
                 <Button variant="primary" onClick={handleChangePw} loading={savingPw} style={{ alignSelf: 'flex-start' }}>{t('settings.update')}</Button>
+
+                <div className="section-divider" style={{ cursor: 'default' }}>{t('settings.restart')}</div>
+                <Button variant="danger" onClick={handleRestart} loading={restarting} style={{ alignSelf: 'flex-start' }}>{t('settings.restart')}</Button>
               </div>
             </Card>
 
@@ -459,6 +526,9 @@ export default function SettingsPage() {
               </FormGroup>
               <FormGroup label={t('settings.basePath')}>
                 <Input value={basePath} onChange={(e) => setBasePath(e.target.value)} placeholder="/scale" />
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.4 }}>
+                  {t('settings.restartRequired')}
+                </div>
               </FormGroup>
               <FormGroup label={t('settings.forceHttps')}>
                 <Toggle checked={forceHttps} onChange={(e) => setForceHttps(e.target.checked)} />
@@ -469,7 +539,6 @@ export default function SettingsPage() {
               <FormGroup label={t('settings.sessionTimeout')}>
                 <Input type="number" value={sessionTimeout} onChange={(e) => setSessionTimeout(e.target.value)} suffix="h" />
               </FormGroup>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{t('settings.restartRequired')}</div>
               <Button variant="primary" onClick={handleSaveWeb} loading={savingUI} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
             </div>
           </Card>

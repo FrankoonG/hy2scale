@@ -5,7 +5,8 @@ import * as api from '@/api';
 import { getBasePath } from '@/api/client';
 import { fmtRate } from '@/hooks/useFormat';
 import { useExitPaths } from '@/hooks/useExitPaths';
-import { useConfirm } from '@hy2scale/ui';
+import { useConfirm, useToast } from '@hy2scale/ui';
+import { copyToClipboard } from '@/utils/buildHy2Url';
 import { motion, AnimatePresence } from 'framer-motion';
 import { PathInfoExpand, type PathInfoExpandProps, type Precision } from './PathInfoExpand';
 
@@ -1529,6 +1530,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   }, [positions, fitView, snapshotApplied]);
 
   const confirm = useConfirm();
+  const toast = useToast();
   const resetLayout = useCallback(async () => {
     const ok = await confirm({
       title: t('nodes.graph.resetLayout'),
@@ -2188,6 +2190,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
           return { key: k, name: gn?.name || k, native: !!gn?.native };
         });
         const latClass = offline ? 'lat-bad' : totalLat <= 0 ? 'lat-na' : totalLat < 80 ? 'lat-ok' : totalLat < 200 ? 'lat-mid' : 'lat-bad';
+        // Copy target: the routable exit path (hop names without the local
+        // node), the form exit_via / exit paths accept.
+        const copyPath = hops.filter((h) => h.key !== selfId).map((h) => h.name).join('/');
         // Edit button retired from the path-info overlay; selecting a node
         // and pressing the top-right Edit button is now the unified entry
         // point for both list and graph views. Per-hop remote-open is now
@@ -2305,6 +2310,23 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                */}
               {offline ? t('nodes.offline') : fmtLatency(totalLat)}
             </span>
+            {copyPath && (
+              <button
+                type="button"
+                className="hy-topo-pathinfo-copy"
+                aria-label={t('nodes.graph.copyPath')}
+                title={t('nodes.graph.copyPath')}
+                onClick={async () => {
+                  if (await copyToClipboard(copyPath)) toast.success(t('app.copied'));
+                  else toast.error(t('nodes.exportFailed'));
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <rect x="4" y="4" width="6.5" height="6.5" rx="1.25" stroke="currentColor" strokeWidth="1.5" />
+                  <path d="M8 2.5V2.25C8 1.56 7.44 1 6.75 1H2.25C1.56 1 1 1.56 1 2.25V6.75C1 7.44 1.56 8 2.25 8H2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                </svg>
+              </button>
+            )}
             <button
               type="button"
               className="hy-topo-pathinfo-toggle"

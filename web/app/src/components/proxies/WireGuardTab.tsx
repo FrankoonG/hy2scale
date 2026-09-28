@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, type MouseEvent } from 'react';
+import { useState, useCallback, useRef, type MouseEvent } from 'react';
 import { useDeselectOnBlankClick } from '@/hooks/useDeselectOnBlankClick';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -11,6 +11,7 @@ import { ExitViaCell } from '@/components/ExitViaCell';
 import ResponsiveActions from '@/components/ResponsiveActions';
 import ImportExportButton from '@/components/ImportExportButton';
 import * as api from '@/api';
+import { useServerFormInit } from '@/hooks/useFormInit';
 import type { WireGuardPeer } from '@/api';
 
 export default function WireGuardTab({ limited }: { limited?: boolean }) {
@@ -19,7 +20,8 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
   const confirm = useConfirm();
   const queryClient = useQueryClient();
 
-  const { data: wg } = useQuery({ queryKey: ['wireguard'], queryFn: api.getWireGuard });
+  const wgQ = useQuery({ queryKey: ['wireguard'], queryFn: api.getWireGuard });
+  const wg = wgQ.data;
 
   // Server config
   const [enabled, setEnabled] = useState(false);
@@ -49,16 +51,16 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
 
   const [clickPos, setClickPos] = useState<{ x: number; y: number } | undefined>();
 
-  useEffect(() => {
-    if (wg) {
-      setEnabled(wg.enabled);
-      setListenPort(String(wg.listen_port || ''));
-      setAddress(wg.address || '');
-      setPrivKey(wg.private_key || '');
-      setPubKey(wg.public_key || '');
-      setWgMtu(String(wg.mtu || 1420));
-    }
-  }, [wg]);
+  // Server fields seed once and after their own save; peer add/edit/delete
+  // also refetches ['wireguard'] and must not revert unsaved server edits.
+  const resyncServer = useServerFormInit(wgQ, (wg) => {
+    setEnabled(wg.enabled);
+    setListenPort(String(wg.listen_port || ''));
+    setAddress(wg.address || '');
+    setPrivKey(wg.private_key || '');
+    setPubKey(wg.public_key || '');
+    setWgMtu(String(wg.mtu || 1420));
+  });
 
   const handleSaveServer = async () => {
     setSaving(true);
@@ -68,6 +70,7 @@ export default function WireGuardTab({ limited }: { limited?: boolean }) {
         address, private_key: privKey, mtu: parseInt(wgMtu) || 1420,
       } as any);
       toast.success(t('wg.saved'));
+      resyncServer();
       queryClient.invalidateQueries({ queryKey: ['wireguard'] });
     } catch (e: any) { toast.error(String(e.message || e)); }
     finally { setSaving(false); }

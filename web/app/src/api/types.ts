@@ -9,6 +9,7 @@ export interface NodeConfig {
   compat: boolean;
   hy2_user_auth: boolean;
   active_paths: Record<string, string>;
+  lossless_min_version?: string;
 }
 
 export interface ServerConfig {
@@ -239,6 +240,7 @@ export interface UISettings {
   force_https: boolean;
   https_cert_id: string;
   session_timeout_h: number;
+  path_loss_grace_s?: number;
   // Nested-discovery hard limits — hot-reloadable on PUT.
   max_nested_depth: number;
   max_response_nodes: number;

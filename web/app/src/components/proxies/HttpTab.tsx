@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, Button, Input, Toggle, Select, FormGroup, useToast } from '@hy2scale/ui';
 import * as api from '@/api';
+import { useServerFormInit } from '@/hooks/useFormInit';
 
 export default function HttpTab() {
   const { t } = useTranslation();
@@ -12,7 +13,8 @@ export default function HttpTab() {
   // `= []` only defaults when data is undefined — the server returns
   // literal null on a fresh install, which would make proxies.find()
   // explode. Coalesce explicitly.
-  const { data: proxiesRaw } = useQuery({ queryKey: ['proxies'], queryFn: api.getProxies });
+  const proxiesQ = useQuery({ queryKey: ['proxies'], queryFn: api.getProxies });
+  const proxiesRaw = proxiesQ.data;
   const { data: certsRaw } = useQuery({ queryKey: ['certs'], queryFn: api.getCerts });
   const proxies = proxiesRaw ?? [];
   const certs = certsRaw ?? [];
@@ -27,13 +29,15 @@ export default function HttpTab() {
   const [tlsCert, setTlsCert] = useState('');
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
+  // Seed once from the first fetch; refetches must not revert unsaved edits.
+  const resync = useServerFormInit(proxiesQ, (d) => {
+    const http = (d ?? []).find((p) => p.protocol === 'http');
     if (http) {
       setEnabled(http.enabled);
       setListen(http.listen || '0.0.0.0:8080');
       setTlsCert(http.tls_cert || '');
     }
-  }, [http]);
+  });
 
   const handleSave = async () => {
     setLoading(true);
@@ -45,6 +49,7 @@ export default function HttpTab() {
         await api.createProxy(data);
       }
       toast.success(t('http.saved'));
+      resync();
       queryClient.invalidateQueries({ queryKey: ['proxies'] });
     } catch (e: any) {
       toast.error(String(e.message || e));

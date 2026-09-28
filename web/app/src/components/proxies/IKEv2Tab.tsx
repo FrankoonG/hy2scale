@@ -1,16 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, Button, Input, Select, Toggle, FormGroup, FormGrid, useToast } from '@hy2scale/ui';
 import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
 import * as api from '@/api';
+import { useServerFormInit } from '@/hooks/useFormInit';
 
 export default function IKEv2Tab({ limited }: { limited?: boolean }) {
   const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
 
-  const { data: ikev2 } = useQuery({ queryKey: ['ikev2'], queryFn: api.getIKEv2 });
+  const ikev2Q = useQuery({ queryKey: ['ikev2'], queryFn: api.getIKEv2 });
+  const ikev2 = ikev2Q.data;
   const { data: certs = [] } = useQuery({ queryKey: ['certs'], queryFn: api.getCerts });
 
   const [enabled, setEnabled] = useState(false);
@@ -23,7 +25,9 @@ export default function IKEv2Tab({ limited }: { limited?: boolean }) {
   const [exitPath, setExitPath] = useState<ExitPathValue>({ paths: [''], mode: '' });
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
+  // Seed once from the first fetch; refetches must not revert unsaved edits.
+  const resync = useServerFormInit(ikev2Q, (d) => {
+    const ikev2 = d;
     if (ikev2) {
       setEnabled(ikev2.enabled);
       setMode(ikev2.mode || 'mschapv2');
@@ -34,7 +38,7 @@ export default function IKEv2Tab({ limited }: { limited?: boolean }) {
       setMtu(String(ikev2.mtu || 1400));
       setExitPath(apiToExitPath(ikev2.default_exit, ikev2.default_exit_paths, ikev2.default_exit_mode));
     }
-  }, [ikev2]);
+  });
 
   const handleSave = async () => {
     if (!pool) { toast.error(t('ikev2.poolRequired')); return; }
@@ -52,6 +56,7 @@ export default function IKEv2Tab({ limited }: { limited?: boolean }) {
         default_exit_mode: (exitData as any).exit_mode,
       } as any);
       toast.success(t('ikev2.saved'));
+      resync();
       queryClient.invalidateQueries({ queryKey: ['ikev2'] });
     } catch (e: any) {
       toast.error(String(e.message || e));

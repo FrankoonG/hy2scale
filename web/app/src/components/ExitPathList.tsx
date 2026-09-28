@@ -47,6 +47,12 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
     paths: value.paths.length > 0 ? value.paths : [''],
     mode: value.mode,
   }));
+  // Items being applied from a new parent value. Until they are committed
+  // the emit effect must not run on the old items: a new value usually
+  // changes `mode` in the same commit, and emitting old items with it (e.g.
+  // the empty row a dialog starts with) reset a quality/aggregate user's
+  // mode to direct when the edit dialog opened.
+  const syncingRef = useRef<PathItem[] | null>(null);
 
   const mode = value.mode;
 
@@ -61,7 +67,9 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
     const incomingSig = JSON.stringify({ paths: incomingPaths, mode: value.mode });
     if (incomingSig !== lastEmittedRef.current) {
       lastEmittedRef.current = incomingSig;
-      setItems(toItems(incomingPaths));
+      const next = toItems(incomingPaths);
+      syncingRef.current = next;
+      setItems(next);
     }
   }, [value]);
 
@@ -69,6 +77,11 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
   // fix — calling parent setState from inside an updater races with concurrent
   // re-renders (zustand topology polls) and forces remounts that drop focus.
   useEffect(() => {
+    if (syncingRef.current) {
+      if (items !== syncingRef.current) return; // parent value not applied yet
+      syncingRef.current = null;
+      return; // items now mirror the parent's value: nothing to emit
+    }
     const paths = items.map((it) => it.value);
     const override = pendingModeOverrideRef.current;
     pendingModeOverrideRef.current = null;
