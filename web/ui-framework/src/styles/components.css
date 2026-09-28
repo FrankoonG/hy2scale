@@ -436,6 +436,10 @@ a.peer-link:hover{text-decoration:underline}
 .hy-topo-pathinfo-toggle{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;margin-left:auto;border:none;background:transparent;color:#6b7280;cursor:pointer;border-radius:var(--radius-sm);transition:background .12s,color .12s}
 .hy-topo-pathinfo-toggle:hover{background:var(--primary-light);color:var(--primary)}
 .hy-topo-pathinfo-toggle svg{display:block}
+.hy-topo-pathinfo-copy{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;margin-left:auto;border:none;background:transparent;color:#6b7280;cursor:pointer;border-radius:var(--radius-sm);transition:background .12s,color .12s}
+.hy-topo-pathinfo-copy:hover{background:var(--primary-light);color:var(--primary)}
+.hy-topo-pathinfo-copy svg{display:block}
+.hy-topo-pathinfo-copy+.hy-topo-pathinfo-toggle{margin-left:2px}
 /* Expanded panel — four metric sections (latency / online / tx peak /
    rx peak). Each section has a header row with the metric name on the
    left and a precision-tab strip on the right; below the header is a

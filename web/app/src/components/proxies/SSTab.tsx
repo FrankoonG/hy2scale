@@ -1,15 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, Button, Input, Select, Toggle, FormGroup, useToast } from '@hy2scale/ui';
 import * as api from '@/api';
+import { useServerFormInit } from '@/hooks/useFormInit';
 
 export default function SSTab() {
   const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
 
-  const { data: ss } = useQuery({ queryKey: ['ss'], queryFn: api.getSS });
+  const ssQ = useQuery({ queryKey: ['ss'], queryFn: api.getSS });
+  const ss = ssQ.data;
 
   // Default to "0.0.0.0:8388" so the form is submittable on a fresh
   // install — same rationale as Socks5Tab/HttpTab: an empty listen
@@ -19,19 +21,22 @@ export default function SSTab() {
   const [method, setMethod] = useState('aes-256-gcm');
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
+  // Seed once from the first fetch; refetches must not revert unsaved edits.
+  const resync = useServerFormInit(ssQ, (d) => {
+    const ss = d;
     if (ss) {
       setEnabled(ss.enabled);
       setListen(ss.listen || '0.0.0.0:8388');
       setMethod(ss.method || 'aes-256-gcm');
     }
-  }, [ss]);
+  });
 
   const handleSave = async () => {
     setLoading(true);
     try {
       await api.updateSS({ listen, enabled, method });
       toast.success(t('ss.saved'));
+      resync();
       queryClient.invalidateQueries({ queryKey: ['ss'] });
     } catch (e: any) {
       toast.error(String(e.message || e));

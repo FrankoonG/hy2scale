@@ -207,6 +207,7 @@ export const checkUpdate = () => api<UpgradeCheckResult>('/upgrade/check');
 export const startUpgradeDownload = () => api<UpgradeStatus>('/upgrade/download', { method: 'POST' });
 export const getUpgradeStatus = () => api<UpgradeStatus>('/upgrade/status');
 export const applyUpgrade = () => api('/upgrade/apply', { method: 'POST' });
+export const restartNode = () => api('/system/restart', { method: 'POST' });
 
 // Port Check
 export const checkPorts = (ports: PortConflict[]) =>

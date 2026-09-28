@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, Button, Input, Toggle, Select, FormGroup, useToast } from '@hy2scale/ui';
 import * as api from '@/api';
+import { useServerFormInit } from '@/hooks/useFormInit';
 
 export default function Socks5Tab() {
   const { t } = useTranslation();
@@ -12,7 +13,8 @@ export default function Socks5Tab() {
   // `= []` only defaults when data is undefined — the server returns
   // literal null on a fresh install, which would make proxies.find()
   // explode. Coalesce explicitly.
-  const { data: proxiesRaw } = useQuery({ queryKey: ['proxies'], queryFn: api.getProxies });
+  const proxiesQ = useQuery({ queryKey: ['proxies'], queryFn: api.getProxies });
+  const proxiesRaw = proxiesQ.data;
   const { data: certsRaw } = useQuery({ queryKey: ['certs'], queryFn: api.getCerts });
   const proxies = proxiesRaw ?? [];
   const certs = certsRaw ?? [];
@@ -23,21 +25,23 @@ export default function Socks5Tab() {
   // an empty `listen` would either get rejected by the backend's
   // "id, listen required" check (POST) or silently persist an unrunnable
   // proxy on the update path. Pre-filling the standard SOCKS5 port also
-  // saves the operator from typing it. The useEffect below overwrites
-  // this with the saved listen as soon as the GET /api/proxies query
-  // resolves, so existing-proxy edits still see the real value.
+  // saves the operator from typing it. The init below replaces this with
+  // the saved listen as soon as the GET /api/proxies query resolves, so
+  // existing-proxy edits still see the real value.
   const [enabled, setEnabled] = useState(false);
   const [listen, setListen] = useState('0.0.0.0:1080');
   const [tlsCert, setTlsCert] = useState('');
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
+  // Seed once from the first fetch; refetches must not revert unsaved edits.
+  const resync = useServerFormInit(proxiesQ, (d) => {
+    const socks5 = (d ?? []).find((p) => p.protocol === 'socks5');
     if (socks5) {
       setEnabled(socks5.enabled);
       setListen(socks5.listen || '0.0.0.0:1080');
       setTlsCert(socks5.tls_cert || '');
     }
-  }, [socks5]);
+  });
 
   const handleSave = async () => {
     setLoading(true);
@@ -49,6 +53,7 @@ export default function Socks5Tab() {
         await api.createProxy(data);
       }
       toast.success(t('socks5.saved'));
+      resync();
       queryClient.invalidateQueries({ queryKey: ['proxies'] });
     } catch (e: any) {
       toast.error(String(e.message || e));

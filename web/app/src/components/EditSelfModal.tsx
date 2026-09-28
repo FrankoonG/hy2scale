@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
-import { Modal, Button, Input, PasswordInput, Select, FormGroup, FormGrid, useToast } from '@hy2scale/ui';
+import { Modal, Button, Input, PasswordInput, Select, Toggle, FormGroup, FormGrid, useToast } from '@hy2scale/ui';
 import * as api from '@/api';
 import { useNodeStore } from '@/store/node';
+import { useDialogInit } from '@/hooks/useFormInit';
 import { buildHy2Url, canExportAsHy2Url, copyToClipboard } from '@/utils/buildHy2Url';
 
 interface Props {
@@ -29,6 +30,9 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
   // a separate field. Defaults to the browser's current hostname —
   // which is, by definition, an address that just reached this node.
   const [shareHost, setShareHost] = useState('');
+  // Exported URL: skip certificate verification by default — a node without
+  // a TLS certificate from the TLS page serves a self-signed one.
+  const [exportInsecure, setExportInsecure] = useState(true);
 
   // Fetch TLS certs for dropdown
   const { data: certs } = useQuery({
@@ -47,8 +51,10 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
     enabled: open,
   });
 
-  useEffect(() => {
-    if (open && node) {
+  // Seed on open (or once node info arrives) — not on every ['node'] refetch.
+  useDialogInit(open, node ? 'ready' : null, () => {
+    setExportInsecure(true);
+    if (node) {
       setNodeId(node.node_id || '');
       const listen = node.server?.listen || '0.0.0.0:5565';
       const match = listen.match(/^(.+):(.+)$/);
@@ -66,7 +72,7 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
       const certMatch = certPath.match(/\/data\/tls\/(.+)\.crt$/);
       setTlsCertId(certMatch ? certMatch[1] : '');
     }
-  }, [open, node]);
+  });
 
   const handleExport = async () => {
     const host = shareHost.trim();
@@ -86,6 +92,7 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
         name: nodeId.trim() || node?.name || 'self',
         addr,
         password,
+        insecure: exportInsecure || undefined,
         // Self exports rarely want to advertise a custom SNI; let
         // the recipient set it if they need to.
       });
@@ -186,13 +193,20 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
           />
         </FormGroup>
 
-        <FormGroup label={t('nodes.shareHost')}>
-          <Input
-            value={shareHost}
-            onChange={(e) => setShareHost(e.target.value)}
-            placeholder={typeof window !== 'undefined' ? window.location.hostname : ''}
-          />
-        </FormGroup>
+        <FormGrid>
+          <FormGroup label={t('nodes.shareHost')}>
+            <Input
+              value={shareHost}
+              onChange={(e) => setShareHost(e.target.value)}
+              placeholder={typeof window !== 'undefined' ? window.location.hostname : ''}
+            />
+          </FormGroup>
+          <FormGroup label={t('nodes.skipVerify')}>
+            <div style={{ paddingTop: 6 }}>
+              <Toggle checked={exportInsecure} onChange={(e) => setExportInsecure(e.target.checked)} />
+            </div>
+          </FormGroup>
+        </FormGrid>
 
         <FormGroup label={t('settings.tlsCert')}>
           <Select

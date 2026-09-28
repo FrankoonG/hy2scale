@@ -21,6 +21,7 @@ import ImportExportButton from '@/components/ImportExportButton';
 import NodesGraphView from '@/components/NodesGraphView';
 import { useLongPress } from '@/hooks/useLongPress';
 import { useDeselectOnBlankClick } from '@/hooks/useDeselectOnBlankClick';
+import { versionAtLeast } from '../utils/version';
 
 export default function NodesPage() {
   const { t } = useTranslation();
@@ -361,9 +362,15 @@ export default function NodesPage() {
           </a>
         );
 
+        const lossMin = node?.lossless_min_version;
+        const outdated = !!n.version && !!lossMin && !n.incompatible && !versionAtLeast(n.version, lossMin);
         const versionBadge = n.version && n.version !== node?.version ? (
-          <span className={`version-badge${n.incompatible ? ' incompatible' : n.compat ? ' compat' : ''}`} style={{ marginLeft: 6 }}>
-            v{n.version}{n.incompatible ? ' ✗' : ''}
+          <span
+            className={`version-badge${n.incompatible ? ' incompatible' : n.compat ? ' compat' : ''}`}
+            style={{ marginLeft: 6 }}
+            title={outdated ? t('nodes.updateForLossless', { v: lossMin }) : undefined}
+          >
+            v{n.version}{n.incompatible ? ' ✗' : outdated ? ' ↑' : ''}
           </span>
         ) : null;
 

@@ -1,15 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, Button, Input, Toggle, FormGroup, FormGrid, useToast } from '@hy2scale/ui';
 import * as api from '@/api';
+import { useServerFormInit } from '@/hooks/useFormInit';
 
 export default function L2TPTab({ limited }: { limited?: boolean }) {
   const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
 
-  const { data: l2tp } = useQuery({ queryKey: ['l2tp'], queryFn: api.getL2TP });
+  const l2tpQ = useQuery({ queryKey: ['l2tp'], queryFn: api.getL2TP });
+  const l2tp = l2tpQ.data;
 
   const [enabled, setEnabled] = useState(false);
   const [listen, setListen] = useState('');
@@ -18,7 +20,9 @@ export default function L2TPTab({ limited }: { limited?: boolean }) {
   const [mtu, setMtu] = useState('1400');
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
+  // Seed once from the first fetch; refetches must not revert unsaved edits.
+  const resync = useServerFormInit(l2tpQ, (d) => {
+    const l2tp = d;
     if (l2tp) {
       setEnabled(l2tp.enabled);
       setListen(l2tp.listen || '');
@@ -26,7 +30,7 @@ export default function L2TPTab({ limited }: { limited?: boolean }) {
       setPsk(l2tp.psk || '');
       setMtu(String(l2tp.mtu || 1400));
     }
-  }, [l2tp]);
+  });
 
   const handleSave = async () => {
     if (!listen || !pool || !psk) {
@@ -37,6 +41,7 @@ export default function L2TPTab({ limited }: { limited?: boolean }) {
     try {
       await api.updateL2TP({ listen, enabled, pool, psk, mtu: parseInt(mtu) || 1400 });
       toast.success(t('l2tp.saved'));
+      resync();
       queryClient.invalidateQueries({ queryKey: ['l2tp'] });
     } catch (e: any) {
       toast.error(String(e.message || e));

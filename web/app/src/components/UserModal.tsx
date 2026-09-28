@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { Modal, Button, Input, PasswordInput, Toggle, FormGroup, FormGrid, Tabs, TabPanel, useToast } from '@hy2scale/ui';
@@ -7,6 +7,7 @@ import * as api from '@/api';
 import type { UserConfig } from '@/api';
 import { PROXY_REGISTRY } from '@/config/proxyRegistry';
 import { useNodeStore } from '@/store/node';
+import { useDialogInit } from '@/hooks/useFormInit';
 
 interface Props {
   open: boolean;
@@ -42,8 +43,9 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
   const [expiryDate, setExpiryDate] = useState('');
   const [enabled, setEnabled] = useState(true);
 
-  useEffect(() => {
-    if (!open) return;
+  // Seed on open / on switching to another user only — the users list
+  // refetches every 5 s and a user with traffic is a new object each flush.
+  useDialogInit(open, editing?.id ?? null, () => {
     setTab('general');
     if (!editing) {
       setUsername(''); setPassword(''); setProxyPasswords({});
@@ -60,7 +62,7 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
     setTrafficLimit(editing.traffic_limit > 0 ? String(editing.traffic_limit / 1073741824) : '');
     setExpiryDate(editing.expiry_date || '');
     setEnabled(editing.enabled);
-  }, [open, editing]);
+  });
 
   const handleSubmit = async () => {
     if (!username || !password) {
