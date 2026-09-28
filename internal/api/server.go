@@ -1010,7 +1010,7 @@ func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
 }
 
 // Version is the application version. Update this on each release.
-const Version = "1.3.9"
+const Version = "1.3.10"
 
 func init() {
 	app.AppVersion = Version
