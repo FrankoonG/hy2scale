@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -728,28 +727,7 @@ func (a *App) handleTransparent(conn net.Conn) {
 	log.Printf("[l2tp] connected to %s for user %s", origDst, username)
 	defer remote.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	sid := a.Sessions.Connect(username, srcIP, "l2tp", cancel)
-
-	var up, down int64
-	done := make(chan struct{})
-	go func() {
-		// Upload: client → remote.
-		n, _ := copyCtx(ctx, remote, conn)
-		atomic.AddInt64(&up, n)
-		halfCloseAndBound(remote)
-		done <- struct{}{}
-	}()
-	// Download: remote → client.
-	n, _ := copyCtx(ctx, conn, remote)
-	atomic.AddInt64(&down, n)
-	halfCloseAndBound(conn)
-	<-done
-	cancel()
-	a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))
-	if username != "" {
-		a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))
-	}
+	a.relayUser(conn, remote, username, srcIP, "l2tp", true)
 }
 
 // getOriginalDst retrieves the original destination from a DNAT'd connection.

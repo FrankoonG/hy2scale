@@ -240,6 +240,8 @@ func isPathAuthorised(parts []string, cfg Config) bool {
 }
 
 // findPathsTo discovers all available paths to a target node.
+var findPathsLogged sync.Map // target → last logged path set
+
 func (a *App) findPathsTo(target string) []string {
 	// Cache path discovery for 5 seconds
 	if ts, ok := adaptivePathsAge.Load(target); ok {
@@ -396,15 +398,23 @@ func (a *App) findPathsTo(target string) []string {
 		}
 	}
 
-	log.Printf("[findPathsTo] %s: found %d paths: %v (cache keys: %v)", target, len(paths), paths, func() []string {
-		var keys []string
-		for _, p := range peers {
-			if _, ok := a.node.PeersOfCached(p.Name); ok {
-				keys = append(keys, p.Name)
+	// Log only when the result changes: every dial to a non-direct target
+	// lands here, and the unconditional line flooded production logs.
+	if summary := fmt.Sprint(paths); func() bool {
+		prev, ok := findPathsLogged.Load(target)
+		return !ok || prev.(string) != summary
+	}() {
+		findPathsLogged.Store(target, summary)
+		log.Printf("[findPathsTo] %s: found %d paths: %v (cache keys: %v)", target, len(paths), paths, func() []string {
+			var keys []string
+			for _, p := range peers {
+				if _, ok := a.node.PeersOfCached(p.Name); ok {
+					keys = append(keys, p.Name)
+				}
 			}
-		}
-		return keys
-	}())
+			return keys
+		}())
+	}
 	adaptivePathsAge.Store(target, time.Now().UnixMilli())
 	for _, p := range paths {
 		getPathScore(target, p)

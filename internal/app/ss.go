@@ -12,7 +12,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/chacha20poly1305"
@@ -163,6 +162,10 @@ func (a *App) handleSS(conn net.Conn, method string) {
 		increment(nonce)
 
 		// This user's key decrypted the first frame — lock it in.
+		if userExpired(&u) || a.overTrafficLimit(u.Username) {
+			log.Printf("[ss] %s refused: expired or over its traffic limit", u.Username)
+			return
+		}
 		payloadLen := int(binary.BigEndian.Uint16(plainLen))
 		payload := make([]byte, payloadLen+overhead)
 		if _, err := io.ReadFull(conn, payload); err != nil {
@@ -222,13 +225,25 @@ func (a *App) handleSS(conn net.Conn, method string) {
 		}
 		defer remote.Close()
 
+		// Device row with live accounting; stop closes both ends.
+		remoteIP := ""
+		if h, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
+			remoteIP = h
+		}
+		stop := func() { conn.Close(); remote.Close() }
+		sid := a.Sessions.Connect(username, remoteIP, "ss", stop)
+		m := a.newUserMeter(username, sid, stop)
+		defer func() {
+			a.Sessions.Disconnect(sid, 0, 0)
+			m.done()
+		}()
+
 		// Send remaining data
 		if len(remaining) > 0 {
 			remote.Write(remaining)
+			m.add(int64(len(remaining)), 0)
 		}
 
-		// Bidirectional relay with traffic counting
-		var up, down int64
 		done := make(chan struct{})
 
 		// remote → client (encrypt)
@@ -257,7 +272,7 @@ func (a *App) handleSS(conn net.Conn, method string) {
 					increment(writeNonce)
 					conn.Write(encLen)
 					conn.Write(encPayload)
-					atomic.AddInt64(&down, int64(n))
+					m.add(0, int64(n))
 				}
 				if err != nil {
 					break
@@ -293,12 +308,9 @@ func (a *App) handleSS(conn net.Conn, method string) {
 			}
 			increment(nonce)
 			remote.Write(plainData)
-			atomic.AddInt64(&up, int64(len(plainData)))
+			m.add(int64(len(plainData)), 0)
 		}
 		<-done
-		if username != "" {
-			a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))
-		}
 		return
 	}
 	// User-loop exited with no match — explain WHY (silent rejection
@@ -353,28 +365,11 @@ func (a *App) handleSSNone(conn net.Conn) {
 	if len(remaining) > 0 {
 		remote.Write(remaining)
 	}
-
-	var up, down int64
-	done := make(chan struct{})
-	go func() {
-		// Upload: client → remote.
-		n, _ := io.Copy(remote, conn)
-		atomic.AddInt64(&up, n)
-		// Forward client FIN to remote so the exit can finish writing
-		// any final response and close. Without this the function
-		// would hang on the download direction's io.Copy when the
-		// client hangs up but the server has nothing more to send.
-		halfCloseAndBound(remote)
-		done <- struct{}{}
-	}()
-	// Download: remote → client.
-	n2, _ := io.Copy(conn, remote)
-	atomic.AddInt64(&down, n2)
-	halfCloseAndBound(conn)
-	<-done
-	if username != "" {
-		a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))
+	remoteIP := ""
+	if h, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
+		remoteIP = h
 	}
+	a.relayUser(conn, remote, username, remoteIP, "ss", true)
 }
 
 func keySize(method string) int {

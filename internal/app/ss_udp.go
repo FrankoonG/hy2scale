@@ -63,6 +63,7 @@ type ssUDPFlow struct {
 	dstPort    uint16
 	mu         sync.Mutex
 	lastUsed   time.Time
+	dead       bool // upstream gone: the next datagram builds a new flow
 }
 
 func (a *App) runSSUDP(ctx context.Context, listenAddr, method string) {
@@ -175,10 +176,22 @@ func (a *App) handleSSUDPPacket(
 	flowsMu.Lock()
 	existing := flows[clientKey]
 	flowsMu.Unlock()
+	var key []byte
 	if existing != nil {
 		existing.mu.Lock()
-		key := existing.masterKey
+		key = existing.masterKey
+		dead := existing.dead
 		existing.mu.Unlock()
+		if dead {
+			flowsMu.Lock()
+			if flows[clientKey] == existing {
+				delete(flows, clientKey)
+			}
+			flowsMu.Unlock()
+			existing = nil
+		}
+	}
+	if existing != nil {
 		if dec, ok := ssUDPDecrypt(method, key, salt, ciphertext, zeroNonce); ok {
 			a.ssUDPForward(ctx, listener, existing, dec, method, saltLen, zeroNonce)
 			return
@@ -199,6 +212,9 @@ func (a *App) handleSSUDPPacket(
 		dec, ok := ssUDPDecrypt(method, key, salt, ciphertext, zeroNonce)
 		if !ok {
 			continue
+		}
+		if userExpired(&u) || a.overTrafficLimit(u.Username) {
+			return
 		}
 		// Plain payload = atype + addr + port + udp_data.
 		host, port, atyp, payload, perr := parseSocksAddrUDP(dec)
@@ -310,7 +326,7 @@ func (a *App) ssUDPForward(
 	upstream := flow.upstream
 	username := flow.username
 	flow.mu.Unlock()
-	if upstream == nil {
+	if upstream == nil || a.overTrafficLimit(username) {
 		return
 	}
 	_, _ = upstream.Write(payload)
@@ -336,6 +352,10 @@ func (a *App) ssUDPReverse(
 		if flow.upstream != nil {
 			flow.upstream.Close()
 		}
+		// Without this the flow stayed in the table bound to a closed
+		// upstream: every later datagram was dropped until the client went
+		// quiet for udpFlowIdle.
+		flow.dead = true
 		flow.mu.Unlock()
 	}()
 	buf := make([]byte, 65535)
@@ -383,6 +403,9 @@ func (a *App) ssUDPReverse(
 		aead, err := newAEAD(method, sessionKey)
 		if err != nil {
 			return
+		}
+		if a.overTrafficLimit(username) {
+			continue // over the limit: replies are dropped
 		}
 		ct := aead.Seal(nil, zeroNonce, plain, nil)
 		out := make([]byte, 0, len(replySalt)+len(ct))

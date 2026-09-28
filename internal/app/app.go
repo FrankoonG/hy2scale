@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -25,6 +26,7 @@ import (
 	hyclient "github.com/apernet/hysteria/core/v2/client"
 	hyserver "github.com/apernet/hysteria/core/v2/server"
 	"github.com/FrankoonG/hy2scale/internal/history"
+	"github.com/FrankoonG/hy2scale/internal/msess"
 	"github.com/FrankoonG/hy2scale/internal/relay"
 )
 
@@ -122,6 +124,10 @@ type Config struct {
 	ForceHTTPS  bool                  `yaml:"force_https,omitempty" json:"force_https,omitempty"`
 	HTTPSCertID     string                `yaml:"https_cert_id,omitempty" json:"https_cert_id,omitempty"`
 	SessionTimeoutH int                   `yaml:"session_timeout_h,omitempty" json:"session_timeout_h,omitempty"` // hours, default 12
+	// PathLossGraceS: quality/aggregate connections survive this many
+	// seconds without any working path to their exit, then close.
+	// 0 = default (msess.OrphanBudget); clamped to [3, 300].
+	PathLossGraceS int `yaml:"path_loss_grace_s,omitempty" json:"path_loss_grace_s,omitempty"`
 	// Persisted topology-graph layout: node key → SVG coordinates. Stored
 	// server-side so the layout follows the user across browsers/devices
 	// and multiple concurrent sessions converge on a single source of truth.
@@ -228,8 +234,11 @@ type proxyHandle struct {
 }
 
 type App struct {
+	persisters   sync.WaitGroup // shutdown-time flushers (see WaitPersisted)
 	store        *ConfigStore
 	node         *relay.Node
+	ms           *msessState // lossless multi-path sessions (quality/aggregate)
+	primaryDial  sync.Map    // client identity (Addr) → address its primary connection dials
 	tls          *TLSStore
 	dataDir      string
 	appCtx       context.Context
@@ -279,7 +288,7 @@ func New(dataDir string) (*App, error) {
 	hist := history.New(histPath)
 	_ = hist.Load()
 
-	return &App{
+	a := &App{
 		store:        NewConfigStore(cfg, persistPath),
 		node:         node,
 		tls:          NewTLSStore(dataDir),
@@ -289,16 +298,41 @@ func New(dataDir string) (*App, error) {
 		activePaths:  make(map[string]string),
 		proxyHandles: make(map[string]*proxyHandle),
 		Sessions:     NewSessionManager(),
-	}, nil
+	}
+	a.initMsess()
+	return a, nil
 }
 
 func (a *App) Store() *ConfigStore { return a.store }
 func (a *App) Node() *relay.Node   { return a.node }
 func (a *App) TLS() *TLSStore     { return a.tls }
+
+// WaitPersisted waits (at most d) for the shutdown flush of traffic counters
+// and path history after Run's context ended, so a stop or restart doesn't
+// drop the last interval.
+func (a *App) WaitPersisted(d time.Duration) {
+	done := make(chan struct{})
+	go func() { a.persisters.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(d):
+	}
+}
 func (a *App) DataDir() string     { return a.dataDir }
 func (a *App) History() *history.Store { return a.hist }
 
 func (a *App) GetConfig() Config { return a.store.Get() }
+
+// ObjectCounts reports app-level live-object counts for /api/diag/runtime.
+func (a *App) ObjectCounts() map[string]int {
+	return map[string]int{
+		"bond_receivers":  syncMapLen(&bondReceivers),
+		"hy2_auth_stash":  syncMapLen(&goidAuthID),
+		"hy2_addr_stash":  syncMapLen(&goidAddr),
+		"adaptive_scores": syncMapLen(&adaptiveScores),
+		"sessions":        a.Sessions.Count(),
+	}
+}
 
 // ActivePath returns the last successful exit path for a given primary exit_via.
 func (a *App) ActivePath(exitVia string) string {
@@ -378,8 +412,10 @@ func (a *App) Run(ctx context.Context) error {
 	// Start rate ticker, latency prober, and traffic flusher
 	go a.node.StartRateTicker(ctx)
 	go a.node.StartLatencyProber(ctx)
-	go a.StartTrafficFlusher(ctx)
-	go a.runHistoryRecorder(ctx)
+	// Both persist on ctx.Done; WaitPersisted lets main wait for that.
+	a.persisters.Add(2)
+	go func() { defer a.persisters.Done(); a.StartTrafficFlusher(ctx) }()
+	go func() { defer a.persisters.Done(); a.runHistoryRecorder(ctx) }()
 
 	// Register IP tunnel handler on all nodes (any node can be an exit for TUN mode)
 	a.registerExitIPTunHandler(ctx)
@@ -532,10 +568,12 @@ func (a *App) StartClient(cl ClientEntry) {
 	// Primary connection (first addr) — registers with relay, handles peer identity
 	go a.connectLoop(ctx, cl)
 
-	// Secondary connections (additional addrs) — attach as extra QUIC connections
+	// Secondary connections — attach as extra QUIC connections. One loop per
+	// address: the primary may dial any of them (connectLoop rotates on
+	// failure), and each loop stands down while its address is the primary's.
 	addrs := cl.AllAddrs()
 	if len(addrs) > 1 {
-		for i := 1; i < len(addrs); i++ {
+		for i := 0; i < len(addrs); i++ {
 			extraAddr := addrs[i]
 			go a.connectExtraLoop(ctx, cl, extraAddr, i)
 		}
@@ -797,7 +835,9 @@ func (a *App) rebuildUserIndex() {
 		}
 	}
 	// Also check system password against hy2 users (relay/user ambiguity)
-	if cfg.Server.Password != "" {
+	// Server is nil when the hy2 server is disabled (Edit Local Node with no
+	// listen/password) or absent from the config.
+	if cfg.Server != nil && cfg.Server.Password != "" {
 		if users, ok := proxyPwUsers["hy2"][cfg.Server.Password]; ok {
 			_ = users // system password collides; mark those users as conflicted
 		}
@@ -1294,6 +1334,7 @@ func (a *App) startServer(ctx context.Context, sc *ServerConfig) error {
 
 func (a *App) connectLoop(ctx context.Context, cl ClientEntry) {
 	addr := cl.Addr // stable key
+	next := 0       // index into AllAddrs() for the next dial
 	for {
 		select {
 		case <-ctx.Done():
@@ -1308,26 +1349,57 @@ func (a *App) connectLoop(ctx context.Context, cl ClientEntry) {
 				break
 			}
 		}
-		log.Printf("[%s] connecting to %s (%s)", a.node.Name(), cl.Name, cl.Addr)
-		if err := a.connect(ctx, cl); err != nil {
+		dialAddr := cl.Addr
+		if addrs := cl.AllAddrs(); len(addrs) > 1 {
+			dialAddr = addrs[next%len(addrs)]
+		}
+		a.primaryDial.Store(addr, dialAddr)
+		log.Printf("[%s] connecting to %s (%s)", a.node.Name(), cl.Name, dialAddr)
+		if err := a.connectAt(ctx, cl, dialAddr); err != nil {
 			log.Printf("[%s] %s: %v", a.node.Name(), cl.Name, err)
+		}
+		// Multi-address peers: whenever a connection ends or a dial fails,
+		// move on to the next configured address — one dead IP must not keep
+		// the peer offline (its extra connections hang off this one). Walk
+		// the alternatives quickly, then back off.
+		next++
+		wait := 5 * time.Second
+		if n := len(cl.AllAddrs()); n > 1 && next%n != 0 {
+			wait = time.Second
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(5 * time.Second):
+		case <-time.After(wait):
 		}
 	}
 }
 
 // connectExtraLoop manages a secondary QUIC connection to an additional IP of the same peer.
 // It doesn't register with relay — just attaches the QUIC client to the existing peer's extra conns.
+// isPrimaryDial: is addr the one cl's primary connection currently dials?
+func (a *App) isPrimaryDial(cl ClientEntry, addr string) bool {
+	cur := cl.Addr
+	if v, ok := a.primaryDial.Load(cl.Addr); ok {
+		cur = v.(string)
+	}
+	return cur == addr
+}
+
 func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr string, index int) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
+		}
+		if a.isPrimaryDial(cl, extraAddr) {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
+			continue
 		}
 
 		// Wait for primary to connect first (peer must exist)
@@ -1432,14 +1504,20 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 				c.Close()
 				return
 			case <-ticker.C:
+				// (A connected extra stays even if the primary has moved onto
+				// the same address: it may be carrying the live streams.)
 				// Probe: try opening a lightweight stream
 				probe, err := c.TCP("_relay_latency_:0")
 				if err != nil {
 					log.Printf("[%s] extra IP %s for %s: connection lost, reconnecting", a.node.Name(), extraAddr, peerName)
+					a.node.RemovePeerConn(peerName, extraAddr)
 					c.Close()
 					break // break select, continue outer for loop to reconnect
 				}
 				probe.Close()
+				// Re-attach: a reconnect of the primary builds a new peer entry
+				// that starts without extras (idempotent when still attached).
+				a.node.AddPeerConn(peerName, c, extraAddr, status)
 				continue // probe successful, keep monitoring
 			}
 			break // connection lost, reconnect
@@ -1501,7 +1579,12 @@ func (a *App) verifyExtraConn(c hyclient.Client, expectedPeerName string) string
 }
 
 func (a *App) connect(ctx context.Context, cl ClientEntry) error {
-	addr, err := net.ResolveUDPAddr("udp", extractPrimaryAddr(cl.Addr))
+	return a.connectAt(ctx, cl, cl.Addr)
+}
+
+// connectAt dials dialAddr; cl.Addr stays the peer's identity key.
+func (a *App) connectAt(ctx context.Context, cl ClientEntry, dialAddr string) error {
+	addr, err := net.ResolveUDPAddr("udp", extractPrimaryAddr(dialAddr))
 	if err != nil {
 		return fmt.Errorf("invalid address %q: %w", cl.Addr, err)
 	}
@@ -1582,7 +1665,7 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 		return err
 	}
 	defer c.Close()
-	log.Printf("[%s] connected to %s (%s)", a.node.Name(), cl.Name, cl.Addr)
+	log.Printf("[%s] connected to %s (%s)", a.node.Name(), cl.Name, dialAddr)
 
 	// Try hy2scale relay protocol first
 	err = a.node.AttachTo(ctx, cl.Name, c, func(remoteID string) {
@@ -1838,40 +1921,12 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 		}
 	}
 
-	// Session tracking — aggregated per device (username+IP+protocol)
+	// Device row (username+IP+protocol) with live accounting
 	remoteIP := ""
 	if ta, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
 		remoteIP = ta.IP.String()
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	sid := a.Sessions.Connect(username, remoteIP, "socks5", cancel)
-
-	var up, down int64
-	done := make(chan struct{})
-	go func() {
-		// Upload: client → remote. (copyCtx(dst, src) reads src, writes dst.)
-		n, _ := copyCtx(ctx, remote, conn)
-		atomic.AddInt64(&up, n)
-		// Upload ended (client FIN or remote write failed). Forward the
-		// FIN downstream so the exit/target sees a clean end-of-request.
-		// Do NOT cancel the response direction — server reply may still
-		// be draining back, and aborting it would lose buffered bytes.
-		halfCloseAndBound(remote)
-		done <- struct{}{}
-	}()
-	// Download: remote → client.
-	n2, _ := copyCtx(ctx, conn, remote)
-	atomic.AddInt64(&down, n2)
-	// Download ended (server FIN or client write failed). Forward FIN to
-	// client AND bound the goroutine's remaining read on conn so a hung
-	// client doesn't leak this session.
-	halfCloseAndBound(conn)
-	<-done
-	cancel()
-	a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))
-	if username != "" {
-		a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))
-	}
+	a.relayUser(conn, remote, username, remoteIP, "socks5", true)
 }
 
 // halfCloseWriteOrClose forwards an end-of-stream signal on `c`'s write
@@ -1888,6 +1943,13 @@ func halfCloseWriteOrClose(c net.Conn) {
 	type writeCloser interface{ CloseWrite() error }
 	if cw, ok := c.(writeCloser); ok {
 		_ = cw.CloseWrite()
+		return
+	}
+	// Relay streams can't carry a half-close: closing one here aborted the
+	// response still in flight (the tail of every reply was lost whenever
+	// the client half-closed first). Leave it open; halfCloseAndBound's
+	// read deadline reaps it.
+	if nh, ok := c.(interface{ NoHalfClose() bool }); ok && nh.NoHalfClose() {
 		return
 	}
 	_ = c.Close()
@@ -2097,34 +2159,12 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 		}
 	}
 
-	// Session tracking
+	// Device row with live accounting
 	remoteIP := ""
 	if ta, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
 		remoteIP = ta.IP.String()
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	sid := a.Sessions.Connect(username, remoteIP, "http", cancel)
-
-	var up, down int64
-	done := make(chan struct{})
-	go func() {
-		// Upload: client → remote.
-		n, _ := copyCtx(ctx, remote, conn)
-		atomic.AddInt64(&up, n)
-		// See handleSOCKS5 for the rationale on half-close vs cancel.
-		halfCloseAndBound(remote)
-		done <- struct{}{}
-	}()
-	// Download: remote → client.
-	n, _ := copyCtx(ctx, conn, remote)
-	atomic.AddInt64(&down, n)
-	halfCloseAndBound(conn)
-	<-done
-	cancel()
-	a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))
-	if username != "" {
-		a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))
-	}
+	a.relayUser(conn, remote, username, remoteIP, "http", true)
 }
 
 // copyCtx copies data respecting context cancellation.
@@ -2273,6 +2313,11 @@ func (a *App) dialExitWithMode(ctx context.Context, exitVia, exitMode, addr stri
 // First successful connection wins; others are closed.
 // If exitPaths is empty or mode is aggregate, falls back to dialExitWithMode.
 func (a *App) dialExitWithPaths(ctx context.Context, exitVia string, exitPaths []string, exitMode, addr string) (net.Conn, error) {
+	// quality / aggregate: lossless multi-path session when the exit speaks
+	// msess (1.3.10+); otherwise the legacy dispatch below.
+	if conn, ok, err := a.dialMsess(ctx, exitVia, exitPaths, exitMode, addr); ok {
+		return conn, err
+	}
 	paths := exitPaths
 	if len(paths) == 0 {
 		paths = []string{exitVia}
@@ -2399,8 +2444,10 @@ func (a *App) isExitPathDisabled(exitVia string) bool {
 	return false
 }
 
-// dialExit routes traffic through an exit path (direct mode, no adaptive/LB).
-func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, error) {
+// exitChain normalises exit_via into the hop list after this node and
+// enforces the nested iron rules; shared by every dial path so routing and
+// the UI keep one predicate.
+func (a *App) exitChain(exitVia string) ([]string, error) {
 	parts := splitPath(exitVia)
 	cfg := a.store.Get()
 	// Strip leading self label (either our display name or our node_id)
@@ -2430,6 +2477,15 @@ func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, err
 		log.Printf("[exit] rejecting unauthorised path %q (nested gate closed on an ancestor)", exitVia)
 		return nil, fmt.Errorf("exit path %q not authorised by local nested config", exitVia)
 	}
+	return parts, nil
+}
+
+// dialExit routes traffic through an exit path (direct mode, no adaptive/LB).
+func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, error) {
+	parts, err := a.exitChain(exitVia)
+	if err != nil {
+		return nil, err
+	}
 	if len(parts) == 0 {
 		return net.DialTimeout("tcp", rewriteLocalAddr(addr), 10*time.Second)
 	}
@@ -2443,43 +2499,18 @@ func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, err
 				return a.dialExit(ctx, pick, addr)
 			}
 		}
-		// Use bridged connection for single-hop: survives QUIC reconnects.
-		// Retry with backoff if peer is temporarily disconnected (up to 30s).
-		deadline := time.Now().Add(30 * time.Second)
-		for {
-			conn, _, err := a.node.DialTCPBridged(parts[0], addr)
-			if err == nil {
-				return conn, nil
-			}
-			// Fallback to non-bridged (e.g. inbound peer)
-			conn, err = a.node.DialTCP(ctx, parts[0], addr)
-			if err == nil {
-				peerCtx := a.node.PeerCtx(parts[0])
-				return wrapIdleTimeoutCtx(peerCtx, conn), nil
-			}
-			// If past deadline or context canceled, give up
-			if time.Now().After(deadline) {
-				return nil, err
-			}
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(2 * time.Second):
-			}
-		}
 	}
-	// Multi-hop: use bridged via connection for first-hop resilience, with retry
-	deadline := time.Now().Add(30 * time.Second)
+	// A first hop that is down right now may come back: keep trying for the
+	// no-path grace, like an established connection would.
+	deadline := time.Now().Add(a.PathLossGrace())
 	for {
-		conn, _, err := a.node.DialViaBridged(ctx, parts, addr)
+		conn, err := a.dialExitChain(ctx, parts, addr)
 		if err == nil {
 			return conn, nil
 		}
-		// Fallback to non-bridged
-		conn2, err2 := a.node.DialVia(ctx, parts, addr)
-		if err2 == nil {
-			peerCtx := a.node.PeerCtx(parts[0])
-			return wrapIdleTimeoutCtx(peerCtx, conn2), nil
+		var de *msess.DialError
+		if errors.Is(err, relay.ErrRemoteDial) || errors.As(err, &de) {
+			return nil, err // the exit answered: the target itself is unreachable
 		}
 		if time.Now().After(deadline) {
 			return nil, err
@@ -2490,6 +2521,26 @@ func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, err
 		case <-time.After(2 * time.Second):
 		}
 	}
+}
+
+// dialExitChain makes one attempt over an explicit chain: a lossless
+// session when the exit speaks msess (1.3.10+), else a plain relay stream
+// that ends with its QUIC connection.
+func (a *App) dialExitChain(ctx context.Context, parts []string, addr string) (net.Conn, error) {
+	if conn, ok, err := a.dialMsessDirect(ctx, parts, addr); ok {
+		return conn, err
+	}
+	var conn net.Conn
+	var err error
+	if len(parts) == 1 {
+		conn, err = a.node.DialTCP(ctx, parts[0], addr)
+	} else {
+		conn, err = a.node.DialVia(ctx, parts, addr)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return wrapIdleTimeoutCtx(a.node.PeerCtx(parts[0]), conn), nil
 }
 
 // dialExitUDP opens a UDP connection through the specified exit chain.
@@ -2518,8 +2569,7 @@ func (a *App) dialExitUDP(ctx context.Context, exitVia, addr string) (net.Conn, 
 	// after the peer registers — DialUDPVia can return
 	// "peer X control not ready" during the convergence window
 	// (typically <5s in production, longer after a fresh compose
-	// recreate). Mirror the 30s/2s pattern dialExit uses for TCP
-	// DialViaBridged → DialVia fallback.
+	// recreate). 30s/2s retry.
 	deadline := time.Now().Add(30 * time.Second)
 	var lastErr error
 	for {
@@ -2550,6 +2600,11 @@ func (a *App) dialExitUDP(ctx context.Context, exitVia, addr string) (net.Conn, 
 // dialExitUDP when only one path is active. The UDP equivalent of
 // dialExitWithPaths used by IKEv2 / L2TP transparent UDP proxies.
 func (a *App) dialExitUDPPaths(ctx context.Context, exitVia string, exitPaths []string, exitMode, addr string) (net.Conn, error) {
+	// quality / aggregate: packet session (exit keeps one UDP socket while
+	// the carrying path changes) when the exit speaks msess.
+	if conn, ok, err := a.dialMsessPacket(ctx, exitVia, exitPaths, exitMode, addr); ok {
+		return conn, err
+	}
 	paths := exitPaths
 	if len(paths) == 0 {
 		paths = []string{exitVia}
@@ -2641,7 +2696,7 @@ type nodeOutbound struct {
 
 func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
 	// Strip any "#bridge=<id>" tag BEFORE the relay-stream dispatch.
-	// On a multi-hop forward (hub→us→us-east) the intermediate node
+	// On a multi-hop forward (hub→us→us-east) a pre-1.3.10 intermediate
 	// uses DialTCPBridged so the request reaches us-east as
 	// `_relay_api_:0#bridge=<id>`; without the strip, IsRelayStream's
 	// exact-match against `_relay_api_:0` fails, the call falls
@@ -2649,20 +2704,27 @@ func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
 	// "_relay_api_:0", …)` burns ~4s walking glibc DNS search domains
 	// before erroring — observed as a fixed ~4 s wait on every 2-hop
 	// /api/* request through the remote-proxy, while 1-hop is sub-ms.
-	actualAddr, bridgeID, isBridged := relay.ParseBridgeAddr(reqAddr)
+	actualAddr, _, isBridged := relay.ParseBridgeAddr(reqAddr)
+	// Capture the authID/peer addr stashed by hy2Auth.TCPRequest for THIS
+	// goroutine (hyserver invokes EventLogger.TCPRequest immediately before
+	// Outbound.TCP in the same goroutine). Taken for every request so user
+	// streams can be routed and refused below.
+	authID := takeGoIDAuth()
+	peerAddr := takeGoIDAddr()
+	isUser := strings.HasPrefix(authID, "user:")
+	if isUser && (relay.IsRelayStream(actualAddr) || IsBondStream(actualAddr)) {
+		// A user credential must never reach mesh-internal streams: via
+		// streams would route an hy2 user through the mesh past the exit
+		// assigned to them, and register would join them as a peer.
+		return nil, fmt.Errorf("relay stream not permitted for %s", authID)
+	}
 	if relay.IsRelayStream(actualAddr) {
-		// Capture the authID stashed by hy2Auth.TCPRequest for THIS goroutine
-		// (hyserver invokes EventLogger.TCPRequest immediately before
-		// Outbound.TCP in the same goroutine). For `_relay_api_:0` we wrap
-		// the local pipe end in *RelayAuthConn so the api server's
-		// relaySrv ConnContext can extract the authID into the request
-		// context. authMiddleware then applies RelayAdminPassthrough only
-		// when authID == "system" — i.e. the inbound QUIC connection used
-		// the peer-node system password. User-level (`user:<name>`) hits
-		// fall through to the normal token check, which 401s the API or
-		// SPA-redirects to /login. Default-deny on missing entry.
-		authID := takeGoIDAuth()
-		peerAddr := takeGoIDAddr()
+		// For `_relay_api_:0` we wrap the local pipe end in *RelayAuthConn
+		// so the api server's relaySrv ConnContext can extract the authID
+		// into the request context. authMiddleware then applies
+		// RelayAdminPassthrough only when authID == "system" — i.e. the
+		// inbound QUIC connection used the peer-node system password.
+		// Default-deny on missing entry.
 		c1, c2 := net.Pipe()
 		// Wrap c1 so handleRegister and other relay-side handlers see the
 		// real peer addr via RemoteAddr() instead of "pipe". See
@@ -2693,14 +2755,32 @@ func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
 		return c2, nil
 	}
 
-	// Check if this is a rebind to an existing bridge
-	if isBridged {
-		if rebindConn := o.node.Bridges().TryRebind(bridgeID); rebindConn != nil {
-			log.Printf("[exit] rebind accepted: %s", bridgeID)
-			return rebindConn, nil
+	// hy2 users follow their exit route like every other protocol, and get
+	// a device row with live accounting (their limit used to be checked only
+	// when the QUIC connection authenticated).
+	if isUser {
+		if err := o.app.hy2UserUsable(authID); err != nil {
+			return nil, err
 		}
+		c, err := o.hy2UserTCP(authID, actualAddr, isBridged)
+		if err != nil {
+			return nil, err
+		}
+		return o.app.meterHy2(authID, peerAddr, c), nil
 	}
+	return o.localTCP(actualAddr, isBridged)
+}
 
+// hy2UserTCP dials an hy2 user's stream: its exit route, or here.
+func (o *nodeOutbound) hy2UserTCP(authID, actualAddr string, isBridged bool) (net.Conn, error) {
+	if via, paths, mode, ok := o.app.hy2UserRoute(authID); ok {
+		return o.app.dialExitWithPaths(o.ctx, via, paths, mode, actualAddr)
+	}
+	return o.localTCP(actualAddr, isBridged)
+}
+
+// localTCP dials a stream's target from this node.
+func (o *nodeOutbound) localTCP(actualAddr string, isBridged bool) (net.Conn, error) {
 	// DNS-pollution recovery for the hy2 server path: if a user's hy2
 	// client supplied an IP-form destination (because its own resolver
 	// was poisoned), we want to peek the first client bytes to recover
@@ -2722,15 +2802,13 @@ func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
 		return nil, err
 	}
 
-	// If bridge ID provided, wrap in a bridge for future rebinding
-	if isBridged {
-		return o.node.Bridges().CreateWithID(bridgeID, actualAddr, conn), nil
-	}
-
 	return conn, nil
 }
 
 func (o *nodeOutbound) UDP(reqAddr string) (hyserver.UDPConn, error) {
+	authID := takeGoIDAuth() // stashed by hy2Auth.UDPRequest on this goroutine
+	peerAddr := takeGoIDAddr()
+	isUser := strings.HasPrefix(authID, "user:")
 	// Multi-hop UDP via: receiving peer parses the via-encoded target
 	// address and forwards through the next hop's UDP path. The UDP
 	// analog of TCP's handleVia. Without this, multi-hop UDP from WG /
@@ -2738,6 +2816,9 @@ func (o *nodeOutbound) UDP(reqAddr string) (hyserver.UDPConn, error) {
 	// dialExitUDP encodes the chain and each intermediate hop strips
 	// one level here.
 	if chain, targetAddr, isVia := relay.ParseVia(reqAddr); isVia {
+		if isUser {
+			return nil, fmt.Errorf("relay stream not permitted for %s", authID)
+		}
 		path := strings.Split(chain, "/")
 		c, err := o.node.DialUDPVia(o.ctx, path, targetAddr)
 		if err != nil {
@@ -2745,11 +2826,59 @@ func (o *nodeOutbound) UDP(reqAddr string) (hyserver.UDPConn, error) {
 		}
 		return &netConnUDPAdapter{nc: c, addr: targetAddr}, nil
 	}
+	if isUser {
+		if err := o.app.hy2UserUsable(authID); err != nil {
+			return nil, err
+		}
+		var c net.Conn
+		var err error
+		if via, paths, mode, ok := o.app.hy2UserRoute(authID); ok {
+			c, err = o.app.dialExitUDPPaths(o.ctx, via, paths, mode, reqAddr)
+		} else {
+			c, err = net.DialTimeout("udp", rewriteLocalAddr(reqAddr), 5*time.Second)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &netConnUDPAdapter{nc: o.app.meterHy2(authID, peerAddr, c), addr: reqAddr}, nil
+	}
 	conn, err := net.DialTimeout("udp", rewriteLocalAddr(reqAddr), 5*time.Second)
 	if err != nil {
 		return nil, err
 	}
 	return &realUDP{conn: conn.(*net.UDPConn), addr: reqAddr}, nil
+}
+
+// hy2UserUsable refuses a new stream of an hy2 user that expired or used up
+// its traffic limit while its QUIC connection stayed open.
+func (a *App) hy2UserUsable(authID string) error {
+	name := strings.TrimPrefix(authID, "user:")
+	a.usersMu.RLock()
+	u, ok := a.userIndex[name]
+	a.usersMu.RUnlock()
+	if !ok || !u.Enabled {
+		return fmt.Errorf("user %s not active", name)
+	}
+	if userExpired(u) || a.overTrafficLimit(name) {
+		return fmt.Errorf("user %s expired or over its traffic limit", name)
+	}
+	return nil
+}
+
+// hy2UserRoute returns the exit route of an hy2-authenticated user
+// ("user:<name>"); ok=false when the user exits here.
+func (a *App) hy2UserRoute(authID string) (via string, paths []string, mode string, ok bool) {
+	name, isUser := strings.CutPrefix(authID, "user:")
+	if !isUser {
+		return
+	}
+	a.usersMu.RLock()
+	u, found := a.userIndex[name]
+	a.usersMu.RUnlock()
+	if !found || u.ExitVia == "" {
+		return
+	}
+	return u.ExitVia, u.ExitPaths, u.ExitMode, true
 }
 
 // netConnUDPAdapter adapts a net.Conn (returned by relay.Node.DialUDP

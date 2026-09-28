@@ -102,6 +102,17 @@ func (m *SessionManager) Connect(username, remoteIP, protocol string, cancel fun
 	return key + "#" + connID
 }
 
+// device returns the row a Connect'ed session counts into (nil if none).
+func (m *SessionManager) device(sessionID string) *Device {
+	parts := splitSessionID(sessionID)
+	if len(parts) != 2 {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.devices[parts[0]]
+}
+
 // Disconnect removes a connection. If the device has no more connections, it's removed.
 func (m *SessionManager) Disconnect(sessionID string, txBytes, rxBytes int64) {
 	if sessionID == "" {

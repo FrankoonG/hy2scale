@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -49,6 +50,11 @@ type bondReceiver struct {
 	paths          map[int]net.Conn    // pathIndex → relay stream
 	pathWriteMu    map[int]*sync.Mutex // per-path write serializer (return frames + keepalives)
 	teardownsRcvd  map[int]bool        // per-path teardown received from sender
+	// Session completion, read by the reaper (close() had no caller at all:
+	// every legacy bond session leaked its target socket + goroutines).
+	upDone  atomic.Bool // deliverer drained and half-closed the target
+	retDone atomic.Bool // target EOF, teardown broadcast to the sender
+	broken  atomic.Bool // target write failed
 	writerDoneCh   chan struct{}       // closed when all sender paths have torn down
 	pathTxBytes    map[int]int64       // bytes written per path
 	pathWriteNs    map[int]int64       // cumulative write time in ns per path
@@ -135,6 +141,9 @@ func (a *App) handleBondStream(bondAddr string, pathConn net.Conn) error {
 			recv.writerDoneCh = make(chan struct{})
 			recv.pathTxBytes = make(map[int]int64)
 			recv.writeSeq = 0
+			recv.upDone.Store(false)
+			recv.retDone.Store(false)
+			recv.broken.Store(false)
 			needsInit = true
 			log.Printf("[bond-rx] %d: reviving session", bondID)
 		}
@@ -178,6 +187,8 @@ func (a *App) handleBondStream(bondAddr string, pathConn net.Conn) error {
 		// Periodic length-0 frame on every registered path so the sender's
 		// per-path read deadline survives long upload-only intervals.
 		go recv.runKeepaliveSender()
+
+		go recv.runReaper()
 
 		// Cleanup: delete from map after 60s grace period (allows reconnection)
 		go func() {
@@ -311,6 +322,7 @@ func (recv *bondReceiver) runDeliverer() {
 
 			if _, err := recv.target.Write(data); err != nil {
 				debugLog("[bond-rx] %d: target write error: %v", recv.id, err)
+				recv.broken.Store(true)
 				return
 			}
 			delivered = true
@@ -325,6 +337,7 @@ func (recv *bondReceiver) runDeliverer() {
 		if bufSize == 0 && recv.isWriterDone() {
 			log.Printf("[bond-rx] %d: deliverer drained, half-closing target", recv.id)
 			recv.halfCloseTarget()
+			recv.upDone.Store(true)
 			return
 		}
 
@@ -477,6 +490,7 @@ func (recv *bondReceiver) doReturnWrite(target net.Conn) {
 		if err != nil {
 			log.Printf("[bond-rx] %d: return writer done, distribution: %v", recv.id, pathBytes)
 			recv.broadcastTeardown()
+			recv.retDone.Store(true)
 			return
 		}
 	}
@@ -706,6 +720,40 @@ func (recv *bondReceiver) signalWriterDone() {
 	default:
 	}
 }
+
+// runReaper ends the session: both directions finished, delivery to the
+// target broke, or no sender path for bondOrphanTimeout.
+func (recv *bondReceiver) runReaper() {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	var noPaths time.Time
+	for {
+		select {
+		case <-recv.closeCh:
+			return
+		case <-t.C:
+		}
+		if recv.upDone.Load() && recv.retDone.Load() || recv.broken.Load() {
+			time.Sleep(2 * time.Second) // let the teardown frames flush
+			recv.close()
+			return
+		}
+		recv.mu.Lock()
+		n := len(recv.paths)
+		recv.mu.Unlock()
+		switch {
+		case n > 0:
+			noPaths = time.Time{}
+		case noPaths.IsZero():
+			noPaths = time.Now()
+		case time.Since(noPaths) > bondOrphanTimeout:
+			recv.close()
+			return
+		}
+	}
+}
+
+const bondOrphanTimeout = 30 * time.Second
 
 // runKeepaliveSender writes a length-0 frame on every registered path on a
 // fixed cadence so the sender's per-path read deadline never expires during

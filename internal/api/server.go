@@ -98,6 +98,30 @@ type Server struct {
 	// browser tabs see the same download progress instead of triggering
 	// duplicate downloads. See internal/api/upgrade.go.
 	upgrade *upgradeJob
+
+	// Web UI TLS (https_cert_id / force_https), read live. Set in Start.
+	web *webTLS
+
+	// restart asks main to shut down and come back (SetRestart).
+	restart func()
+}
+
+// SetRestart installs the process restart used by POST /api/system/restart.
+func (s *Server) SetRestart(fn func()) { s.restart = fn }
+
+// restartProcess replies, then restarts the node (same path as a stop, so
+// counters and history are flushed first).
+func (s *Server) restartProcess(w http.ResponseWriter, r *http.Request) {
+	if s.restart == nil {
+		http.Error(w, "restart not available", http.StatusNotImplemented)
+		return
+	}
+	log.Printf("[api] restart requested from the web UI")
+	writeJSON(w, map[string]string{"status": "ok"})
+	go func() {
+		time.Sleep(300 * time.Millisecond) // let the reply go out
+		s.restart()
+	}()
 }
 
 // validAddrSpec checks "host:portspec" where portspec can be "5565", "1000,2000", "20000-30000"
@@ -267,6 +291,10 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("GET /api/diag/peer-rebinds", s.diagPeerRebinds)
 	authed.HandleFunc("GET /api/diag/peer-latency", s.diagPeerLatency)
 	authed.HandleFunc("GET /api/diag/peer-history", s.diagPeerHistory)
+	//   GET /api/diag/runtime       goroutine / heap / relay-object counts,
+	//                                the first thing to read when a node's
+	//                                memory keeps growing
+	authed.HandleFunc("GET /api/diag/runtime", s.diagRuntime)
 
 	// Sessions (active connections)
 	authed.HandleFunc("GET /api/sessions", s.getSessions)
@@ -299,6 +327,7 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("GET /api/upgrade/status", s.getUpgradeStatus)
 	authed.HandleFunc("GET /api/upgrade/events", s.streamUpgradeEvents)
 	authed.HandleFunc("POST /api/upgrade/apply", s.applyDownloadedUpgrade)
+	authed.HandleFunc("POST /api/system/restart", s.restartProcess)
 	authed.HandleFunc("GET /api/settings/ui", s.getUISettings)
 	authed.HandleFunc("PUT /api/settings/ui", s.updateUISettings)
 
@@ -407,7 +436,8 @@ func (s *Server) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{Handler: root}
+	s.web = &webTLS{store: s.app.TLS(), conf: s.app.Store().Get}
+	srv := &http.Server{Handler: s.web.redirect(root)}
 	go func() { <-ctx.Done(); srv.Close() }()
 	if s.basePath != "" {
 		log.Printf("API/UI on %s%s", s.addr, s.basePath)
@@ -442,7 +472,7 @@ func (s *Server) Start(ctx context.Context) error {
 	go func() { <-ctx.Done(); relaySrv.Close() }()
 	go relaySrv.Serve(apiBridge)
 
-	return srv.Serve(ln)
+	return srv.Serve(newSniffListener(ln, s.web))
 }
 
 // relayCtxKey carries the hyserver authID of the QUIC connection that
@@ -721,7 +751,11 @@ func (s *Server) getUISettings(w http.ResponseWriter, r *http.Request) {
 		"dns":                dns,
 		"force_https":        cfg.ForceHTTPS,
 		"https_cert_id":      cfg.HTTPSCertID,
+		// plain http is being redirected right now (force on + usable cert)
+		"https_active":       s.web != nil && s.web.forced(),
 		"session_timeout_h":  sessionH,
+		// quality/aggregate: seconds a connection survives with no path (effective value)
+		"path_loss_grace_s": int(s.app.PathLossGrace() / time.Second),
 		// Nested-discovery hard limits — hot-reloadable, no restart.
 		"max_nested_depth":   lim.MaxDepth,
 		"max_response_nodes": lim.MaxResponseNodes,
@@ -751,6 +785,7 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 		ForceHTTPS       *bool   `json:"force_https"`
 		HTTPSCertID      *string `json:"https_cert_id"`
 		SessionTimeoutH  *int    `json:"session_timeout_h"`
+		PathLossGraceS   *int    `json:"path_loss_grace_s"`
 		MaxNestedDepth   *int    `json:"max_nested_depth"`
 		MaxResponseNodes *int    `json:"max_response_nodes"`
 		MaxCacheEntries  *int    `json:"max_cache_entries"`
@@ -790,6 +825,10 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.SessionTimeoutH != nil {
 			c.SessionTimeoutH = *body.SessionTimeoutH
+		}
+		if body.PathLossGraceS != nil {
+			// read per new session: effective immediately, no restart
+			c.PathLossGraceS = *body.PathLossGraceS
 		}
 		if body.MaxNestedDepth != nil {
 			c.MaxNestedDepth = *body.MaxNestedDepth
@@ -850,13 +889,12 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 	// Only listen/base_path actually need a restart — they're consumed at
 	// http.ListenAndServe binding time. DNS is read on every ikev2/l2tp
 	// handshake (a.store.Get().DNS), so DNS changes affect new VPN
-	// connections immediately. force_https / https_cert_id / session
-	// timeout are restart-required (TLS bound at startup).
-	listenChanged := body.Listen != nil || body.BasePath != nil ||
-		body.ForceHTTPS != nil || body.HTTPSCertID != nil
+	// connections immediately. force_https / https_cert_id are read per
+	// connection (webTLS), so they apply live too.
+	listenChanged := body.Listen != nil || body.BasePath != nil
 	note := "applied live"
 	if listenChanged {
-		note = "listen / base_path / TLS settings require restart to take effect"
+		note = "listen / base_path require restart to take effect"
 	}
 	writeJSON(w, map[string]string{"status": "ok", "note": note})
 }
@@ -912,6 +950,32 @@ func (s *Server) diagPeerRebinds(w http.ResponseWriter, r *http.Request) {
 // only the current point value the topology API surfaces.
 func (s *Server) diagPeerLatency(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"peers": s.app.Node().LatencySnapshots()})
+}
+
+var startTime = time.Now()
+
+// diagRuntime — process-level counters for leak hunting: goroutines,
+// heap, GC, and the relay's own live-object counts. Read-only and cheap
+// (one ReadMemStats); safe to poll every few seconds.
+func (s *Server) diagRuntime(w http.ResponseWriter, r *http.Request) {
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	st := s.app.Node().GetStats()
+	writeJSON(w, map[string]any{
+		"goroutines":     runtime.NumGoroutine(),
+		"heap_alloc":     ms.HeapAlloc,
+		"heap_inuse":     ms.HeapInuse,
+		"heap_objects":   ms.HeapObjects,
+		"stack_inuse":    ms.StackInuse,
+		"sys":            ms.Sys,
+		"num_gc":         ms.NumGC,
+		"relay_conns":    st.Conns,
+		"relay_objects":  s.app.Node().ObjectCounts(),
+		"app_objects":    s.app.ObjectCounts(),
+		"msess":          s.app.MsessStats(),
+		"msess_paths":    s.app.MsessPaths(),
+		"uptime_seconds": int64(time.Since(startTime).Seconds()),
+	})
 }
 
 // diagPeerHistory — rolled-up time-bucketed metrics (1m / 1h / 1d
@@ -973,6 +1037,8 @@ func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 		"compat":        app.IsCompatMode(),
 		"hy2_user_auth": cfg.Hy2UserAuth,
 		"active_paths":  s.app.AllActivePaths(),
+		// peers below this lack lossless quality/aggregate (UI marks them)
+		"lossless_min_version": app.MsessMinVersion,
 	})
 }
 

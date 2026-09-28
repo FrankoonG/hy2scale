@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -856,26 +855,5 @@ func (a *App) handleIKEv2Transparent(conn net.Conn, cfg IKEv2Config) {
 	defer remote.Close()
 	log.Printf("[ikev2] connected to %s for user %s", origDst, username)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	sid := a.Sessions.Connect(username, srcIP, "ikev2", cancel)
-
-	var up, down int64
-	done := make(chan struct{})
-	go func() {
-		// Upload: client → remote.
-		n, _ := copyCtx(ctx, remote, conn)
-		atomic.AddInt64(&up, n)
-		halfCloseAndBound(remote)
-		done <- struct{}{}
-	}()
-	// Download: remote → client.
-	n, _ := copyCtx(ctx, conn, remote)
-	atomic.AddInt64(&down, n)
-	halfCloseAndBound(conn)
-	<-done
-	cancel()
-	a.Sessions.Disconnect(sid, atomic.LoadInt64(&up), atomic.LoadInt64(&down))
-	if username != "" && username != "__psk__" {
-		a.RecordTraffic(username, atomic.LoadInt64(&up)+atomic.LoadInt64(&down))
-	}
+	a.relayUser(conn, remote, username, srcIP, "ikev2", true)
 }
