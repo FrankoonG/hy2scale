@@ -1604,6 +1604,18 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 }
 
 
+// nestedAuthorised: every hop down to and including path is nested-enabled
+// in cfg.Peers (iron rule 2) — the paths whose children the topology shows.
+func nestedAuthorised(cfg app.Config, path string) bool {
+	parts := strings.Split(path, "/")
+	for i := 1; i <= len(parts); i++ {
+		if pc, ok := cfg.Peers[strings.Join(parts[:i], "/")]; !ok || !pc.Nested {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Server) getCachedSubPeers(name string) []topoSubPeer {
 	s.subPeersMu.RLock()
 	defer s.subPeersMu.RUnlock()
@@ -2015,6 +2027,14 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 		visitedBare := make(map[string]bool)
 		var walkAndCache func(qualifiedPath string, children []topoSubPeer)
 		walkAndCache = func(qualifiedPath string, children []topoSubPeer) {
+			// Rule 2: only paths whose children the topology shows (every
+			// hop nested-enabled here) are cached. Routing and the history
+			// recorder use nothing else, and caching every path the remote
+			// caches describe grew without bound in a dense mesh
+			// (production AUB: 9,000+ keys for a 92-path topology).
+			if !nestedAuthorised(cfg, qualifiedPath) {
+				return
+			}
 			parts := strings.Split(qualifiedPath, "/")
 			bare := parts[len(parts)-1]
 			if visitedBare[bare] {
@@ -2083,6 +2103,11 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 		for peerName, children := range newCache {
 			walkAndCache(peerName, children)
 		}
+		// visitedBare expands each node under one path per round and the
+		// map order picks which, so a node reached through several parents
+		// is written under each of them over time. Paths not written for an
+		// hour have left the topology.
+		s.app.Node().ExpirePeersOfCache(time.Hour)
 	}
 }
 

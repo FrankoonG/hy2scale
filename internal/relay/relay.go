@@ -550,7 +550,10 @@ type Node struct {
 	latencies      map[string]int
 	addrLatencies  map[string]map[string]int // peer → addr → ms
 	peersOfCache map[string][]PeerInfo // cached PeersOf results from prober
-	conflicts    map[string]string    // client addr → conflicting name
+	// last SetPeersOfCache write per key; entries the prober owns (direct
+	// peers) have none and never expire
+	peersOfCacheSeen map[string]time.Time
+	conflicts        map[string]string // client addr → conflicting name
 
 	// Injected handler: returns rich peer list JSON (with children) for nested discovery.
 	// If nil, falls back to flat n.Peers() JSON.
@@ -749,6 +752,27 @@ func (n *Node) SetPeersOfCache(peerName string, peers []PeerInfo) {
 		n.peersOfCache = make(map[string][]PeerInfo)
 	}
 	n.peersOfCache[peerName] = peers
+	if n.peersOfCacheSeen == nil {
+		n.peersOfCacheSeen = make(map[string]time.Time)
+	}
+	n.peersOfCacheSeen[peerName] = time.Now()
+}
+
+// ExpirePeersOfCache drops entries SetPeersOfCache hasn't refreshed for
+// maxAge: qualified paths the topology no longer shows. Without it every
+// path ever observed stayed, and the history recorder kept rings for all of
+// them (production: 9000+ keys for a 92-path topology). Prober-owned
+// direct-peer entries are left alone.
+func (n *Node) ExpirePeersOfCache(maxAge time.Duration) {
+	n.peerRateMu.Lock()
+	defer n.peerRateMu.Unlock()
+	now := time.Now()
+	for k, t := range n.peersOfCacheSeen {
+		if now.Sub(t) > maxAge {
+			delete(n.peersOfCache, k)
+			delete(n.peersOfCacheSeen, k)
+		}
+	}
 }
 
 // PeersOfCached returns cached peer list from the last prober cycle.
@@ -842,12 +866,14 @@ func (n *Node) StartLatencyProber(ctx context.Context) {
 						if subPeers, err := n.PeersOf(name); err == nil {
 							n.peerRateMu.Lock()
 							n.peersOfCache[name] = subPeers
+							delete(n.peersOfCacheSeen, name) // prober-owned: never expires
 							n.peerRateMu.Unlock()
 						}
 					} else {
 						// Nested disabled: remove stale cache
 						n.peerRateMu.Lock()
 						delete(n.peersOfCache, name)
+						delete(n.peersOfCacheSeen, name)
 						n.peerRateMu.Unlock()
 					}
 				}(names[i], p)
@@ -1011,7 +1037,8 @@ func NewNode(name string, exitNode bool) *Node {
 		pathRates: make(map[string]PeerTraffic),
 		latencies:     make(map[string]int),
 		addrLatencies: make(map[string]map[string]int),
-		peersOfCache: make(map[string][]PeerInfo),
+		peersOfCache:     make(map[string][]PeerInfo),
+		peersOfCacheSeen: make(map[string]time.Time),
 		bridgeTags: newBridgeTags(),
 	}
 }
