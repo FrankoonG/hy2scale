@@ -216,11 +216,13 @@ func (a *App) collectPaths(cfg Config) []string {
 			continue
 		}
 		parts := strings.Split(parent, "/")
-		root := parts[0]
-		// Only enroll deep paths that descend from a nested-enabled
-		// root the operator has already authorised. Otherwise we'd
-		// record paths from disabled / unauthorised peers too.
-		if pc, ok := cfg.Peers[root]; !ok || !pc.Nested {
+		// Rule 2 (docs/nested-rules.md): enroll the children of `parent`
+		// only when every hop down to and including it is nested-enabled —
+		// the predicate the topology display and routing use, so exactly
+		// the displayable paths get rings. Checking only the root enrolled
+		// every path the cache could derive (production AUB: 10,600 paths
+		// and a 50 MB history.json for a 92-path topology).
+		if !isPathAuthorised(append(parts, ""), cfg) {
 			continue
 		}
 		if len(parts) >= maxLeafDepth {
