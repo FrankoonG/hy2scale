@@ -212,6 +212,11 @@ func (sv *Server) pump(s *session, target net.Conn) {
 		if err == nil {
 			if cw, ok := target.(interface{ CloseWrite() error }); ok {
 				cw.CloseWrite()
+				// A target that ignores the FIN would keep the read above
+				// blocked after the session ended (reset, no path, idle):
+				// release it then.
+				<-s.done
+				target.Close()
 				return
 			}
 		}

@@ -38,6 +38,13 @@ var (
 	PacketQueue = 1 << 20           // bytes of datagrams buffered per direction (oldest dropped)
 	PacketPing  = time.Second       // per-subflow PING while a packet session is active
 	PacketIdle  = 180 * time.Second // packet session without any datagram for this long → closed
+
+	// StreamIdle: a stream session without data in either direction for this
+	// long is reset by whichever side notices first (the 10 min idle limit
+	// of plain relay streams). PINGs keep a session's paths alive, so without
+	// it a connection whose user and target both went quiet — or whose target
+	// ignores the user's FIN — would hold its target socket forever.
+	StreamIdle = 10 * time.Minute
 )
 
 // ErrAborted is returned after the session was reset by either side.
@@ -169,6 +176,7 @@ type session struct {
 	dgIn       [][]byte
 	dgInBytes  int
 	lastDgram  time.Time
+	lastData   time.Time // stream data written by the app or received
 
 	closed    bool // app closed its side
 	closedAt  time.Time
@@ -184,7 +192,7 @@ type session struct {
 
 func newSession(id [16]byte, mode Mode, isServer bool, logf func(string, ...any)) *session {
 	s := &session{id: id, mode: mode, isServer: isServer, logf: logf, done: make(chan struct{}),
-		noSubFrom: time.Now(), lastAdv: time.Now(), rescueAt: ^uint64(0)}
+		noSubFrom: time.Now(), lastAdv: time.Now(), lastData: time.Now(), rescueAt: ^uint64(0)}
 	s.cond = sync.NewCond(&s.mu)
 	if s.logf == nil {
 		s.logf = func(string, ...any) {}
@@ -224,6 +232,7 @@ func (s *session) Write(p []byte) (int, error) {
 		if k > len(p) {
 			k = len(p)
 		}
+		s.lastData = time.Now()
 		s.sq.push(p[:k], Window)
 		p = p[k:]
 		n += k
@@ -786,6 +795,7 @@ func (s *session) handleFrameLocked(sf *subflow, f frame) error {
 }
 
 func (s *session) onDataLocked(off uint64, data []byte) {
+	s.lastData = time.Now()
 	end := off + uint64(len(data))
 	next := s.rRead + uint64(s.rq.Len())
 	if end <= next || len(data) == 0 {
@@ -1045,6 +1055,10 @@ func (s *session) tickLocked(now time.Time) {
 	}
 	if s.packet && now.Sub(s.lastDgram) > PacketIdle {
 		s.abortLocked(fmt.Errorf("%w: idle", ErrAborted), true)
+		return
+	}
+	if !s.packet && now.Sub(s.lastData) > StreamIdle {
+		s.abortLocked(fmt.Errorf("%w: no data for %s", ErrAborted, StreamIdle), true)
 		return
 	}
 	if s.closed && now.Sub(s.closedAt) > LingerBudget {
