@@ -46,6 +46,8 @@ type topoSubPeer struct {
 	Native     bool           `json:"native,omitempty"`
 	Version    string         `json:"version,omitempty"`
 	TunCapable bool           `json:"tun_capable,omitempty"`
+	// Conns: connections the parent holds to this node (several addresses)
+	Conns      int            `json:"conns,omitempty"`
 	TxRate     uint64         `json:"tx_rate"`
 	RxRate     uint64         `json:"rx_rate"`
 	// MaxRate is the configured peak the link can sustain (bytes/sec),
@@ -1369,6 +1371,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		Conflict     bool              `json:"conflict,omitempty"`
 		Unsupported  bool              `json:"unsupported,omitempty"`
 		TunCapable   bool              `json:"tun_capable,omitempty"`
+		Conns        int               `json:"conns,omitempty"`
 		LatencyMs    int               `json:"latency_ms"`
 		TxRate       uint64            `json:"tx_rate"`
 		RxRate       uint64            `json:"rx_rate"`
@@ -1551,6 +1554,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 					tn.Direction = p.Direction
 				}
 				tn.TunCapable = p.TunCapable
+				tn.Conns = p.Conns
 				if p.Direction == "outbound" {
 					// Found the matching outbound entry — prefer this and
 					// stop. (Continuing would overwrite with inbound
@@ -2065,6 +2069,7 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 					Version:    c.Version,
 					TunCapable: c.TunCapable,
 					LatencyMs:  lat,
+					Conns:      c.Conns,
 				})
 			}
 			if len(infos) > 0 {
@@ -2149,6 +2154,7 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 		// to size the edge thickness directly from configured
 		// bandwidth, even before any traffic flows.
 		MaxRate   uint64        `json:"max_rate,omitempty"`
+		Conns     int           `json:"conns,omitempty"`
 		Children  []topoSubPeer `json:"children,omitempty"`
 	}
 	var remotePeers []peerWithChildren
@@ -2199,6 +2205,7 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 			Native:     rp.Native,
 			Version:    rp.Version,
 			TunCapable: rp.TunCapable,
+			Conns:      rp.Conns,
 			Connected:  connected,
 			MaxRate:    rp.MaxRate,
 			Children:   embedded,

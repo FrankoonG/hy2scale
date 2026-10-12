@@ -20,6 +20,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -188,6 +189,10 @@ type PeerInfo struct {
 	// the direct connection itself as `unsupported`.
 	PV          int  `json:"pv,omitempty"`
 	Unsupported bool `json:"unsupported,omitempty"`
+	// Conns: QUIC connections the reporting node holds to this peer (one
+	// per configured address); omitted for one. A chain through that node
+	// can then be carried over each of them (see ConnHint).
+	Conns int `json:"conns,omitempty"`
 }
 
 // NodeVersion is the version string sent during peer registration.
@@ -436,6 +441,87 @@ func (p *peer) pickClientIdx(idx int) hyclient.Client {
 		idx = idx % len(healthy)
 	}
 	return healthy[idx]
+}
+
+// relayOpenTimeout bounds opening a relay stream on one of several QUIC
+// connections to a peer. The far node answers a relay stream at once, so no
+// answer for this long means the connection died — something its probe
+// notices only up to 7 s later, while a stream opened on it hangs until
+// QUIC gives up (~25 s).
+const relayOpenTimeout = 3 * time.Second
+
+type tcpResult struct {
+	conn net.Conn
+	err  error
+}
+
+// openStream opens addr on cl. For a relay stream to a peer reached over
+// several connections it moves on to the next healthy connection when cl
+// doesn't answer within relayOpenTimeout (marking cl down until its next
+// probe); a late answer is closed. Target dials, which answer only after the
+// far end dialed the target, and single-connection peers wait as before.
+func (n *Node) openStream(name string, p *peer, cl hyclient.Client, addr string) (net.Conn, error) {
+	if !IsRelayStream(addr) {
+		return cl.TCP(addr)
+	}
+	tried := map[hyclient.Client]bool{}
+	var lastErr error
+	for cl != nil {
+		tried[cl] = true
+		var next hyclient.Client
+		for _, c := range p.healthyClients() {
+			if !tried[c] {
+				next = c
+				break
+			}
+		}
+		if next == nil {
+			return cl.TCP(addr)
+		}
+		ch := make(chan tcpResult, 1)
+		go func(c hyclient.Client) {
+			conn, err := c.TCP(addr)
+			ch <- tcpResult{conn, err}
+		}(cl)
+		select {
+		case r := <-ch:
+			if r.err == nil {
+				return r.conn, nil
+			}
+			lastErr = r.err // a closed connection fails at once
+		case <-time.After(relayOpenTimeout):
+			n.markConnDown(name, cl)
+			go func() {
+				if r := <-ch; r.conn != nil {
+					r.conn.Close()
+				}
+			}()
+			lastErr = fmt.Errorf("relay: no answer from %s within %s", name, relayOpenTimeout)
+		}
+		cl = next
+	}
+	return nil, lastErr
+}
+
+// markConnDown takes cl out of new-stream selection until the prober sees it
+// answer again.
+func (n *Node) markConnDown(name string, cl hyclient.Client) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	p, ok := n.peers[name]
+	if !ok {
+		return
+	}
+	log.Printf("[relay] %s: a connection did not answer a stream open; skipped until its next probe", name)
+	if cl == p.client {
+		p.primaryDown.Store(true)
+		return
+	}
+	for i, c := range p.extraConns {
+		if c == cl && i < len(p.connStatuses) {
+			p.connStatuses[i] = "offline"
+		}
+	}
 }
 
 // ConnCount returns the total number of active QUIC connections for this peer.
@@ -929,6 +1015,9 @@ func (n *Node) PeersAlt() []PeerInfo {
 		}
 		if conflictNames[name] {
 			info.Conflict = true
+		}
+		if c := p.ConnCount(); c > 1 {
+			info.Conns = c
 		}
 		result = append(result, info)
 	}
@@ -1756,13 +1845,7 @@ func (n *Node) handleVia(ctx context.Context, peerName, targetAddr string, strea
 		defer n.bridgeTags.close(tag)
 	}
 
-	var exitConn net.Conn
-	var err error
-	if parts := strings.Split(peerName, "/"); len(parts) > 1 {
-		exitConn, err = n.DialVia(ctx, parts, actualAddr)
-	} else {
-		exitConn, err = n.DialTCP(ctx, peerName, actualAddr)
-	}
+	exitConn, err := n.dialChain(ctx, peerName, actualAddr)
 	if err != nil {
 		stream.Close()
 		return
@@ -1917,11 +2000,7 @@ func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclie
 
 	// Check if addr is a via request (multi-hop forwarding)
 	if viaPeer, targetAddr, ok := parseVia(addr); ok {
-		if parts := strings.Split(viaPeer, "/"); len(parts) > 1 {
-			target, err = n.DialVia(ctx, parts, targetAddr)
-		} else {
-			target, err = n.DialTCP(ctx, viaPeer, targetAddr)
-		}
+		target, err = n.dialChain(ctx, viaPeer, targetAddr)
 	} else {
 		target, err = net.DialTimeout("tcp", addr, 10*time.Second)
 	}
@@ -2052,6 +2131,9 @@ func (n *Node) Peers() []PeerInfo {
 		}
 		if conflictNames[name] {
 			info.Conflict = true
+		}
+		if c := p.ConnCount(); c > 1 {
+			info.Conns = c
 		}
 		result = append(result, info)
 	}
@@ -2939,7 +3021,7 @@ func (n *Node) DialTCPIdx(ctx context.Context, peerName string, addr string, cli
 		} else {
 			cl = p.pickClient()
 		}
-		conn, err := cl.TCP(addr)
+		conn, err := n.openStream(peerName, p, cl, addr)
 		if err != nil {
 			return nil, err
 		}
@@ -2971,8 +3053,7 @@ func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.C
 
 	// Outbound peer: use round-robin across available QUIC connections
 	if p.client != nil {
-		cl := p.pickClient()
-		conn, err := cl.TCP(addr)
+		conn, err := n.openStream(peerName, p, p.pickClient(), addr)
 		if err != nil {
 			return nil, err
 		}
@@ -3100,11 +3181,18 @@ func (n *Node) DialIPTun(ctx context.Context, peerName string) (net.Conn, error)
 // DialVia dials addr through a chain of peers.
 // path = ["au", "jp"] means: this node → au → jp → internet.
 func (n *Node) DialVia(ctx context.Context, path []string, addr string) (net.Conn, error) {
+	return n.DialViaIdx(ctx, path, addr, -1)
+}
+
+// DialViaIdx is DialVia over a chosen connection to the first hop
+// (clientIdx as in DialTCPIdx; -1 = round-robin). Later hops may carry a
+// ConnHint for the node that dials them.
+func (n *Node) DialViaIdx(ctx context.Context, path []string, addr string, clientIdx int) (net.Conn, error) {
 	if len(path) == 0 {
 		return nil, fmt.Errorf("relay: empty path")
 	}
 	if len(path) == 1 {
-		return n.DialTCP(ctx, path[0], addr)
+		return n.DialTCPIdx(ctx, path[0], addr, clientIdx)
 	}
 
 	// Multi-hop: connect to first peer, ask it to route via remaining path
@@ -3122,11 +3210,14 @@ func (n *Node) DialVia(ctx context.Context, path []string, addr string) (net.Con
 	// Qualified path key for per-path counters — covers origin dials and
 	// bridge sub-dials alike, since handleVia also lands here for multi-
 	// hop continuations.
-	pathKey := strings.Join(path, "/")
+	pathKey := StripConnHints(strings.Join(path, "/"))
 
 	if p.client != nil {
 		cl := p.pickClient()
-		conn, err := cl.TCP(viaAddr)
+		if clientIdx >= 0 {
+			cl = p.pickClientIdx(clientIdx)
+		}
+		conn, err := n.openStream(firstPeer, p, cl, viaAddr)
 		if err != nil {
 			return nil, err
 		}
@@ -3182,6 +3273,51 @@ func (n *Node) copyCount(dst io.Writer, src io.Reader, counter *atomic.Uint64, p
 			return
 		}
 	}
+}
+
+// ConnHint names hop name in a via chain together with the connection its
+// dialer should carry it over: "x@1" = dial peer x on its connection 1
+// (an index into the dialer's healthy connections to x, modulo their
+// number). A chain through a multi-address hop can so be spread over every
+// connection of that hop. Only nodes from 1.3.12 read hints; the ingress
+// never sends one to an older node.
+func ConnHint(name string, idx int) string { return name + "@" + strconv.Itoa(idx) }
+
+// SplitConnHint: "x@1" → ("x", 1); "x" → ("x", -1).
+func SplitConnHint(seg string) (string, int) {
+	i := strings.LastIndexByte(seg, '@')
+	if i <= 0 {
+		return seg, -1
+	}
+	k, err := strconv.Atoi(seg[i+1:])
+	if err != nil || k < 0 {
+		return seg, -1
+	}
+	return seg[:i], k
+}
+
+// StripConnHints: "a/x@1" → "a/x".
+func StripConnHints(chain string) string {
+	if !strings.Contains(chain, "@") {
+		return chain
+	}
+	parts := strings.Split(chain, "/")
+	for i, p := range parts {
+		parts[i], _ = SplitConnHint(p)
+	}
+	return strings.Join(parts, "/")
+}
+
+// dialChain dials the next hop of a via chain ("x" or "x/y/z"; hops may
+// carry a ConnHint) toward addr.
+func (n *Node) dialChain(ctx context.Context, chain, addr string) (net.Conn, error) {
+	parts := strings.Split(chain, "/")
+	first, idx := SplitConnHint(parts[0])
+	parts[0] = first
+	if len(parts) > 1 {
+		return n.DialViaIdx(ctx, parts, addr, idx)
+	}
+	return n.DialTCPIdx(ctx, first, addr, idx)
 }
 
 func parseVia(reqAddr string) (nodeName, targetAddr string, ok bool) {
