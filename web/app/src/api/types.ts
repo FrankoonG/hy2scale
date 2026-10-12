@@ -32,6 +32,9 @@ export interface TopologyNode {
   name: string;
   addr: string;
   addrs?: string[];
+  // QUIC connections to this node from its parent in the tree (one per
+  // address); absent = one.
+  conns?: number;
   ip_statuses?: IPStatus[];
   exit_node: boolean;
   direction: 'inbound' | 'outbound' | 'local' | '';

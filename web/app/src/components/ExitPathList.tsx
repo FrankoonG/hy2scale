@@ -4,6 +4,7 @@ import { Reorder, useDragControls } from 'framer-motion';
 import { Autocomplete, FormGroup, GripIcon } from '@hy2scale/ui';
 import { useExitPaths } from '@/hooks/useExitPaths';
 import { useNodeStore } from '@/store/node';
+import type { TopologyNode } from '@/api';
 import clsx from 'clsx';
 
 export interface ExitPathValue {
@@ -25,6 +26,25 @@ interface PathItem {
 let nextId = 1;
 function toItems(paths: string[]): PathItem[] {
   return paths.map((v) => ({ id: nextId++, value: v }));
+}
+
+/**
+ * Some hop of `path` is reached over several connections (a node with
+ * several addresses): one path then still offers several routes, so
+ * quality / aggregate apply to it.
+ */
+export function pathHasMultiConn(topology: TopologyNode[], path: string, selfId?: string): boolean {
+  const self = topology.find((n) => n.is_self);
+  let segs = path.split('/').filter(Boolean);
+  if (segs.length > 1 && (segs[0] === selfId || (self && segs[0] === self.name))) segs = segs.slice(1);
+  let level: TopologyNode[] = [...(self?.children || []), ...topology.filter((n) => !n.is_self)];
+  for (let i = 0; i < segs.length; i++) {
+    const node = level.find((n) => n.name === segs[i]);
+    if (!node) return false;
+    if ((node.conns ?? 0) > 1 || (i === 0 && (node.addrs?.length ?? 0) > 1)) return true;
+    level = node.children || [];
+  }
+  return false;
 }
 
 export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
@@ -110,13 +130,18 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
     });
   }, [mode]);
 
+  const topology = useNodeStore((s) => s.topology);
+  const selfId = useNodeStore((s) => s.node?.node_id);
+
   const removePath = useCallback((id: number) => {
     setItems((prev) => {
       const next = prev.filter((it) => it.id !== id);
-      pendingModeOverrideRef.current = next.length <= 1 ? '' : mode;
+      const rest = next.filter((it) => it.value);
+      const keep = rest.length > 1 || (rest.length === 1 && pathHasMultiConn(topology, rest[0].value, selfId));
+      pendingModeOverrideRef.current = keep ? mode : '';
       return next;
     });
-  }, [mode]);
+  }, [mode, topology, selfId]);
 
   const handleReorder = useCallback((newItems: PathItem[]) => {
     setItems(newItems);
@@ -127,25 +152,12 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
   }, [items, onChange]);
 
   const listRef = useRef<HTMLUListElement>(null);
-  const topology = useNodeStore((s) => s.topology);
   const filledItems = items.filter((it) => it.value);
   const hasMultiple = filledItems.length > 1;
-
-  // Check if single exit target has multiple addrs (enables quality/aggregate)
-  let targetHasMultiAddr = false;
-  if (filledItems.length === 1) {
-    const targetName = filledItems[0].value.split('/').pop() || '';
-    const findNode = (nodes: any[]): any => {
-      for (const n of nodes) {
-        if (n.name === targetName) return n;
-        if (n.children) { const r = findNode(n.children); if (r) return r; }
-      }
-      return null;
-    };
-    const node = findNode(topology);
-    if (node && node.addrs && node.addrs.length > 1) targetHasMultiAddr = true;
-  }
-  const singleOnly = !hasMultiple && !targetHasMultiAddr && filledItems.length <= 1;
+  // one path whose route has several connections somewhere still offers
+  // quality / aggregate
+  const singleMultiConn = filledItems.length === 1 && pathHasMultiConn(topology, filledItems[0].value, selfId);
+  const singleOnly = !hasMultiple && !singleMultiConn;
 
   // Aggregate requires all paths to reach the same final exit node
   let aggregateDisabled = singleOnly;
