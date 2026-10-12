@@ -18,6 +18,10 @@ import (
 // (lossless quality/aggregate). The UI flags older nodes against it.
 const MsessMinVersion = "1.3.10"
 
+// ConnHintMinVersion is the first release whose relay hops read a
+// relay.ConnHint (carry the next hop over a chosen connection).
+const ConnHintMinVersion = "1.3.12"
+
 // msessLegacyTTL: an exit that refused a session is re-tried after this.
 const msessLegacyTTL = 5 * time.Minute
 
@@ -213,7 +217,9 @@ func (a *App) msessLegacy(parts []string) bool {
 }
 
 // msessCarriers: the subflow routes of one exit chain — one per QUIC
-// connection when the first hop is reached over several addresses.
+// connection of every hop reached over several addresses. Subflow i takes
+// connection i (modulo their number) at each such hop: the first hop
+// locally, a later hop through a relay.ConnHint read by the node dialing it.
 func (a *App) msessCarriers(parts []string) []msess.Path {
 	exit := parts[len(parts)-1]
 	name := strings.Join(parts, "/")
@@ -221,15 +227,50 @@ func (a *App) msessCarriers(parts []string) []msess.Path {
 	v, _ := a.nodeVersionAt(parts)
 	capable := v != "" && relay.VersionAtLeast(v, MsessMinVersion)
 	if len(parts) > 1 {
-		chain := parts
-		return []msess.Path{{Name: name, Exit: exit, Capable: capable,
-			Dial: func(ctx context.Context) (net.Conn, error) {
-				return a.node.DialVia(ctx, chain, relay.StreamMsess)
-			},
-			Open: func(ctx context.Context, hello []byte) (net.Conn, error) {
-				c, err := a.node.DialVia(ctx, chain, relay.MsessAddr(hello))
-				return c, msessOpenErr(err)
-			}}}
+		first := a.node.PeerConnCount(hop)
+		conns := a.hopConns(parts)
+		n := first
+		for _, c := range conns {
+			if c > n {
+				n = c
+			}
+		}
+		if n > msess.MaxSubflows {
+			n = msess.MaxSubflows
+		}
+		if n <= 1 {
+			chain := parts
+			return []msess.Path{{Name: name, Exit: exit, Capable: capable,
+				Dial: func(ctx context.Context) (net.Conn, error) {
+					return a.node.DialVia(ctx, chain, relay.StreamMsess)
+				},
+				Open: func(ctx context.Context, hello []byte) (net.Conn, error) {
+					c, err := a.node.DialVia(ctx, chain, relay.MsessAddr(hello))
+					return c, msessOpenErr(err)
+				}}}
+		}
+		out := make([]msess.Path, 0, n)
+		for i := 0; i < n; i++ {
+			chain := append([]string(nil), parts...)
+			for j, c := range conns {
+				if c > 1 {
+					chain[j+1] = relay.ConnHint(parts[j+1], i%c)
+				}
+			}
+			idx := -1
+			if first > 1 {
+				idx = i % first
+			}
+			out = append(out, msess.Path{Name: fmt.Sprintf("%s@%d", name, i), Exit: exit, Capable: capable,
+				Dial: func(ctx context.Context) (net.Conn, error) {
+					return a.node.DialViaIdx(ctx, chain, relay.StreamMsess, idx)
+				},
+				Open: func(ctx context.Context, hello []byte) (net.Conn, error) {
+					c, err := a.node.DialViaIdx(ctx, chain, relay.MsessAddr(hello), idx)
+					return c, msessOpenErr(err)
+				}})
+		}
+		return out
 	}
 	if k := a.node.PeerConnCount(hop); k > 1 {
 		out := make([]msess.Path, 0, k)
@@ -254,6 +295,29 @@ func (a *App) msessCarriers(parts []string) []msess.Path {
 			c, err := a.node.DialTCP(ctx, hop, relay.MsessAddr(hello))
 			return c, msessOpenErr(err)
 		}}}
+}
+
+// hopConns: for each hop after the first, the number of connections the
+// node dialing it holds to it — 0 where that node can't take a ConnHint
+// (older than ConnHintMinVersion) or the count isn't known.
+func (a *App) hopConns(parts []string) []int {
+	out := make([]int, len(parts)-1)
+	for j := 1; j < len(parts); j++ {
+		if v, _ := a.nodeVersionAt(parts[:j]); v == "" || !relay.VersionAtLeast(v, ConnHintMinVersion) {
+			continue
+		}
+		kids, ok := a.node.PeersOfCached(strings.Join(parts[:j], "/"))
+		if !ok {
+			continue
+		}
+		for _, k := range kids {
+			if k.Name == parts[j] {
+				out[j-1] = k.Conns
+				break
+			}
+		}
+	}
+	return out
 }
 
 // errSubflowDialed: the far end took the subflow address for a TCP target
