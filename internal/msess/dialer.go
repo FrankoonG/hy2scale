@@ -34,6 +34,11 @@ var (
 	RetireGrace    = 2 * time.Second      // old carrier kept this long after a switch
 	JoinStagger    = time.Second          // failover: start the next candidate if none attached yet
 	MaxSubflows    = 6
+	// MaxPathJoins: joins racing on one path. Through a relay hop each join
+	// may be forwarded over another connection, so when the only candidate
+	// path has a join stuck on a dead connection, another join on the same
+	// path is the way out.
+	MaxPathJoins = 3
 )
 
 // DialConfig describes one user connection.
@@ -164,7 +169,7 @@ func dial(ctx context.Context, cfg DialConfig, packet bool) (*Conn, error) {
 			s.lastDgram = time.Now()
 			s.mu.Unlock()
 			pm := &pathMgr{s: s, cfg: cfg, exit: exit, paths: group, backoff: map[string]time.Time{},
-				fails: map[string]int{}, dialing: map[string]bool{}, lastSwitch: time.Now()}
+				fails: map[string]int{}, dialing: map[string]int{}, lastSwitch: time.Now()}
 			s.nextSub = 1
 			s.onEvent = pm.onEvent
 			sf := s.attach(conn, br, 1, p.Name)
@@ -239,7 +244,7 @@ type pathMgr struct {
 
 	backoff    map[string]time.Time
 	fails      map[string]int
-	dialing    map[string]bool
+	dialing    map[string]int // joins in flight per path
 	lastEval   time.Time
 	lastJoin   time.Time
 	lastSwitch time.Time
@@ -292,7 +297,22 @@ func (pm *pathMgr) evalLocked(now time.Time) {
 	live := pm.livePathsLocked()
 	ranked := pm.cfg.Prober.Rank(pm.paths)
 	usable := func(p Path) bool {
-		return live[p.Name] == nil && !pm.dialing[p.Name] && !now.Before(pm.backoff[p.Name])
+		return live[p.Name] == nil && pm.dialing[p.Name] == 0 && !now.Before(pm.backoff[p.Name])
+	}
+	// raceAgain: every candidate already has a join in flight and none has
+	// attached for JoinStagger — start one more on the best of them.
+	raceAgain := func(kind int) bool {
+		if len(live) > 0 || len(pm.dialing) == 0 || now.Sub(pm.lastJoin) < JoinStagger {
+			return false
+		}
+		for _, p := range ranked {
+			if live[p.Name] == nil && pm.dialing[p.Name] > 0 && pm.dialing[p.Name] < MaxPathJoins {
+				pm.startJoinLocked(p, kind)
+				pm.lastJoin = now
+				return true
+			}
+		}
+		return false
 	}
 	if s.mode == ModeBond {
 		n := len(live) + len(pm.dialing)
@@ -310,10 +330,12 @@ func (pm *pathMgr) evalLocked(now time.Time) {
 			for _, p := range ranked {
 				if usable(p) {
 					pm.startJoinLocked(p, joinSpare)
+					pm.lastJoin = now
 					break
 				}
 			}
 		}
+		raceAgain(joinSpare)
 		return
 	}
 	// selector
@@ -338,12 +360,15 @@ func (pm *pathMgr) evalLocked(now time.Time) {
 				return
 			}
 		}
+		if raceAgain(joinFailover) {
+			return
+		}
 		if len(pm.dialing) == 0 {
 			// all in backoff: take the one whose backoff ends first
 			var pick *Path
 			for i := range ranked {
 				p := ranked[i]
-				if live[p.Name] == nil && !pm.dialing[p.Name] &&
+				if live[p.Name] == nil && pm.dialing[p.Name] == 0 &&
 					(pick == nil || pm.backoff[p.Name].Before(pm.backoff[pick.Name])) {
 					pick = &p
 				}
@@ -402,7 +427,7 @@ const (
 
 // startJoinLocked dials a join subflow on p in the background.
 func (pm *pathMgr) startJoinLocked(p Path, kind int) {
-	pm.dialing[p.Name] = true
+	pm.dialing[p.Name]++
 	s := pm.s
 	s.nextSub++
 	id := s.nextSub
@@ -412,7 +437,9 @@ func (pm *pathMgr) startJoinLocked(p Path, kind int) {
 	go func() {
 		conn, br, err := handshake(context.Background(), p, hello{kind: kindJoin, sid: sid, sub: id, mode: mode, rxNext: rx})
 		pm.mu.Lock()
-		delete(pm.dialing, p.Name)
+		if pm.dialing[p.Name]--; pm.dialing[p.Name] <= 0 {
+			delete(pm.dialing, p.Name)
+		}
 		if err != nil {
 			pm.fails[p.Name]++
 			pm.backoff[p.Name] = time.Now().Add(time.Second << min(pm.fails[p.Name], 5))
