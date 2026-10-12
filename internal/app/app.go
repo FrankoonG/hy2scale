@@ -28,6 +28,7 @@ import (
 	"github.com/FrankoonG/hy2scale/internal/history"
 	"github.com/FrankoonG/hy2scale/internal/msess"
 	"github.com/FrankoonG/hy2scale/internal/relay"
+	"github.com/FrankoonG/hy2scale/internal/udphop"
 )
 
 type ClientEntry struct {
@@ -558,12 +559,21 @@ func (a *App) StartClient(cl ClientEntry) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	primaryAddr := cl.PrimaryAddr()
-	if _, ok := a.clientCancel[primaryAddr]; ok {
-		return // already running for this address
+	// Keyed by Addr, the entry's stable key, as StopClient looks it up. Its
+	// first address (PrimaryAddr) changes when the address is edited, and a
+	// loop keyed by it was never stopped: two loops then kept replacing each
+	// other's connection to the peer.
+	if _, ok := a.clientCancel[cl.Addr]; ok {
+		return // already running for this entry
 	}
 	ctx, cancel := context.WithCancel(a.appCtx)
-	a.clientCancel[primaryAddr] = cancel
+	a.clientCancel[cl.Addr] = cancel
+	// The primary loop dials the first address first; say so before the
+	// extra loops start, so none of them dials it too (they would read the
+	// previous entry's value).
+	if addrs := cl.AllAddrs(); len(addrs) > 0 {
+		a.primaryDial.Store(cl.Addr, addrs[0])
+	}
 
 	// Primary connection (first addr) — registers with relay, handles peer identity
 	go a.connectLoop(ctx, cl)
@@ -1261,6 +1271,7 @@ func (a *App) restartServer() error {
 	}
 	cfg := a.store.Get()
 	if cfg.Server == nil || cfg.Server.Listen == "" {
+		setPortHopRedirect("") // server off: drop its port redirect too
 		return nil
 	}
 	srvCtx, cancel := context.WithCancel(a.appCtx)
@@ -1284,6 +1295,84 @@ func extractPrimaryAddr(addr string) string {
 	return host + ":" + strings.TrimSpace(first)
 }
 
+// hy2Dial resolves a peer address spec. "host:port" is one UDP address. A
+// spec with several ports ("host:5565,44000-45000", "host:20000-30000") is
+// hysteria port hopping: one connection to host that moves to another of
+// those ports every 30 s.
+func hy2Dial(spec string) (net.Addr, hyclient.ConnFactory, net.IP, error) {
+	_, ports, err := net.SplitHostPort(spec)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if !strings.ContainsAny(ports, ",-") {
+		ua, err := net.ResolveUDPAddr("udp", spec)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		return ua, nil, ua.IP, nil
+	}
+	ha, err := udphop.ResolveUDPHopAddr(spec)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return ha, hopConnFactory{}, ha.IP, nil
+}
+
+type hopConnFactory struct{}
+
+func (hopConnFactory) New(addr net.Addr) (net.PacketConn, error) {
+	return udphop.NewUDPHopPacketConn(addr.(*udphop.UDPHopAddr), udphop.HopIntervalConfig{},
+		func() (net.PacketConn, error) { return net.ListenUDP("udp", nil) })
+}
+
+// Port hopping, server side: hysteria listens on one port; the other ports
+// of the listen spec are redirected to it in a nat chain of our own. Every
+// server start rewrites the chain (an empty spec removes it).
+const hopChain = "HY2SCALE-HOP"
+
+func setPortHopRedirect(listen string) {
+	ipt := iptVariant()
+	host, ports, err := net.SplitHostPort(listen)
+	extra := []udphop.PortRange(nil)
+	primary := ""
+	if err == nil && strings.ContainsAny(ports, ",-") {
+		primary = strings.TrimPrefix(extractPrimaryAddr(listen), host+":")
+		for _, r := range udphop.ParsePortUnion(ports) {
+			if p := strconv.Itoa(int(r.Start)); r.Start == r.End && p == primary {
+				continue
+			}
+			extra = append(extra, r)
+		}
+	}
+	if len(extra) == 0 {
+		if iptExec(ipt, "-t", "nat", "-L", hopChain, "-n").Run() == nil {
+			iptExec(ipt, "-t", "nat", "-D", "PREROUTING", "-p", "udp", "-j", hopChain).Run()
+			iptExec(ipt, "-t", "nat", "-F", hopChain).Run()
+			iptExec(ipt, "-t", "nat", "-X", hopChain).Run()
+		}
+		return
+	}
+	if !cachedIptablesAvail() {
+		log.Printf("[server] listen %s: no iptables here, so only port %s is reachable (redirect the other ports to it on the host)", listen, primary)
+		return
+	}
+	iptExec(ipt, "-t", "nat", "-N", hopChain).Run() // exists already: fine
+	iptExec(ipt, "-t", "nat", "-F", hopChain).Run()
+	iptRun(ipt, "-t", "nat", "-I", "PREROUTING", "-p", "udp", "-j", hopChain)
+	target := []string{"-j", "REDIRECT", "--to-ports", primary}
+	if ip := net.ParseIP(host); ip != nil && !ip.IsUnspecified() {
+		target = []string{"-j", "DNAT", "--to-destination", net.JoinHostPort(host, primary)}
+	}
+	for _, r := range extra {
+		dport := fmt.Sprintf("%d:%d", r.Start, r.End)
+		args := append([]string{"-t", "nat", "-A", hopChain, "-p", "udp", "--dport", dport}, target...)
+		if out, err := iptExec(ipt, args...).CombinedOutput(); err != nil {
+			log.Printf("[server] port hopping redirect %s: %v %s", dport, err, out)
+		}
+	}
+	log.Printf("[server] port hopping: udp %s redirected to %s", ports, primary)
+}
+
 func (a *App) startServer(ctx context.Context, sc *ServerConfig) error {
 	cert, err := loadCert(sc.TLSCert, sc.TLSKey)
 	if err != nil {
@@ -1294,6 +1383,7 @@ func (a *App) startServer(ctx context.Context, sc *ServerConfig) error {
 	if err != nil {
 		return err
 	}
+	setPortHopRedirect(sc.Listen)
 	authImpl := &hy2Auth{app: a, sysPassword: sc.Password}
 	hyServer, err := hyserver.NewServer(&hyserver.Config{
 		Conn: conn,
@@ -1349,8 +1439,10 @@ func (a *App) connectLoop(ctx context.Context, cl ClientEntry) {
 				break
 			}
 		}
+		// Addr is the entry's stable key and may still be the address it was
+		// created with; the addresses to dial are AllAddrs.
 		dialAddr := cl.Addr
-		if addrs := cl.AllAddrs(); len(addrs) > 1 {
+		if addrs := cl.AllAddrs(); len(addrs) > 0 {
 			dialAddr = addrs[next%len(addrs)]
 		}
 		a.primaryDial.Store(addr, dialAddr)
@@ -1430,9 +1522,12 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 			continue
 		}
 
+		if a.isPrimaryDial(cl, extraAddr) {
+			continue // the primary moved to this address while we waited
+		}
 		log.Printf("[%s] connecting extra IP %s for %s (#%d)", a.node.Name(), extraAddr, peerName, index)
 
-		addr, err := net.ResolveUDPAddr("udp", extractPrimaryAddr(extraAddr))
+		addr, connFactory, _, err := hy2Dial(extraAddr)
 		if err != nil {
 			log.Printf("[%s] extra IP %s: %v", a.node.Name(), extraAddr, err)
 			select {
@@ -1457,9 +1552,10 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 		}
 
 		c, _, err := hyclient.NewClient(&hyclient.Config{
-			ServerAddr: addr,
-			Auth:       cl.Password,
-			TLSConfig:  tlsCfg,
+			ConnFactory: connFactory,
+			ServerAddr:  addr,
+			Auth:        cl.Password,
+			TLSConfig:   tlsCfg,
 			QUICConfig: hyclient.QUICConfig{
 				// See server-side comment at NewServer for why these are 8/16 MB
 				// rather than 64/128 MB. The client side must match: a small
@@ -1579,12 +1675,12 @@ func (a *App) verifyExtraConn(c hyclient.Client, expectedPeerName string) string
 }
 
 func (a *App) connect(ctx context.Context, cl ClientEntry) error {
-	return a.connectAt(ctx, cl, cl.Addr)
+	return a.connectAt(ctx, cl, cl.PrimaryAddr())
 }
 
 // connectAt dials dialAddr; cl.Addr stays the peer's identity key.
 func (a *App) connectAt(ctx context.Context, cl ClientEntry, dialAddr string) error {
-	addr, err := net.ResolveUDPAddr("udp", extractPrimaryAddr(dialAddr))
+	addr, connFactory, ip, err := hy2Dial(dialAddr)
 	if err != nil {
 		return fmt.Errorf("invalid address %q: %w", cl.Addr, err)
 	}
@@ -1592,7 +1688,7 @@ func (a *App) connectAt(ctx context.Context, cl ClientEntry, dialAddr string) er
 	// Ensure relay traffic bypasses VPN routing (strongSwan table 220).
 	// Without this, QUIC to the relay gets routed through ipsec0 → ESP loop.
 	if TunCaptureActive() {
-		excludeFromVPNRouting(addr.IP.String())
+		excludeFromVPNRouting(ip.String())
 	}
 
 	// TLS
@@ -1642,9 +1738,10 @@ func (a *App) connectAt(ctx context.Context, cl ClientEntry, dialAddr string) er
 	}
 
 	c, _, err := hyclient.NewClient(&hyclient.Config{
-		ServerAddr: addr,
-		Auth:       cl.Password,
-		TLSConfig:  tlsCfg,
+		ConnFactory: connFactory,
+		ServerAddr:  addr,
+		Auth:        cl.Password,
+		TLSConfig:   tlsCfg,
 		QUICConfig: hyclient.QUICConfig{
 			InitialStreamReceiveWindow:     isw,
 			MaxStreamReceiveWindow:         msw,
@@ -1739,9 +1836,10 @@ func (a *App) connectAt(ctx context.Context, cl ClientEntry, dialAddr string) er
 		log.Printf("[%s] %s is not hy2scale, attaching as native hy2", a.node.Name(), cl.Addr)
 		// Need a fresh client since the old one may be broken
 		c2, _, err2 := hyclient.NewClient(&hyclient.Config{
-			ServerAddr: addr,
-			Auth:       cl.Password,
-			TLSConfig:  tlsCfg,
+			ConnFactory: connFactory,
+			ServerAddr:  addr,
+			Auth:        cl.Password,
+			TLSConfig:   tlsCfg,
 			QUICConfig: hyclient.QUICConfig{
 				InitialStreamReceiveWindow:     isw,
 				MaxStreamReceiveWindow:         msw,
