@@ -8,3 +8,15 @@ export function versionAtLeast(version: string, min: string): boolean {
   }
   return true;
 }
+
+// Strictly newer x.y.z ("1.3.2" > "1.3.1"); false when either side is not
+// three numeric parts. Mirrors the backend's semverGreater upgrade gate.
+export function versionGreater(a: string, b: string): boolean {
+  const pa = a.split('.').map((s) => parseInt(s, 10));
+  const pb = b.split('.').map((s) => parseInt(s, 10));
+  if (pa.length !== 3 || pb.length !== 3 || pa.some(isNaN) || pb.some(isNaN)) return false;
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return pa[i] > pb[i];
+  }
+  return false;
+}

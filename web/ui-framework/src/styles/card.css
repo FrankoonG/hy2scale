@@ -1,13 +1,10 @@
-/* Cards and stat tiles. */
+/* Cards. */
 /* ====== Cards ====== */
 .hy-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px;box-shadow:var(--shadow)}
 .hy-card.no-pad{padding:0}
 .hy-card-header{display:flex;align-items:center;gap:8px;margin-bottom:16px}
 .hy-card.no-pad .hy-card-header{padding:16px 20px;margin-bottom:0;border-bottom:1px solid var(--border-light)}
 .hy-card-title{font-size:13px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.6px;display:inline-flex;align-items:center;gap:8px}
-/* IconTabs embedded inline in a card title — reset the title's text styling
-   influence so the tab buttons keep their own look. */
-.hy-card-title .hy-card-title-tabs{text-transform:none;letter-spacing:0;color:var(--text-muted)}
 .hy-card-count{font-size:11px;background:var(--bg);color:var(--text-muted);padding:1px 8px;border-radius:10px}
 .hy-card-actions{display:flex;gap:8px;margin-left:auto}
 .hy-card-body{} /* no padding when card has padding */
@@ -16,19 +13,3 @@
    never scrolls inside the panel. */
 .hy-card.fill{margin-bottom:0}
 
-
-/* ====== Stats Grid ====== */
-.hy-stats-grid{display:flex;gap:12px;flex-shrink:0}
-.hy-stat-card{flex:1 1 0;min-width:0;position:relative;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);overflow:hidden}
-.hy-stat-card>*{position:relative;z-index:1}
-.hy-stat-spark{position:absolute;inset:0;pointer-events:none;z-index:0}
-.hy-stat-spark svg{width:100%;height:100%;display:block}
-.hy-stat-peak{position:absolute;top:8px;right:12px;font-size:10px;font-weight:600;font-family:var(--mono);color:var(--text-muted);letter-spacing:.3px;z-index:1;pointer-events:none}
-.hy-stat-label{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
-.hy-stat-value{font-size:20px;font-weight:700;font-family:var(--mono);letter-spacing:-.5px}
-.hy-stat-sub{font-size:11px;color:var(--text-muted);margin-top:2px;font-family:var(--mono)}
-.stat-up{color:var(--blue)}
-.stat-down{color:var(--green)}
-.sep{color:var(--text-muted);font-weight:400;margin:0 2px}
-@media(max-width:768px){.hy-stats-grid{flex-wrap:wrap}.hy-stat-card{flex:1 1 calc(50% - 6px)}}
-@media(max-width:500px){.hy-stat-card{flex:1 1 100%}}

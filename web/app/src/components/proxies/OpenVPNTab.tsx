@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Card, Badge, Button, Input, Select, Toggle, FormGroup, FormGrid, useToast } from '@hy2scale/ui';
+import { Card, Badge, Button, Input, Select, Toggle, FormGroup, FormGrid, FormStack, Hint, useToast } from '@hy2scale/ui';
+import { downloadBlob } from '@/utils/download';
 import * as api from '@/api';
 import { useServerFormInit } from '@/hooks/useFormInit';
 import VPNStatus from './VPNStatus';
@@ -59,10 +60,7 @@ export default function OpenVPNTab() {
     try {
       const res = await api.downloadOpenVPNProfile(endpoint.trim());
       const blob = new Blob([await (res as any).text()], { type: 'application/x-openvpn-profile' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = `${endpoint.trim().replace(/[[\]:]/g, '_')}.ovpn`; a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `${endpoint.trim().replace(/[[\]:]/g, '_')}.ovpn`);
     } catch (e: any) {
       toast.error(String(e.message || e));
     }
@@ -76,7 +74,7 @@ export default function OpenVPNTab() {
   return (
     <>
       <Card fill={1} title={<>{t('openvpn.title')} <VPNStatus running={ovpn?.running} connected={ovpn?.connected} /></>}>
-        <div style={{ maxWidth: 500, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <FormStack maxWidth={500}>
           <FormGroup label={t('app.enabled')}>
             <Toggle checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
           </FormGroup>
@@ -97,20 +95,18 @@ export default function OpenVPNTab() {
               <Input type="number" value={mtu} onChange={(e) => setMtu(e.target.value)} placeholder="1400" />
             </FormGroup>
           </FormGrid>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('openvpn.desc')}</div>
-          <Button variant="primary" onClick={handleSave} loading={loading} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
-        </div>
+          <Hint>{t('openvpn.desc')}</Hint>
+          <Button variant="primary" className="align-start" onClick={handleSave} loading={loading}>{t('app.save')}</Button>
+        </FormStack>
       </Card>
       <Card title={t('openvpn.profile')}>
-        <div style={{ maxWidth: 500, display: 'flex', gap: 10, alignItems: 'flex-end' }}>
-          <div style={{ flex: 1 }}>
-            <FormGroup label={t('openvpn.endpoint')}>
-              <Input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="vpn.example.com" />
-            </FormGroup>
-          </div>
+        <div className="field-with-button">
+          <FormGroup label={t('openvpn.endpoint')}>
+            <Input value={endpoint} onChange={(e) => setEndpoint(e.target.value)} placeholder="vpn.example.com" />
+          </FormGroup>
           <Button onClick={downloadProfile} disabled={!ovpn?.cert_id}>{t('openvpn.download')}</Button>
         </div>
-        {!ovpn?.cert_id && <div style={{ marginTop: 8 }}><Badge variant="orange">{t('openvpn.saveFirst')}</Badge></div>}
+        {!ovpn?.cert_id && <div className="hint-gap"><Badge variant="orange">{t('openvpn.saveFirst')}</Badge></div>}
       </Card>
     </>
   );

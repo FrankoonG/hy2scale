@@ -71,7 +71,6 @@
    Shorter paths → narrower panel → fewer bars fit (older bars clip
    off the left via overflow + flex-end). Longer paths → wider panel
    → more bars naturally visible. */
-.hy-topo-graph-pathinfo.is-expanded{padding:8px 12px 10px}
 .hy-topo-pathinfo-row{display:flex;align-items:center;gap:10px;flex-wrap:nowrap}
 /* Chevron toggle on the right of the compact row. Borderless ghost so
    it disappears into the panel chrome until hover. Same DR-safe colour
@@ -82,9 +81,6 @@
    inner 2 px strip becomes faintly visible so operators can find it.
    Only rendered when the panel is expanded; collapsed state has no
    resizing semantics. */
-.hy-topo-pathinfo-resize-handle{position:absolute;top:0;right:0;width:6px;height:100%;cursor:col-resize;z-index:3;touch-action:none}
-.hy-topo-pathinfo-resize-handle::after{content:"";position:absolute;top:8px;bottom:8px;right:1px;width:2px;border-radius:1px;background:#6b7280;opacity:0;transition:opacity .14s ease}
-.hy-topo-pathinfo-resize-handle:hover::after,.hy-topo-pathinfo-resize-handle:active::after{opacity:.45}
 .hy-topo-pathinfo-toggle{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;margin-left:auto;border:none;background:transparent;color:#6b7280;cursor:pointer;border-radius:var(--radius-sm);transition:background .12s,color .12s}
 .hy-topo-pathinfo-toggle:hover{background:var(--primary-light);color:var(--primary)}
 .hy-topo-pathinfo-toggle svg{display:block}
@@ -168,8 +164,6 @@
 /* Action buttons (open remote, edit) appear to the right of the latency
    badge. Borderless ghost style matching the list-view row buttons so
    both views feel consistent. */
-.hy-topo-pathinfo-btn{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border:none;background:transparent;color:var(--text-muted);cursor:pointer;padding:0;border-radius:var(--radius-sm);transition:background .12s,color .12s}
-.hy-topo-pathinfo-btn:hover{background:var(--primary-light);color:var(--primary)}
 
 /* Topology graph palette — uses *literal* hex colours on the `color`
    property (not CSS vars) because dark-mode extensions (Dark Reader,
@@ -271,7 +265,6 @@
    edge-base — when a path is selected, visibility beats the throughput
    encoding for the duration of the selection. */
 .hy-topo-dot.selected .hy-topo-dot-outer{color:#4361ee;stroke:currentColor;stroke-width:3;stroke-opacity:1}
-.hy-topo-dot.selected .hy-topo-dot-single{color:#4361ee;stroke:currentColor;stroke-width:3;stroke-opacity:1}
 .hy-topo-edge-base{transition:stroke .28s ease-out, stroke-opacity .28s ease-out, stroke-width .28s ease-out}
 .hy-topo-edge-flow{transition:stroke .28s ease-out, stroke-opacity .28s ease-out, stroke-width .28s ease-out}
 /* On-path highlight is carried entirely by the .hy-topo-edge-draw

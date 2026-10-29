@@ -9,7 +9,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ToastProvider, ConfirmProvider, setImperativeToast, useToast, TableLabelsProvider } from '@hy2scale/ui';
+import { ToastProvider, ConfirmProvider, setImperativeToast, useToast, UiLabelsProvider } from '@hy2scale/ui';
 import { useTranslation } from 'react-i18next';
 import '@hy2scale/ui/css';
 import '@/styles/index.css';
@@ -64,8 +64,8 @@ const queryClient = new QueryClient({
   },
 });
 
-// Translated words for the framework's tables (column menu, pager)
-function TableLabels({ children }: { children: React.ReactNode }) {
+// Translated words for framework components (tables, controls, dialogs)
+function UiLabels({ children }: { children: React.ReactNode }) {
   const { t, i18n } = useTranslation();
   const labels = React.useMemo(() => ({
     columns: t('table.columns'),
@@ -74,9 +74,17 @@ function TableLabels({ children }: { children: React.ReactNode }) {
     total: (n: number) => t('table.total', { n }),
     prev: t('table.prev'),
     next: t('table.next'),
+    generate: t('app.generate'),
+    showPassword: t('app.showPassword'),
+    hidePassword: t('app.hidePassword'),
+    clear: t('app.clear'),
+    menu: t('app.menu'),
+    confirm: t('app.confirm'),
+    cancel: t('app.cancel'),
+    replaceFile: t('app.replaceFile'),
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [i18n.language]);
-  return <TableLabelsProvider labels={labels}>{children}</TableLabelsProvider>;
+  return <UiLabelsProvider labels={labels}>{children}</UiLabelsProvider>;
 }
 
 // Bridge imperative toast from inside React tree
@@ -93,9 +101,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <ToastProvider>
           <ConfirmProvider>
             <ToastBridge />
-            <TableLabels>
+            <UiLabels>
               <App />
-            </TableLabels>
+            </UiLabels>
           </ConfirmProvider>
         </ToastProvider>
       </BrowserRouter>

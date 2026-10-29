@@ -1,4 +1,4 @@
-/* Badges and chips. */
+/* Badges. */
 /* ====== Badges ====== */
 .hy-badge{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:600;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .hy-badge.green{background:var(--green-bg);color:var(--c-green)}
@@ -8,8 +8,3 @@
 .hy-badge.muted{background:var(--bg);color:var(--text-muted)}
 .hy-badge.warn{background:var(--c-yellow-bg);color:var(--c-yellow)}
 
-
-/* ====== Chip ====== */
-.hy-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:12px;font-size:12px;background:var(--primary-light);color:var(--primary)}
-.hy-chip .close{cursor:pointer;font-size:14px;line-height:1;opacity:.6}
-.hy-chip .close:hover{opacity:1}

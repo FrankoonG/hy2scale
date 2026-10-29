@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
-import { Modal, Button, Input, PasswordInput, Select, Toggle, FormGroup, FormGrid, useToast } from '@hy2scale/ui';
+import { Modal, Button, Input, PasswordInput, Select, Toggle, FormGroup, FormGrid, useToast, SectionDivider } from '@hy2scale/ui';
 import * as api from '@/api';
 import { useNodeStore } from '@/store/node';
 import { useDialogInit } from '@/hooks/useFormInit';
@@ -179,7 +179,7 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
           <Input value={nodeId} onChange={(e) => setNodeId(e.target.value)} />
         </FormGroup>
 
-        <div className="section-divider">{t('nodes.hy2Server')}</div>
+        <SectionDivider>{t('nodes.hy2Server')}</SectionDivider>
 
         <FormGroup label={t('nodes.listenUdp')}>
           <div style={{ display: 'flex', gap: 8 }}>

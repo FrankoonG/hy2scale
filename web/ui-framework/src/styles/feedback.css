@@ -2,7 +2,7 @@
 /* ====== Alert ====== */
 .hy-alert-warn{padding:12px 16px;background:var(--orange-bg);border:1px solid var(--orange);border-radius:var(--radius-sm);font-size:13px;color:var(--text)}
 
-/* ====== Empty ====== */
+/* ====== Empty (table rows) ====== */
 .hy-empty{text-align:center;padding:24px;color:var(--text-muted);font-size:13px}
 
 
@@ -29,4 +29,8 @@
 
 
 /* ====== Section divider ====== */
-.section-divider{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;padding:12px 0 8px;border-top:1px solid var(--border-light);margin-top:4px;display:flex;align-items:center;gap:6px;user-select:none;cursor:pointer}
+.section-divider{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;padding:12px 0 8px;border-top:1px solid var(--border-light);margin-top:4px;display:flex;align-items:center;gap:6px;user-select:none}
+.section-divider.collapsible{cursor:pointer}
+.section-divider.collapsible:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.section-caret{flex-shrink:0;transition:transform .15s}
+.section-divider[aria-expanded="true"] .section-caret{transform:rotate(90deg)}

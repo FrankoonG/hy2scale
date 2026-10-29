@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
-  Card, Button, Badge, Tooltip, TreeTable, TreeCell, useToast, useConfirm, useSelection,
+  Card, Button, Badge, Tooltip, TreeTable, TreeCell, MenuCheck, useToast, useConfirm, useSelection,
   type TreeNode, type TreeColumn, type TreeRowMeta,
 } from '@hy2scale/ui';
 import { ipSortKey } from '@/utils/ipaddr';
@@ -387,17 +387,15 @@ export default function InterfacesPage() {
     <ResponsiveActions
       selectedCount={selection.count}
       onClearSelection={selection.clear}
-      selectedLabel={t('app.selected', { count: selection.count })}
       more={
-        <label className="hy-menu-check" data-testid="show-hidden">
-          <input type="checkbox" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} />
-          <span>{t('iface.showHidden')}</span>
-          {hiddenCount > 0 && <span className="hy-menu-check-count">{hiddenCount}</span>}
-        </label>
+        <MenuCheck checked={showHidden} onChange={setShowHidden} testId="show-hidden"
+          count={hiddenCount > 0 ? hiddenCount : undefined}>
+          {t('iface.showHidden')}
+        </MenuCheck>
       }
     >
       {selActions()}
-      <span title={capReason || undefined} style={{ display: 'inline-flex' }} data-testid="add-child-wrap">
+      <span title={capReason || undefined} className="inline-flex" data-testid="add-child-wrap">
         <Button size="sm" variant="primary" disabled={!!capReason || parents.length === 0} data-testid="add-child"
           onClick={(e) => {
             setClickPos(anchorOf(e));

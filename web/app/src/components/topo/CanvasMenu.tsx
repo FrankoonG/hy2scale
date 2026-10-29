@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AnimatePresence, motion } from 'framer-motion';
 import clsx from 'clsx';
-import { Button, FormGroup, Input, Modal, useClickOutside } from '@hy2scale/ui';
+import {
+  Button, FormGroup, Input, Modal, useDismiss, IconCheck, IconChevronDown, IconChevronRight, IconLayers,
+} from '@hy2scale/ui';
 
 export interface CanvasMenuEntry { key: string; label: string }
 
@@ -21,11 +23,6 @@ export interface CanvasMenuProps {
   onDelete: () => void;
 }
 
-const layersIcon = <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M12 3 3 8l9 5 9-5-9-5Z" /><path d="m3 13 9 5 9-5" /></svg>;
-const caretDown = <svg className="hy-topo-canvas-caret" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><polyline points="6 9 12 15 18 9" /></svg>;
-const caretRight = <svg className="hy-dd-caret" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><polyline points="9 6 15 12 9 18" /></svg>;
-const checkIcon = <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><polyline points="5 12 10 17 19 7" /></svg>;
-
 /** The menu body, shared by the toolbar dropdown and the ⋯ submenu. */
 function MenuItems(p: CanvasMenuProps & { close: () => void }) {
   const { t } = useTranslation();
@@ -40,7 +37,7 @@ function MenuItems(p: CanvasMenuProps & { close: () => void }) {
       data-testid={`canvas-item-${e.key}`}
       onClick={act(() => p.onSelect(e.key))}
     >
-      <span className="hy-dd-check">{e.key === p.activeKey && checkIcon}</span>
+      <span className="hy-dd-check">{e.key === p.activeKey && <IconCheck size={14} />}</span>
       <span className="hy-topo-canvas-name">{e.label}</span>
     </button>
   );
@@ -72,13 +69,7 @@ export function CanvasMenuButton(p: CanvasMenuProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
-  useClickOutside(ref, close);
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open, close]);
+  useDismiss(ref, close, { enabled: open });
   return (
     <div ref={ref} className="hy-topo-canvas">
       <button
@@ -90,9 +81,9 @@ export function CanvasMenuButton(p: CanvasMenuProps) {
         data-testid="canvas-menu"
         onClick={() => setOpen((v) => !v)}
       >
-        {layersIcon}
+        <IconLayers size={14} />
         <span className="hy-topo-canvas-label">{p.activeLabel}</span>
-        {caretDown}
+        <IconChevronDown className="hy-topo-canvas-caret" size={12} />
       </button>
       <AnimatePresence>
         {open && (
@@ -125,10 +116,10 @@ export function CanvasSubmenu(p: CanvasMenuProps & { onDone: () => void }) {
         data-testid="canvas-submenu"
         onClick={() => setOpen((v) => !v)}
       >
-        {layersIcon}
+        <IconLayers size={14} />
         <span>{t('nodes.canvas.title')}</span>
         <span className="hy-dd-meta">{p.activeLabel}</span>
-        {caretRight}
+        <IconChevronRight className="hy-dd-caret" size={14} />
       </button>
       {open && (
         <div className="hy-dd-sub" role="group">

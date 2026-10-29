@@ -9,11 +9,6 @@
 /* Full-bleed pages (topology views): fill the viewport under the top bar. */
 .hy-content.full{padding:0;height:calc(100vh - 56px);height:calc(100dvh - 56px);min-height:0}
 .hy-content.full>.page-enter{flex:1;min-height:0}
-.hy-topo-full{position:relative;flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
-/* Top bar title that switches a page between its list and topology view. */
-.hy-view-switch{display:inline-flex;align-items:center;gap:8px;padding:0;margin:0;border:none;background:none;font:inherit;line-height:1;color:inherit;cursor:pointer}
-.hy-view-switch:focus-visible{outline:2px solid var(--primary);outline-offset:2px;border-radius:2px}
-.hy-view-switch svg{display:block;flex-shrink:0;width:16px;height:16px;opacity:.65}
 
 /* Page root: a stack of panels. Panels take the width they are given and
    the height of their content; the page itself scrolls. */
@@ -30,6 +25,7 @@
 .hy-sidebar-item.active{background:var(--primary-light);color:var(--primary);font-weight:600}
 .hy-sidebar-item svg{width:18px;height:18px;flex-shrink:0;opacity:.7}
 .hy-sidebar-item.active svg{opacity:1}
+.hy-sidebar-item.disabled{opacity:.35;pointer-events:none}
 /* Active indicator bar */
 .hy-sidebar-item::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);width:3px;height:0;background:var(--primary);border-radius:2px;transition:height .3s ease}
 .hy-sidebar-item.active::before{height:60%}
@@ -46,15 +42,12 @@
 .hy-sidebar-label{overflow:hidden;text-overflow:clip;transition:opacity .15s}
 .hy-sidebar-bottom{display:flex;flex-direction:column;gap:2px;padding:8px;border-top:1px solid var(--border-light)}
 .hy-sidebar-toggle{justify-content:center}
-.hy-sidebar-toggle svg{transition:transform .2s ease}
 .hy-sidebar.collapsed .hy-sidebar-logo{padding-left:18px}
 .hy-sidebar.collapsed .hy-sidebar-logo>*:not(:first-child){opacity:0}
 .hy-sidebar.collapsed .hy-sidebar-section{color:transparent}
 .hy-sidebar.collapsed .hy-sidebar-section::after{opacity:1}
 .hy-sidebar.collapsed .hy-sidebar-item:not(.hy-sidebar-toggle){padding-left:15px}
 .hy-sidebar.collapsed .hy-sidebar-label{opacity:0}
-.hy-sidebar.collapsed .hy-sidebar-toggle svg{transform:rotate(180deg)}
-.hy-sidebar-version{font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:6px}
 
 /* ====== Topbar ====== */
 .hy-topbar{position:sticky;top:0;z-index:50;height:56px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 24px;gap:12px}
@@ -69,4 +62,3 @@
 
 /* ====== Misc ====== */
 .spacer{flex:1}
-.msg-error{color:var(--red);font-size:13px;min-height:16px}

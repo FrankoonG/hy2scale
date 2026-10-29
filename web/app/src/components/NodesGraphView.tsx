@@ -10,8 +10,12 @@ import { getBasePath } from '@/api/client';
 import { fmtRate } from '@/hooks/useFormat';
 import { useExitPaths } from '@/hooks/useExitPaths';
 import { usePanZoom, type View } from '@/hooks/usePanZoom';
-import { useConfirm, useMediaQuery, useToast } from '@hy2scale/ui';
-import { copyToClipboard } from '@/utils/buildHy2Url';
+import {
+  useConfirm, useMediaQuery, useToast, MenuCheck, readStored, writeStored,
+  IconCopy, IconMaximize2, IconChevronLeft, IconChevronRight, IconScan, IconZoomIn, IconZoomOut,
+} from '@hy2scale/ui';
+import { copyToClipboard } from '@/utils/clipboard';
+import { latencyTier, pathLatencyClass } from '@/utils/latency';
 import {
   buildGraph, findPaths, fmtLatency, isTransit, nodeRadiusFor, R_HUB_INNER, R_HUB_OUTER, R_SINGLE,
   type GraphEdge, type GraphNode, type GraphPath, type Pos,
@@ -66,8 +70,8 @@ const ACTIVE_STORE = () => 'hy2.topo.canvas:' + getBasePath();
 const SNAP_STORE = 'scale:topology-graph-snap';
 const ALT_STORE = 'hy2.topo.altPaths';
 
-const lsGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
-const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } };
+const lsGet = readStored;
+const lsSet = (k: string, v: string) => writeStored(k, v);
 const newId = () => {
   const b = new Uint8Array(5);
   crypto.getRandomValues(b);
@@ -1177,7 +1181,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     const showLatency = !offline && e.segmentLatencyMs > 0 && screenLen > 60;
     const showRate = !offline && screenLen > 110;
     if (spot && (showLatency || showRate)) {
-      const latCls = e.segmentLatencyMs < 80 ? 'lat-ok' : e.segmentLatencyMs < 200 ? 'lat-mid' : 'lat-bad';
+      const latCls = ({ good: 'lat-ok', med: 'lat-mid', bad: 'lat-bad' } as const)[latencyTier(e.segmentLatencyMs)];
       const tx = e.txRate || 0, rx = e.rxRate || 0, value = Math.max(tx, rx);
       const arrow = value > 0 ? (tx >= rx ? '↓' : '↑') : '';
       const rateChildren = arrow
@@ -1255,7 +1259,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     const hops = p.segs.map((key) => ({ key, name: nodes.get(key)?.name || key, native: !!nodes.get(key)?.native }));
     const offline = !!selNode?.offline || p.offline;
     const total = p.total;
-    const latClass = (ms: number, off: boolean) => (off ? 'lat-bad' : ms <= 0 ? 'lat-na' : ms < 80 ? 'lat-ok' : ms < 200 ? 'lat-mid' : 'lat-bad');
+    const latClass = (ms: number, off: boolean) => (ms <= 0 && !off ? 'lat-na' : pathLatencyClass(ms, off));
     const copyPath = hops.filter((h) => h.key !== selfId).map((h) => h.name).join('/');
     const detailKey = p.segs.length === 1 && p.segs[0] === selfId ? '__self__' : p.segs.join('/');
     const n = selectedPaths.length;
@@ -1302,10 +1306,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                 else toast.error(t('nodes.exportFailed'));
               }}
             >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <rect x="4" y="4" width="6.5" height="6.5" rx="1.25" stroke="currentColor" strokeWidth="1.5" />
-                <path d="M8 2.5V2.25C8 1.56 7.44 1 6.75 1H2.25C1.56 1 1 1.56 1 2.25V6.75C1 7.44 1.56 8 2.25 8H2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-              </svg>
+              <IconCopy size={12} />
             </button>
           )}
           {onOpenDetails && (
@@ -1320,9 +1321,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                 onOpenDetails(detailKey, { x: r.left + r.width / 2, y: r.top + r.height / 2 });
               }}
             >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path d="M2 8L6 4L10 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+              <IconMaximize2 size={12} />
             </button>
           )}
         </div>
@@ -1330,11 +1329,11 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
           <>
             <div className="hy-topo-pathinfo-nav">
               <button type="button" aria-label={t('nodes.graph.prevPath')} title={t('nodes.graph.prevPath')} onClick={() => step(-1)} data-testid="path-prev">
-                <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><polyline points="15 6 9 12 15 18" /></svg>
+                <IconChevronLeft size={12} />
               </button>
               <span className="hy-topo-pathinfo-count" data-testid="path-count">{t('nodes.graph.pathCount', { i: pathIdx + 1, n })}</span>
               <button type="button" aria-label={t('nodes.graph.nextPath')} title={t('nodes.graph.nextPath')} onClick={() => step(1)} data-testid="path-next">
-                <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true"><polyline points="9 6 15 12 9 18" /></svg>
+                <IconChevronRight size={12} />
               </button>
               <label className="hy-topo-pathinfo-alt">
                 <input type="checkbox" checked={showAlt} onChange={(ev) => { setShowAlt(ev.target.checked); lsSet(ALT_STORE, ev.target.checked ? '1' : '0'); }} data-testid="path-show-alt" />
@@ -1365,10 +1364,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
   // ---------------------------------------------------------------- chrome
   const snapBox = isCustom ? (
-    <label className="hy-menu-check" data-testid="canvas-snap">
-      <input type="checkbox" checked={snap} onChange={(e) => { setSnap(e.target.checked); lsSet(SNAP_STORE, e.target.checked ? '1' : '0'); }} />
-      <span>{t('nodes.graph.snap')}</span>
-    </label>
+    <MenuCheck checked={snap} onChange={(on) => { setSnap(on); lsSet(SNAP_STORE, on ? '1' : '0'); }} testId="canvas-snap">
+      {t('nodes.graph.snap')}
+    </MenuCheck>
   ) : null;
   // ResponsiveActions closes its ⋯ menu on Escape.
   const closeMore = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
@@ -1402,13 +1400,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       <div className="hy-topo-graph-topbar" data-overlay="">
         <div className="iface-topo-tools">
           <button type="button" className="iface-topo-tool" onClick={fitView} title={t('nodes.graph.fit')} data-testid="topo-fit">
-            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
+            <IconScan size={14} />
           </button>
           <button type="button" className="iface-topo-tool" onClick={() => zoomBy(1 / 1.2)} title={t('nodes.graph.zoomOut')} data-testid="topo-zoom-out">
-            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M5 12h14" /></svg>
+            <IconZoomOut size={14} />
           </button>
           <button type="button" className="iface-topo-tool" onClick={() => zoomBy(1.2)} title={t('nodes.graph.zoomIn')} data-testid="topo-zoom-in">
-            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M5 12h14M12 5v14" /></svg>
+            <IconZoomIn size={14} />
           </button>
           {!narrow && <CanvasMenuButton {...menuProps} />}
         </div>

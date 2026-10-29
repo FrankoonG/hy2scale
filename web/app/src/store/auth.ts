@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { login as apiLogin } from '@/api';
-import { sha256, getToken, setToken, clearToken, getSavedCredentials, saveCredentials, clearCredentials, setSessionHash, clearSessionHash, setHubSessionCookie, clearHubSessionCookie, getLoginUser, setLoginUser, clearLoginUser } from '@/hooks/useAuth';
+import { sha256, getToken, setToken, clearToken, saveCredentials, clearCredentials, setSessionHash, clearSessionHash, setHubSessionCookie, clearHubSessionCookie, getLoginUser, setLoginUser, clearLoginUser } from '@/hooks/useAuth';
 
 const isProxy = () => !!(window as any).__PROXY__;
 

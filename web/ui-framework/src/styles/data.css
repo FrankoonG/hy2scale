@@ -1,0 +1,50 @@
+/* Detail grid, key/value list, segmented control, sortable list. */
+/* ====== DetailGrid ====== */
+.hy-detail{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px 20px;padding:10px 14px;border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--bg)}
+.hy-detail-item{display:flex;flex-direction:column;gap:2px;min-width:0}
+.hy-detail-label{font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px}
+.hy-detail-value{font-family:var(--mono);font-size:12px;color:var(--text);word-break:break-all}
+.hy-detail.plain{grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px 20px;padding:0;border:none;border-radius:0;background:none}
+.hy-detail.plain .hy-detail-item{gap:4px}
+.hy-detail.plain .hy-detail-label,.hy-field-label{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px}
+.hy-detail.plain .hy-detail-value{font-family:var(--font);font-size:13px;word-break:normal}
+.hy-field-label{margin-bottom:4px}
+
+/* ====== KeyValueList ====== */
+.hy-kv{display:flex;flex-direction:column}
+.hy-kv-row{display:flex;align-items:center;gap:12px;min-width:0;padding:7px 0;border-top:1px solid var(--border-light);font-size:13px}
+.hy-kv-row:first-child{border-top:none}
+.hy-kv-label{display:inline-flex;align-items:center;gap:6px;min-width:0;color:var(--text-secondary)}
+.hy-kv-value{margin-left:auto;min-width:0;font-family:var(--mono);font-size:12px;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hy-kv-row.clickable{cursor:pointer;outline:none}
+.hy-kv-row.clickable:hover .hy-kv-label,.hy-kv-row.clickable:focus-visible .hy-kv-label{color:var(--primary)}
+.hy-kv.compact .hy-kv-row{justify-content:space-between;padding:4px 0;border-top:none;border-bottom:1px solid var(--border)}
+.hy-kv.compact .hy-kv-label{color:var(--text-muted)}
+.hy-kv.compact .hy-kv-value{font-family:inherit;font-size:13px;white-space:normal;overflow:visible;word-break:break-all}
+.hy-kv.compact .hy-kv-value.mono{font-family:var(--mono)}
+
+/* ====== SegmentedControl ====== */
+.hy-seg{display:inline-flex;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden}
+.hy-seg button{border:none;border-right:1px solid var(--border);background:var(--bg);color:var(--text-muted);font:inherit;font-size:11px;font-weight:600;padding:3px 10px;cursor:pointer;white-space:nowrap}
+.hy-seg button:last-child{border-right:none}
+.hy-seg button.on{background:var(--primary-light);color:var(--primary)}
+.hy-seg button:disabled{opacity:.4;cursor:not-allowed}
+.hy-seg button.has-count{display:inline-flex;align-items:center;gap:6px;padding:4px 10px}
+.hy-seg button b{font-family:var(--mono);font-weight:600;opacity:.75}
+.hy-seg button.tone-warn.on{background:var(--orange-bg);color:var(--c-orange)}
+.hy-seg button.tone-danger.on{background:var(--red-bg);color:var(--red)}
+
+/* ====== SortableList ====== */
+.hy-sortable-list{display:flex;flex-direction:column;gap:6px;position:relative;list-style:none;padding:0;margin:0}
+.hy-sortable-row{display:flex;gap:8px;align-items:center;list-style:none}
+.hy-sortable-row:has(.hy-sortable-grip){user-select:none;-webkit-user-select:none}
+body.dragging-active,body.dragging-active *{user-select:none!important;-webkit-user-select:none!important}
+.hy-sortable-grip{width:20px;height:32px;display:flex;align-items:center;justify-content:center;cursor:grab;color:var(--text-muted);flex-shrink:0;touch-action:none;opacity:.5;transition:opacity .15s;user-select:none;-webkit-user-select:none}
+.hy-sortable-grip:hover{opacity:1}
+.hy-sortable-grip:active{cursor:grabbing}
+.hy-sortable-row .hy-input{flex:1;min-width:0}
+.hy-sortable-del{width:32px;height:32px;border:1px solid var(--border);border-radius:var(--radius-sm);background:none;cursor:pointer;color:var(--red);display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0;padding:0}
+.hy-sortable-del:hover{background:var(--red-bg);border-color:var(--red)}
+.hy-sortable-add{border:2px dashed var(--border);border-radius:var(--radius-sm);padding:10px;text-align:center;color:var(--text-muted);font-size:13px;cursor:pointer;transition:all .15s;margin-top:8px}
+.hy-sortable-add:hover,.hy-sortable-add:focus-visible{border-color:var(--primary);color:var(--primary);background:var(--primary-light);outline:none}
+.hy-form-group>.hy-sortable:not(.tight)>.hy-sortable-add{margin-top:12px}

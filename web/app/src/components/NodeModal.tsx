@@ -1,10 +1,9 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
-import { Reorder, useDragControls } from 'framer-motion';
 import {
   Modal, Button, Input, PasswordInput, Toggle, Textarea, Select, Tabs,
-  FormGroup, FormGrid, GripIcon, useToast,
+  FormGroup, FormGrid, SortableList, useToast,
 } from '@hy2scale/ui';
 import * as api from '@/api';
 import type { ClientEntry, CertInfo, TopologyNode } from '@/api';
@@ -102,7 +101,6 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   const [nameError, setNameError] = useState('');
   const [addrItems, setAddrItems] = useState<AddrItem[]>([{ id: addrNextId++, host: '', port: '', bind: '' }]);
   const { data: ifaces = [] } = useQuery({ queryKey: ['interfaces'], queryFn: api.getInterfaces, enabled: open, staleTime: 30000 });
-  const addrListRef = useRef<HTMLUListElement>(null);
   const [addrError, setAddrError] = useState('');
   // Addresses: manual rows and/or punch routes (both may be set).
   const [addrTab, setAddrTab] = useState<'manual' | 'punch'>('manual');
@@ -479,7 +477,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
     { value: '', label: t('nodes.caNone') },
     ...caCerts.map((c) => {
       const base = c.name || c.id;
-      const tag = c.is_ca ? '[CA]' : '[cert]';
+      const tag = c.is_ca ? t('nodes.certTagCa') : t('nodes.certTagLeaf');
       return { value: c.id, label: `${base} ${tag}` };
     }),
     { value: '__manual__', label: t('nodes.caManual') },
@@ -512,7 +510,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
             for offline entries; on create, blank falls back to first addr. */}
         <FormGroup label={t('nodes.nodeName')}>
           <>
-            {nameError && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 6 }}>{nameError}</div>}
+            {nameError && <div className="field-error above">{nameError}</div>}
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -542,7 +540,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
                 { key: 'punch', label: `${t('nodes.addrPunch')} (${punchSet ? punchBinds.length : 0})` },
               ]}
             />
-            {addrError && <div style={{ color: 'var(--red)', fontSize: 13, margin: '6px 0' }}>{addrError}</div>}
+            {addrError && <div className="field-error">{addrError}</div>}
             {addrTab === 'punch' ? (
               <div data-testid="punch-panel" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
                 <div className="punch-sub">{t('nodes.punchSignal')}</div>
@@ -585,34 +583,25 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
               </div>
             ) : (
             <>
-            <Reorder.Group
-              ref={addrListRef}
-              axis="y"
-              values={addrItems}
+            <SortableList
+              items={addrItems}
               onReorder={setAddrItems}
-              className="addr-list"
-              style={{ listStyle: 'none', padding: 0, margin: 0 }}
-            >
-              {addrItems.map((item) => (
-                <AddrRowItem
-                  key={item.id}
-                  item={item}
-                  canDrag={addrItems.length > 1}
-                  canRemove={addrItems.length > 1}
-                  constraintsRef={addrListRef}
-                  hostPlaceholder={t('nodes.host')}
-                  portPlaceholder={t('nodes.port')}
-                  deleteTitle={t('app.delete')}
-                  bindOptions={bindOptions(ifaces, item.bind, t('nodes.ifaceAuto'), hostFamily(item.host))}
-                  bindTitle={t('nodes.iface')}
-                  onUpdate={(field, val) => updateAddrItem(item.id, field, val)}
-                  onRemove={() => removeAddrItem(item.id)}
-                />
-              ))}
-            </Reorder.Group>
-            <div className="addr-add-row" onClick={addAddrRow}>
-              {t('nodes.addAddress')}
-            </div>
+              removeLabel={t('app.delete')}
+              onRemove={(item) => removeAddrItem(item.id)}
+              addLabel={t('nodes.addAddress')}
+              onAdd={addAddrRow}
+              renderItem={(item) => (
+                <>
+                  <Input value={item.host} onChange={(e) => updateAddrItem(item.id, 'host', e.target.value)} placeholder={t('nodes.host')} />
+                  <Input value={item.port} onChange={(e) => updateAddrItem(item.id, 'port', e.target.value)} placeholder={t('nodes.port')}
+                    className="addr-port" />
+                  <div title={t('nodes.iface')} className="addr-bind" data-testid="addr-bind">
+                    <Select value={item.bind} onChange={(e) => updateAddrItem(item.id, 'bind', e.target.value)}
+                      options={bindOptions(ifaces, item.bind, t('nodes.ifaceAuto'), hostFamily(item.host))} />
+                  </div>
+                </>
+              )}
+            />
             </>
             )}
           </>
@@ -745,20 +734,6 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   );
 }
 
-interface AddrRowItemProps {
-  item: AddrItem;
-  canDrag: boolean;
-  canRemove: boolean;
-  constraintsRef: React.RefObject<HTMLElement | null>;
-  hostPlaceholder: string;
-  portPlaceholder: string;
-  deleteTitle: string;
-  bindOptions: { value: string; label: string }[];
-  bindTitle: string;
-  onUpdate: (field: 'host' | 'port' | 'bind', val: string) => void;
-  onRemove: () => void;
-}
-
 // Interface / source choices for an address row: auto, each interface, and
 // each of its addresses (only those of family `fam` when it is set). A saved
 // binding this host does not have stays selectable so editing the row does
@@ -791,45 +766,4 @@ function bindOptions(ifaces: api.IfaceInfo[], current: string, autoLabel: string
 function bindFits(bind: string, fam: 4 | 6): boolean {
   const i = bind.indexOf('/');
   return i < 0 || hostFamily(bind.slice(i + 1)) === fam;
-}
-
-function AddrRowItem({ item, canDrag, canRemove, constraintsRef, hostPlaceholder, portPlaceholder, deleteTitle, bindOptions, bindTitle, onUpdate, onRemove }: AddrRowItemProps) {
-  const controls = useDragControls();
-  return (
-    <Reorder.Item
-      value={item}
-      dragListener={false}
-      dragControls={controls}
-      dragConstraints={constraintsRef}
-      dragElastic={0.1}
-      onDragStart={() => document.body.classList.add('dragging-active')}
-      onDragEnd={() => document.body.classList.remove('dragging-active')}
-      className="addr-row"
-      style={{ listStyle: 'none' }}
-    >
-      {canDrag && (
-        <div className="addr-drag" onPointerDown={(e) => controls.start(e)}>
-          <GripIcon />
-        </div>
-      )}
-      <Input
-        value={item.host}
-        onChange={(e) => onUpdate('host', e.target.value)}
-        placeholder={hostPlaceholder}
-        style={{ flex: 1 }}
-      />
-      <Input
-        value={item.port}
-        onChange={(e) => onUpdate('port', e.target.value)}
-        placeholder={portPlaceholder}
-        style={{ width: 120 }}
-      />
-      <div title={bindTitle} style={{ width: 150, flexShrink: 0 }} data-testid="addr-bind">
-        <Select value={item.bind} onChange={(e) => onUpdate('bind', e.target.value)} options={bindOptions} />
-      </div>
-      {canRemove && (
-        <button type="button" className="addr-del" onClick={onRemove} title={deleteTitle}>−</button>
-      )}
-    </Reorder.Item>
-  );
 }

@@ -3,9 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button, Input, PasswordInput } from '@hy2scale/ui';
 import { useAuthStore, getSavedCredentials } from '@/store/auth';
-import { sha256, getSessionHash } from '@/hooks/useAuth';
-import LanguageSwitcher from '@/components/LanguageSwitcher';
-import ThemeSwitcher from '@/components/ThemeSwitcher';
+import { LanguageSwitcher, ThemeSwitcher } from '@/components/PrefSwitcher';
 import LoginBackground from '@/components/LoginBackground';
 
 export default function LoginPage() {
@@ -47,8 +45,6 @@ export default function LoginPage() {
       setHasSaved(true);
     }
   }, [isProxy]);
-  // Suppress unused-var warning for the no-op proxy branch.
-  void getSessionHash; void loginWithHash; void navigate;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,29 +67,18 @@ export default function LoginPage() {
 
   if (isProxy) {
     return (
-      <div
-        style={{
-          position: 'fixed', inset: 0,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          padding: 24, fontFamily: 'var(--mono)',
-          fontSize: 14, lineHeight: 1.6, color: 'var(--text-secondary)',
-          textAlign: 'center', whiteSpace: 'pre-wrap',
-          background: 'var(--bg)',
-        }}
-      >
-        {t('remote.expired')}
-      </div>
+      <div className="hy-remote-expired">{t('remote.expired')}</div>
     );
   }
 
   return (
     <div className="hy-login-wrap">
       <LoginBackground />
-      <div style={{ position: 'absolute', top: 16, right: 16, zIndex: 1, display: 'flex', alignItems: 'center', gap: 16 }}>
+      <div className="hy-login-switchers">
         <ThemeSwitcher />
         <LanguageSwitcher />
       </div>
-      <div className="hy-login-box" style={{ position: 'relative', zIndex: 1 }}>
+      <div className="hy-login-box">
         <div className="hy-login-logo">
           <img src="./logo.min.svg" alt="logo" />
         </div>
@@ -119,7 +104,7 @@ export default function LoginPage() {
             />
             {t('app.remember')}
           </label>
-          {error && <div style={{ color: 'var(--red)', fontSize: 13 }}>{t('error.invalidCredentials')}</div>}
+          {error && <div className="hy-login-error">{t('error.invalidCredentials')}</div>}
           <Button type="submit" variant="primary" fullWidth loading={loading}>
             {t('app.signin')}
           </Button>

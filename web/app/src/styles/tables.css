@@ -1,0 +1,79 @@
+/* App table semantics: column widths, peer names, self / sub rows, latency, nesting toggle, traffic pair. */
+.hy-table .col-status{width:75px;text-align:center}
+.hy-table .col-dir{width:55px}
+.hy-table .col-name{min-width:200px;user-select:text;-webkit-user-select:text}
+.hy-table .col-name .hy-badge,.hy-table .col-name .version-badge,.hy-table .col-name .hy-tooltip-wrap{user-select:none;-webkit-user-select:none}
+.hy-table .col-traffic{width:160px;font-size:11px;font-family:var(--mono);white-space:nowrap}
+/* Self row */
+.hy-table tr.self-row td{background:var(--primary-light)}
+.hy-table tr.self-row /* Peer name */
+.peer-name-cell{color:var(--primary)}
+.hy-table tbody tr.self-row:hover>td{background-color:var(--primary-light)!important}
+.hy-table tr.sub-row td{padding:8px 10px;font-size:13px}
+.hy-table tr.sub-row td:first-child{padding-left:20px}
+.hy-table tr.sub-row td:last-child{padding-right:20px}
+.hy-table tr.sub-row .col-traffic{font-size:11px;font-family:var(--mono)}
+.hy-table tr.sub-row .col-name{position:relative;overflow:visible}
+.hy-table tr.sub-row .peer-name-cell{font-weight:500}
+/* Latency tiers (utils/latency.ts) */
+.latency{font-family:var(--mono);font-size:12px;font-weight:600}
+.latency-good{color:var(--green)}
+.latency-med{color:var(--orange)}
+.latency-bad{color:var(--red)}
+.latency-off{color:var(--red);font-weight:500;font-family:var(--font)}
+.latency-na{color:var(--text-muted)}
+.latency-sync{color:var(--orange);font-weight:500;font-family:var(--font)}
+/* Nested toggle triangle */
+.hy-tree-toggle{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;margin-right:8px;border:none;background:transparent;cursor:pointer;color:var(--text-muted);border-radius:6px;flex-shrink:0;align-self:center}
+.hy-tree-toggle:not(.hy-tree-toggle-disabled):hover{color:var(--primary);background:var(--primary-light)}
+.hy-tree-toggle svg{width:18px;height:18px;display:block;transition:transform .15s ease}
+.hy-tree-toggle-disabled{pointer-events:none;cursor:default;opacity:.35;color:var(--text-muted);background:transparent}
+.peer-name-cell{font-weight:600}
+a.peer-link{color:var(--primary);text-decoration:none;cursor:pointer}
+a.peer-link:hover{text-decoration:underline}
+.peer-addr-sub{font-family:var(--mono);font-size:11px;color:var(--text-muted);display:block;margin-top:1px}
+.hy-table .col-egress-ip{width:150px}
+/* Up / down traffic */
+.stat-up{color:var(--blue)}
+.stat-down{color:var(--green)}
+.sep{color:var(--text-muted);font-weight:400;margin:0 2px}
+.list-scope{display:contents}
+/* Traffic used / limit (UsageMeter) */
+.usage-text{font-size:12px}
+.usage-used{color:var(--primary);font-weight:600}
+.usage-text.over .usage-used{color:var(--red)}
+.usage-limit{color:var(--text-muted)}
+.usage-bar{background:var(--border-light);height:3px;border-radius:2px;margin-top:3px}
+.usage-fill{background:var(--primary);height:100%;border-radius:2px}
+.usage-text.over+.usage-bar .usage-fill{background:var(--red)}
+.text-muted{color:var(--text-muted)}
+.text-bad{color:var(--red)}
+.cell-small{font-size:12px}
+.badge-list{display:inline-flex;flex-wrap:wrap;gap:4px}
+.name-with-mark{display:inline-flex;align-items:center;gap:6px}
+.alert-mark{color:var(--red);cursor:help;flex-shrink:0}
+.tip-title{font-weight:600;margin-bottom:4px}
+.cell-exit{min-width:180px}
+.hy-table .mono.rule-targets{font-size:11px}
+.version-after-name{margin-left:6px}
+.rot-90{transform:rotate(90deg)}
+.addr-lat{font-weight:600;color:var(--text-muted)}
+.addr-lat.good{color:var(--green)}
+.addr-lat.bad{color:var(--red)}
+/* Multi-line value inside a DetailGrid cell */
+.detail-lines{display:flex;flex-direction:column;font-family:var(--mono);font-size:12px}
+/* Node details: path line above the grid */
+.node-detail-path{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:21px;margin-bottom:10px;font-family:var(--mono);font-size:12px}
+.node-detail-path .hy-topo-pathinfo-copy{margin-left:0}
+.node-detail-history{margin-top:12px}
+.reach-ok{color:var(--green)}
+.reach-bad{color:var(--red)}
+.inline-flex{display:inline-flex}
+/* Exit path cell (ExitViaCell) */
+.exit-cell{display:inline-flex;align-items:center;gap:4px}
+.exit-path{font-family:var(--mono);font-size:12px}
+.exit-path-sep{color:var(--text-muted);margin:0 2px}
+.exit-hop{font-weight:600}
+.exit-hop.pending{color:var(--text-muted)}
+.exit-hop.ok{color:var(--green)}
+.exit-hop.bad{color:var(--red)}

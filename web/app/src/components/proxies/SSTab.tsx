@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Card, Button, Input, Select, Toggle, FormGroup, useToast } from '@hy2scale/ui';
+import { Card, Button, Input, Select, Toggle, FormGroup, FormStack, FormRow, Hint, useToast } from '@hy2scale/ui';
 import * as api from '@/api';
 import { useServerFormInit } from '@/hooks/useFormInit';
 
@@ -11,7 +11,6 @@ export default function SSTab() {
   const queryClient = useQueryClient();
 
   const ssQ = useQuery({ queryKey: ['ss'], queryFn: api.getSS });
-  const ss = ssQ.data;
 
   // Default to "0.0.0.0:8388" so the form is submittable on a fresh
   // install — same rationale as Socks5Tab/HttpTab: an empty listen
@@ -47,21 +46,15 @@ export default function SSTab() {
 
   return (
     <Card fill={1} title={t('ss.title')}>
-      <div style={{ maxWidth: 400, display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-          <div style={{ flex: '0 0 auto' }}>
-            <FormGroup label={t('app.enabled')}>
-              <div style={{ paddingTop: 6 }}>
-                <Toggle checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-              </div>
-            </FormGroup>
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <FormGroup label={t('ss.listen')} required>
-              <Input value={listen} onChange={(e) => setListen(e.target.value)} placeholder="0.0.0.0:8388" />
-            </FormGroup>
-          </div>
-        </div>
+      <FormStack maxWidth={400}>
+        <FormRow>
+          <FormGroup label={t('app.enabled')}>
+            <Toggle offset checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+          </FormGroup>
+          <FormGroup label={t('ss.listen')} required>
+            <Input value={listen} onChange={(e) => setListen(e.target.value)} placeholder="0.0.0.0:8388" />
+          </FormGroup>
+        </FormRow>
         <FormGroup label={t('ss.method')}>
           <Select
             value={method}
@@ -72,13 +65,13 @@ export default function SSTab() {
               { value: 'chacha20-ietf-poly1305', label: 'chacha20-ietf-poly1305' },
               { value: '2022-blake3-aes-128-gcm', label: '2022-blake3-aes-128-gcm' },
               { value: '2022-blake3-aes-256-gcm', label: '2022-blake3-aes-256-gcm' },
-              { value: 'none', label: 'none (no encryption)' },
+              { value: 'none', label: t('ss.methodNone') },
             ]}
           />
         </FormGroup>
-        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('ss.desc')}</div>
-        <Button variant="primary" onClick={handleSave} loading={loading} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
-      </div>
+        <Hint>{t('ss.desc')}</Hint>
+        <Button variant="primary" className="align-start" onClick={handleSave} loading={loading}>{t('app.save')}</Button>
+      </FormStack>
     </Card>
   );
 }

@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
-import { Card, Button, Input, Select } from '@hy2scale/ui';
+import { Card, Button, Input, Select, SegmentedControl, MenuCheck, useStoredState, boolCodec, type SegmentedItem } from '@hy2scale/ui';
 import * as api from '@/api';
 import type { LogEntry } from '@/api';
 import { useNodeStore } from '@/store/node';
 import ResponsiveActions from '@/components/ResponsiveActions';
+import { downloadBlob } from '@/utils/download';
 
 const MAX = 5000;
 const POLL_MS = 2000;
@@ -48,7 +49,7 @@ export default function LogsPage() {
   const [level, setLevel] = useState<Level>('all');
   const [src, setSrc] = useState('');
   const [query, setQuery] = useState('');
-  const [wrap, setWrap] = useState(() => { try { return localStorage.getItem(WRAP_KEY) !== '0'; } catch { return true; } });
+  const [wrap, setWrap] = useStoredState(WRAP_KEY, true, boolCodec);
   const [refreshing, setRefreshing] = useState(false);
   const viewRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
@@ -142,22 +143,15 @@ export default function LogsPage() {
 
   const download = () => {
     const text = shown.map((e) => `${fmtDay(e.ts)} ${fmtTime(e.ts)} ${e.msg}`).join('\n') + '\n';
-    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
     const d = new Date();
     const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `${nodeName}-${stamp}.log`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    downloadBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), `${nodeName}-${stamp}.log`);
   };
 
-  const levelTabs: { key: Level; label: string; n: number }[] = [
-    { key: 'all', label: t('logs.all'), n: counts.all },
-    { key: 'warn', label: t('logs.warn'), n: counts.warn },
-    { key: 'error', label: t('logs.error'), n: counts.error },
+  const levelTabs: SegmentedItem<Level>[] = [
+    { key: 'all', label: t('logs.all'), count: counts.all, testId: 'logs-level-all' },
+    { key: 'warn', label: t('logs.warn'), count: counts.warn, tone: 'warn', testId: 'logs-level-warn' },
+    { key: 'error', label: t('logs.error'), count: counts.error, tone: 'danger', testId: 'logs-level-error' },
   ];
 
   const truncatedHead = live.length > 0 && live[0].seq > 1;
@@ -190,24 +184,10 @@ export default function LogsPage() {
         actions={
           <ResponsiveActions
             more={
-              <label className="hy-menu-check" data-testid="logs-wrap">
-                <input type="checkbox" checked={wrap} onChange={(e) => {
-                  setWrap(e.target.checked);
-                  try { localStorage.setItem(WRAP_KEY, e.target.checked ? '1' : '0'); } catch { /* storage unavailable */ }
-                }} />
-                <span>{t('logs.wrap')}</span>
-              </label>
+              <MenuCheck checked={wrap} onChange={setWrap} testId="logs-wrap">{t('logs.wrap')}</MenuCheck>
             }
           >
-            <div className="ov-seg logs-levels" role="tablist">
-              {levelTabs.map((l) => (
-                <button key={l.key} type="button" role="tab" aria-selected={level === l.key}
-                  className={clsx(level === l.key && 'on', l.key)} onClick={() => setLevel(l.key)}
-                  data-testid={`logs-level-${l.key}`}>
-                  {l.label}<b>{l.n}</b>
-                </button>
-              ))}
-            </div>
+            <SegmentedControl items={levelTabs} value={level} onChange={setLevel} />
             <Select
               className="logs-src-select"
               value={src}

@@ -1,7 +1,7 @@
-import { type ReactNode, useRef, useEffect } from 'react';
+import { type ReactNode } from 'react';
 import * as React from 'react';
 import clsx from 'clsx';
-import { ColumnMenu, Pager, SortTitle, sortBy, tableId, useColumnPrefs, usePager } from './TableKit';
+import { ColumnMenu, EmptyRow, IndeterminateCheckbox, Pager, SortTitle, isInteractiveDescendant, sortBy, tableId, useColumnPrefs, usePager } from './TableKit';
 
 export interface Column<T> {
   key: string;
@@ -28,24 +28,6 @@ export interface SelectionState {
   isSomeSelected: boolean;
 }
 
-// isInteractiveDescendant walks up from the clicked element toward the row
-// and returns true if any ancestor along the way is a control the user
-// would expect to handle the click itself (buttons, links, inputs,
-// contentEditable). Used so row-body click selection doesn't fire when
-// the user actually clicked Edit / a checkbox / an inline form field.
-// Exported so pages that render raw `<table>` markup (UsersPage) can
-// apply the same behaviour without depending on the Table component.
-export function isInteractiveDescendant(target: EventTarget | null, row: HTMLElement): boolean {
-  for (let el = target as HTMLElement | null; el && el !== row; el = el.parentElement) {
-    const tag = el.tagName;
-    if (tag === 'BUTTON' || tag === 'A' || tag === 'INPUT' || tag === 'SELECT' ||
-        tag === 'TEXTAREA' || tag === 'LABEL' || el.isContentEditable) {
-      return true;
-    }
-  }
-  return false;
-}
-
 export interface TableProps<T> {
   columns: Column<T>[];
   data: T[];
@@ -61,12 +43,6 @@ export interface TableProps<T> {
   onRowClick?: (row: T, index: number) => void;
 }
 
-function IndeterminateCheckbox({ checked, indeterminate, onChange }: { checked: boolean; indeterminate: boolean; onChange: () => void }) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => { if (ref.current) ref.current.indeterminate = indeterminate; }, [indeterminate]);
-  return <input ref={ref} type="checkbox" checked={checked} onChange={onChange} />;
-}
-
 export function Table<T>({ columns: allColumns, data: rawData, rowKey, rowClassName, emptyText, selection, id, paginate = true, onRowClick: rowAction }: TableProps<T>) {
   const tid = tableId(id, allColumns.map((c) => c.key));
   const prefs = useColumnPrefs(tid, allColumns);
@@ -76,7 +52,7 @@ export function Table<T>({ columns: allColumns, data: rawData, rowKey, rowClassN
   const size = paginate ? prefs.pageSize : Math.max(1, data.length);
   const pager = usePager(data.length, size, tid);
   if (data.length === 0 && emptyText) {
-    return <div className="hy-empty" dangerouslySetInnerHTML={typeof emptyText === 'string' ? { __html: emptyText } : undefined}>{typeof emptyText !== 'string' ? emptyText : undefined}</div>;
+    return <EmptyRow>{emptyText}</EmptyRow>;
   }
   const pageRows = paginate ? data.slice(pager.start, pager.end) : data;
   const offset = paginate ? pager.start : 0;

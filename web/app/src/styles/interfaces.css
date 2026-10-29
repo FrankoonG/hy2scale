@@ -29,7 +29,6 @@
 
 .iface-name{font-weight:600}
 .iface-name-wrap{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
-.iface-group-name{font-weight:500;color:var(--text-secondary)}
 .iface-pub{cursor:pointer;border-radius:4px}
 .iface-pub:hover .iface-pub-ip{color:var(--primary);text-decoration:underline dotted}
 .iface-pub.busy{cursor:progress;opacity:.6}
@@ -37,7 +36,6 @@
 .hy-table .col-iface-pub{width:190px}
 .iface-name-link{padding:0;border:none;background:none;font:inherit;font-weight:600;color:var(--primary);cursor:pointer}
 .iface-name-link:hover{text-decoration:underline}
-.iface-group-ind{margin-left:6px;color:var(--text-muted);font-size:10px}
 .iface-parent-list{display:flex;flex-direction:column;gap:6px}
 .iface-parent-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;transition:border-color .12s,background .12s}
 .iface-parent-item:hover{border-color:var(--primary)}
@@ -45,12 +43,7 @@
 .iface-parent-item input{accent-color:var(--primary);margin:0}
 .iface-parent-name{font-weight:600}
 .iface-parent-addr{font-family:var(--mono);font-size:12px;color:var(--text-muted);margin-left:auto}
-.iface-detail-addrs{display:flex;flex-direction:column;font-family:var(--mono);font-size:12px}
 
-.iface-detail{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px 20px;padding:10px 14px;border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--bg)}
-.iface-detail-item{display:flex;flex-direction:column;gap:2px;min-width:0}
-.iface-detail-label{font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px}
-.iface-detail-value{font-family:var(--mono);font-size:12px;color:var(--text);word-break:break-all}
 .iface-tip-row{font-size:12px;font-family:var(--mono);white-space:nowrap}
 /* Child interface dialog */
 .iface-form-section{font-size:12px;font-weight:600;color:var(--text-secondary);padding-top:6px;border-top:1px solid var(--border-light)}

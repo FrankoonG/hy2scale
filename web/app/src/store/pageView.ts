@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { readStored, writeStored } from '@hy2scale/ui';
 
 /**
  * Pages that have both a list and a topology view. The top bar title of such
@@ -12,15 +13,13 @@ const KEY = (page: string) => `hy-view:${page}`;
 
 // Nodes used to persist under its own key; honour it once.
 function initial(page: TopoPage): PageView {
-  try {
-    const v = localStorage.getItem(KEY(page));
-    if (v === 'list' || v === 'topo') return v;
-    if (page === 'nodes') {
-      const old = localStorage.getItem('scale:nodes-view');
-      if (old === 'list') return 'list';
-      if (old === 'graph') return 'topo';
-    }
-  } catch { /* storage unavailable */ }
+  const v = readStored(KEY(page));
+  if (v === 'list' || v === 'topo') return v;
+  if (page === 'nodes') {
+    const old = readStored('scale:nodes-view');
+    if (old === 'list') return 'list';
+    if (old === 'graph') return 'topo';
+  }
   // Nodes has always opened on its topology.
   return page === 'nodes' ? 'topo' : 'list';
 }
@@ -34,7 +33,7 @@ interface PageViewState {
 export const usePageViewStore = create<PageViewState>((set, get) => ({
   views: { nodes: initial('nodes'), interfaces: initial('interfaces') },
   setView: (page, v) => {
-    try { localStorage.setItem(KEY(page), v); } catch { /* storage unavailable */ }
+    writeStored(KEY(page), v);
     set({ views: { ...get().views, [page]: v } });
   },
   toggle: (page) => get().setView(page, get().views[page] === 'topo' ? 'list' : 'topo'),
@@ -44,9 +43,9 @@ export const usePageViewStore = create<PageViewState>((set, get) => ({
 const HIDDEN_KEY = 'hy-iface-show-hidden';
 interface IfaceOptsState { showHidden: boolean; setShowHidden: (v: boolean) => void }
 export const useIfaceOpts = create<IfaceOptsState>((set) => ({
-  showHidden: (() => { try { return localStorage.getItem(HIDDEN_KEY) === '1'; } catch { return false; } })(),
+  showHidden: readStored(HIDDEN_KEY) === '1',
   setShowHidden: (v) => {
-    try { localStorage.setItem(HIDDEN_KEY, v ? '1' : '0'); } catch { /* storage unavailable */ }
+    writeStored(HIDDEN_KEY, v ? '1' : '0');
     set({ showHidden: v });
   },
 }));

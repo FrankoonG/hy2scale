@@ -2,5 +2,3 @@
 /* ====== Animations ====== */
 .page-enter{animation:pageIn .4s ease both}
 @keyframes pageIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
-.tab-enter{animation:tabSlideIn .35s ease both}
-@keyframes tabSlideIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:translateX(0)}}

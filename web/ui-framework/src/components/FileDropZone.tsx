@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react';
 import clsx from 'clsx';
+import { useUiLabels } from './UiLabels';
 
 export interface FileDropZoneProps {
   // Picked file (controlled). Pass null to render the empty hint.
@@ -38,10 +39,11 @@ export function FileDropZone({
   validate,
   emptyHint,
   emptyAcceptHint,
-  replaceHint = 'Click or drop another file to replace',
+  replaceHint,
   disabled = false,
   className,
 }: FileDropZoneProps) {
+  const L = useUiLabels();
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -78,7 +80,7 @@ export function FileDropZone({
         <>
           <div className="hy-dropzone-name">{file.name}</div>
           <div className="hy-dropzone-meta">{fmtBytes(file.size)}</div>
-          <div className="hy-dropzone-replace">{replaceHint}</div>
+          <div className="hy-dropzone-replace">{replaceHint ?? L.replaceFile}</div>
         </>
       ) : (
         <>

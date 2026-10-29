@@ -1,12 +1,4 @@
 /* Tab strips. */
-/* Icon-only mini tabs — sized to fit inside a Card header's action area.
-   Two or three compact buttons that read as a segmented toggle. */
-.hy-icon-tabs{display:inline-flex;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--bg)}
-.hy-icon-tab{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border:none;background:none;cursor:pointer;color:var(--text-muted);padding:0;transition:background .12s,color .12s}
-.hy-icon-tab+.hy-icon-tab{border-left:1px solid var(--border)}
-.hy-icon-tab:hover{background:var(--primary-light);color:var(--primary)}
-.hy-icon-tab.active{background:var(--primary-light);color:var(--primary)}
-.hy-icon-tab svg{width:14px;height:14px}
 
 .hy-tabs-row{display:flex;align-items:center;gap:8px;margin-bottom:16px}
 .hy-tabs-row .hy-tabs{margin-bottom:0}

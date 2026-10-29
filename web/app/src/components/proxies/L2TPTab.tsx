@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Card, Button, Input, Toggle, FormGroup, FormGrid, useToast } from '@hy2scale/ui';
+import { Card, Button, Input, Toggle, FormGroup, FormGrid, FormStack, Hint, useToast } from '@hy2scale/ui';
 import * as api from '@/api';
 import { useServerFormInit } from '@/hooks/useFormInit';
 import VPNStatus from './VPNStatus';
@@ -51,7 +51,7 @@ export default function L2TPTab() {
 
   return (
     <Card fill={1} title={<>{t('l2tp.title')} <VPNStatus running={l2tp?.running} connected={l2tp?.connected} /></>}>
-      <div style={{ maxWidth: 500, display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <FormStack maxWidth={500}>
         <FormGroup label={t('app.enabled')}>
           <Toggle checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
         </FormGroup>
@@ -66,9 +66,9 @@ export default function L2TPTab() {
             <Input type="number" value={mtu} onChange={(e) => setMtu(e.target.value)} />
           </FormGroup>
         </FormGrid>
-        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('l2tp.desc')}</div>
-        <Button variant="primary" onClick={handleSave} loading={loading} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
-      </div>
+        <Hint>{t('l2tp.desc')}</Hint>
+        <Button variant="primary" className="align-start" onClick={handleSave} loading={loading}>{t('app.save')}</Button>
+      </FormStack>
     </Card>
   );
 }

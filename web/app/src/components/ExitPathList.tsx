@@ -1,11 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Reorder, useDragControls } from 'framer-motion';
-import { Autocomplete, FormGroup, GripIcon } from '@hy2scale/ui';
+import { Autocomplete, FormGroup, SortableList } from '@hy2scale/ui';
 import { useExitPaths } from '@/hooks/useExitPaths';
 import { useNodeStore } from '@/store/node';
 import type { TopologyNode } from '@/api';
-import clsx from 'clsx';
 
 export interface ExitPathValue {
   paths: string[];
@@ -151,7 +149,6 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
     onChange({ paths: items.map((it) => it.value), mode: m });
   }, [items, onChange]);
 
-  const listRef = useRef<HTMLUListElement>(null);
   const filledItems = items.filter((it) => it.value);
   const hasMultiple = filledItems.length > 1;
   // one path whose route has several connections somewhere still offers
@@ -184,82 +181,25 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
         </label>
       </div>
 
-      {/* Path inputs */}
-      <Reorder.Group
-        ref={listRef}
-        axis="y"
-        values={items}
+      {/* Path inputs. The radios keep name="exitMode" (UI regression driver);
+          they are controlled, so two lists on one page never share state. */}
+      <SortableList
+        items={items}
         onReorder={handleReorder}
-        className="addr-list"
-        style={{ listStyle: 'none', padding: 0, margin: 0 }}
-      >
-        {items.map((item) => (
-          <PathRow
-            key={item.id}
-            item={item}
-            canDrag={items.length > 1}
-            canRemove={items.length > 1}
-            constraintsRef={listRef}
-            exitPaths={exitPaths}
+        removeLabel={t('app.delete')}
+        onRemove={(item) => removePath(item.id)}
+        addLabel={t('exit.addPath')}
+        onAdd={addPath}
+        renderItem={(item) => (
+          <Autocomplete
+            options={exitPaths}
+            value={item.value}
+            onChange={(val) => updateItem(item.id, val)}
             placeholder={t('users.exitViaHint')}
-            deleteTitle={t('app.delete')}
-            onUpdate={(val) => updateItem(item.id, val)}
-            onRemove={() => removePath(item.id)}
           />
-        ))}
-      </Reorder.Group>
-      <div className="addr-add-row" onClick={addPath}>
-        {t('exit.addPath')}
-      </div>
-    </FormGroup>
-  );
-}
-
-interface PathRowProps {
-  item: PathItem;
-  canDrag: boolean;
-  canRemove: boolean;
-  constraintsRef: RefObject<HTMLElement | null>;
-  exitPaths: string[];
-  placeholder: string;
-  deleteTitle: string;
-  onUpdate: (val: string) => void;
-  onRemove: () => void;
-}
-
-function PathRow({ item, canDrag, canRemove, constraintsRef, exitPaths, placeholder, deleteTitle, onUpdate, onRemove }: PathRowProps) {
-  const controls = useDragControls();
-  const [dragging, setDragging] = useState(false);
-
-  return (
-    <Reorder.Item
-      value={item}
-      dragListener={false}
-      dragControls={controls}
-      dragConstraints={constraintsRef}
-      dragElastic={0.1}
-      onDragStart={() => { setDragging(true); document.body.classList.add('dragging-active'); }}
-      onDragEnd={() => { setDragging(false); document.body.classList.remove('dragging-active'); }}
-      className={clsx('addr-row', dragging && 'dragging')}
-      style={{ listStyle: 'none' }}
-    >
-      {canDrag && (
-        <div className="addr-drag" onPointerDown={(e) => controls.start(e)}>
-          <GripIcon />
-        </div>
-      )}
-      <Autocomplete
-        options={exitPaths}
-        value={item.value}
-        onChange={onUpdate}
-        placeholder={placeholder}
+        )}
       />
-      {canRemove && (
-        <button type="button" className="addr-del" onClick={onRemove} title={deleteTitle}>
-          ×
-        </button>
-      )}
-    </Reorder.Item>
+    </FormGroup>
   );
 }
 

@@ -3,13 +3,14 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
-import { Card, Badge, Progress } from '@hy2scale/ui';
+import { Card, Badge, Progress, KeyValue, SegmentedControl, IconChevronRight, IconCircleAlert } from '@hy2scale/ui';
 import * as api from '@/api';
 import type { TopologyNode, DiagPeerHistory, DiagHistoryBucket } from '@/api';
 import type { IfaceEntry, IfaceFamilyKey } from '@/api/types';
 import { useNodeStore } from '@/store/node';
 import { fmtBytes, fmtRate, fmtDuration } from '@/hooks/useFormat';
 import { useTheme } from '@/theme';
+import VersionBadge from '@/components/VersionBadge';
 
 // ---------------------------------------------------------------------------
 // Live samples. Kept at module level so the chart and sparklines survive a
@@ -85,14 +86,10 @@ function linkProps(go: () => void) {
   };
 }
 
-const chevron = (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M9 6l6 6-6 6" /></svg>
-);
-
 function TitleLink({ label, onClick }: { label: ReactNode; onClick: () => void }) {
   return (
     <button type="button" className="ov-title-link" onClick={onClick}>
-      {label}{chevron}
+      {label}<IconChevronRight size={12} />
     </button>
   );
 }
@@ -202,14 +199,7 @@ const SVC_LIGHT: Record<string, string> = {
 };
 const SVC_DARK: Record<string, string> = { ...SVC_LIGHT, hy2: '#5a78f8', ss: '#a78bfa' };
 
-function KV({ label, children, onClick }: { label: ReactNode; children: ReactNode; onClick?: () => void }) {
-  return (
-    <div className={clsx('ov-kv-row', onClick && 'ov-click')} {...(onClick ? linkProps(onClick) : {})}>
-      <span className="ov-kv-label">{label}</span>
-      <span className="ov-kv-value">{children}</span>
-    </div>
-  );
-}
+const KV = KeyValue;
 
 // ---------------------------------------------------------------------------
 // Traffic chart (upload / download), time-scaled, with hover crosshair.
@@ -594,12 +584,7 @@ export default function OverviewPage() {
           className="ov-span-8"
           title={t('overview.traffic')}
           actions={
-            <div className="ov-seg" role="tablist">
-              {rangeTabs.map((r) => (
-                <button key={r.key} type="button" role="tab" aria-selected={range === r.key}
-                  className={clsx(range === r.key && 'on')} onClick={() => setRange(r.key)}>{r.label}</button>
-              ))}
-            </div>
+            <SegmentedControl items={rangeTabs} value={range} onChange={setRange} />
           }
         >
           <TrafficChart data={chartData} range={range} />
@@ -615,11 +600,7 @@ export default function OverviewPage() {
         <Card className="ov-span-4" title={t('overview.thisNode')}>
           <div className="ov-node-head">
             <span className="ov-node-name">{node?.node_id || '—'}</span>
-            {node?.version && (
-              <span className={clsx('version-badge', node.limited ? 'limited' : node.compat && 'compat')}>
-                v{node.version}{node.limited ? ' Limited' : node.compat ? ' Compat' : ''}
-              </span>
-            )}
+            {node?.version && <VersionBadge version={node.version} limited={node.limited} compat={node.compat} />}
             {node?.exit_node && <Badge variant="blue">{t('overview.exitNode')}</Badge>}
             <span className="ov-health">
               {issues.length === 0
@@ -627,7 +608,7 @@ export default function OverviewPage() {
                 : <Badge variant={issues.some((i) => i.level === 'red') ? 'red' : 'orange'}>{t('overview.attention')} · {issues.length}</Badge>}
             </span>
           </div>
-          <div className="ov-kv">
+          <div className="hy-kv">
             <KV label={t('overview.uptime')}>{runtime ? fmtDuration(runtime.uptime_seconds) : '—'}</KV>
             <KV label={t('overview.memory')}>{runtime ? `${fmtBytes(runtime.heap_alloc)} / ${fmtBytes(runtime.sys)}` : '—'}</KV>
             <KV label={t('overview.goroutines')}>{runtime?.goroutines ?? '—'}</KV>
@@ -638,7 +619,7 @@ export default function OverviewPage() {
             <div className="ov-issues">
               {issues.map((it, i) => (
                 <div key={i} className={clsx('ov-issue', it.level)} {...linkProps(() => navigate(it.to))}>
-                  <span className="ov-issue-mark">!</span>
+                  <IconCircleAlert className="ov-issue-mark" size={16} />
                   <span className="ov-issue-label">{it.label}</span>
                   {it.count != null && <span className="ov-issue-count">{it.count}</span>}
                 </div>
@@ -806,7 +787,7 @@ export default function OverviewPage() {
               { key: 'down', label: t('overview.ifDown'), value: ifList.length - ifUp, color: C.off },
             ]} />
           )}
-          <div className="ov-kv">
+          <div className="hy-kv">
             <KV label={t('iface.egressOn', { fam: 'IPv4' })} onClick={() => navigate('/interfaces')}>{ifaces ? egressLine('ipv4', eg4) : '—'}</KV>
             <KV label={t('iface.egressOn', { fam: 'IPv6' })} onClick={() => navigate('/interfaces')}>{ifaces ? egressLine('ipv6', eg6) : '—'}</KV>
             <KV label={t('nav.rules')} onClick={() => navigate('/rules')}>
@@ -833,7 +814,7 @@ export default function OverviewPage() {
               { key: 'soon', label: t('overview.within30d'), value: certInfo.expiring, color: C.warn },
               { key: 'exp', label: t('overview.expired'), value: certInfo.expired, color: C.bad },
             ]} />
-            <div className="ov-kv">
+            <div className="hy-kv">
               {certInfo.list.slice(0, 5).map(({ c, days }) => (
                 <KV key={c.id} label={<span className="ov-ellipsis">{c.name || c.id}{c.is_ca && <span className="ov-tag">CA</span>}</span>} onClick={() => navigate('/tls')}>
                   {days != null && days < 0

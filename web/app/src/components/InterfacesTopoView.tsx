@@ -4,7 +4,7 @@ import {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
-import { type useSelection } from '@hy2scale/ui';
+import { type useSelection, IconGlobe, IconScan, IconZoomIn, IconZoomOut } from '@hy2scale/ui';
 import type { IfaceEntry, IfaceFamilyKey, Egress } from '@/api/types';
 import { isLinkLocal6 } from '@/utils/ipaddr';
 import IfaceTypeBadge, { ifaceType } from '@/components/IfaceTypeBadge';
@@ -608,10 +608,7 @@ export default function InterfacesTopoView({
 
           <div className="iface-topo-inet" style={{ left: L.inet.x, top: L.inet.y, width: L.inet.w, height: L.inet.h }} data-testid="topo-inet">
             <div className="iface-topo-inet-head" style={{ height: INET_HEAD }}>
-              <svg className="iface-topo-globe" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                <circle cx="12" cy="12" r="9" />
-                <path d="M3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9M12 3C9.5 5.6 8.2 8.6 8.2 12s1.3 6.4 3.8 9" />
-              </svg>
+              <IconGlobe className="iface-topo-globe" size={16} />
               <span>{t('iface.topo.internet')}</span>
             </div>
             {L.inetLines.length
@@ -645,13 +642,13 @@ export default function InterfacesTopoView({
       <div className="iface-topo-topbar" data-overlay="">
         <div className="iface-topo-tools">
           <button type="button" className="iface-topo-tool" onClick={resetView} title={t('iface.topo.fit')} data-testid="topo-fit">
-            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
+            <IconScan size={14} />
           </button>
           <button type="button" className="iface-topo-tool" onClick={() => zoomBy(1 / 1.2)} title={t('iface.topo.zoomOut')}>
-            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M5 12h14" /></svg>
+            <IconZoomOut size={14} />
           </button>
           <button type="button" className="iface-topo-tool" onClick={() => zoomBy(1.2)} title={t('iface.topo.zoomIn')}>
-            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M5 12h14M12 5v14" /></svg>
+            <IconZoomIn size={14} />
           </button>
           <span className="iface-topo-legend">
             {FAMS.map((fam) => (

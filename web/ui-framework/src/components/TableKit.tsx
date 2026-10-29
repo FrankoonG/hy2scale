@@ -1,36 +1,14 @@
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import clsx from 'clsx';
+import { useUiLabels } from './UiLabels';
+import { useDismiss } from '../hooks/useDismiss';
+import { readStored, writeStored } from '../hooks/useStoredState';
+import { IconChevronLeft, IconChevronRight, IconColumns3, IconGripVertical } from '../icons';
 
 // Shared table behaviour for Table and TreeTable: user-chosen columns
 // (visibility + order, remembered per table) and pagination with a pager
 // at the bottom of the panel.
-
-export interface TableLabels {
-  columns: string;
-  reset: string;
-  perPage: string;
-  total: (n: number) => string;
-  prev: string;
-  next: string;
-}
-
-const defaultLabels: TableLabels = {
-  columns: 'Columns',
-  reset: 'Reset',
-  perPage: 'Per page',
-  total: (n) => `${n} total`,
-  prev: 'Previous',
-  next: 'Next',
-};
-
-const LabelsContext = createContext<TableLabels>(defaultLabels);
-
-/** Supplies the (translated) words tables use. */
-export function TableLabelsProvider({ labels, children }: { labels: Partial<TableLabels>; children: ReactNode }) {
-  const merged = useMemo(() => ({ ...defaultLabels, ...labels }), [labels]);
-  return <LabelsContext.Provider value={merged}>{children}</LabelsContext.Provider>;
-}
 
 export const PAGE_SIZES = [10, 20, 50, 100];
 const DEFAULT_PAGE_SIZE = 20;
@@ -61,16 +39,14 @@ interface StoredPrefs {
 
 function load(id: string): StoredPrefs {
   try {
-    return JSON.parse(localStorage.getItem('hy-table:' + id) || '{}') || {};
+    return JSON.parse(readStored('hy-table:' + id) || '{}') || {};
   } catch {
     return {};
   }
 }
 
 function save(id: string, p: StoredPrefs) {
-  try {
-    localStorage.setItem('hy-table:' + id, JSON.stringify(p));
-  } catch { /* storage unavailable */ }
+  writeStored('hy-table:' + id, JSON.stringify(p));
 }
 
 /** A stable per-table id: the page path plus the column keys. */
@@ -148,19 +124,9 @@ export function usePager(total: number, size: number, resetKey: string) {
   return { page: cur, pages, setPage, start: (cur - 1) * size, end: cur * size };
 }
 
-function ColumnsIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="3" y="4" width="18" height="16" rx="2" />
-      <line x1="9" y1="4" x2="9" y2="20" />
-      <line x1="15" y1="4" x2="15" y2="20" />
-    </svg>
-  );
-}
-
 /** The column button at the right end of a table's header row. */
 export function ColumnMenu<C extends ColumnPrefsSpec>({ prefs }: { prefs: ReturnType<typeof useColumnPrefs<C>> }) {
-  const L = useContext(LabelsContext);
+  const L = useUiLabels();
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
   const [drag, setDrag] = useState<string | null>(null);
@@ -174,21 +140,14 @@ export function ColumnMenu<C extends ColumnPrefsSpec>({ prefs }: { prefs: Return
       if (r) setPos({ top: r.bottom + 4, right: window.innerWidth - r.right });
     };
     place();
-    const close = (e: MouseEvent) => {
-      if (!pop.current?.contains(e.target as Node) && !btn.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
     window.addEventListener('scroll', place, true);
     window.addEventListener('resize', place);
-    document.addEventListener('mousedown', close);
-    document.addEventListener('keydown', esc);
     return () => {
       window.removeEventListener('scroll', place, true);
       window.removeEventListener('resize', place);
-      document.removeEventListener('mousedown', close);
-      document.removeEventListener('keydown', esc);
     };
   }, [open]);
+  useDismiss([pop, btn], () => setOpen(false), { enabled: open });
 
   if (prefs.menuItems.length === 0) return null;
   const label = (c: C) => c.menuTitle ?? (typeof c.title === 'string' ? c.title : c.key);
@@ -202,7 +161,7 @@ export function ColumnMenu<C extends ColumnPrefsSpec>({ prefs }: { prefs: Return
         aria-label={L.columns}
         onClick={() => setOpen((o) => !o)}
       >
-        <ColumnsIcon />
+        <IconColumns3 size={15} />
       </button>
       {open && pos && createPortal(
         <div ref={pop} className="hy-col-menu" style={{ top: pos.top, right: pos.right }} role="menu">
@@ -222,7 +181,7 @@ export function ColumnMenu<C extends ColumnPrefsSpec>({ prefs }: { prefs: Return
               onDragOver={(e) => e.preventDefault()}
               onDragEnd={() => setDrag(null)}
             >
-              <span className="hy-col-menu-grip" aria-hidden="true">⋮⋮</span>
+              <span className="hy-col-menu-grip" aria-hidden="true"><IconGripVertical size={12} /></span>
               <input type="checkbox" checked={!prefs.hidden.has(c.key)} onChange={() => prefs.toggle(c.key)} />
               <span className="hy-col-menu-label">{label(c)}</span>
             </label>
@@ -242,7 +201,7 @@ export function Pager({ total, size, onSize, pager }: {
   onSize: (n: number) => void;
   pager: ReturnType<typeof usePager>;
 }) {
-  const L = useContext(LabelsContext);
+  const L = useUiLabels();
   if (total <= PAGE_SIZES[0]) return null;
   const { page, pages, setPage } = pager;
   const nums: (number | '…')[] = [];
@@ -260,11 +219,11 @@ export function Pager({ total, size, onSize, pager }: {
         </select>
       </label>
       <div className="hy-pager-pages">
-        <button type="button" className="hy-pager-btn" disabled={page <= 1} aria-label={L.prev} onClick={() => setPage(page - 1)}>‹</button>
+        <button type="button" className="hy-pager-btn" disabled={page <= 1} aria-label={L.prev} onClick={() => setPage(page - 1)}><IconChevronLeft size={14} /></button>
         {nums.map((n, i) => n === '…'
           ? <span key={'e' + i} className="hy-pager-gap">…</span>
           : <button key={n} type="button" className={clsx('hy-pager-btn', n === page && 'current')} onClick={() => setPage(n)}>{n}</button>)}
-        <button type="button" className="hy-pager-btn" disabled={page >= pages} aria-label={L.next} onClick={() => setPage(page + 1)}>›</button>
+        <button type="button" className="hy-pager-btn" disabled={page >= pages} aria-label={L.next} onClick={() => setPage(page + 1)}><IconChevronRight size={14} /></button>
       </div>
     </div>
   );
@@ -297,4 +256,28 @@ export function SortTitle({ title, active, dir, onClick }: { title: ReactNode; a
       <span className="hy-sort-ind" aria-hidden="true">{active ? (dir === 'asc' ? '▲' : '▼') : '▲▼'}</span>
     </button>
   );
+}
+
+/** A header / row checkbox that can show the indeterminate state. */
+export function IndeterminateCheckbox({ checked, indeterminate, onChange }: { checked: boolean; indeterminate: boolean; onChange: () => void }) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (ref.current) ref.current.indeterminate = indeterminate; }, [indeterminate]);
+  return <input ref={ref} type="checkbox" checked={checked} onChange={onChange} />;
+}
+
+/** A click inside a native control of the row (the control handles it, not the row). */
+export function isInteractiveDescendant(target: EventTarget | null, row: HTMLElement): boolean {
+  for (let el = target as HTMLElement | null; el && el !== row; el = el.parentElement) {
+    const tag = el.tagName;
+    if (tag === 'BUTTON' || tag === 'A' || tag === 'INPUT' || tag === 'SELECT' ||
+        tag === 'TEXTAREA' || tag === 'LABEL' || el.isContentEditable) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** The empty-list message (plain text or nodes, never HTML). */
+export function EmptyRow({ children }: { children: ReactNode }) {
+  return <div className="hy-empty">{children}</div>;
 }
