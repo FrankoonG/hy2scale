@@ -17,16 +17,12 @@
     "qrcode.react": "^4.2.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-dropzone": "^14.3.5",
-    "react-hook-form": "^7.54.2",
     "react-i18next": "^15.4.0",
     "react-router-dom": "^6.28.0",
     "xlsx": "^0.18.5",
-    "zod": "^3.24.1",
     "zustand": "^5.0.2"
   },
   "devDependencies": {
-    "@hookform/resolvers": "^3.9.1",
     "@types/react": "^18.2.79",
     "@types/react-dom": "^18.2.25",
     "@vitejs/plugin-react": "^4.3.4",

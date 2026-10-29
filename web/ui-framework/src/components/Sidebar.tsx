@@ -1,5 +1,6 @@
 import { type ReactNode } from 'react';
 import clsx from 'clsx';
+import { IconPanelLeftClose, IconPanelLeftOpen } from '../icons';
 
 export interface SidebarItem {
   key: string;
@@ -36,13 +37,6 @@ export interface SidebarProps {
   toggleLabel?: string;
 }
 
-const toggleIcon = (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="11 17 6 12 11 7" />
-    <polyline points="18 17 13 12 18 7" />
-  </svg>
-);
-
 export function Sidebar({
   items, sections, bottomItems, activeKey, onSelect, mobile, onClose, logo, footer,
   collapsed, onToggleCollapse, toggleLabel,
@@ -55,7 +49,6 @@ export function Sidebar({
       type="button"
       className={clsx('hy-sidebar-item', activeKey === item.key && 'active', item.disabled && 'disabled')}
       onClick={() => { if (!item.disabled) { onSelect(item.key); onClose?.(); } }}
-      style={item.disabled ? { opacity: 0.35, pointerEvents: 'none' } : undefined}
       title={collapsed ? item.label : undefined}
       aria-label={collapsed ? item.label : undefined}
       data-nav={item.key}
@@ -93,7 +86,7 @@ export function Sidebar({
                 aria-expanded={!collapsed}
                 data-testid="sidebar-toggle"
               >
-                {toggleIcon}
+                {collapsed ? <IconPanelLeftOpen /> : <IconPanelLeftClose />}
               </button>
             )}
           </div>

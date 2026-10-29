@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Card, Button, Input, Select, Toggle, FormGroup, FormGrid, useToast } from '@hy2scale/ui';
+import { Card, Button, Input, Select, Toggle, FormGroup, FormGrid, FormStack, Hint, useToast } from '@hy2scale/ui';
 import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
 import * as api from '@/api';
 import { useServerFormInit } from '@/hooks/useFormInit';
@@ -77,7 +77,7 @@ export default function IKEv2Tab() {
 
   return (
     <Card fill={1} title={<>{t('ikev2.title')} <VPNStatus running={ikev2?.running} connected={ikev2?.connected} /></>}>
-      <div style={{ maxWidth: 450, display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <FormStack maxWidth={450}>
         <FormGrid>
           <FormGroup label={t('ikev2.mode')}>
             <Select
@@ -95,7 +95,7 @@ export default function IKEv2Tab() {
         </FormGrid>
 
         <FormGroup label={t('ikev2.localId')}>
-          <Input value={localId} onChange={(e) => setLocalId(e.target.value)} placeholder="node ID" />
+          <Input value={localId} onChange={(e) => setLocalId(e.target.value)} placeholder={t('ikev2.localIdHint')} />
         </FormGroup>
 
         <FormGroup label={t('ikev2.pool')} required>
@@ -115,7 +115,7 @@ export default function IKEv2Tab() {
             <FormGroup label={t('ikev2.cert')} required>
               <Select value={certId} onChange={(e) => setCertId(e.target.value)} options={certOptions} />
             </FormGroup>
-            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('ikev2.certDesc')}</div>
+            <Hint>{t('ikev2.certDesc')}</Hint>
           </>
         ) : (
           <>
@@ -126,18 +126,18 @@ export default function IKEv2Tab() {
               <Toggle checked={pskUserMode} onChange={(e) => setPskUserMode(e.target.checked)} data-testid="psk-user-mode" />
             </FormGroup>
             {pskUserMode ? (
-              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('ikev2.pskUserModeDesc')}</div>
+              <Hint>{t('ikev2.pskUserModeDesc')}</Hint>
             ) : (
               <>
                 <ExitPathList value={exitPath} onChange={setExitPath} label={t('ikev2.defaultExit')} />
-                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('ikev2.pskDesc')}</div>
+                <Hint>{t('ikev2.pskDesc')}</Hint>
               </>
             )}
           </>
         )}
 
-        <Button variant="primary" onClick={handleSave} loading={loading} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
-      </div>
+        <Button variant="primary" className="align-start" onClick={handleSave} loading={loading}>{t('app.save')}</Button>
+      </FormStack>
     </Card>
   );
 }

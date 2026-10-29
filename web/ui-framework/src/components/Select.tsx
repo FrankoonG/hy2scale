@@ -1,8 +1,10 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useDropdownPosition } from '../hooks/useDropdownPosition';
+import { useDismiss } from '../hooks/useDismiss';
+import { IconChevronDown } from '../icons';
 
 export interface SelectOption {
   value: string;
@@ -29,18 +31,8 @@ export function Select({ options, value, onChange, placeholder, disabled, classN
   const dropRef = useRef<HTMLDivElement>(null);
   const pos = useDropdownPosition(open, btnRef, MAX_HEIGHT);
 
-  // Close when clicking outside both the trigger and the portal dropdown
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (ref.current?.contains(target)) return;
-      if (dropRef.current?.contains(target)) return;
-      setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
+  // Close on a press outside the trigger and the portalled list, or Escape
+  useDismiss([ref, dropRef], () => setOpen(false), { enabled: open });
 
   const selected = options.find((o) => o.value === value);
   const label = selected?.label || placeholder || '';
@@ -49,14 +41,6 @@ export function Select({ options, value, onChange, placeholder, disabled, classN
     setOpen(false);
     if (onChange) onChange({ target: { value: val } });
   }, [onChange]);
-
-  // Close on Escape
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [open]);
 
   const dropdownStyle = pos ? {
     position: 'fixed' as const,
@@ -77,9 +61,7 @@ export function Select({ options, value, onChange, placeholder, disabled, classN
         disabled={disabled}
       >
         <span className={clsx('hy-select-label', !selected && 'placeholder')}>{label}</span>
-        <svg className="hy-select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <polyline points="6 9 12 15 18 9" />
-        </svg>
+        <IconChevronDown className="hy-select-arrow" size={14} />
       </button>
       {createPortal(
         <AnimatePresence>

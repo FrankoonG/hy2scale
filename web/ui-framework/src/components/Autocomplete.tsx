@@ -3,13 +3,15 @@ import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useDropdownPosition } from '../hooks/useDropdownPosition';
+import { useDismiss } from '../hooks/useDismiss';
+import { useUiLabels } from './UiLabels';
+import { IconX } from '../icons';
 
 export interface AutocompleteProps {
   options: string[];
   value: string;
   onChange: (val: string) => void;
   placeholder?: string;
-  freeSolo?: boolean;
   className?: string;
   disabled?: boolean;
 }
@@ -17,8 +19,9 @@ export interface AutocompleteProps {
 const MAX_HEIGHT = 180;
 
 export function Autocomplete({
-  options, value, onChange, placeholder, freeSolo = true, className, disabled,
+  options, value, onChange, placeholder, className, disabled,
 }: AutocompleteProps) {
+  const L = useUiLabels();
   const [open, setOpen] = useState(false);
   const [highlighted, setHighlighted] = useState(-1);
   const ref = useRef<HTMLDivElement>(null);
@@ -26,18 +29,9 @@ export function Autocomplete({
   const listRef = useRef<HTMLDivElement>(null);
   const pos = useDropdownPosition(open, ref, MAX_HEIGHT);
 
-  // Close when clicking outside both the trigger and the portal list
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (ref.current?.contains(target)) return;
-      if (listRef.current?.contains(target)) return;
-      setOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
+  // Close on a press outside the input and the portalled list (Escape is
+  // handled by the input's key handler)
+  useDismiss([ref, listRef], () => setOpen(false), { enabled: open, escape: false });
 
   const filtered = options.filter((o) =>
     o.toLowerCase().includes(value.toLowerCase())
@@ -99,12 +93,13 @@ export function Autocomplete({
         {value && (
           <button
             type="button"
-            className="hy-icon-btn"
-            style={{ position: 'absolute', right: 4 }}
+            className="hy-icon-btn tone-danger hy-autocomplete-clear"
             onClick={() => { onChange(''); inputRef.current?.focus(); }}
             tabIndex={-1}
+            title={L.clear}
+            aria-label={L.clear}
           >
-            ✕
+            <IconX size={14} />
           </button>
         )}
       </div>

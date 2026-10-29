@@ -112,3 +112,21 @@ export function ipSortKey(addr?: string): string | null {
   const groups = ip.includes('::') ? [...h, ...Array(8 - h.length - t.length).fill('0'), ...t] : h;
   return '6' + groups.map((g) => g.padStart(4, '0')).join(':');
 }
+
+/** A rule target: IPv4/IPv6 address, CIDR, or a-b range of one family ('' passes). */
+export function validateIP(val: string): boolean {
+  if (!val) return true;
+  const slash = val.indexOf('/');
+  if (slash >= 0) {
+    const ip = val.slice(0, slash), bits = val.slice(slash + 1);
+    if (!/^\d{1,3}$/.test(bits)) return false;
+    if (isIPv4(ip)) return Number(bits) <= 32;
+    return isIPv6(ip) && Number(bits) <= 128;
+  }
+  const dash = val.indexOf('-');
+  if (dash >= 0) {
+    const a = val.slice(0, dash), b = val.slice(dash + 1);
+    return (isIPv4(a) && isIPv4(b)) || (isIPv6(a) && isIPv6(b));
+  }
+  return isIPv4(val) || isIPv6(val);
+}

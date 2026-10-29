@@ -1,33 +1,36 @@
-import { useState, useCallback, useRef, useMemo, type MouseEvent } from 'react';
-import { useDeselectOnBlankClick } from '@/hooks/useDeselectOnBlankClick';
+import { useCallback, useMemo, useRef, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Card, Button, Badge, AlertBadge, Table, Tooltip, useToast, useConfirm, useSelection, type Column } from '@hy2scale/ui';
+import {
+  Card, Button, Badge, Table, Tooltip, IconCircleAlert, useToast, useSelection, useModalState, type Column,
+} from '@hy2scale/ui';
 import type { UserConfig, Session, PasswordConflicts } from '@/api';
 import * as api from '@/api';
+import { GiB } from '@/hooks/useFormat';
+import { useBulkAction } from '@/hooks/useBulkAction';
+import { ListScope } from '@/hooks/useDeselectOnBlankClick';
+import { isPast } from '@/utils/date';
 import { ExitViaCell, exitViaSortValue } from '@/components/ExitViaCell';
 import UserModal from '@/components/UserModal';
+import UserLinksModal from '@/components/UserLinksModal';
 import UserDetailModal from '@/components/UserDetailModal';
-import UserInfoModal from '@/components/UserInfoModal';
 import ImportExportButton from '@/components/ImportExportButton';
 import ResponsiveActions from '@/components/ResponsiveActions';
+import UsageMeter from '@/components/UsageMeter';
+import { BulkButtons, EditSelectedButton, pickSelected } from '@/components/SelectionActions';
+import { boldMarkup } from '@/utils/richText';
+
+const gb = (digits: number) => (b: number) => (b / GiB).toFixed(digits) + ' GB';
+const noSessions: Session[] = [];
 
 export default function UsersPage() {
   const { t } = useTranslation();
   const toast = useToast();
-  const confirm = useConfirm();
   const queryClient = useQueryClient();
 
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [clickPos, setClickPos] = useState<{ x: number; y: number } | undefined>();
-  const [detailId, setDetailId] = useState<string | null>(null);
-  const [detailSnap, setDetailSnap] = useState<UserConfig | null>(null);
-  const [detailOpen, setDetailOpen] = useState(false);
-  const [detailPos, setDetailPos] = useState<{ x: number; y: number } | undefined>();
-  const [preview, setPreview] = useState<UserConfig | null>(null);
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const [previewPos, setPreviewPos] = useState<{ x: number; y: number } | undefined>();
+  const edit = useModalState<string | null>();      // user id; null = new user
+  const detail = useModalState<UserConfig>();       // row click
+  const links = useModalState<UserConfig>();        // username click
 
   const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: api.getUsers, refetchInterval: 5000 });
   const { data: conflicts = {} } = useQuery<PasswordConflicts>({ queryKey: ['userConflicts'], queryFn: api.getUserConflicts, refetchInterval: 5000 });
@@ -41,73 +44,12 @@ export default function UsersPage() {
     }
     return m;
   }, [sessions]);
-  const noSessions: Session[] = [];
   // The dialog follows the live user row (traffic etc. keep polling); the
-  // snapshot covers the close animation after a delete.
-  const detailUser = (detailId && users.find((u) => u.id === detailId)) || detailSnap;
+  // snapshot taken on open covers the close animation after a delete.
+  const detailUser = (detail.data && users.find((u) => u.id === detail.data!.id)) || detail.data || null;
 
-  const openAdd = (e: MouseEvent) => {
-    setClickPos({ x: e.clientX, y: e.clientY });
-    setEditingId(null);
-    setModalOpen(true);
-  };
-
-  const openEdit = (id: string, e: MouseEvent) => {
-    setClickPos({ x: e.clientX, y: e.clientY });
-    setEditingId(id);
-    setModalOpen(true);
-  };
-
-  const openDetailAt = (u: UserConfig, pos?: { x: number; y: number }) => {
-    setDetailPos(pos);
-    setDetailId(u.id);
-    setDetailSnap(u);
-    setDetailOpen(true);
-  };
-  // Username click: the quick preview (links / QR codes).
-  const openPreview = (u: UserConfig, e: MouseEvent) => {
-    setPreviewPos({ x: e.clientX, y: e.clientY });
-    setPreview(u);
-    setPreviewOpen(true);
-  };
-  // Where the last click in the user list landed (modal animation origin).
-  const userClickPos = useRef<{ x: number; y: number } | undefined>(undefined);
-
-  const handleToggle = useCallback(async (u: UserConfig) => {
-    try {
-      await api.toggleUser(u.id, !u.enabled);
-      queryClient.invalidateQueries({ queryKey: ['users'] });
-    } catch (e: any) { toast.error(String(e.message || e)); }
-  }, [queryClient, toast]);
-
-  const handleReset = useCallback(async (u: UserConfig) => {
-    const ok = await confirm({
-      title: t('users.resetTitle'),
-      message: t('users.resetConfirm'),
-      confirmText: t('users.reset'),
-      cancelText: t('app.cancel'),
-    });
-    if (!ok) return;
-    try {
-      await api.resetTraffic(u.id);
-      toast.success(t('users.trafficReset'));
-      queryClient.invalidateQueries({ queryKey: ['users'] });
-    } catch (e: any) { toast.error(String(e.message || e)); }
-  }, [confirm, t, queryClient, toast]);
-
-  const handleDelete = useCallback(async (u: UserConfig) => {
-    const ok = await confirm({
-      title: t('users.deleteTitle'),
-      message: t('users.deleteConfirm', { name: u.username }),
-      danger: true, confirmText: t('app.delete'), cancelText: t('app.cancel'),
-    });
-    if (!ok) return;
-    try {
-      await api.deleteUser(u.id);
-      toast.success(t('users.deleted', { name: u.username }));
-      queryClient.invalidateQueries({ queryKey: ['users'] });
-    } catch (e: any) { toast.error(String(e.message || e)); }
-  }, [confirm, t, queryClient, toast]);
+  // Where the last click in the user list landed (row-click dialog origin).
+  const lastClick = useRef<{ x: number; y: number } | undefined>(undefined);
 
   const handleKick = useCallback(async (s: Session) => {
     try {
@@ -117,66 +59,40 @@ export default function UsersPage() {
     } catch (e: any) { toast.error(String(e.message || e)); }
   }, [queryClient, toast, t]);
 
-  const isExpired = (date?: string) => {
-    if (!date) return false;
-    try { return new Date(date) < new Date(); } catch { return false; }
-  };
-
   const selection = useSelection(users.map((u) => u.id));
-  const listScopeRef = useRef<HTMLDivElement | null>(null);
-  useDeselectOnBlankClick(selection, listScopeRef);
+  const selected = pickSelected(users, selection.selected, (u) => u.id);
+  const bulk = useBulkAction(['users']);
 
-  const bulkToggle = useCallback(async (enabled: boolean) => {
-    try {
-      await Promise.all([...selection.selected].map((id) => api.toggleUser(id, enabled)));
-      toast.success(`${enabled ? t('app.bulkEnable') : t('app.bulkDisable')}: ${selection.count}`);
-      queryClient.invalidateQueries({ queryKey: ['users'] });
-    } catch (e: any) { toast.error(String(e.message || e)); }
-  }, [selection, queryClient, toast, t]);
-
-  const bulkReset = useCallback(async () => {
-    const ok = await confirm({
-      title: t('users.resetTitle'), message: t('users.resetConfirm'),
-      confirmText: t('users.reset'), cancelText: t('app.cancel'),
-    });
-    if (!ok) return;
-    try {
-      await Promise.all([...selection.selected].map((id) => api.resetTraffic(id)));
-      toast.success(`${t('users.bulkResetTraffic')}: ${selection.count}`);
-      queryClient.invalidateQueries({ queryKey: ['users'] });
-    } catch (e: any) { toast.error(String(e.message || e)); }
-  }, [selection, confirm, queryClient, toast, t]);
-
-  const bulkDelete = useCallback(async () => {
-    const ok = await confirm({
-      title: t('app.bulkDelete'), message: t('users.deleteConfirm', { name: `${selection.count} users` }),
-      danger: true, confirmText: t('app.delete'), cancelText: t('app.cancel'),
-    });
-    if (!ok) return;
-    try {
-      await Promise.all([...selection.selected].map((id) => api.deleteUser(id)));
-      toast.success(`${t('app.bulkDelete')}: ${selection.count}`);
-      queryClient.invalidateQueries({ queryKey: ['users'] });
-    } catch (e: any) { toast.error(String(e.message || e)); }
-  }, [selection, confirm, queryClient, toast, t]);
+  const bulkToggle = (enabled: boolean) => bulk(selection.selected, (id) => api.toggleUser(id, enabled),
+    { label: enabled ? t('app.bulkEnable') : t('app.bulkDisable') });
+  const bulkReset = () => bulk(selection.selected, (id) => api.resetTraffic(id), {
+    label: t('users.bulkResetTraffic'),
+    confirm: { title: t('users.resetTitle'), message: t('users.resetConfirm'), confirmText: t('users.reset') },
+  });
+  const bulkDelete = () => bulk(selection.selected, (id) => api.deleteUser(id), {
+    label: t('app.bulkDelete'),
+    confirm: { title: t('app.bulkDelete'), message: t('app.bulkDeleteConfirm', { count: selection.count }), confirmText: t('app.delete'), danger: true },
+  });
 
   const userColumns: Column<UserConfig>[] = [
     {
       key: 'username', title: t('users.username'), width: '120px',
       sortValue: (u) => u.username,
       render: (u) => (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <span className="name-with-mark">
           {conflicts[u.username] && (
-            <AlertBadge tooltip={
-              <div style={{ fontSize: 12 }}>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>{t('users.conflictWarning')}</div>
+            <Tooltip content={
+              <div className="cell-small">
+                <div className="tip-title">{t('users.conflictWarning')}</div>
                 {Object.entries(conflicts[u.username]).map(([proxy, others]) => (
                   <div key={proxy}>{proxy}: {others.join(', ')}</div>
                 ))}
               </div>
-            } />
+            }>
+              <IconCircleAlert size={14} className="alert-mark" />
+            </Tooltip>
           )}
-          <a className="peer-link peer-name-cell" style={{ cursor: 'pointer' }} onClick={(e) => openPreview(u, e)}>{u.username}</a>
+          <a className="peer-link peer-name-cell" onClick={(e) => links.show(u, e)}>{u.username}</a>
         </span>
       ),
     },
@@ -184,7 +100,7 @@ export default function UsersPage() {
       key: 'exit', title: t('users.exitVia'),
       sortValue: (u) => exitViaSortValue(u.exit_via, u.exit_paths),
       render: (u) => (
-        <div style={{ minWidth: 180 }}>
+        <div className="cell-exit">
           <ExitViaCell exitVia={u.exit_via} exitPaths={u.exit_paths} exitMode={u.exit_mode} />
         </div>
       ),
@@ -194,46 +110,22 @@ export default function UsersPage() {
       sortValue: (u) => sessionsByUser.get(u.username)?.length ?? 0,
       render: (u) => {
         const list = sessionsByUser.get(u.username);
-        if (!list || list.length === 0) {
-          return <div style={{ textAlign: 'right', color: 'var(--text-muted)' }}>—</div>;
-        }
+        if (!list || list.length === 0) return <span className="text-muted">—</span>;
         return (
-          <div style={{ textAlign: 'right' }}>
-            <Tooltip content={
-              <div style={{ fontSize: 12 }}>
-                {list.map((s) => (
-                  <div key={s.key}>{s.protocol} <span className="mono">{s.remote_ip}</span></div>
-                ))}
-              </div>
-            }>
-              <Badge variant="green">{list.length}</Badge>
-            </Tooltip>
-          </div>
+          <Tooltip content={
+            <div className="cell-small">
+              {list.map((s) => <div key={s.key}>{s.protocol} <span className="mono">{s.remote_ip}</span></div>)}
+            </div>
+          }>
+            <Badge variant="green">{list.length}</Badge>
+          </Tooltip>
         );
       },
     },
     {
       key: 'traffic', title: t('users.traffic'), width: '130px', className: 'col-right',
       sortValue: (u) => u.traffic_used,
-      render: (u) => {
-        const limitGB = u.traffic_limit > 0 ? (u.traffic_limit / 1073741824).toFixed(1) + ' GB' : '∞';
-        const usedGB = (u.traffic_used / 1073741824).toFixed(2) + ' GB';
-        const pct = u.traffic_limit > 0 ? Math.min(100, (u.traffic_used / u.traffic_limit * 100)) : 0;
-        return (
-          <div style={{ textAlign: 'right' }}>
-            <span style={{ fontSize: 12 }}>
-              <span style={{ color: pct > 90 ? 'var(--red)' : 'var(--primary)', fontWeight: 600 }}>{usedGB}</span>
-              <span className="sep">/</span>
-              <span style={{ color: 'var(--text-muted)' }}>{limitGB}</span>
-            </span>
-            {u.traffic_limit > 0 && (
-              <div style={{ background: 'var(--border-light)', height: 3, borderRadius: 2, marginTop: 3 }}>
-                <div style={{ background: pct > 90 ? 'var(--red)' : 'var(--primary)', height: '100%', width: `${pct}%`, borderRadius: 2 }} />
-              </div>
-            )}
-          </div>
-        );
-      },
+      render: (u) => <UsageMeter used={u.traffic_used} limit={u.traffic_limit} format={gb(2)} formatLimit={gb(1)} />,
     },
     {
       key: 'expiry', title: t('users.expiry'), width: '90px', className: 'col-right',
@@ -242,92 +134,52 @@ export default function UsersPage() {
         const ts = Date.parse(u.expiry_date);
         return Number.isNaN(ts) ? null : ts;
       },
-      render: (u) => (
-        <div style={{ textAlign: 'right' }}>
-          <span style={{ fontSize: 12, color: isExpired(u.expiry_date) ? 'var(--red)' : undefined }}>{u.expiry_date || '—'}</span>
-        </div>
-      ),
+      render: (u) => <span className={`cell-small${isPast(u.expiry_date) ? ' text-bad' : ''}`}>{u.expiry_date || '—'}</span>,
     },
   ];
 
   return (
     <div className="hy-page">
-      {/* Users */}
       <Card
         fill={1}
         title={t('users.title')}
         count={users.length}
         actions={
-          <ResponsiveActions
-            selectedCount={selection.count}
-            onClearSelection={selection.clear}
-            selectedLabel={t('app.selected', { count: selection.count })}
-          >
-            {(() => {
-              const sel = [...selection.selected];
-              const items = sel.map((id) => users.find((u) => u.id === id)).filter(Boolean);
-              const hasDisabled = items.some((u) => !u!.enabled);
-              const hasEnabled = items.some((u) => u!.enabled);
-              return <>
-                {hasDisabled && <Button size="sm" onClick={() => bulkToggle(true)}>{t('app.bulkEnable')}</Button>}
-                {hasEnabled && <Button size="sm" onClick={() => bulkToggle(false)}>{t('app.bulkDisable')}</Button>}
-                {selection.count > 0 && <Button size="sm" onClick={bulkReset}>{t('users.bulkResetTraffic')}</Button>}
-                {selection.count > 0 && <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>}
-              </>;
-            })()}
+          <ResponsiveActions selectedCount={selection.count} onClearSelection={selection.clear}>
+            <BulkButtons selected={selected} isEnabled={(u) => u.enabled} onToggle={bulkToggle} onDelete={bulkDelete}>
+              <Button size="sm" onClick={bulkReset}>{t('users.bulkResetTraffic')}</Button>
+            </BulkButtons>
             <ImportExportButton target="users" />
-            {(() => {
-              const sel = [...selection.selected];
-              if (sel.length !== 1) return null;
-              const onEditClick = (e: MouseEvent) => openEdit(sel[0], e);
-              return (
-                <Button size="sm" variant="success" data-testid="edit-selected-btn" onClick={onEditClick}>
-                  {t('app.edit')}
-                </Button>
-              );
-            })()}
-            <Button size="sm" variant="primary" onClick={openAdd}>{t('users.addUser')}</Button>
+            <EditSelectedButton selected={selected} onEdit={(u, e) => edit.show(u.id, e)} />
+            <Button size="sm" variant="primary" onClick={(e: MouseEvent) => edit.show(null, e)}>{t('users.addUser')}</Button>
           </ResponsiveActions>
         }
         noPadding
       >
-        <div
-          ref={listScopeRef}
-          style={{ display: 'contents' }}
-          onClickCapture={(e) => { userClickPos.current = { x: e.clientX, y: e.clientY }; }}
-        >
+        <ListScope selection={selection} lastClick={lastClick}>
           <Table
             id="users"
             columns={userColumns}
             data={users}
             rowKey={(u) => u.id}
             rowClassName={(u) => !u.enabled ? 'disabled-row' : undefined}
-            emptyText={t('users.noUsers')}
+            emptyText={boldMarkup(t('users.noUsers'))}
             selection={selection}
-            onRowClick={(u) => openDetailAt(u, userClickPos.current)}
+            onRowClick={(u) => detail.show(u, lastClick.current)}
           />
-        </div>
+        </ListScope>
       </Card>
 
       <UserModal
-        open={modalOpen}
-        onClose={() => setModalOpen(false)}
-        editing={editingId ? users.find((u) => u.id === editingId) || null : null}
-        animateFrom={clickPos}
+        {...edit.modalProps}
+        editing={edit.data ? users.find((u) => u.id === edit.data) || null : null}
       />
+
+      <UserLinksModal {...links.modalProps} user={links.data ?? null} />
 
       <UserDetailModal
-        open={previewOpen}
-        onClose={() => setPreviewOpen(false)}
-        user={preview}
-        animateFrom={previewPos}
-      />
-
-      <UserInfoModal
-        open={detailOpen}
-        onClose={() => setDetailOpen(false)}
+        {...detail.modalProps}
         user={detailUser}
-        animateFrom={detailPos}
         sessions={(detailUser && sessionsByUser.get(detailUser.username)) || noSessions}
         conflicts={detailUser ? conflicts[detailUser.username] : undefined}
         onKick={handleKick}

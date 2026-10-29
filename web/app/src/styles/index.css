@@ -1,5 +1,6 @@
 /* App styles; loaded after the framework CSS. */
 @import './widgets.css';
+@import './tables.css';
 @import './nodes-graph.css';
 @import './interfaces.css';
 @import './interfaces-topo.css';

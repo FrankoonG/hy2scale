@@ -1,6 +1,6 @@
 import { type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Modal, Button } from '@hy2scale/ui';
+import { Modal, Button, DetailGrid } from '@hy2scale/ui';
 import type { IfaceEntry, IfaceFamilyKey } from '@/api/types';
 import { fmtBytes, fmtDuration } from '@/hooks/useFormat';
 
@@ -38,7 +38,7 @@ export default function InterfaceDetailModal({
       const addrs = f?.addrs || [];
       const on = !!f && f.mode !== 'off';
       if (addrs.length) {
-        items.push([FAM_LABEL[fam], <span className="iface-detail-addrs">{addrs.map((a) => <span key={a.prefix}>{a.prefix} <span className="iface-muted">{srcLabel(a.source)}</span></span>)}</span>]);
+        items.push([FAM_LABEL[fam], <span className="detail-lines">{addrs.map((a) => <span key={a.prefix}>{a.prefix} <span className="iface-muted">{srcLabel(a.source)}</span></span>)}</span>]);
         shown++;
       } else if (on && f.state === 'acquiring') {
         items.push([FAM_LABEL[fam], <span className="iface-pending">{t('iface.acquiring')}</span>]);
@@ -94,7 +94,7 @@ export default function InterfaceDetailModal({
       footer={
         <>
           {child && onDelete && <Button variant="danger" onClick={onDelete} data-testid="iface-detail-delete">{t('app.delete')}</Button>}
-          <span style={{ flex: 1 }} />
+          <span className="spacer" />
           {child && onRenew && x?.ipv4?.mode === 'dhcp' && (
             <Button onClick={onRenew} disabled={off} data-testid="iface-detail-renew">{t('iface.renew')}</Button>
           )}
@@ -103,21 +103,14 @@ export default function InterfaceDetailModal({
           )}
           {child && onEdit && <Button variant="primary" onClick={onEdit} data-testid="iface-detail-edit">{t('app.edit')}</Button>}
           {!child && onAddChild && (
-            <span title={addChildDisabledReason || undefined} style={{ display: 'inline-flex' }}>
+            <span title={addChildDisabledReason || undefined} className="inline-flex">
               <Button variant="primary" onClick={onAddChild} disabled={!!addChildDisabledReason} data-testid="iface-detail-add">{t('iface.addChild')}</Button>
             </span>
           )}
         </>
       }
     >
-      <div className="iface-detail" data-testid={x ? `detail-${x.name}` : undefined}>
-        {items.map(([label, value], i) => (
-          <div key={i} className="iface-detail-item">
-            <span className="iface-detail-label">{label}</span>
-            <span className="iface-detail-value">{value}</span>
-          </div>
-        ))}
-      </div>
+      <DetailGrid items={items} testId={x ? `detail-${x.name}` : undefined} />
     </Modal>
   );
 }

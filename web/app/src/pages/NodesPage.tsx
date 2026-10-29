@@ -1,8 +1,8 @@
-import { useState, useCallback, useEffect, useRef, type MouseEvent, type ReactNode } from 'react';
+import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Card, Button, Badge, Tooltip,
+  Card, Button, Badge, Tooltip, IconChevronRight,
   TreeTable, TreeCell, useToast, useConfirm, useSelection,
   type TreeNode, type TreeColumn,
 } from '@hy2scale/ui';
@@ -11,7 +11,6 @@ import * as api from '@/api';
 import { useNodeStore } from '@/store/node';
 import { usePageView } from '@/store/pageView';
 import { fmtRate } from '@/hooks/useFormat';
-import { getBasePath } from '@/api/client';
 import NodeModal from '@/components/NodeModal';
 import NodeImportModal from '@/components/NodeImportModal';
 import EditSelfModal from '@/components/EditSelfModal';
@@ -22,17 +21,19 @@ import ImportExportButton from '@/components/ImportExportButton';
 import NodesGraphView from '@/components/NodesGraphView';
 import { useLongPress } from '@/hooks/useLongPress';
 import { useDeselectOnBlankClick } from '@/hooks/useDeselectOnBlankClick';
-import { versionAtLeast } from '../utils/version';
+import { versionAtLeast } from '@/utils/version';
+import { latencyClass } from '@/utils/latency';
+import { fmtPunchAddr, punchesFor } from '@/utils/punch';
+import VersionBadge from '@/components/VersionBadge';
+import { boldMarkup } from '@/utils/richText';
 
 export default function NodesPage() {
   const { t } = useTranslation();
   // Hole-punched routes this node works on (state per route address)
   const { data: punchStatus = [] } = useQuery({ queryKey: ['punchStatus'], queryFn: api.getPunchStatus, refetchInterval: 5000 });
-  const fmtAddr = (a: string) => a.startsWith('@punch:')
-    ? `${t('punch.route')}${a.includes('#') ? ` · ${a.slice(a.indexOf('#') + 1)}` : ''}`
-    : a;
+  const fmtAddr = (a: string) => fmtPunchAddr(t, a);
   const punchBadge = (name: string) => {
-    const sts = punchStatus.filter((p) => p.addr === `@punch:${name}` || p.addr.startsWith(`@punch:${name}#`));
+    const sts = punchesFor(punchStatus, name);
     if (!sts.length) return null;
     const best = sts.find((p) => p.state === 'connected') || sts.find((p) => p.state === 'punching') || sts[0];
     const variant = best.state === 'connected' ? 'blue' : best.state === 'failed' ? 'red' : 'muted';
@@ -132,19 +133,6 @@ export default function NodesPage() {
     setEditSelfOpen(true);
   };
 
-  const handleToggle = useCallback(async (n: TopologyNode, qualifiedPath: string) => {
-    const newDisabled = !n.disabled;
-    setSyncing(qualifiedPath, !newDisabled);
-    try {
-      await api.disableClient(n.name, newDisabled);
-      queryClient.invalidateQueries({ queryKey: ['topology'] });
-    } catch (e: any) {
-      toast.error(String(e.message || e));
-    } finally {
-      setTimeout(() => clearSyncing(qualifiedPath), 3000);
-    }
-  }, [setSyncing, clearSyncing, queryClient, toast]);
-
   const handleNestedToggle = useCallback(async (n: TopologyNode, qualifiedPath: string) => {
     const newNested = !n.nested;
     setSyncing(qualifiedPath, newNested);
@@ -160,24 +148,6 @@ export default function NodesPage() {
       setTimeout(() => clearSyncing(qualifiedPath), 3000);
     }
   }, [setSyncing, clearSyncing, queryClient, toast]);
-
-  const handleDelete = useCallback(async (name: string) => {
-    const ok = await confirm({
-      title: t('nodes.deleteTitle'),
-      message: t('nodes.deleteConfirm', { name }),
-      danger: true,
-      confirmText: t('app.delete'),
-      cancelText: t('app.cancel'),
-    });
-    if (!ok) return;
-    try {
-      await api.deleteClient(name);
-      toast.success(t('nodes.deleted', { name }));
-      queryClient.invalidateQueries({ queryKey: ['topology'] });
-    } catch (e: any) {
-      toast.error(String(e.message || e));
-    }
-  }, [confirm, t, queryClient, toast]);
 
   // Build tree nodes from topology
   const buildTreeNodes = (topo: TopologyNode[]): TreeNode<TopologyNode>[] => {
@@ -248,14 +218,13 @@ export default function NodesPage() {
     if (n.connected === false) return <span className="latency latency-off">{t('nodes.offline')}</span>;
     if (n.latency_ms === -1) return <span className="latency latency-off">{t('nodes.offline')}</span>;
     if (n.latency_ms === 0) return <span className="latency latency-na">—</span>;
-    const cls = n.latency_ms < 80 ? 'latency-good' : n.latency_ms < 200 ? 'latency-med' : 'latency-bad';
-    return <span className={`latency ${cls}`}>{n.latency_ms}ms</span>;
+    return <span className={`latency ${latencyClass(n.latency_ms)}`}>{n.latency_ms}ms</span>;
   };
 
   const dirBadge = (n: TopologyNode) => {
-    if (n.is_self) return <Badge variant="blue">LOCAL</Badge>;
-    if (n.direction === 'inbound') return <Badge variant="muted">IN</Badge>;
-    if (n.direction === 'outbound') return <Badge variant="muted">OUT</Badge>;
+    if (n.is_self) return <Badge variant="blue">{t('nodes.dirLocal')}</Badge>;
+    if (n.direction === 'inbound') return <Badge variant="muted">{t('nodes.dirIn')}</Badge>;
+    if (n.direction === 'outbound') return <Badge variant="muted">{t('nodes.dirOut')}</Badge>;
     return null;
   };
 
@@ -315,16 +284,11 @@ export default function NodesPage() {
         const lossMin = node?.lossless_min_version;
         const outdated = !!n.version && !!lossMin && !n.incompatible && !versionAtLeast(n.version, lossMin);
         const versionBadge = n.version && n.version !== node?.version ? (
-          <span
-            className={`version-badge${n.incompatible ? ' incompatible' : n.compat ? ' compat' : ''}`}
-            style={{ marginLeft: 6 }}
-            title={outdated ? t('nodes.updateForLossless', { v: lossMin }) : undefined}
-          >
-            v{n.version}{n.incompatible ? ' ✗' : outdated ? ' ↑' : ''}
-          </span>
+          <VersionBadge peer version={n.version} compat={n.compat} incompatible={n.incompatible} outdated={outdated}
+            className="version-after-name" title={outdated ? t('nodes.updateForLossless', { v: lossMin }) : undefined} />
         ) : null;
 
-        const nativeBadge = n.native ? <Badge variant="muted">native</Badge> : null;
+        const nativeBadge = n.native ? <Badge variant="muted">{t('nodes.native')}</Badge> : null;
 
         // Tree expand/collapse triangle: shown for non-self, non-native nodes
         // ▶ = nested false (collapsed), ▼ = nested true (expanded)
@@ -333,31 +297,21 @@ export default function NodesPage() {
         // Self/native rows render a non-interactive disabled chevron (forced
         // down state) so the column stays visually consistent with other rows.
         const canExpand = !n.is_self && !n.native && !n.incompatible && !n.conflict;
-        const chevronSvg = (rotated: boolean) => (
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2.5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            style={{ transform: rotated ? 'rotate(90deg)' : 'rotate(0deg)' }}
-          >
-            <path d="M9 6l6 6-6 6" />
-          </svg>
+        const chevron = (rotated: boolean) => (
+          <IconChevronRight size={18} strokeWidth={2.5} className={rotated ? 'rot-90' : undefined} />
         );
         const triangleSlot = canExpand ? (
           <button
             type="button"
             className="hy-tree-toggle"
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleNestedToggle(n, meta.nodeKey); }}
-            aria-label={n.nested ? 'Collapse' : 'Expand'}
+            aria-label={n.nested ? t('app.collapse') : t('app.expand')}
           >
-            {chevronSvg(!!n.nested)}
+            {chevron(!!n.nested)}
           </button>
         ) : (
           <span className="hy-tree-toggle hy-tree-toggle-disabled" aria-hidden="true">
-            {chevronSvg(true)}
+            {chevron(true)}
           </span>
         );
 
@@ -369,7 +323,7 @@ export default function NodesPage() {
               {versionBadge}
               {nativeBadge && <> {nativeBadge}</>}
               {n.via ? (
-                <span className="peer-addr-sub">via {n.via}</span>
+                <span className="peer-addr-sub">{t('nodes.via', { name: n.via })}</span>
               ) : n.addr ? (
                 <span className="peer-addr-sub">
                   {fmtAddr(n.addr)}
@@ -380,11 +334,10 @@ export default function NodesPage() {
                         {n.ip_statuses.map((s, i) => {
                           const isGood = s.latency_ms && s.latency_ms > 0;
                           const isBad = s.latency_ms === -1;
-                          const lat = isGood ? `${s.latency_ms}ms` : isBad ? 'timeout' : s.status;
-                          const color = isGood ? 'var(--green)' : isBad ? 'var(--red)' : 'var(--text-muted)';
+                          const lat = isGood ? `${s.latency_ms}ms` : isBad ? t('nodes.timeout') : s.status;
                           return (
-                            <div key={i} style={{ fontSize: 12 }}>
-                              {fmtAddr(s.addr)} — <span style={{ color, fontWeight: 600 }}>{lat}</span>
+                            <div key={i} className="cell-small">
+                              {fmtAddr(s.addr)} — <span className={`addr-lat ${isGood ? 'good' : isBad ? 'bad' : ''}`}>{lat}</span>
                             </div>
                           );
                         })}
@@ -430,7 +383,7 @@ export default function NodesPage() {
       render: (n) => (
         <>
           <span className="stat-up">{fmtRate(n.tx_rate || 0)}</span>
-          {' '}<span style={{ color: 'var(--text-muted)' }}>/</span>{' '}
+          {' '}<span className="text-muted">/</span>{' '}
           <span className="stat-down">{fmtRate(n.rx_rate || 0)}</span>
         </>
       ),
@@ -440,6 +393,17 @@ export default function NodesPage() {
   ];
 
   const treeNodes = buildTreeNodes(topology);
+  // Row data by tree key (keys are unique across the tree).
+  const findData = (key: string): TopologyNode | undefined => {
+    const search = (nodes: TreeNode<TopologyNode>[]): TopologyNode | undefined => {
+      for (const n of nodes) {
+        if (n.key === key) return n.data;
+        if (n.children) { const r = search(n.children); if (r) return r; }
+      }
+      return undefined;
+    };
+    return search(treeNodes);
+  };
 
   // Collect selectable keys. Self is now selectable too — selecting the
   // self row is the unified way to reach EditSelfModal via the top-right
@@ -515,7 +479,7 @@ export default function NodesPage() {
 
   const bulkDeleteNodes = useCallback(async () => {
     const ok = await confirm({
-      title: t('app.bulkDelete'), message: t('nodes.deleteConfirm', { name: `${selection.count} nodes` }),
+      title: t('app.bulkDelete'), message: t('app.bulkDeleteConfirm', { count: selection.count }),
       danger: true, confirmText: t('app.delete'), cancelText: t('app.cancel'),
     });
     if (!ok) return;
@@ -534,22 +498,11 @@ export default function NodesPage() {
     <ResponsiveActions
       selectedCount={selection.count}
       onClearSelection={selection.clear}
-      selectedLabel={t('app.selected', { count: selection.count })}
       more={more || undefined}
     >
       {(() => {
         // Inspect selected nodes to decide which buttons to show.
         const sel = [...selection.selected];
-        const findData = (key: string): TopologyNode | undefined => {
-          const search = (nodes: TreeNode<TopologyNode>[]): TopologyNode | undefined => {
-            for (const n of nodes) {
-              if (n.key === key) return n.data;
-              if (n.children) { const r = search(n.children); if (r) return r; }
-            }
-            return undefined;
-          };
-          return search(treeNodes);
-        };
         const items = sel.map(findData).filter(Boolean) as TopologyNode[];
         const onlySelf = sel.length === 1 && items.some((n) => n.is_self);
         // Self is preserved for the enable/disable affordance per UX
@@ -597,16 +550,6 @@ export default function NodesPage() {
         const selfId = node?.node_id || '';
         const stripped = selfId && key.startsWith(selfId + '/') ? key.slice(selfId.length + 1) : key;
         if (stripped.includes('/')) return null;
-        const findData = (k: string): TopologyNode | undefined => {
-          const search = (nodes: TreeNode<TopologyNode>[]): TopologyNode | undefined => {
-            for (const n of nodes) {
-              if (n.key === k) return n.data;
-              if (n.children) { const r = search(n.children); if (r) return r; }
-            }
-            return undefined;
-          };
-          return search(treeNodes);
-        };
         const data = findData(key) || findData(stripped);
         if (!data) return null;
         // An inbound first-hop peer is one that dialed us — its
@@ -706,7 +649,7 @@ export default function NodesPage() {
               id="nodes"
               columns={columns}
               nodes={treeNodes}
-              emptyText={t('nodes.noConnections')}
+              emptyText={boldMarkup(t('nodes.noConnections'))}
               selection={selection}
               isSelectable={() => true}
               paginate={false}

@@ -1,23 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { AnimatePresence, motion } from 'framer-motion';
 import clsx from 'clsx';
-import { useClickOutside } from '@hy2scale/ui';
+import {
+  Menu, MenuItem, MenuRadioItem, MenuSeparator, MenuSub, useDismiss,
+  IconChevronDown, IconCircleUser, IconLanguages, IconLogOut, IconSunMoon,
+} from '@hy2scale/ui';
 import i18n from '@/i18n';
 import * as api from '@/api';
 import { useAuthStore } from '@/store/auth';
-import { languages } from '@/components/LanguageSwitcher';
+import { languages, currentLanguage } from '@/components/PrefSwitcher';
 import { useTheme, setThemePref, themePrefs, themeLabelKey } from '@/theme';
-
-const userIcon = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 016-6h4a6 6 0 016 6v1"/></svg>;
-const caretDown = <svg className="hy-user-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9"/></svg>;
-const caretRight = <svg className="hy-dd-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 6 15 12 9 18"/></svg>;
-const globeIcon = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/></svg>;
-const themeIcon = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 010 18z" fill="currentColor"/></svg>;
-const checkIcon = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="5 12 10 17 19 7"/></svg>;
-const logoutIcon = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>;
 
 /** Top bar account button: language and theme (inline expand) and logout. */
 export default function UserMenu() {
@@ -30,23 +24,14 @@ export default function UserMenu() {
   const username = me?.username || loginUser || t('app.account');
 
   const [open, setOpen] = useState(false);
-  const [langOpen, setLangOpen] = useState(false);
-  const [themeOpen, setThemeOpen] = useState(false);
+  const [sub, setSub] = useState<'lang' | 'theme' | null>(null);
   const { pref } = useTheme();
   const ref = useRef<HTMLDivElement>(null);
-  const close = useCallback(() => { setOpen(false); setLangOpen(false); setThemeOpen(false); }, []);
-  useClickOutside(ref, close);
+  const close = useCallback(() => { setOpen(false); setSub(null); }, []);
+  useDismiss(ref, close, { enabled: open });
 
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open, close]);
-
-  const lang = i18n.language || 'en';
-  const current = languages.find((l) => lang.startsWith(l.code))?.code || 'en';
-  const currentName = languages.find((l) => l.code === current)?.name || current;
+  const lang = currentLanguage();
+  const toggleSub = (s: 'lang' | 'theme') => setSub((v) => (v === s ? null : s));
 
   return (
     <div ref={ref} className="hy-user-menu">
@@ -59,94 +44,31 @@ export default function UserMenu() {
         data-testid="user-menu"
         onClick={() => (open ? close() : setOpen(true))}
       >
-        {userIcon}
+        <IconCircleUser />
         <span className="hy-user-name">{username}</span>
-        {caretDown}
+        <IconChevronDown className="hy-user-caret" size={14} />
       </button>
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            className="hy-dropdown hy-user-dropdown"
-            role="menu"
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            transition={{ duration: 0.15, ease: 'easeOut' }}
-          >
-            <button
-              type="button"
-              className="hy-dropdown-item"
-              aria-expanded={langOpen}
-              data-testid="user-menu-language"
-              onClick={() => { setLangOpen((v) => !v); setThemeOpen(false); }}
-            >
-              {globeIcon}
-              <span>{t('app.language')}</span>
-              <span className="hy-dd-meta">{currentName}</span>
-              {caretRight}
-            </button>
-            {langOpen && (
-              <div className="hy-dd-sub" role="group">
-                {languages.map((l) => (
-                  <button
-                    key={l.code}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={l.code === current}
-                    className={clsx('hy-dropdown-item', l.code === current && 'current')}
-                    onClick={() => { i18n.changeLanguage(l.code); close(); }}
-                  >
-                    <span className="hy-dd-check">{l.code === current && checkIcon}</span>
-                    <span>{l.name}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-            <button
-              type="button"
-              className="hy-dropdown-item"
-              aria-expanded={themeOpen}
-              data-testid="user-menu-theme"
-              onClick={() => { setThemeOpen((v) => !v); setLangOpen(false); }}
-            >
-              {themeIcon}
-              <span>{t('app.theme')}</span>
-              <span className="hy-dd-meta">{t(themeLabelKey[pref])}</span>
-              {caretRight}
-            </button>
-            {themeOpen && (
-              <div className="hy-dd-sub" role="group">
-                {themePrefs.map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={p === pref}
-                    data-testid={`user-menu-theme-${p}`}
-                    className={clsx('hy-dropdown-item', p === pref && 'current')}
-                    onClick={() => { setThemePref(p); close(); }}
-                  >
-                    <span className="hy-dd-check">{p === pref && checkIcon}</span>
-                    <span>{t(themeLabelKey[p])}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="hy-dd-divider" />
-            <button
-              type="button"
-              role="menuitem"
-              className="hy-dropdown-item"
-              disabled={forcePasswordChange}
-              data-testid="user-menu-logout"
-              onClick={() => { close(); logout(); navigate('/login'); }}
-            >
-              {logoutIcon}
-              <span>{t('app.logout')}</span>
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <Menu open={open} className="hy-user-dropdown">
+        <MenuSub icon={IconLanguages} label={t('app.language')} meta={lang.name}
+          open={sub === 'lang'} onToggle={() => toggleSub('lang')} testId="user-menu-language">
+          {languages.map((l) => (
+            <MenuRadioItem key={l.code} checked={l.code === lang.code}
+              onClick={() => { i18n.changeLanguage(l.code); close(); }}>{l.name}</MenuRadioItem>
+          ))}
+        </MenuSub>
+        <MenuSub icon={IconSunMoon} label={t('app.theme')} meta={t(themeLabelKey[pref])}
+          open={sub === 'theme'} onToggle={() => toggleSub('theme')} testId="user-menu-theme">
+          {themePrefs.map((p) => (
+            <MenuRadioItem key={p} checked={p === pref} testId={`user-menu-theme-${p}`}
+              onClick={() => { setThemePref(p); close(); }}>{t(themeLabelKey[p])}</MenuRadioItem>
+          ))}
+        </MenuSub>
+        <MenuSeparator />
+        <MenuItem icon={IconLogOut} disabled={forcePasswordChange} testId="user-menu-logout"
+          onClick={() => { close(); logout(); navigate('/login'); }}>
+          {t('app.logout')}
+        </MenuItem>
+      </Menu>
     </div>
   );
 }

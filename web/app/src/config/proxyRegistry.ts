@@ -135,8 +135,5 @@ export const PROXY_REGISTRY: ProxyRegistryEntry[] = [
   },
 ];
 
-/** Proxy types that support per-proxy password overrides (password-only auth). */
-export const PASSWORD_ONLY_PROXIES = PROXY_REGISTRY.filter((p) => p.authType === 'password');
-
 /** L7 proxy types shown in user detail modal (excludes VPN types like l2tp/ikev2). */
 export const DETAIL_PROXIES = PROXY_REGISTRY.filter((p) => p.category === 'l7');

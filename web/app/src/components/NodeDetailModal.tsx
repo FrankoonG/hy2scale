@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { Modal, Button, Badge, useToast } from '@hy2scale/ui';
+import { Modal, Button, Badge, DetailGrid, IconButton, IconCopy, useToast } from '@hy2scale/ui';
 import type { TopologyNode } from '@/api';
 import * as api from '@/api';
 import { useNodeStore } from '@/store/node';
 import { useExitPaths } from '@/hooks/useExitPaths';
 import { fmtRate } from '@/hooks/useFormat';
-import { copyToClipboard } from '@/utils/buildHy2Url';
-import { versionAtLeast } from '../utils/version';
+import { copyToClipboard } from '@/utils/clipboard';
+import { versionAtLeast } from '@/utils/version';
+import { latencyClass, pathLatencyClass } from '@/utils/latency';
+import { fmtPunchAddr, punchesFor } from '@/utils/punch';
+import VersionBadge from '@/components/VersionBadge';
 import { buildGraph, type GraphEdge } from './topo/graphModel';
 import { PathInfoExpand, type PathInfoExpandProps, type Precision } from './PathInfoExpand';
 
@@ -62,12 +65,6 @@ function historyProps(snap: api.DiagPeerHistory | undefined): Pick<PathInfoExpan
   };
 }
 
-function latColor(ms: number): string {
-  if (ms < 0) return 'latency-off';
-  if (ms === 0) return 'latency-na';
-  return ms < 80 ? 'latency-good' : ms < 200 ? 'latency-med' : 'latency-bad';
-}
-
 export default function NodeDetailModal({ open, onClose, qpath, animateFrom, renderStatus, onRemoteConnect }: Props) {
   const { t } = useTranslation();
   const toast = useToast();
@@ -113,9 +110,7 @@ export default function NodeDetailModal({ open, onClose, qpath, animateFrom, ren
     return () => { cancelled = true; clearInterval(id); };
   }, [open, isSelf]);
 
-  const fmtAddr = (a: string) => a.startsWith('@punch:')
-    ? `${t('punch.route')}${a.includes('#') ? ` · ${a.slice(a.indexOf('#') + 1)}` : ''}`
-    : a;
+  const fmtAddr = (a: string) => fmtPunchAddr(t, a);
 
   const items: [string, ReactNode][] = [];
   if (n) {
@@ -127,12 +122,10 @@ export default function NodeDetailModal({ open, onClose, qpath, animateFrom, ren
     const lossMin = self?.lossless_min_version;
     const outdated = !isSelf && !!ver && !!lossMin && !n.incompatible && !versionAtLeast(ver, lossMin);
     items.push([t('nodes.detail.version'), ver ? (
-      <span
-        className={`version-badge${n.incompatible ? ' incompatible' : n.compat ? ' compat' : ''}`}
-        title={outdated ? t('nodes.updateForLossless', { v: lossMin }) : undefined}
-      >v{ver}{n.incompatible ? ' ✗' : outdated ? ' ↑' : ''}</span>
+      <VersionBadge peer version={ver} compat={n.compat} incompatible={n.incompatible} outdated={outdated}
+        title={outdated ? t('nodes.updateForLossless', { v: lossMin }) : undefined} />
     ) : '—']);
-    if (n.native) items.push([t('nodes.detail.type'), <Badge variant="muted">native</Badge>]);
+    if (n.native) items.push([t('nodes.detail.type'), <Badge variant="muted">{t('nodes.native')}</Badge>]);
     if (!isSelf && !n.native) items.push([t('nodes.nested'), n.nested ? t('app.yes') : t('app.no')]);
 
     const addrs = n.ip_statuses && n.ip_statuses.length > 0
@@ -142,19 +135,19 @@ export default function NodeDetailModal({ open, onClose, qpath, animateFrom, ren
           return (
             <span key={i}>
               {fmtAddr(s.addr)}{' '}
-              <span className={good ? latColor(s.latency_ms!) : bad ? 'latency-off' : 'latency-na'}>
-                {good ? `${s.latency_ms}ms` : bad ? 'timeout' : s.status}
+              <span className={good ? latencyClass(s.latency_ms!) : bad ? 'latency-off' : 'latency-na'}>
+                {good ? `${s.latency_ms}ms` : bad ? t('nodes.timeout') : s.status}
               </span>
             </span>
           );
         })
       : (n.addrs && n.addrs.length > 0 ? n.addrs : n.addr ? [n.addr] : []).map((a) => <span key={a}>{fmtAddr(a)}</span>);
-    if (addrs.length > 0) items.push([t('nodes.addresses'), <span className="iface-detail-addrs">{addrs}</span>]);
+    if (addrs.length > 0) items.push([t('nodes.addresses'), <span className="detail-lines">{addrs}</span>]);
     if (n.via) items.push([t('nodes.detail.via'), n.via]);
-    const punches = punchStatus.filter((p) => p.addr === `@punch:${n.name}` || p.addr.startsWith(`@punch:${n.name}#`));
+    const punches = punchesFor(punchStatus, n.name);
     if (!isSelf && punches.length > 0) {
       items.push([t('punch.route'), (
-        <span className="iface-detail-addrs" data-testid="detail-punch">
+        <span className="detail-lines" data-testid="detail-punch">
           {punches.map((p, i) => (
             <span key={i}>
               {fmtAddr(p.addr)}: {t(`punch.state.${p.state}`)}
@@ -172,7 +165,7 @@ export default function NodeDetailModal({ open, onClose, qpath, animateFrom, ren
     const egLines = e == null ? [] : [fam(e.ipv4, 'v4'), fam(e.ipv6, 'v6')].filter(Boolean);
     items.push([t('nodes.egressIp'), e == null
       ? <span className="iface-muted">{t('nodes.egressUnknown')}</span>
-      : egLines.length ? <span className="iface-detail-addrs">{egLines}</span> : '—']);
+      : egLines.length ? <span className="detail-lines">{egLines}</span> : '—']);
     items.push([t('nodes.traffic'), (
       <span>
         <span className="stat-up">↑{fmtRate(n.tx_rate || 0)}</span>
@@ -184,7 +177,7 @@ export default function NodeDetailModal({ open, onClose, qpath, animateFrom, ren
   }
 
   const pathEl = hops.length > 0 && (
-    <div className="node-detail-path" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10, fontFamily: 'var(--mono)', fontSize: 12 }}>
+    <div className="node-detail-path">
       <span className="hy-topo-pathinfo-label">{t('nodes.detail.path')}</span>
       <span className="hy-topo-pathinfo-chain" data-testid="detail-path">
         {hops.map((hop, i) => {
@@ -192,31 +185,25 @@ export default function NodeDetailModal({ open, onClose, qpath, animateFrom, ren
           return (
             <span key={i}>
               {i > 0 && <span className="hy-topo-pathinfo-sep">/</span>}
-              <span className="hy-topo-pathinfo-hop" style={{ color: reach ? 'var(--green)' : 'var(--red)' }}>{hop.name}</span>
+              <span className={`hy-topo-pathinfo-hop ${reach ? 'reach-ok' : 'reach-bad'}`}>{hop.name}</span>
             </span>
           );
         })}
       </span>
-      <span className={`hy-topo-pathinfo-lat ${totalLat < 0 || n?.connected === false ? 'lat-bad' : totalLat === 0 ? 'lat-na' : totalLat < 80 ? 'lat-ok' : totalLat < 200 ? 'lat-mid' : 'lat-bad'}`}>
+      <span className={`hy-topo-pathinfo-lat ${pathLatencyClass(totalLat, n?.connected === false)}`}>
         {totalLat < 0 || n?.connected === false ? t('nodes.offline') : totalLat === 0 ? '—' : `${Math.round(totalLat)}ms`}
       </span>
       {copyPath && (
-        <button
-          type="button"
+        <IconButton
+          icon={IconCopy}
+          iconSize={12}
           className="hy-topo-pathinfo-copy"
-          style={{ marginLeft: 0 }}
-          aria-label={t('nodes.graph.copyPath')}
-          title={t('nodes.graph.copyPath')}
+          label={t('nodes.graph.copyPath')}
           onClick={async () => {
             if (await copyToClipboard(copyPath)) toast.success(t('app.copied'));
             else toast.error(t('nodes.exportFailed'));
           }}
-        >
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-            <rect x="4" y="4" width="6.5" height="6.5" rx="1.25" stroke="currentColor" strokeWidth="1.5" />
-            <path d="M8 2.5V2.25C8 1.56 7.44 1 6.75 1H2.25C1.56 1 1 1.56 1 2.25V6.75C1 7.44 1.56 8 2.25 8H2.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-          </svg>
-        </button>
+        />
       )}
     </div>
   );
@@ -237,7 +224,7 @@ export default function NodeDetailModal({ open, onClose, qpath, animateFrom, ren
       wide
       footer={
         <>
-          <span style={{ flex: 1 }} />
+          <span className="spacer" />
           <Button onClick={onClose}>{t('app.close')}</Button>
           {showRemote && (
             <Button
@@ -255,16 +242,9 @@ export default function NodeDetailModal({ open, onClose, qpath, animateFrom, ren
     >
       <div data-testid={key ? `node-detail-${key}` : undefined}>
         {pathEl}
-        <div className="iface-detail">
-          {items.map(([label, value], i) => (
-            <div key={i} className="iface-detail-item">
-              <span className="iface-detail-label">{label}</span>
-              <span className="iface-detail-value">{value}</span>
-            </div>
-          ))}
-        </div>
+        <DetailGrid items={items} />
         {n && !isSelf && fullPath.length >= 2 && (
-          <div style={{ marginTop: 12 }}>
+          <div className="node-detail-history">
             <PathInfoExpand {...historyProps(peerHistory[recorderKey])} perHopLatencyMs={perHopLatencyMs} />
           </div>
         )}

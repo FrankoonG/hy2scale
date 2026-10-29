@@ -12,12 +12,21 @@
 .hy-toggle.sm .slider{border-radius:3px}
 .hy-toggle.sm .slider::before{width:10px;height:10px;border-radius:2px}
 .hy-toggle.sm input:checked+.slider::before{transform:translateX(14px)}
+.hy-toggle-offset{padding-top:6px}
+.hy-toggle-row{display:inline-flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;user-select:none}
+.hy-toggle-row .hy-toggle-label{color:var(--text)}
 
 /* ====== Forms ====== */
 .hy-form-group{display:flex;flex-direction:column;gap:4px}
 .hy-form-label{font-size:12px;font-weight:500;color:var(--text-muted);display:flex;align-items:center;gap:4px}
 .hy-form-label .required{color:var(--red)}
 .hy-form-error{font-size:11px;color:var(--red)}
+.hy-form-hint{font-size:11px;color:var(--text-muted);margin-top:4px;line-height:1.4}
+.hy-hint{font-size:12px;color:var(--text-muted)}
+.hy-form-stack{display:flex;flex-direction:column}
+.hy-form-row{display:flex;gap:14px;align-items:flex-start}
+.hy-form-row>:first-child{flex:0 0 auto}
+.hy-form-row>:not(:first-child){flex:1;min-width:0}
 .hy-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .hy-form-grid.cols-1{grid-template-columns:1fr}
 .hy-form-grid .full-width{grid-column:1/-1}
@@ -31,6 +40,8 @@
 .hy-input::placeholder{color:var(--text-muted)}
 .hy-input:disabled{opacity:.6;cursor:not-allowed}
 .hy-input.error{border-color:var(--red)}
+.hy-input.mono{font-family:var(--mono)}
+.hy-input.mono.small{font-size:11px}
 
 .hy-textarea{background:var(--input-bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:var(--radius-sm);font-size:12px;font-family:var(--mono);outline:none;transition:border .15s;width:100%;min-height:80px;resize:vertical}
 .hy-textarea:focus{border-color:var(--primary);box-shadow:0 0 0 3px var(--focus-ring)}
@@ -115,6 +126,7 @@
 /* ====== Autocomplete ====== */
 .hy-autocomplete{position:relative;width:100%}
 .hy-autocomplete .hy-input{width:100%;box-sizing:border-box}
+.hy-autocomplete-clear{position:absolute;right:4px}
 .hy-autocomplete-list{z-index:10000;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);max-height:180px;overflow-y:auto;box-shadow:var(--shadow-pop)}
 .hy-autocomplete-item{padding:7px 10px;font-size:13px;cursor:pointer;font-family:var(--mono)}
 .hy-autocomplete-item:hover,.hy-autocomplete-item.highlighted{background:var(--primary-light);color:var(--primary)}

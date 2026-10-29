@@ -1,145 +1,50 @@
-import { useState, useCallback, useRef, type MouseEvent } from 'react';
+import { useState, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  Card, Button, Table, Modal, Input, Tabs, TabPanel,
-  FormGroup, useToast, useConfirm, useSelection, type Column,
-} from '@hy2scale/ui';
-import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
-import { TargetList } from '@/components/TargetList';
+import { useQuery } from '@tanstack/react-query';
+import { Card, Button, Table, Tabs, TabPanel, useSelection, useModalState, type Column } from '@hy2scale/ui';
 import { ExitViaCell, exitViaSortValue } from '@/components/ExitViaCell';
 import ImportExportButton from '@/components/ImportExportButton';
 import ResponsiveActions from '@/components/ResponsiveActions';
-import { useDeselectOnBlankClick } from '@/hooks/useDeselectOnBlankClick';
+import RuleModal from '@/components/RuleModal';
+import { BulkButtons, EditSelectedButton, pickSelected } from '@/components/SelectionActions';
+import { useBulkAction } from '@/hooks/useBulkAction';
+import { ListScope } from '@/hooks/useDeselectOnBlankClick';
 import type { RoutingRule } from '@/api';
 import * as api from '@/api';
 
+type RuleType = 'ip' | 'domain';
+
 export default function RulesPage() {
   const { t } = useTranslation();
-  const toast = useToast();
-  const confirmDlg = useConfirm();
-  const queryClient = useQueryClient();
-
   const { data } = useQuery({ queryKey: ['rules'], queryFn: api.getRules });
-
   const rules = data?.rules || [];
 
-  const [tab, setTab] = useState('ip');
-
-  const ipRules = rules.filter((r) => r.type === 'ip');
-  const domainRules = rules.filter((r) => r.type === 'domain');
-  const currentRules = tab === 'ip' ? ipRules : domainRules;
+  const [tab, setTab] = useState<RuleType>('ip');
+  const currentRules = rules.filter((r) => r.type === tab);
 
   const selection = useSelection(currentRules.map((r) => r.id));
-  const listScopeRef = useRef<HTMLDivElement | null>(null);
-  useDeselectOnBlankClick(selection, listScopeRef);
+  const selected = pickSelected(currentRules, selection.selected, (r) => r.id);
+  const edit = useModalState<RoutingRule | null>();
+  const bulk = useBulkAction(['rules']);
 
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editId, setEditId] = useState<string | null>(null);
-  const [clickPos, setClickPos] = useState<{ x: number; y: number } | undefined>();
-
-  // Rule form
-  const [name, setName] = useState('');
-  const [targets, setTargets] = useState<string[]>([]);
-  const [exitPath, setExitPath] = useState<ExitPathValue>({ paths: [''], mode: '' });
-  const [priority, setPriority] = useState<string>('0');
-  const [ruleEnabled, setRuleEnabled] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  const resetForm = () => {
-    setName(''); setTargets([]); setExitPath({ paths: [''], mode: '' });
-    setPriority('0'); setRuleEnabled(true);
-  };
-
-  const openAdd = (e: MouseEvent) => {
-    setClickPos({ x: e.clientX, y: e.clientY });
-    setEditId(null);
-    resetForm();
-    setModalOpen(true);
-  };
-
-  const openEdit = (r: RoutingRule, e: MouseEvent) => {
-    setClickPos({ x: e.clientX, y: e.clientY });
-    setEditId(r.id);
-    setName(r.name);
-    setTargets([...r.targets]);
-    setPriority(String(r.priority || 0));
-    setExitPath(apiToExitPath(r.exit_via, r.exit_paths, r.exit_mode));
-    setRuleEnabled(r.enabled);
-    setModalOpen(true);
-  };
-
-  const handleSave = async () => {
-    const targetList = targets.filter(Boolean);
-    if (targetList.length === 0) { toast.error(t('rules.targetsRequired')); return; }
-
-    const exitData = exitPathToApi(exitPath) as { exit_via: string; exit_paths?: string[]; exit_mode?: '' | 'quality' | 'aggregate' };
-    if (!exitData.exit_via) { toast.error(t('rules.exitRequired')); return; }
-
-    setSaving(true);
-    try {
-      const prioN = parseInt(priority, 10);
-      const ruleType = tab as 'ip' | 'domain';
-      const ruleData = {
-        id: editId || `${ruleType}-${Date.now().toString(36)}`,
-        name, type: ruleType, targets: targetList,
-        ...exitData,
-        priority: Number.isFinite(prioN) ? prioN : 0,
-        enabled: ruleEnabled,
-      };
-      if (editId) {
-        await api.updateRule(editId, ruleData);
-      } else {
-        await api.createRule(ruleData);
-      }
-      toast.success(t('rules.saved'));
-      queryClient.invalidateQueries({ queryKey: ['rules'] });
-      setModalOpen(false);
-    } catch (e: any) { toast.error(String(e.message || e)); }
-    finally { setSaving(false); }
-  };
-
-  const bulkToggle = useCallback(async (enabled: boolean) => {
-    try {
-      await Promise.all([...selection.selected].map((id) => api.toggleRule(id, enabled)));
-      toast.success(`${enabled ? t('app.bulkEnable') : t('app.bulkDisable')}: ${selection.count}`);
-      queryClient.invalidateQueries({ queryKey: ['rules'] });
-    } catch (e: any) { toast.error(String(e.message || e)); }
-  }, [selection, queryClient, toast, t]);
-
-  const bulkDelete = useCallback(async () => {
-    const ok = await confirmDlg({
-      title: t('app.bulkDelete'), message: t('rules.deleteConfirm'),
-      danger: true, confirmText: t('app.delete'), cancelText: t('app.cancel'),
-    });
-    if (!ok) return;
-    try {
-      await Promise.all([...selection.selected].map((id) => api.deleteRule(id)));
-      toast.success(`${t('app.bulkDelete')}: ${selection.count}`);
-      queryClient.invalidateQueries({ queryKey: ['rules'] });
-    } catch (e: any) { toast.error(String(e.message || e)); }
-  }, [selection, confirmDlg, queryClient, toast, t]);
+  const bulkToggle = (enabled: boolean) => bulk(selection.selected, (id) => api.toggleRule(id, enabled),
+    { label: enabled ? t('app.bulkEnable') : t('app.bulkDisable') });
+  const bulkDelete = () => bulk(selection.selected, (id) => api.deleteRule(id), {
+    label: t('app.bulkDelete'),
+    confirm: { title: t('app.bulkDelete'), message: t('app.bulkDeleteConfirm', { count: selection.count }), confirmText: t('app.delete'), danger: true },
+  });
 
   const captureNote = data?.capture === 'dnat' ? 'rules.localOnlyCapture'
     : data?.capture === 'none' ? 'rules.noCapture' : '';
-  const unavailableBanner = captureNote ? (
-    <div className="hy-warn-banner">
-      {t(captureNote)}
-    </div>
-  ) : null;
 
   const columns: Column<RoutingRule>[] = [
-    { key: 'name', title: t('rules.name'), sortValue: (r) => r.name || null, render: (r) => (
-      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <strong>{r.name || '—'}</strong>
-      </span>
-    )},
-    { key: 'targets', title: t('rules.targets'), sortValue: (r) => r.targets[0] ?? null, render: (r) => <span className="mono" style={{ fontSize: 11 }}>{r.targets.slice(0, 3).join(', ')}{r.targets.length > 3 ? ` +${r.targets.length - 3}` : ''}</span> },
+    { key: 'name', title: t('rules.name'), sortValue: (r) => r.name || null, render: (r) => <strong>{r.name || '—'}</strong> },
+    {
+      key: 'targets', title: t('rules.targets'), sortValue: (r) => r.targets[0] ?? null,
+      render: (r) => <span className="mono rule-targets">{r.targets.slice(0, 3).join(', ')}{r.targets.length > 3 ? ` +${r.targets.length - 3}` : ''}</span>,
+    },
     { key: 'exit', title: t('rules.exitVia'), sortValue: (r) => exitViaSortValue(r.exit_via, r.exit_paths), render: (r) => <ExitViaCell exitVia={r.exit_via} exitPaths={r.exit_paths} exitMode={r.exit_mode} /> },
-    // Per-row edit column retired — select a row and use the top-right Edit button.
   ];
-
-  const tabTitle = tab === 'ip' ? t('rules.ipRules') : t('rules.domainRules');
 
   return (
     <div className="hy-page">
@@ -149,100 +54,41 @@ export default function RulesPage() {
           { key: 'domain', label: t('rules.domainRules') },
         ]}
         activeKey={tab}
-        onChange={setTab}
+        onChange={(k) => setTab(k as RuleType)}
       />
 
       <TabPanel fill activeKey={tab} keys={['ip', 'domain']}>
-        {unavailableBanner}
+        {captureNote && <div className="hy-warn-banner">{t(captureNote)}</div>}
         <Card
           fill={1}
-          title={tabTitle}
+          title={tab === 'ip' ? t('rules.ipRules') : t('rules.domainRules')}
           count={currentRules.length}
           actions={
-            <ResponsiveActions
-              selectedCount={selection.count}
-              onClearSelection={selection.clear}
-              selectedLabel={t('app.selected', { count: selection.count })}
-            >
-              {(() => {
-                const sel = [...selection.selected];
-                const items = sel.map((id) => currentRules.find((r) => r.id === id)).filter(Boolean);
-                const hasDisabled = items.some((r) => !r!.enabled);
-                const hasEnabled = items.some((r) => r!.enabled);
-                return <>
-                  {hasDisabled && <Button size="sm" onClick={() => bulkToggle(true)}>{t('app.bulkEnable')}</Button>}
-                  {hasEnabled && <Button size="sm" onClick={() => bulkToggle(false)}>{t('app.bulkDisable')}</Button>}
-                  {selection.count > 0 && <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>}
-                </>;
-              })()}
+            <ResponsiveActions selectedCount={selection.count} onClearSelection={selection.clear}>
+              <BulkButtons selected={selected} isEnabled={(r) => r.enabled} onToggle={bulkToggle} onDelete={bulkDelete} />
               <ImportExportButton target="rules" />
-              {(() => {
-                const sel = [...selection.selected];
-                if (sel.length !== 1) return null;
-                const single = currentRules.find((r) => r.id === sel[0]);
-                if (!single) return null;
-                const onEditClick = (e: MouseEvent) => openEdit(single, e);
-                return (
-                  <Button size="sm" variant="success" data-testid="edit-selected-btn" onClick={onEditClick}>
-                    {t('app.edit')}
-                  </Button>
-                );
-              })()}
-              <Button size="sm" variant="primary" onClick={openAdd}>{t('rules.newRule')}</Button>
+              <EditSelectedButton selected={selected} onEdit={(r, e) => edit.show(r, e)} />
+              <Button size="sm" variant="primary" onClick={(e: MouseEvent) => edit.show(null, e)}>{t('rules.newRule')}</Button>
             </ResponsiveActions>
           }
           noPadding
         >
-          <div ref={listScopeRef} style={{ display: 'contents' }}>
-          <Table
-            id={`rules.${tab}`}
-            columns={columns}
-            data={currentRules}
-            rowKey={(r) => r.id}
-            rowClassName={(r) => !r.enabled ? 'disabled-row' : undefined}
-            emptyText={t('rules.noRules')}
-            selection={selection}
-          />
-          </div>
+          <ListScope selection={selection}>
+            <Table
+              id={`rules.${tab}`}
+              columns={columns}
+              data={currentRules}
+              rowKey={(r) => r.id}
+              rowClassName={(r) => !r.enabled ? 'disabled-row' : undefined}
+              emptyText={t('rules.noRules')}
+              selection={selection}
+            />
+          </ListScope>
         </Card>
       </TabPanel>
 
-      {/* Rule Modal — type determined by active tab */}
-      <Modal
-        open={modalOpen} onClose={() => setModalOpen(false)}
-        title={editId ? t('app.edit') : t('rules.newRule')}
-        animateFrom={clickPos}
-        footer={
-          <>
-            <Button onClick={() => setModalOpen(false)}>{t('app.cancel')}</Button>
-            <Button variant="primary" onClick={handleSave} loading={saving}>
-              {editId ? t('app.save') : t('rules.add')}
-            </Button>
-          </>
-        }
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <FormGroup label={t('rules.name')}>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('tls.optional')} />
-          </FormGroup>
-          <TargetList type={tab as 'ip' | 'domain'} value={targets} onChange={setTargets} />
-
-          <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-            <div style={{ flex: '0 0 120px' }}>
-              <FormGroup label={t('rules.priority')}>
-                <Input
-                  type="number"
-                  value={priority}
-                  onChange={(e) => setPriority(e.target.value)}
-                  placeholder="0"
-                />
-              </FormGroup>
-            </div>
-          </div>
-
-          <ExitPathList value={exitPath} onChange={setExitPath} label={t('rules.exitVia')} />
-        </div>
-      </Modal>
+      {/* Type follows the active tab */}
+      <RuleModal {...edit.modalProps} type={tab} editing={edit.data ?? null} />
     </div>
   );
 }

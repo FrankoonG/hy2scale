@@ -1,24 +1,9 @@
-import { type ReactNode, useRef, useEffect } from 'react';
+import { type ReactNode } from 'react';
 import * as React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
 import type { SelectionState } from './Table';
-import { ColumnMenu, Pager, SortTitle, sortBy, type SortState, tableId, useColumnPrefs, usePager } from './TableKit';
-
-// Mirror of Table's isInteractiveDescendant — kept inline to avoid making
-// it part of the framework's public surface. Walks up from the click
-// target to the row and bails on any ancestor that's a native control,
-// so row-body click selection never preempts an Edit / checkbox click.
-function isInteractiveDescendant(target: EventTarget | null, row: HTMLElement): boolean {
-  for (let el = target as HTMLElement | null; el && el !== row; el = el.parentElement) {
-    const tag = el.tagName;
-    if (tag === 'BUTTON' || tag === 'A' || tag === 'INPUT' || tag === 'SELECT' ||
-        tag === 'TEXTAREA' || tag === 'LABEL' || el.isContentEditable) {
-      return true;
-    }
-  }
-  return false;
-}
+import { ColumnMenu, EmptyRow, IndeterminateCheckbox, Pager, SortTitle, isInteractiveDescendant, sortBy, type SortState, tableId, useColumnPrefs, usePager } from './TableKit';
 
 export interface TreeColumn<T> {
   key: string;
@@ -94,12 +79,6 @@ function flattenNodes<T>(
   return result;
 }
 
-function IndeterminateCheckbox({ checked, indeterminate, onChange }: { checked: boolean; indeterminate: boolean; onChange: () => void }) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => { if (ref.current) ref.current.indeterminate = indeterminate; }, [indeterminate]);
-  return <input ref={ref} type="checkbox" checked={checked} onChange={onChange} />;
-}
-
 export function TreeTable<T>({ columns: allColumns, nodes: rawNodes, emptyText, selection, isSelectable, renderDetail, id, paginate = true, onRowClick: rowAction }: TreeTableProps<T>) {
   const tid = tableId(id, allColumns.map((c) => c.key));
   const prefs = useColumnPrefs(tid, allColumns);
@@ -111,7 +90,7 @@ export function TreeTable<T>({ columns: allColumns, nodes: rawNodes, emptyText, 
   const rows = flattenNodes(paginate ? nodes.slice(pager.start, pager.end) : nodes);
 
   if (nodes.length === 0 && emptyText) {
-    return <div className="hy-empty" dangerouslySetInnerHTML={typeof emptyText === 'string' ? { __html: emptyText } : undefined}>{typeof emptyText !== 'string' ? emptyText : undefined}</div>;
+    return <EmptyRow>{emptyText}</EmptyRow>;
   }
 
   return (

@@ -35,7 +35,6 @@ function rippleMaxRadius(force: number) { return 40 + force * 360; }
 const HALO_RATIO = 0.5;
 function rippleTotalRadius(force: number) { return rippleMaxRadius(force) * (1 + HALO_RATIO); }
 function rippleExpandTime(force: number) { return 0.8 + force * 2.0; }
-function rippleCorePhase(force: number) { return rippleMaxRadius(force) / rippleTotalRadius(force); }
 function easeOutCubic(t: number) { return 1 - Math.pow(1 - t, 3); }
 
 // Glow decay: per-frame multiplier — controls how fast circles fade after being lit
