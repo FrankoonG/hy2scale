@@ -1,0 +1,176 @@
+/* Tables, tree rows, row and bulk actions. */
+/* ====== Peer Table ====== */
+.hy-table-wrap{overflow-x:auto;overflow-y:visible;-webkit-overflow-scrolling:touch}
+/* Table box: column button over the header's right end, pager at the
+   bottom of the panel. */
+.hy-table-box{position:relative}
+.hy-table.has-col-menu th:last-child{padding-right:48px}
+.hy-col-btn{position:absolute;top:4px;right:10px;z-index:2;width:26px;height:26px;padding:4px;border:1px solid transparent;border-radius:var(--radius-sm);background:var(--surface);color:var(--text-muted);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;opacity:.7;transition:color .12s,background .12s,opacity .12s,border-color .12s}
+.hy-col-btn svg{width:15px;height:15px}
+.hy-col-btn:hover,.hy-col-btn.active{opacity:1;color:var(--primary);background:var(--primary-light)}
+.hy-col-menu{position:fixed;z-index:1060;min-width:200px;max-width:280px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:0 4px 12px rgba(0,0,0,.15);padding:4px 0;font-size:13px}
+.hy-col-menu-head{display:flex;align-items:center;gap:8px;padding:6px 12px 6px;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border-light);margin-bottom:4px}
+.hy-col-menu-reset{margin-left:auto;border:none;background:none;color:var(--primary);font-size:11px;cursor:pointer;padding:0;text-transform:none;letter-spacing:0}
+.hy-col-menu-item{display:flex;align-items:center;gap:8px;padding:5px 12px;cursor:pointer;user-select:none;color:var(--text)}
+.hy-col-menu-item:hover{background:var(--bg)}
+.hy-col-menu-item.dragging{opacity:.5}
+.hy-col-menu-item input{accent-color:var(--primary);margin:0}
+.hy-col-menu-grip{color:var(--text-muted);font-size:10px;letter-spacing:-2px;cursor:grab}
+.hy-col-menu-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hy-pager{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:10px 20px;border-top:1px solid var(--border-light);font-size:12px;color:var(--text-muted)}
+.hy-pager-size{display:inline-flex;align-items:center;gap:6px}
+.hy-pager-size select{font:inherit;color:var(--text);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:2px 6px;cursor:pointer}
+.hy-pager-pages{display:inline-flex;align-items:center;gap:4px;margin-left:auto}
+.hy-pager-btn{min-width:28px;height:28px;padding:0 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-secondary);font:inherit;font-family:var(--mono);cursor:pointer;transition:background .12s,color .12s,border-color .12s}
+.hy-pager-btn:hover:not(:disabled){color:var(--primary);border-color:var(--primary)}
+.hy-pager-btn.current{background:var(--primary);border-color:var(--primary);color:#fff}
+.hy-pager-btn:disabled{opacity:.4;cursor:default}
+.hy-pager-gap{padding:0 2px}
+.hy-sort-btn{display:inline-flex;align-items:center;gap:4px;padding:0;border:none;background:none;font:inherit;color:inherit;text-transform:inherit;letter-spacing:inherit;cursor:pointer}
+.hy-sort-btn:hover,.hy-sort-btn.active{color:var(--primary)}
+.hy-sort-ind{font-size:8px;opacity:.35;letter-spacing:-1px}
+.hy-sort-btn.active .hy-sort-ind{opacity:1}
+.hy-table tr.hy-row-action{cursor:pointer}
+.hy-table tr.hy-row-action:hover td{background:var(--bg)}
+.hy-table{width:100%;min-width:700px;border-collapse:collapse;user-select:none;-webkit-user-select:none}
+.hy-table th{text-align:left;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;padding:8px 10px;border-bottom:2px solid var(--border);white-space:nowrap;background:var(--surface)}
+.hy-table th:first-child,.hy-table td:first-child{padding-left:20px}
+.hy-table th:last-child,.hy-table td:last-child{padding-right:20px}
+.hy-table td{padding:10px;border-bottom:1px solid var(--border-light);font-size:13px;vertical-align:middle}
+.hy-table tr:last-child td{border-bottom:none}
+.hy-table .actions{display:inline-flex;gap:2px;justify-content:flex-end}
+.hy-table .mono{font-family:var(--mono);font-size:12px}
+.hy-table .col-status{width:75px;text-align:center}
+.hy-table .col-dir{width:55px}
+.hy-table .col-name{min-width:200px;user-select:text;-webkit-user-select:text}
+.hy-table .col-name .hy-badge,.hy-table .col-name .version-badge,.hy-table .col-name .hy-tooltip-wrap{user-select:none;-webkit-user-select:none}
+.hy-table .col-traffic{width:160px;font-size:11px;font-family:var(--mono);white-space:nowrap}
+.hy-table .col-nested{width:70px;text-align:center}
+.hy-table .col-actions{width:150px;text-align:right}
+.hy-table .col-right{text-align:right}
+
+/* Checkbox column */
+.hy-table .col-check{width:40px;text-align:center;user-select:none;-webkit-user-select:none;vertical-align:middle;cursor:pointer}
+.hy-table .col-check input[type="checkbox"]{width:16px;height:16px;cursor:pointer;accent-color:var(--primary);margin:0;vertical-align:middle;border-radius:3px;border:1.5px solid var(--text-muted);appearance:none;-webkit-appearance:none;background:transparent;transition:border-color .15s;position:relative;flex-shrink:0;display:inline-block}
+.hy-table .col-check input[type="checkbox"]:checked{background:var(--primary);border-color:var(--primary)}
+.hy-table .col-check input[type="checkbox"]:checked::after{content:'';position:absolute;left:50%;top:45%;width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:translate(-50%,-50%) rotate(45deg)}
+.hy-table .col-check input[type="checkbox"]:indeterminate{background:var(--primary);border-color:var(--primary)}
+.hy-table .col-check input[type="checkbox"]:indeterminate::after{content:'';position:absolute;left:50%;top:50%;width:8px;height:2px;background:#fff;border-radius:1px;transform:translate(-50%,-50%)}
+.hy-table .col-check input[type="checkbox"]:hover{border-color:var(--primary)}
+.hy-table tr.selected td{background:var(--primary-light)}
+/* Row-body click selection: deliberately NO cursor:pointer — the
+   row-body click is a *secondary* affordance for power users; the
+   primary affordances (checkbox, edit button, links) already advertise
+   themselves with their own pointer cursors. A row-wide pointer would
+   misleadingly imply the whole row is a single clickable surface and
+   override the nested cursor styles of the leading checkbox cell.
+   Click handler stays bound — just the visual cue is dropped. */
+
+/* Ghost row edit button */
+.hy-row-edit{padding:6px;border:none;background:transparent;color:var(--text-muted);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;border-radius:var(--radius-sm);transition:all .15s;opacity:.5}
+.hy-row-edit:hover{color:var(--primary);background:var(--primary-light);opacity:1}
+.hy-row-edit svg{width:15px;height:15px}
+
+/* Bulk action bar */
+.hy-bulk-bar{display:inline-flex;align-items:center;gap:8px;animation:bulkFadeIn .2s ease}
+.hy-bulk-bar .hy-bulk-count{font-size:12px;font-weight:600;color:var(--primary);padding:2px 8px;background:var(--primary-light);border-radius:10px}
+.hy-bulk-bar .hy-bulk-clear{border:none;background:none;color:var(--text-muted);cursor:pointer;font-size:12px;padding:2px 6px}
+.hy-bulk-bar .hy-bulk-clear:hover{color:var(--text)}
+
+/* ResponsiveActions — wide layout is a plain flex row of buttons
+   indistinguishable from writing them inline. Narrow layout shows a
+   tiny bulk-count pill + a ⋯ overflow button that opens a popover
+   containing the same buttons stacked vertically. */
+.hy-actions-row{display:flex;align-items:center;gap:8px}
+.hy-actions-row--narrow{position:relative;gap:6px}
+.hy-actions-count{display:inline-flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 6px;font-size:12px;font-weight:700;color:var(--primary);background:var(--primary-light);border:none;border-radius:11px;cursor:pointer}
+.hy-actions-count:hover{background:var(--primary);color:#fff}
+.hy-actions-overflow{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-secondary);cursor:pointer;transition:background .12s,color .12s}
+.hy-actions-overflow:hover,.hy-actions-overflow.open{background:var(--primary-light);color:var(--primary);border-color:var(--primary)}
+.hy-actions-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:50;min-width:180px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-md);padding:6px;display:flex;flex-direction:column;gap:4px;animation:bulkFadeIn .15s ease}
+.hy-actions-menu>*{width:100%;justify-content:flex-start}
+.hy-actions-menu button{text-align:left}
+/* ImportExportButton / similar wrappers contain multiple buttons inside
+   a flex container — make them stack inside the menu too. */
+.hy-actions-menu>div{display:flex;flex-direction:column;gap:4px;width:100%}
+@keyframes bulkFadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+
+/* Self row */
+.hy-table tr.self-row td{background:var(--primary-light)}
+.hy-table tr.self-row .peer-name-cell{color:var(--primary)}
+/* Syncing / disabled */
+/* Dim only the contents of cells (not the cells themselves), so backgrounds stay uniform */
+.hy-table tr.syncing td:not(.col-check)>*{opacity:.45}
+.hy-table tr.syncing{pointer-events:none}
+.hy-table tr.disabled-row td:not(.col-check)>*{opacity:.45}
+
+/* Sub-row (nested children) */
+.hy-table tr.sub-row td{padding:8px 10px;font-size:13px}
+.hy-table tr.sub-row td:first-child{padding-left:20px}
+.hy-table tr.sub-row td:last-child{padding-right:20px}
+.hy-table tr.sub-row .col-traffic{font-size:11px;font-family:var(--mono)}
+.hy-table tr.sub-row .col-actions{text-align:right}
+.hy-table tr.sub-row .col-name{position:relative;overflow:visible}
+.hy-table tr.sub-row .peer-name-cell{font-weight:500}
+
+/* Row hover — apply to all td including col-check, with !important to win specificity */
+.hy-table tbody tr:hover>td{background-color:var(--bg)!important;transition:background-color .15s}
+.hy-table tbody tr.self-row:hover>td{background-color:var(--primary-light)!important}
+
+/* Latency */
+.latency{font-family:var(--mono);font-size:12px;font-weight:600}
+.latency-good{color:var(--green)}
+.latency-med{color:var(--orange)}
+.latency-bad{color:var(--red)}
+.latency-off{color:var(--red);font-weight:500;font-family:var(--font)}
+.latency-na{color:var(--text-muted)}
+.latency-sync{color:var(--orange);font-weight:500;font-family:var(--font)}
+
+/* Tree expand/collapse triangle */
+.hy-tree-toggle{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;margin-right:8px;border:none;background:transparent;cursor:pointer;color:var(--text-muted);border-radius:6px;flex-shrink:0;align-self:center}
+.hy-tree-toggle:not(.hy-tree-toggle-disabled):hover{color:var(--primary);background:var(--primary-light)}
+.hy-tree-toggle svg{width:18px;height:18px;display:block;transition:transform .15s ease}
+.hy-tree-toggle-spacer{pointer-events:none;cursor:default}
+.hy-tree-toggle-disabled{pointer-events:none;cursor:default;opacity:.35;color:var(--text-muted);background:transparent}
+
+/* Peer name */
+.peer-name-cell{font-weight:600}
+a.peer-link{color:var(--primary);text-decoration:none;cursor:pointer}
+a.peer-link:hover{text-decoration:underline}
+.peer-addr-sub{font-family:var(--mono);font-size:11px;color:var(--text-muted);display:block;margin-top:1px}
+
+/* ====== Tree Guide Lines ====== */
+.tree-cell{display:inline-flex;align-items:center;gap:0}
+.tree-guide{display:inline-block;width:20px;height:1em;position:relative;vertical-align:middle;pointer-events:none;flex-shrink:0}
+.tree-guide-active::before{content:'';position:absolute;left:8px;top:-20px;width:0;height:calc(100% + 40px);border-left:1.5px solid var(--border)}
+.tree-branch{display:inline-block;width:20px;height:1em;position:relative;vertical-align:middle;user-select:none;-webkit-user-select:none;pointer-events:none;z-index:1;flex-shrink:0}
+.tree-branch::before{content:'';position:absolute;left:8px;top:-20px;width:0;height:calc(100% + 40px);border-left:1.5px solid var(--border)}
+.tree-branch::after{content:'';position:absolute;left:8px;top:50%;width:10px;height:0;border-top:1.5px solid var(--border)}
+.tree-branch.tree-last::before{top:-20px;height:calc(50% + 20px)}
+.sub-name-wrap{display:inline-block;vertical-align:middle}
+
+/* ====== Action Buttons ====== */
+.act-group{display:inline-flex;gap:2px}
+.act-btn{padding:4px 10px;border:none;border-radius:var(--radius-sm);cursor:pointer;display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:500;font-family:var(--font);transition:all .15s;color:#fff}
+.act-btn:hover{opacity:.85;transform:translateY(-1px);color:#fff}
+.act-btn:active{transform:translateY(0)}
+.act-btn.edit{background:var(--primary)}
+.act-btn.warn{background:var(--orange)}
+.act-btn.enable{background:var(--green)}
+.act-btn.danger{background:var(--red)}
+.act-btn svg{width:13px;height:13px}
+
+
+/* Checkbox row inside an actions menu */
+.hy-actions-more{position:relative;display:inline-flex}
+.hy-actions-menu .hy-actions-menu-sep{height:1px;padding:0;background:var(--border-light);margin:2px 0}
+.hy-menu-check{display:flex!important;flex-direction:row!important;align-items:center;gap:8px;padding:6px 8px;border-radius:var(--radius-sm);font-size:13px;color:var(--text);cursor:pointer;white-space:nowrap;user-select:none;-webkit-user-select:none}
+.hy-menu-check:hover{background:var(--primary-light)}
+.hy-menu-check input{margin:0;accent-color:var(--primary)}
+.hy-menu-check-count{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--text-muted)}
+
+.hy-row-edit.danger:hover{color:var(--red);background:var(--red-bg)}
+.hy-row-edit:disabled{opacity:.25;cursor:not-allowed;background:transparent;color:var(--text-muted)}
+/* Expanded detail row */
+.hy-table tr.hy-tree-detail td{padding:4px 20px 12px 20px;background:var(--surface)}
+.hy-table tbody tr.hy-tree-detail:hover>td{background-color:var(--surface)!important}

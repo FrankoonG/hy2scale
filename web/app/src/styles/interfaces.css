@@ -1,0 +1,58 @@
+/* Interfaces page (list, dialogs). */
+/* ====== Interfaces page ====== */
+/* Two fixed lines per cell (IPv4 / IPv6). */
+.iface-lines{display:flex;flex-direction:column;gap:2px;min-width:0}
+.iface-line{display:flex;align-items:center;gap:6px;min-height:20px;font-family:var(--mono);font-size:12px;white-space:nowrap}
+.iface-line-main{flex:1;min-width:0;display:inline-flex;align-items:center;gap:6px}
+.iface-muted{color:#9098a8}
+.iface-bad{color:#ef4444;font-weight:500;font-family:var(--font)}
+.iface-pending{color:#9098a8;font-style:italic;font-family:var(--font)}
+/* Egress badge: hy-badge look; solid = selected, ghost = hover-only switch. */
+.iface-egress{font-family:var(--mono);font-size:10px;line-height:14px;padding:0 5px;border:1px solid transparent;flex-shrink:0;text-transform:none;background:var(--blue-bg);color:#3b82f6;cursor:default}
+.iface-egress.warn{background:var(--orange-bg);color:#d97706;border-color:#f59e0b}
+/* Small name tags (mode / VLAN / state) and the faint "direct" tag. */
+.iface-tag{display:inline-flex;align-items:center;font-size:10px;font-weight:600;line-height:14px;padding:0 5px;border:1px solid #c4cad6;border-radius:4px;color:#5a6070;font-family:var(--font);white-space:nowrap;user-select:none;-webkit-user-select:none}
+.iface-tag.faint{color:#9098a8;border-color:#d5d9e2;font-weight:500}
+.iface-tag.off{color:#9098a8;border-style:dashed}
+/* Link-type badge beside an interface name */
+.iface-type{display:inline-flex;align-items:center;flex-shrink:0;font-size:10px;font-weight:600;line-height:14px;padding:1px 6px;border-radius:4px;font-family:var(--font);white-space:nowrap;user-select:none;-webkit-user-select:none;color:#5a6070;background:rgba(144,152,168,.14)}
+.iface-type[data-t=ethernet]{color:#2563eb;background:rgba(59,130,246,.12)}
+.iface-type[data-t=wlan]{color:#0891b2;background:rgba(6,182,212,.12)}
+.iface-type[data-t=child]{color:#4361ee;background:rgba(67,97,238,.12)}
+.iface-type[data-t=bridge]{color:#7c3aed;background:rgba(139,92,246,.12)}
+.iface-type[data-t=bond]{color:#4f46e5;background:rgba(99,102,241,.12)}
+.iface-type[data-t=vlan]{color:#d97706;background:rgba(245,158,11,.14)}
+.iface-type[data-t=veth]{color:#0d9488;background:rgba(20,184,166,.12)}
+.iface-type[data-t=macvlan],.iface-type[data-t=ipvlan]{color:#db2777;background:rgba(236,72,153,.12)}
+.iface-type[data-t=tun],.iface-type[data-t=wireguard]{color:#16a34a;background:rgba(34,197,94,.12)}
+.iface-type[data-t=vxlan],.iface-type[data-t=ovs]{color:#ea580c;background:rgba(249,115,22,.12)}
+
+.iface-name{font-weight:600}
+.iface-name-wrap{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+.iface-group-name{font-weight:500;color:var(--text-secondary)}
+.iface-pub{cursor:pointer;border-radius:4px}
+.iface-pub:hover .iface-pub-ip{color:#4361ee;text-decoration:underline dotted}
+.iface-pub.busy{cursor:progress;opacity:.6}
+.hy-table .col-iface-addr{min-width:240px}
+.hy-table .col-iface-pub{width:190px}
+.iface-name-link{padding:0;border:none;background:none;font:inherit;font-weight:600;color:var(--primary);cursor:pointer}
+.iface-name-link:hover{text-decoration:underline}
+.iface-group-ind{margin-left:6px;color:var(--text-muted);font-size:10px}
+.iface-parent-list{display:flex;flex-direction:column;gap:6px}
+.iface-parent-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;transition:border-color .12s,background .12s}
+.iface-parent-item:hover{border-color:var(--primary)}
+.iface-parent-item.on{border-color:var(--primary);background:var(--primary-light)}
+.iface-parent-item input{accent-color:var(--primary);margin:0}
+.iface-parent-name{font-weight:600}
+.iface-parent-addr{font-family:var(--mono);font-size:12px;color:var(--text-muted);margin-left:auto}
+.iface-detail-addrs{display:flex;flex-direction:column;font-family:var(--mono);font-size:12px}
+
+.iface-detail{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px 20px;padding:10px 14px;border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--bg)}
+.iface-detail-item{display:flex;flex-direction:column;gap:2px;min-width:0}
+.iface-detail-label{font-size:10px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px}
+.iface-detail-value{font-family:var(--mono);font-size:12px;color:var(--text);word-break:break-all}
+.iface-tip-row{font-size:12px;font-family:var(--mono);white-space:nowrap}
+/* Child interface dialog */
+.iface-form-section{font-size:12px;font-weight:600;color:var(--text-secondary);padding-top:6px;border-top:1px solid var(--border-light)}
+.iface-hint{font-size:11px;color:var(--text-muted);margin-top:4px;line-height:1.4}
+.iface-ref-list{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--bg);font-size:12px;font-family:var(--mono);max-height:180px;overflow-y:auto}

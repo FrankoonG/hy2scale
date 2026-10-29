@@ -1,0 +1,15 @@
+/* Badges and chips. */
+/* ====== Badges ====== */
+.hy-badge{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:600;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.hy-badge.green{background:var(--green-bg);color:#16a34a}
+.hy-badge.red{background:var(--red-bg);color:var(--red)}
+.hy-badge.orange{background:var(--orange-bg);color:#d97706}
+.hy-badge.blue{background:var(--blue-bg);color:var(--blue)}
+.hy-badge.muted{background:var(--bg);color:var(--text-muted)}
+.hy-badge.warn{background:rgba(234,179,8,0.12);color:#ca8a04}
+
+
+/* ====== Chip ====== */
+.hy-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:12px;font-size:12px;background:var(--primary-light);color:var(--primary)}
+.hy-chip .close{cursor:pointer;font-size:14px;line-height:1;opacity:.6}
+.hy-chip .close:hover{opacity:1}

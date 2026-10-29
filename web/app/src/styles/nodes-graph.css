@@ -1,0 +1,307 @@
+/* Nodes topology graph. */
+/* ====== Tabs (proxy-style button group) ====== */
+/* Topology graph view: infinite pan/zoom canvas hosted inside a fill Card's
+   body. Background grid lives inside the SVG's transformed group (see
+   <pattern id="hy-topo-grid">) so it pans and zooms with the nodes. */
+.hy-topo-graph{position:relative;width:100%;height:calc(100vh - 330px);height:calc(100dvh - 330px);min-height:460px;display:flex;flex-direction:column;background:var(--surface);overflow:hidden}
+/* Full-bleed variant (Nodes topology view): fills .hy-topo-full edge to edge. */
+.hy-topo-graph.is-full{flex:1;height:auto;min-height:0}
+/* Top bar: graph tools left, page actions right, one flex row so they can't
+   overlap. The bar passes the pointer through so the canvas pans under it. */
+.hy-topo-graph-topbar{position:absolute;top:8px;left:8px;right:8px;z-index:3;display:flex;align-items:center;justify-content:space-between;gap:12px;pointer-events:none}
+.hy-topo-graph-topbar>*{pointer-events:auto}
+.hy-topo-graph-toolbar{display:flex;gap:6px;align-items:center;font-size:11px;flex:0 1 auto;min-width:0}
+.hy-topo-graph-toolbar>.hy-topo-snap{margin-left:4px;flex-shrink:0}
+.hy-topo-graph-toolbar>.hy-topo-btn{flex-shrink:0}
+.hy-topo-graph-actions{flex:0 1 auto;min-width:0}
+/* Page actions sit on the canvas like the tools on the left: no panel,
+   one height, the ⋯ button styled as a tool. */
+.hy-topo-graph-toolbar>.hy-topo-btn{height:28px;display:inline-flex;align-items:center}
+.hy-topo-graph-actions .hy-btn{height:28px}
+/* Ghost buttons (Import / Export) get an outline on the canvas. */
+.hy-topo-graph-actions .hy-btn.ghost,.iface-topo-actions .hy-btn.ghost{border:1px solid var(--border);background:var(--surface);color:var(--text)}
+.hy-topo-graph-actions .hy-btn.ghost:hover,.iface-topo-actions .hy-btn.ghost:hover{border-color:var(--primary);color:var(--primary);background:var(--surface)}
+.hy-topo-graph-actions .hy-actions-overflow,.iface-topo-actions .hy-actions-overflow{border-color:var(--border);background:var(--surface);color:var(--text-secondary)}
+.hy-topo-graph-actions .hy-actions-overflow{width:28px;height:28px}
+.hy-topo-graph-actions .hy-actions-overflow:hover,.hy-topo-graph-actions .hy-actions-overflow.open,
+.iface-topo-actions .hy-actions-overflow:hover,.iface-topo-actions .hy-actions-overflow.open{background:var(--surface);color:var(--primary);border-color:var(--primary)}
+.hy-topo-graph-actions .hy-actions-row{flex-wrap:wrap;justify-content:flex-end;gap:6px}
+/* Checkbox sits directly on the canvas — no button-style frame. */
+.hy-topo-snap{display:inline-flex;align-items:center;gap:6px;color:var(--text-muted);cursor:pointer;user-select:none;padding:0;background:none;border:none}
+.hy-topo-snap:hover{color:var(--primary)}
+.hy-topo-snap input{accent-color:var(--primary);cursor:pointer;margin:0}
+.hy-topo-btn{border:1px solid var(--border);background:var(--surface);color:var(--text-secondary);padding:4px 10px;border-radius:var(--radius-sm);cursor:pointer;font-size:11px}
+.hy-topo-btn:hover{background:var(--primary-light);color:var(--primary);border-color:var(--primary-light)}
+.hy-topo-graph-hint{color:var(--text-muted);font-size:10px;margin-left:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+@media(max-width:640px){.hy-topo-graph-hint{display:none}}
+.hy-topo-graph-svg{flex:1;min-height:0;width:100%;cursor:grab;user-select:none;-webkit-user-select:none;touch-action:none;-webkit-touch-callout:none}
+.hy-topo-graph-svg:active{cursor:grabbing}
+
+/* Selected-path info overlay — bottom-left of the graph canvas. Matches
+   ExitViaCell styling: monospace, 12px, green/red per-hop colour, muted
+   slash separator. Total latency or "unreachable" appears on the right. */
+/* Bottom-left selected-path overlay — "live" frosted-glass following
+   the standard Apple Vibrancy / web.dev backdrop-blur recipe:
+   1. rgba surface + backdrop-filter for the actual blur
+   2. `will-change: backdrop-filter` forces the element into its own
+      compositor layer so Chromium re-samples per-frame instead of
+      caching the blur until the next layout-level composite trigger
+   3. `transform: translateZ(0)` as a GPU-promotion fallback hint for
+      browsers that ignore will-change
+   4. `isolation: isolate` so the panel's blur stacking context is
+      independent of the parent's
+   5. `saturate(180%)` boost makes the frost look chromatically alive
+      even if the backdrop is mostly static
+   6. An ambient inner highlight via ::before with a slow drift
+      animation — gives intrinsic motion so the eye reads "live"
+      regardless of how often the backdrop re-samples
+   Dark Reader inverts the rgba into a dark-transparent surface and
+   keeps the blur, so the same recipe holds in both modes. */
+.hy-topo-graph-pathinfo{position:absolute;left:10px;bottom:10px;z-index:2;display:flex;flex-direction:column;gap:8px;padding:6px 10px;background:rgba(255,255,255,.42);backdrop-filter:blur(20px) saturate(180%);-webkit-backdrop-filter:blur(20px) saturate(180%);will-change:backdrop-filter;transform:translateZ(0);isolation:isolate;border:1px solid rgba(228,231,237,.5);border-radius:var(--radius-sm);font-family:var(--mono);font-size:12px;max-width:calc(100% - 20px);transition:padding .12s ease;box-shadow:0 4px 18px rgba(0,0,0,.08)}
+.hy-topo-graph-pathinfo::before{content:"";position:absolute;inset:0;border-radius:inherit;background:linear-gradient(120deg,rgba(255,255,255,.18) 0%,rgba(255,255,255,0) 35%,rgba(255,255,255,0) 65%,rgba(255,255,255,.10) 100%);background-size:220% 220%;animation:hy-topo-pathinfo-sheen 14s ease-in-out infinite;pointer-events:none;z-index:-1}
+@keyframes hy-topo-pathinfo-sheen{0%,100%{background-position:0% 0%}50%{background-position:100% 100%}}
+/* No min-width on the expanded panel — width is driven by content.
+   Shorter paths → narrower panel → fewer bars fit (older bars clip
+   off the left via overflow + flex-end). Longer paths → wider panel
+   → more bars naturally visible. */
+.hy-topo-graph-pathinfo.is-expanded{padding:8px 12px 10px}
+.hy-topo-pathinfo-row{display:flex;align-items:center;gap:10px;flex-wrap:nowrap}
+/* Chevron toggle on the right of the compact row. Borderless ghost so
+   it disappears into the panel chrome until hover. Same DR-safe colour
+   pattern as the rest of the graph palette (literal hex on `color`,
+   `stroke: currentColor`). */
+/* Right-edge resize handle. 6 px wide invisible hit-area extending the
+   full height of the panel, anchored to the right edge. On hover the
+   inner 2 px strip becomes faintly visible so operators can find it.
+   Only rendered when the panel is expanded; collapsed state has no
+   resizing semantics. */
+.hy-topo-pathinfo-resize-handle{position:absolute;top:0;right:0;width:6px;height:100%;cursor:col-resize;z-index:3;touch-action:none}
+.hy-topo-pathinfo-resize-handle::after{content:"";position:absolute;top:8px;bottom:8px;right:1px;width:2px;border-radius:1px;background:#6b7280;opacity:0;transition:opacity .14s ease}
+.hy-topo-pathinfo-resize-handle:hover::after,.hy-topo-pathinfo-resize-handle:active::after{opacity:.45}
+.hy-topo-pathinfo-toggle{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;margin-left:auto;border:none;background:transparent;color:#6b7280;cursor:pointer;border-radius:var(--radius-sm);transition:background .12s,color .12s}
+.hy-topo-pathinfo-toggle:hover{background:var(--primary-light);color:var(--primary)}
+.hy-topo-pathinfo-toggle svg{display:block}
+.hy-topo-pathinfo-copy{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;margin-left:auto;border:none;background:transparent;color:#6b7280;cursor:pointer;border-radius:var(--radius-sm);transition:background .12s,color .12s}
+.hy-topo-pathinfo-copy:hover{background:var(--primary-light);color:var(--primary)}
+.hy-topo-pathinfo-copy svg{display:block}
+.hy-topo-pathinfo-copy+.hy-topo-pathinfo-toggle{margin-left:2px}
+/* Expanded panel — four metric sections (latency / online / tx peak /
+   rx peak). Each section has a header row with the metric name on the
+   left and a precision-tab strip on the right; below the header is a
+   single status-bar row whose buckets reflect the selected precision. */
+/* `contain: inline-size` is the critical piece: it tells the layout
+   engine that this element's WIDTH is determined by its container,
+   NOT by its descendants. Without it the 60-tick bar row's
+   max-content (720 px) propagates up through .section → .expanded →
+   the absolutely-positioned panel and forces the panel ~720 px wide
+   regardless of how short the path text is. With `contain: inline-size`
+   the panel sizes purely by the compact row at top; .expanded fills
+   100% of that width and the bar rows then have a finite parent
+   width to measure against via ResizeObserver.
+   `min-width: 0` is the flex-context companion for the same goal. */
+.hy-topo-pathinfo-expanded{display:flex;flex-direction:column;gap:10px;border-top:1px solid rgba(0,0,0,.06);padding-top:8px;font-family:var(--font-sans);min-width:0;width:100%;contain:inline-size}
+/* Info zone — per-hop latency sum, realtime speed, total traffic.
+   Sits above the status-bar zone and is separated from it by its
+   own bottom border. */
+.hy-topo-pathinfo-info{display:flex;flex-direction:column;gap:4px;padding-bottom:8px;border-bottom:1px solid rgba(0,0,0,.06)}
+.hy-topo-pathinfo-info-row{display:flex;align-items:flex-start;gap:10px;font-size:11px;line-height:1.4}
+.hy-topo-pathinfo-info-label{flex-shrink:0;width:52px;color:#6b7280;font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding-top:1px}
+/* The per-hop latency sum can wrap onto multiple lines for chains
+   that don't fit on one row. Each `<span>` is a single "20ms" token
+   so flex-wrap breaks cleanly between tokens. */
+.hy-topo-pathinfo-info-hopsum{display:flex;flex-wrap:wrap;gap:2px 4px;font-family:var(--mono);font-weight:600;font-size:11px;min-width:0}
+.hy-topo-pathinfo-info-plus{color:#9ca3af;font-weight:400;margin:0 2px}
+.hy-topo-pathinfo-info-vals{display:inline-flex;align-items:center;gap:3px;font-family:var(--mono);font-weight:600;font-size:11px;color:#1e2330}
+.hy-topo-pathinfo-info-arrow{font-size:12px;line-height:1}
+.hy-topo-pathinfo-info-val{min-width:60px}
+.hy-topo-pathinfo-section{display:flex;flex-direction:column;gap:4px}
+.hy-topo-pathinfo-section-header{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:18px}
+.hy-topo-pathinfo-section-title{font-size:10px;color:#6b7280;letter-spacing:.04em;text-transform:uppercase;font-weight:600}
+/* Precision tab strip: three small text buttons. Active tab gets a
+   filled background; inactive is muted. Literal hex on `color` keeps
+   DR happy. */
+.hy-topo-pathinfo-precision-tabs{display:inline-flex;gap:2px;background:rgba(0,0,0,.04);border-radius:6px;padding:2px}
+.hy-topo-pathinfo-precision-tab{appearance:none;border:none;background:transparent;color:#6b7280;font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.04em;padding:2px 8px;border-radius:4px;cursor:pointer;transition:background .12s,color .12s;min-width:24px}
+.hy-topo-pathinfo-precision-tab:hover{color:#1e2330}
+.hy-topo-pathinfo-precision-tab.active{background:#ffffff;color:#1e2330;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+/* Adaptive-count bar row: each tick is FIXED 10px wide and the React
+   component renders only as many ticks as the row width can hold
+   (ResizeObserver-driven `visibleCount` in PathInfoExpand). Two CSS
+   pieces matter:
+   1. `min-width: 0` so flex children's intrinsic size doesn't push
+      the panel wider than other content wants it to be.
+   2. `overflow: hidden` as a safety net in case the ResizeObserver
+      hasn't fired yet on first paint — without it the initial render
+      would briefly overflow before the observer trims `visibleCount`. */
+.hy-topo-pathinfo-statusrow-bars{display:flex;gap:2px;align-items:stretch;height:18px;width:100%;min-width:0;overflow:hidden}
+/* Each tick is one time bucket. Fixed 10px wide — readable, hoverable. */
+.hy-topo-pathinfo-statusbar-tick{display:inline-block;flex:0 0 10px;height:100%;background:currentColor;border-radius:2px;cursor:default;transition:transform .08s ease}
+.hy-topo-pathinfo-statusbar-tick:hover{transform:scaleY(1.15)}
+/* Tooltip wrapper inherits the same fixed sizing so flex layout
+   measures by wrapper width, not by the inner tick. */
+.hy-topo-pathinfo-statusrow-bars .hy-tooltip-wrap{display:flex;flex:0 0 10px;align-items:stretch}
+/* Tooltip payload — small two-line card. Age label on top, value on
+   bottom. Lives inside .hy-tooltip (portal-rendered) so picks up the
+   framework's tooltip chrome automatically; this is just content
+   layout. */
+.hy-topo-pathinfo-tooltip{display:flex;flex-direction:column;gap:1px;font-family:var(--font-sans);line-height:1.2;min-width:90px}
+.hy-topo-pathinfo-tooltip-age{font-size:10px;color:#9ca3af;letter-spacing:.02em}
+.hy-topo-pathinfo-tooltip-value{font-size:12px;font-weight:600;font-family:var(--mono)}
+.hy-topo-pathinfo-label{color:var(--text-muted);font-family:var(--font-sans);font-size:11px;letter-spacing:.02em;text-transform:uppercase}
+.hy-topo-pathinfo-chain{display:inline-flex;align-items:center;flex-wrap:wrap;font-weight:600}
+.hy-topo-pathinfo-sep{color:var(--text-muted);margin:0 2px;font-weight:400}
+.hy-topo-pathinfo-hop{white-space:nowrap}
+.hy-topo-pathinfo-hop-link{text-decoration:none;cursor:pointer;border-bottom:1px dashed transparent;transition:border-color .15s ease}
+.hy-topo-pathinfo-hop-link:hover{border-bottom-color:currentColor}
+.hy-topo-pathinfo-lat{font-size:11px;font-weight:600;padding-left:6px;border-left:1px solid var(--border)}
+.hy-topo-pathinfo-lat.lat-ok{color:#22c55e}
+.hy-topo-pathinfo-lat.lat-mid{color:#d97706}
+.hy-topo-pathinfo-lat.lat-bad{color:#ef4444}
+.hy-topo-pathinfo-lat.lat-na{color:#6b7280}
+/* Action buttons (open remote, edit) appear to the right of the latency
+   badge. Borderless ghost style matching the list-view row buttons so
+   both views feel consistent. */
+.hy-topo-pathinfo-btn{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border:none;background:transparent;color:var(--text-muted);cursor:pointer;padding:0;border-radius:var(--radius-sm);transition:background .12s,color .12s}
+.hy-topo-pathinfo-btn:hover{background:var(--primary-light);color:var(--primary)}
+
+/* Topology graph palette — uses *literal* hex colours on the `color`
+   property (not CSS vars) because dark-mode extensions (Dark Reader,
+   Chrome Auto Dark Mode, Midnight Lizard, …) transform concrete colour
+   values in the `color` property with much higher reliability than
+   `var(…)` indirection or raw SVG fill/stroke attributes. Every SVG
+   paint routes through `fill: currentColor` / `stroke: currentColor`
+   so it inherits whatever the extension substitutes for `color`.
+   Source: DR dynamic-theme-fixes config + general SVG-dark-mode guides.
+   The app has no native dark chrome, so we don't ship a prefers-
+   color-scheme fallback — extensions drive inversion themselves. */
+
+/* Dot-style nodes: pale blue outer disc + (hubs only) dark-navy inner. */
+.hy-topo-dot-outer{color:#4D6EA3;fill:currentColor;fill-opacity:.38;stroke:none}
+.hy-topo-dot-inner{color:#102545;fill:currentColor;fill-opacity:.92;stroke:none}
+.hy-topo-dot.self .hy-topo-dot-inner{color:#4361ee;fill-opacity:1}
+.hy-topo-dot.disabled .hy-topo-dot-outer{fill-opacity:.12}
+.hy-topo-dot.disabled .hy-topo-dot-inner{fill-opacity:.25}
+.hy-topo-dot.bad .hy-topo-dot-inner{color:#ef4444}
+/* NATIVE — raw hy2 servers we connect to as exits / inbound edges.
+   They aren't hy2scale peers (no relay protocol, no admin API), so the
+   palette splits them off from the regular blue with a saturated yellow.
+   Outer fill carries the same opacity ramp as default so transit /
+   single styles stay legible. */
+.hy-topo-dot.native .hy-topo-dot-outer{color:#eab308}
+.hy-topo-dot.native .hy-topo-dot-inner{color:#92400e}
+.hy-topo-dot.native .hy-topo-dot-name{color:#92400e}
+/* Offline — peer is configured but currently unreachable (couldn't
+   complete the QUIC handshake / register flow / etc.). Distinct from
+   `disabled` (user-toggled off, faded) and `bad` (incompatible peer,
+   red inner): offline keeps the dot at full opacity but tints it
+   light red so it reads "broken" at a glance. The dashed red edge +
+   × marker on the line stays as the secondary cue. Source-ordered
+   AFTER `.hy-topo-dot.native` so when both classes are present
+   (forced-native peer that's currently offline) the offline red
+   wins — the immediate connection state is the more urgent signal. */
+.hy-topo-dot.offline .hy-topo-dot-outer{color:#fca5a5}
+.hy-topo-dot.offline .hy-topo-dot-inner{color:#dc2626}
+.hy-topo-dot.offline .hy-topo-dot-name{color:#b91c1c}
+.hy-topo-dot-name{font-size:11px;font-weight:600;color:#1f2328;fill:currentColor;font-family:var(--mono)}
+.hy-topo-dot.self .hy-topo-dot-name{color:#4361ee}
+
+/* Edges: base line thickness encodes peak throughput. Flowing dashed
+   overlay runs along direction, speed scaled by current rate. */
+.hy-topo-edge-base{color:#4D6EA3;stroke:currentColor;stroke-opacity:.4;fill:none;transition:color .28s ease-out, stroke-opacity .28s ease-out}
+.hy-topo-edge-flow{color:#4D6EA3;stroke:currentColor;stroke-opacity:.95;stroke-width:1.5;fill:none;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;transition:color .28s ease-out, stroke-opacity .28s ease-out}
+
+/* Labels — halo+fill pair of <text>s. The halo's stroke colour is set
+   INLINE from the JS-sampled surface colour (see NodesGraphView's
+   surfaceColor state); that's what makes the halo a true "cut-out"
+   that matches whatever any dark-mode extension has painted as the
+   card background. CSS only owns structural properties for the halo.
+   Important: `!important` keeps dark-mode-extension attribute fixes
+   (data-darkreader-inline-stroke) from overriding our inline stroke,
+   so the halo always equals the actual bg. */
+.hy-topo-edge-label,.hy-topo-edge-label-halo{font-size:9px;font-family:var(--mono);pointer-events:none;user-select:none}
+/* Wrapping group that owns the label pair's screen position. Using
+   CSS transform (not SVG x/y attrs) lets the adaptive re-anchor
+   animate: when the anchor memo switches an edge's label from one
+   side/spot to another the labels glide there over 300 ms instead of
+   teleporting. */
+.hy-topo-edge-label-group{transition:transform .3s cubic-bezier(.25,1,.5,1)}
+.hy-topo-edge-label-halo{stroke-width:3;stroke-linejoin:round;fill:none}
+.hy-topo-edge-label{fill:currentColor;stroke:none}
+.hy-topo-edge-label.rate{color:#6b7280}
+/* Direction arrow on the rate label: only the arrow is tinted, the
+ * rate-value text stays neutral grey. ↑ blue = upload (away from self),
+ * ↓ green = download (toward self). Same colour convention as the list
+ * view's .stat-up / .stat-down. Literal hex (not var) per
+ * docs/dark-reader-testing.md: DR's transform skips `color: var(--x)`
+ * indirection on SVG `fill: currentColor` rules. The arrow is rendered
+ * larger than the rate text so it remains legible at the small label
+ * font-size. */
+/* letter-spacing pulls the rate value into the arrow's glyph cell so
+ * the pair reads as a single token. The cell on a unicode arrow has
+ * built-in horizontal padding that, even at advance-width 0, leaves a
+ * visible gap; -0.15em closes that without overlapping legible parts. */
+.rate-arrow-up,.rate-arrow-down{font-size:13px;font-weight:700;letter-spacing:-.1em}
+.hy-topo-edge-label .rate-arrow-up,.hy-topo-edge-label-halo .rate-arrow-up{color:#3b82f6}
+.hy-topo-edge-label .rate-arrow-down,.hy-topo-edge-label-halo .rate-arrow-down{color:#22c55e}
+.hy-topo-edge-label.lat-ok{color:#22c55e}
+.hy-topo-edge-label.lat-mid{color:#d97706}
+.hy-topo-edge-label.lat-bad{color:#ef4444}
+.hy-topo-edge-label.lat-na{color:#6b7280}
+
+/* Background grid — medium-grey stroke at low opacity. DR keeps middle
+   greys roughly mid-grey so opacity alone keeps this subtle in both
+   modes (very-light colours like #e5e7eb stayed near-white after DR's
+   brightness-preserving inversion, producing visible bright lines on
+   the dark background). */
+.hy-topo-grid-line{color:#9ca3af;stroke:currentColor;stroke-width:1;opacity:.22;fill:none;vector-effect:non-scaling-stroke}
+
+/* Selection & path highlight — clicking a node outlines only the selected
+   node; the route is communicated entirely through edge highlights that
+   fade in sequentially from self (pathProgress counter ticks edges on
+   one at a time). Uses the literal-hex-on-color + currentColor pattern
+   so dark-mode extensions reliably reverse the blue. Stroke widths here
+   explicitly override the throughput-scaled JSX attribute on .hy-topo-
+   edge-base — when a path is selected, visibility beats the throughput
+   encoding for the duration of the selection. */
+.hy-topo-dot.selected .hy-topo-dot-outer{color:#4361ee;stroke:currentColor;stroke-width:3;stroke-opacity:1}
+.hy-topo-dot.selected .hy-topo-dot-single{color:#4361ee;stroke:currentColor;stroke-width:3;stroke-opacity:1}
+.hy-topo-edge-base{transition:stroke .28s ease-out, stroke-opacity .28s ease-out, stroke-width .28s ease-out}
+.hy-topo-edge-flow{transition:stroke .28s ease-out, stroke-opacity .28s ease-out, stroke-width .28s ease-out}
+/* On-path highlight is carried entirely by the .hy-topo-edge-draw
+   overlay, whose animation sweeps a blue stroke from self to target
+   at constant speed across the whole path. Base and flow are left
+   at default styling so the overlay IS the wave — if we also tinted
+   the base here, every edge would flash blue at once and defeat the
+   continuous-sweep illusion. After the wave completes, the overlay
+   sits at full 5 px blue over the base, giving the final uniformly
+   highlighted look. */
+/* Path draw overlay — one-shot stroke that "paints in" from the self-side
+   endpoint. Coords for this line are flipped at render time so (x1,y1) is
+   always the nearer-self end; the dashoffset starts at full length and
+   animates to 0, revealing the blue stroke outward toward the target.
+   Rendered on top of the base so it reads as the dominant highlight. */
+.hy-topo-edge-draw{color:#4361ee;stroke:currentColor;stroke-width:5;stroke-linecap:round;fill:none;pointer-events:none;stroke-dasharray:var(--hy-path-len);stroke-dashoffset:var(--hy-path-len);animation:hy-topo-path-draw var(--hy-path-draw-ms, 320ms) linear var(--hy-path-draw-delay, 0ms) forwards}
+/* Path-highlight overlay on an offline / unreachable edge — paint
+   in red instead of blue so the user still sees the route they
+   selected (the segment isn't silently invisible) but in a colour
+   that matches the dashed red base + × marker, signalling that
+   this segment is not actually reachable. */
+.hy-topo-edge-draw.offline{color:#ef4444}
+/* Path-highlight overlay turns yellow when EITHER endpoint of the edge
+   is a NATIVE node. Mirrors the .hy-topo-dot.native palette so
+   selecting a route through a raw hy2 server reads as the same colour
+   family on both the node and the line. The .offline rule above wins
+   when both apply (disconnected segments stay red regardless). */
+.hy-topo-edge.to-native .hy-topo-edge-draw{color:#eab308}
+/* Resting (pre-selection) tint for edges that touch a NATIVE peer — pale
+ * yellow keeps the edge visually grouped with the saturated yellow used
+ * for the native dot and the selection highlight, without overwhelming
+ * the rest of the topology in its idle state. */
+.hy-topo-edge.to-native .hy-topo-edge-base{color:#fde68a;stroke-opacity:.55}
+.hy-topo-edge.to-native .hy-topo-edge-flow{color:#fde68a;stroke-opacity:.95}
+@keyframes hy-topo-path-draw{to{stroke-dashoffset:0}}
+
+/* Offline / disabled edges — red, dashed, no flow, × marker. */
+.hy-topo-edge.offline .hy-topo-edge-base{color:#ef4444;stroke:currentColor;stroke-opacity:.65}
+.hy-topo-edge-x{color:#ef4444;stroke:currentColor;stroke-opacity:.9;stroke-width:1.6;fill:none;stroke-linecap:round}
+.hy-topo-edge-punch{color:#8b5cf6;stroke:currentColor;stroke-width:2;fill:none}
