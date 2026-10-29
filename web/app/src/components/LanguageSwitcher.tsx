@@ -1,7 +1,7 @@
 import i18n from '@/i18n';
 import { DropdownMenu } from '@hy2scale/ui';
 
-const languages = [
+export const languages = [
   { code: 'en', name: 'English' },
   { code: 'ko', name: '한국어' },
   { code: 'zh', name: '简体中文' },

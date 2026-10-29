@@ -1,0 +1,263 @@
+package app
+
+// Runtime capability detection and iptables helpers. They serve the rule
+// engine (TUN / transparent proxy); the VPN servers are userspace and need
+// none of them.
+
+import (
+	"encoding/binary"
+	"fmt"
+	"log"
+	"net"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"syscall"
+	"unsafe"
+)
+
+// iptRun runs an iptables command, checking for duplicates first.
+// For -I (insert) and -A (append), it checks with -C first.
+// iptCmd resolves the iptables command. If the container's iptables doesn't work
+// but host root is mounted at /host, use chroot to run the host's iptables.
+// This handles iKuai routers where container iptables is incompatible with the kernel.
+// iptVariant detects the correct iptables command at startup.
+// On standard Linux with nftables: "iptables" (maps to iptables-nft)
+// On iKuai or legacy systems: "iptables-legacy"
+var iptVariant = sync.OnceValue(func() string {
+	// Check if iptables (nftables backend) works — preferred on modern systems
+	if out, err := exec.Command("iptables", "-V").CombinedOutput(); err == nil {
+		v := string(out)
+		if strings.Contains(v, "nf_tables") {
+			log.Printf("[iptables] using iptables (nf_tables backend)")
+			return "iptables"
+		}
+	}
+	// Fall back to iptables-legacy
+	if _, err := exec.Command("iptables-legacy", "-L", "-n").CombinedOutput(); err == nil {
+		log.Printf("[iptables] using iptables-legacy")
+		return "iptables-legacy"
+	}
+	// Default
+	log.Printf("[iptables] falling back to iptables")
+	return "iptables"
+})
+
+var iptUseChroot = sync.OnceValue(func() bool {
+	// Test if native iptables works
+	variant := iptVariant()
+	if out, err := exec.Command(variant, "-L", "-n").CombinedOutput(); err == nil {
+		debugLog("[iptables] native %s works", variant)
+		return false
+	} else {
+		debugLog("[iptables] native %s failed: %v: %s", variant, err, string(out))
+	}
+	// Check if host root is mounted and its iptables works
+	if _, err := os.Stat("/host/usr/sbin/iptables"); err == nil {
+		if out, err := exec.Command("chroot", "/host", "/usr/sbin/iptables", "-L", "-n").CombinedOutput(); err == nil {
+			log.Printf("[iptables] using chroot /host for iptables (host kernel compat)")
+			return true
+		} else {
+			debugLog("[iptables] chroot /host iptables failed: %v: %s", err, string(out))
+		}
+	} else {
+		debugLog("[iptables] /host/usr/sbin/iptables not found (host root not mounted)")
+	}
+	return false
+})
+
+func iptExec(prog string, args ...string) *exec.Cmd {
+	// Platform adapter: iKuai, OpenWrt, etc. may provide custom iptables binary
+	if cmd := platformIPTExec(prog, args); cmd != nil {
+		return cmd
+	}
+	if iptUseChroot() {
+		hostProg := prog
+		switch prog {
+		case "iptables-legacy":
+			hostProg = "/usr/sbin/iptables"
+		case "iptables":
+			hostProg = "/usr/sbin/iptables"
+		}
+		return exec.Command("chroot", append([]string{"/host", hostProg}, args...)...)
+	}
+	return exec.Command(prog, args...)
+}
+
+func iptRun(prog string, args ...string) {
+	// Try -C (check) first to detect duplicates
+	for i, a := range args {
+		if a == "-I" || a == "-A" {
+			checkArgs := make([]string, len(args))
+			copy(checkArgs, args)
+			checkArgs[i] = "-C"
+			if a == "-I" && i+2 < len(checkArgs) {
+				if _, err := fmt.Sscanf(checkArgs[i+2], "%d", new(int)); err == nil {
+					checkArgs = append(checkArgs[:i+2], checkArgs[i+3:]...)
+				}
+			}
+			if iptExec(prog, checkArgs...).Run() == nil {
+				return // rule already exists
+			}
+			break
+		}
+	}
+	cmd := iptExec(prog, args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("[iptables] %s %v: %s", prog, args, string(out))
+	}
+}
+
+// testIptablesAvailable checks if iptables-legacy DNAT works (native or chroot).
+func testIptablesAvailable() bool {
+	cmd := iptExec(iptVariant(), "-t", "nat", "-L", "-n")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		debugLog("[iptables] NAT table test failed: %v: %s", err, string(out))
+		return false
+	}
+	debugLog("[iptables] NAT table test passed")
+	return true
+}
+
+// cachedIptablesAvail caches iptables detection at startup.
+// If standard iptables fails, tries platform-specific fix before falling back to gvisor.
+var cachedIptablesAvail = sync.OnceValue(func() bool {
+	if testIptablesAvailable() {
+		return true
+	}
+	// Standard iptables failed. Try platform-specific compatibility fix.
+	initPlatformAdapter()
+	if platformFixIPTables() {
+		// Re-test with the platform-provided binary
+		if testIptablesAvailable() {
+			return true
+		}
+		log.Printf("[iptables] platform fix applied but iptables still failing")
+	}
+	return false
+})
+
+// IsCompatMode returns true when the node has NET_ADMIN but no working iptables.
+// This is now a last-resort fallback — iKuai with bundled host iptables runs normal mode.
+func IsCompatMode() bool {
+	capOK, _ := CheckCapability()
+	return capOK && !cachedIptablesAvail()
+}
+
+// DetectRuntimeMode runs early detection and logs the result.
+func DetectRuntimeMode() {
+	capOK, _ := CheckCapability()
+	hostNet := CheckHostNetwork()
+	iptOK := cachedIptablesAvail()
+	platform := DetectPlatform()
+
+	if platform != PlatformLinux {
+		log.Printf("[runtime] platform: %s", platform)
+	}
+
+	if !capOK {
+		log.Printf("[runtime] mode: limited (no NET_ADMIN)")
+	} else if hostNet && iptOK {
+		log.Printf("[runtime] mode: normal (host network, iptables OK)")
+	} else if !hostNet && iptOK {
+		log.Printf("[runtime] mode: bridge (iptables OK, no host network)")
+	} else if !iptOK {
+		log.Printf("[runtime] mode: compat (NET_ADMIN OK, iptables unavailable)")
+	}
+}
+
+// CheckCapability tests if the runtime has NET_ADMIN.
+// Returns (ok, reason) where reason explains what failed.
+var cachedCapability = sync.OnceValues(func() (bool, string) {
+	// NET_ADMIN check — try bridge (kernel built-in), fall back to iptables
+	if exec.Command("ip", "link", "add", "hy2cap_test", "type", "bridge").Run() == nil {
+		exec.Command("ip", "link", "del", "hy2cap_test").Run()
+		debugLog("[cap] NET_ADMIN confirmed via bridge creation")
+		return true, ""
+	}
+	debugLog("[cap] bridge creation failed, trying iptables")
+	if exec.Command(iptVariant(), "-L", "-n").Run() == nil {
+		debugLog("[cap] NET_ADMIN confirmed via iptables-legacy")
+		return true, ""
+	}
+	if exec.Command("iptables", "-L", "-n").Run() == nil {
+		debugLog("[cap] NET_ADMIN confirmed via iptables-nft")
+		return true, ""
+	}
+	if exec.Command("chroot", "/host", "/usr/sbin/iptables", "-L", "-n").Run() == nil {
+		debugLog("[cap] NET_ADMIN confirmed via chroot /host iptables")
+		return true, ""
+	}
+	return false, "no NET_ADMIN capability (bridge creation, iptables-legacy, iptables, and chroot /host all failed)"
+})
+
+func CheckCapability() (bool, string) {
+	return cachedCapability()
+}
+
+// getOriginalDst retrieves the original destination from a DNAT'd connection.
+// Uses SyscallConn to avoid File() which puts the conn into blocking mode.
+func getOriginalDst(conn net.Conn) (string, error) {
+	tcpConn, ok := conn.(*net.TCPConn)
+	if !ok {
+		return "", fmt.Errorf("not a TCP connection")
+	}
+	rc, err := tcpConn.SyscallConn()
+	if err != nil {
+		return "", err
+	}
+
+	const SO_ORIGINAL_DST = 80
+	var addr syscall.RawSockaddrInet4
+	var getsockoptErr error
+	err = rc.Control(func(fd uintptr) {
+		addrLen := uint32(unsafe.Sizeof(addr))
+		_, _, errno := syscall.Syscall6(
+			syscall.SYS_GETSOCKOPT,
+			fd,
+			syscall.SOL_IP,
+			SO_ORIGINAL_DST,
+			uintptr(unsafe.Pointer(&addr)),
+			uintptr(unsafe.Pointer(&addrLen)),
+			0,
+		)
+		if errno != 0 {
+			getsockoptErr = fmt.Errorf("getsockopt SO_ORIGINAL_DST: %v", errno)
+		}
+	})
+	if err != nil {
+		return "", err
+	}
+	if getsockoptErr != nil {
+		return "", getsockoptErr
+	}
+
+	port := binary.BigEndian.Uint16((*[2]byte)(unsafe.Pointer(&addr.Port))[:])
+	ip := net.IPv4(addr.Addr[0], addr.Addr[1], addr.Addr[2], addr.Addr[3])
+	return fmt.Sprintf("%s:%d", ip, port), nil
+}
+
+func run(name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// CheckHostNetwork returns true if the container appears to be running with --network host.
+func CheckHostNetwork() bool {
+	// In host network mode the container sees host-level interfaces like
+	// docker0, br-xxx, real NICs. In bridge/custom network mode, these
+	// are NOT visible — only eth0 (veth) + lo + any TUN/ipsec/ppp
+	// interfaces created by the app itself.
+	// Check for docker0 or br-* which only exist in host network mode.
+	entries, _ := os.ReadDir("/sys/class/net")
+	for _, e := range entries {
+		name := e.Name()
+		if name == "docker0" || strings.HasPrefix(name, "br-") {
+			return true
+		}
+	}
+	return false
+}

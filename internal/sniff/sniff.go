@@ -21,11 +21,98 @@ import (
 	"strings"
 )
 
-// MinPeek is the smallest number of bytes a caller should buffer before
-// calling Host. TLS Client Hellos are normally 200–800 bytes; HTTP request
-// lines + Host header are typically <200. Picking 1500 covers both with one
-// MTU's worth of payload and keeps the buffer page-aligned.
-const MinPeek = 1500
+// MaxPeek bounds how much a caller buffers while waiting for Complete: one
+// full TLS record (a Client Hello with a post-quantum key share is ~1.8 KB)
+// or an HTTP request header.
+const MaxPeek = 5 + 16384
+
+// Complete reports whether p already holds everything Host can use: a whole
+// TLS record, a whole HTTP request header, or bytes that are neither (no
+// amount of further data would help). Callers keep reading while it is
+// false, within their own time window and MaxPeek.
+func Complete(p []byte) bool {
+	if len(p) == 0 {
+		return false
+	}
+	if len(p) >= MaxPeek {
+		return true
+	}
+	if p[0] == 0x16 {
+		if len(p) < 5 {
+			return false
+		}
+		return len(p) >= 5+(int(p[3])<<8|int(p[4]))
+	}
+	if p[0] >= 'A' && p[0] <= 'Z' {
+		if !maybeRequestLine(p) {
+			return true // e.g. an SSH banner: not HTTP, nothing to wait for
+		}
+		return len(p) >= 8192 || bytes.Contains(p, []byte("\r\n\r\n"))
+	}
+	return true
+}
+
+// maybeRequestLine reports whether p can still be the start of an HTTP/1.x
+// request: an uppercase method, a space, and a first line naming HTTP/.
+func maybeRequestLine(p []byte) bool {
+	sp := bytes.IndexByte(p, ' ')
+	method := p
+	if sp >= 0 {
+		method = p[:sp]
+	}
+	if len(method) > 16 {
+		return false
+	}
+	for _, c := range method {
+		if c < 'A' || c > 'Z' {
+			return false
+		}
+	}
+	if eol := bytes.Index(p, []byte("\r\n")); eol >= 0 {
+		return bytes.Contains(p[:eol], []byte(" HTTP/"))
+	}
+	return true
+}
+
+// Usable reports whether a sniffed name may replace an IP destination: a
+// syntactically valid DNS name with at least two labels that is not a
+// private-use name (.local, .lan, .internal, ...) another resolver could not
+// answer, and not a service whose name and connected address legitimately
+// differ (Apple push).
+func Usable(name string) bool {
+	name = strings.TrimSuffix(strings.ToLower(name), ".")
+	if len(name) == 0 || len(name) > 253 || !strings.Contains(name, ".") {
+		return false
+	}
+	for _, label := range strings.Split(name, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			c := label[i]
+			if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+				return false
+			}
+		}
+	}
+	// all-numeric last label: an IPv4 literal or garbage, not a name
+	last := name[strings.LastIndexByte(name, '.')+1:]
+	if strings.Trim(last, "0123456789") == "" {
+		return false
+	}
+	for _, suffix := range skipSuffixes {
+		if name == suffix || strings.HasSuffix(name, "."+suffix) {
+			return false
+		}
+	}
+	return true
+}
+
+// skipSuffixes are names (and their subdomains) never used as a destination.
+var skipSuffixes = []string{
+	"local", "localhost", "lan", "internal", "home.arpa", "arpa", "invalid",
+	"push.apple.com",
+}
 
 // Host returns the hostname recovered from `peeked` — the first bytes the
 // client sent right after the proxy handshake completed. Order of attempts:
@@ -195,7 +282,7 @@ func tlsSNI(p []byte) string {
 //
 // We bound the search to the first 8 KiB to avoid pathological scans on a
 // long-poll request that legitimately has Host way down the buffer but no
-// CRLF terminator yet — proxy peeks are 1.5 KiB by default anyway.
+// CRLF terminator yet.
 func httpHost(p []byte) string {
 	if len(p) > 8192 {
 		p = p[:8192]
@@ -224,16 +311,40 @@ func httpHost(p []byte) string {
 		// Match "Host:" case-insensitively.
 		colon := bytes.IndexByte(line, ':')
 		if colon > 0 && strings.EqualFold(string(line[:colon]), "Host") {
-			v := strings.TrimSpace(string(line[colon+1:]))
-			// Strip optional ":port" — caller already has the dial port
-			// from the proxy-supplied destination, and reusing that keeps
-			// the override surface to "host only."
-			if i := strings.LastIndexByte(v, ':'); i > 0 && !strings.Contains(v, "]") {
-				return v[:i]
-			}
-			return v
+			return hostOnly(strings.TrimSpace(string(line[colon+1:])))
 		}
 		headers = headers[lineEnd+2:]
 	}
 	return ""
+}
+
+// hostOnly strips the optional ":port" of a Host header value — the caller
+// already has the dial port from the proxy-supplied destination, and reusing
+// that keeps the override surface to "host only." An IPv6 literal comes
+// back without its brackets ("[2001:db8::1]:8080" → "2001:db8::1"); a
+// malformed value yields "".
+func hostOnly(v string) string {
+	if strings.HasPrefix(v, "[") {
+		end := strings.IndexByte(v, ']')
+		if end < 0 {
+			return ""
+		}
+		if rest := v[end+1:]; rest != "" && !strings.HasPrefix(rest, ":") {
+			return ""
+		}
+		return v[1:end]
+	}
+	switch strings.Count(v, ":") {
+	case 0:
+		return v
+	case 1:
+		return v[:strings.IndexByte(v, ':')]
+	}
+	// several colons without brackets: only a bare IPv6 literal makes sense
+	for _, r := range v {
+		if !(r == ':' || r == '.' || r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
+			return ""
+		}
+	}
+	return v
 }

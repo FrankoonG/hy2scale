@@ -9,10 +9,11 @@ import (
 	"net/http"
 	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/FrankoonG/hy2scale/internal/selfupdate"
 )
 
 // Online-update subsystem. Goal: any logged-in session can press a single
@@ -65,9 +66,9 @@ type upgradeJob struct {
 	// SSE subscribers — fan out a snapshot on every state mutation. Slow
 	// consumers drop frames; each frame carries a full snapshot so a
 	// missed event self-heals on the next.
-	subs    map[uint64]chan upgradeJobSnapshot
-	subSeq  uint64
-	subsMu  sync.Mutex
+	subs   map[uint64]chan upgradeJobSnapshot
+	subSeq uint64
+	subsMu sync.Mutex
 }
 
 type upgradeJobSnapshot struct {
@@ -136,43 +137,7 @@ func expectedAsset() string {
 // v1.3.2 (the existing `latest != Version` check returns true for any
 // difference, including older). Anything malformed → false (treat as
 // "not greater"); the user can still see the version mismatch in the UI.
-func semverGreater(a, b string) bool {
-	parse := func(s string) (int, int, int, bool) {
-		parts := strings.SplitN(s, ".", 3)
-		if len(parts) != 3 {
-			return 0, 0, 0, false
-		}
-		ints := make([]int, 3)
-		for i, p := range parts {
-			// Strip any pre-release suffix from the patch field
-			// (e.g. "1.3.2-rc1" → 2). Defensive — release tags
-			// have been stripped of "v" already by the caller.
-			if i == 2 {
-				if dash := strings.IndexAny(p, "-+"); dash != -1 {
-					p = p[:dash]
-				}
-			}
-			n, err := strconv.Atoi(p)
-			if err != nil {
-				return 0, 0, 0, false
-			}
-			ints[i] = n
-		}
-		return ints[0], ints[1], ints[2], true
-	}
-	aM, am, ap, ok1 := parse(a)
-	bM, bm, bp, ok2 := parse(b)
-	if !ok1 || !ok2 {
-		return false
-	}
-	if aM != bM {
-		return aM > bM
-	}
-	if am != bm {
-		return am > bm
-	}
-	return ap > bp
-}
+func semverGreater(a, b string) bool { return selfupdate.Newer(a, b) }
 
 // --- Handlers ---
 
@@ -254,11 +219,11 @@ func (s *Server) checkUpdate(w http.ResponseWriter, r *http.Request) {
 	j.broadcast(snap)
 
 	writeJSON(w, map[string]any{
-		"current":          Version,
-		"latest":           latest,
-		"asset":            wanted,
-		"download_url":     url,
-		"size":             size,
+		"current":      Version,
+		"latest":       latest,
+		"asset":        wanted,
+		"download_url": url,
+		"size":         size,
 		// Only flag as available when the published release is STRICTLY newer.
 		// `latest != Version` would happily offer a downgrade when GitHub's
 		// /releases/latest still points at an older tag than what we ship
@@ -514,7 +479,7 @@ func (s *Server) applyDownloadedUpgrade(w http.ResponseWriter, r *http.Request) 
 	j.mu.Unlock()
 	j.broadcast(snap)
 
-	if err := applyTarball(path); err != nil {
+	if err := applyTarball(path, s.app.DataDir()); err != nil {
 		j.markError("apply: " + err.Error())
 		http.Error(w, err.Error(), 500)
 		return

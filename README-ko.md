@@ -46,26 +46,22 @@ docker run -d --name hy2scale \
   frankoong/hy2scale:latest
 ```
 
-브리지 모드 (VPN + 프록시, 라우팅 규칙 제외):
+브리지 모드 (VPN + 프록시, 규칙은 해당 사용자에 적용):
 
 ```bash
 docker run -d --name hy2scale \
-  --cap-add NET_ADMIN --cap-add NET_RAW \
-  --device-cgroup-rule="c 10:200 rwm" \
-  --device-cgroup-rule="c 108:0 rwm" \
   -p 5565:5565/tcp -p 5565:5565/udp \
-  -p 500:500/udp -p 4500:4500/udp -p 1701:1701/udp -p 51820:51820/udp \
+  -p 500:500/udp -p 4500:4500/udp -p 1194:1194/udp -p 51820:51820/udp \
   -v hy2scale-data:/data \
   --restart unless-stopped \
   frankoong/hy2scale:latest
 ```
 
-두 개의 `--device-cgroup-rule` 행은 컨테이너에 `/dev/net/tun` (릴레이 패킷
-캡처)과 `/dev/ppp` (L2TP/IPsec의 PPP 계층) 접근 권한을 부여합니다.
-`c 108:0 rwm`이 없으면 L2TP 터널이 IKE+ESP 협상까지는 성공하지만 pppd가
-`/dev/ppp`를 열 수 없어 즉시 종료되며, 클라이언트는 잠깐 "연결됨"을
-보였다가 끊어집니다. Full 모드는 `--privileged`가 모든 디바이스를 자동으로
-부여하므로 이 두 줄이 필요하지 않습니다.
+VPN 서비스(IKEv2, L2TP/IPsec, OpenVPN, WireGuard)는 모두 사용자 공간에서 실행되며
+capability나 디바이스가 필요 없고, 일반 포트 매핑만으로 충분합니다.
+라우팅 규칙은 모든 모드에서 VPN 및 프록시 사용자에게 적용됩니다. 호스트 자체와
+호스트를 경유하는 장치의 트래픽을 투명하게 캡처하려면 `--network host`와 `NET_ADMIN`이
+필요하며, 서버 포트 호핑에는 `NET_ADMIN`이 필요합니다.
 
 `http://<호스트>:5565/scale/` 접속 — 기본 로그인 `admin` / `admin`.
 
@@ -75,7 +71,9 @@ iKuai v4 사용자는 [Releases](https://github.com/FrankoonG/hy2scale/releases)
 
 - 노드를 메시로 연결하여 그중 어느 노드를 통해서든 트래픽을 라우팅합니다.
 - 인터랙티브 그래프 또는 테이블 뷰에서 실시간 토폴로지와 지연 시간을 확인합니다.
-- VPN / 프록시 서비스 실행: Hysteria 2, SOCKS5, HTTP, Shadowsocks, L2TP, IKEv2, WireGuard.
+- VPN / 프록시 서비스 실행: Hysteria 2, SOCKS5, HTTP, Shadowsocks, L2TP, IKEv2, OpenVPN, WireGuard — VPN은 권한 없이 완전히 사용자 공간에서 실행됩니다.
+- 홀 펀칭: NAT 뒤의 노드끼리, 양쪽 모두 연결된 노드의 도움으로 직접 연결을 설정합니다.
+- 다중 인터페이스 노드는 주소별로 출구 인터페이스나 소스 주소를 지정할 수 있습니다.
 - 사용자별 출구 라우팅, 트래픽 제한, 만료일, 일괄 관리.
 - IP 및 도메인 라우팅 규칙으로 특정 트래픽을 특정 출구로 보냅니다.
 - 내장 CA 서명을 지원하는 TLS 인증서 관리.

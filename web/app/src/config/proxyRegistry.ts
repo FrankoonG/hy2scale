@@ -105,14 +105,14 @@ export const PROXY_REGISTRY: ProxyRegistryEntry[] = [
   // VPN proxies — included so the user-modal "proxy auth" tab can list a
   // per-proxy enable toggle for them. They don't appear in the user-detail
   // share-link list (filtered by category='vpn'); their connection details
-  // come from the dedicated L2TP / IKEv2 admin pages instead.
+  // come from the dedicated L2TP / IKEv2 / OpenVPN admin pages instead.
   {
     key: 'l2tp',
     label: 'L2TP/IPsec',
     authType: 'username_password',
     category: 'vpn',
-    defaultPort: '1701',
-    getPort: () => '1701',
+    defaultPort: '500',
+    getPort: () => '500',
     buildUrl: () => '',
   },
   {
@@ -122,6 +122,15 @@ export const PROXY_REGISTRY: ProxyRegistryEntry[] = [
     category: 'vpn',
     defaultPort: '500',
     getPort: () => '500',
+    buildUrl: () => '',
+  },
+  {
+    key: 'openvpn',
+    label: 'OpenVPN',
+    authType: 'username_password',
+    category: 'vpn',
+    defaultPort: '1194',
+    getPort: () => '1194',
     buildUrl: () => '',
   },
 ];

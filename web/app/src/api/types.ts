@@ -36,6 +36,8 @@ export interface TopologyNode {
   // address); absent = one.
   conns?: number;
   ip_statuses?: IPStatus[];
+  // who set up the live hole-punched connection(s) to this direct peer
+  punched?: string[];
   exit_node: boolean;
   direction: 'inbound' | 'outbound' | 'local' | '';
   connected: boolean;
@@ -57,6 +59,21 @@ export interface TopologyNode {
   via?: string;
   is_self: boolean;
   children?: TopologyNode[];
+  // Selected direct-egress of this node as it reports it. undefined / null =
+  // unknown (older node); a family set to null = not provided.
+  egress?: NodeEgress | null;
+}
+
+export interface NodeEgressFamily { ip: string; ok: boolean }
+export interface NodeEgress { ipv4: NodeEgressFamily | null; ipv6: NodeEgressFamily | null }
+
+// Whether a configured exit path can be dialed now (GET /paths/status). The
+// backend applies the same rules as routing; the UI only renders it.
+export interface PathStatus {
+  path: string;
+  ok: boolean;
+  hop: number; // index of the hop that stops the path (segments as written)
+  reason?: 'loop' | 'nested' | 'disabled' | 'offline';
 }
 
 export interface IPStatus {
@@ -85,6 +102,34 @@ export interface ClientEntry {
   bbr_profile?: '' | 'standard' | 'conservative' | 'aggressive';
   disabled?: boolean;
   connected?: boolean;
+  punch?: PunchConfig;
+  advanced?: PeerAdvanced;
+}
+
+// Hole punching: signalling paths (fallback order, each ending at the node),
+// the target's reflectors, and local bindings (each its own route).
+export interface PunchConfig {
+  signal: string[];
+  reflectors: string[];
+  binds?: string[];
+  // address family used end to end; absent = IPv4
+  family?: 'ipv4' | 'ipv6';
+}
+
+export interface PeerAdvanced {
+  punch_retry_min?: number;
+  punch_retry_max?: number;
+  probe_timeout?: number;
+  punch_window?: number;
+}
+
+export interface PunchStatus {
+  addr: string;
+  state: 'punching' | 'connected' | 'failed' | 'waiting';
+  reason?: string;
+  mapping?: string;
+  since: number;
+  retries?: number;
 }
 
 // ===== Users =====
@@ -149,6 +194,8 @@ export interface SSConfig {
 export interface L2TPConfig {
   capable?: boolean;
   host_network?: boolean;
+  running?: boolean;
+  connected?: number;
   listen: string;
   enabled: boolean;
   pool: string;
@@ -164,9 +211,12 @@ export interface L2TPConfig {
 export interface IKEv2Config {
   capable?: boolean;
   host_network?: boolean;
+  running?: boolean;
+  connected?: number;
   enabled: boolean;
   mode: 'mschapv2' | 'psk';
   pool: string;
+  pool6?: string;
   cert_id: string;
   psk: string;
   local_id: string;
@@ -180,6 +230,18 @@ export interface IKEv2Config {
   mtu: number;
 }
 
+// ===== OpenVPN =====
+export interface OpenVPNConfig {
+  running?: boolean;
+  connected?: number;
+  enabled: boolean;
+  port: number;
+  pool: string;
+  pool6?: string;
+  cert_id: string;
+  mtu: number;
+}
+
 // ===== WireGuard =====
 export interface WireGuardConfig {
   running?: boolean;
@@ -189,6 +251,7 @@ export interface WireGuardConfig {
   private_key: string;
   public_key?: string;
   address: string;
+  address6?: string;
   dns?: string;
   mtu: number;
   peers: WireGuardPeer[];
@@ -219,8 +282,6 @@ export interface RoutingRule {
   exit_mode?: '' | 'quality' | 'aggregate';
   enabled: boolean;
   priority?: number;    // higher wins on CIDR overlap; default 0
-  use_tun?: boolean;    // request full TUN for this rule
-  tun_active?: boolean; // live: true only when actually running on TUN path
 }
 
 // ===== TLS =====
@@ -253,6 +314,7 @@ export interface UISettings {
   // Off by default; when on, peer-relay-delivered admin requests skip the
   // local password / token check. Trust boundary becomes the relay handshake.
   relay_admin_passthrough: boolean;
+  accept_punch?: boolean;
   // DNS resolver (relay-routed) — reroutes hy2scale's own internal name
   // lookups (rules-engine domain rules etc.) through a clean upstream
   // DNS reachable via the rule's own exit, so a polluted local
@@ -268,7 +330,91 @@ export interface UISettings {
   dns_resolver_negative_ttl: number;      // seconds, default 30
   dns_resolver_cache_size: number;        // entries, default 1024
   dns_resolver_query_timeout_ms: number;  // ms, default 3000
+  public_ip?: PublicIPSettings;
 }
+
+// Public-IP detection (GET/PUT /settings/ui). Empty servers = built-in list.
+export interface PublicIPSettings {
+  method: 'public' | 'peer+public';
+  interval: number; // seconds
+  servers: string[];
+}
+
+// ===== Interfaces (GET /interfaces) =====
+export type IfaceKind = 'physical' | 'system' | 'child';
+export type IfaceFamilyKey = 'ipv4' | 'ipv6';
+export interface IfaceAddr {
+  prefix: string;
+  source: 'dhcp' | 'static' | 'slaac' | 'system' | string;
+  expires: number; // unix seconds; 0 = no expiry
+}
+export interface IfaceFamily {
+  mode: 'off' | 'dhcp' | 'static' | 'slaac' | 'system' | string;
+  state: 'off' | 'acquiring' | 'ok' | 'failed' | string;
+  error: string;
+  addrs: IfaceAddr[];
+  gateway: string;
+  dns: string[];
+  hostname?: string;
+  client_id?: string;
+}
+export interface IfacePublic {
+  ip: string;
+  ok: boolean;
+  error: string;
+  checked: number;
+  direct: boolean;
+}
+export interface IfaceUsable {
+  ok: boolean;
+  reason: '' | 'family_off' | 'no_address' | 'no_route' | 'down' | string;
+}
+export interface IfaceEntry {
+  name: string;
+  kind: IfaceKind;
+  parent: string;
+  container?: boolean;
+  /** Link type: ethernet, wlan, bridge, veth, vlan, tun, … (system interfaces). */
+  type?: string;
+  up: boolean;
+  mac: string;
+  mtu: number;
+  wireless: boolean;
+  can_have_children: boolean;
+  // child only
+  mode?: 'builtin' | 'system';
+  enabled?: boolean;
+  vlan?: { enabled: boolean; id: number };
+  error?: string;
+  ipv4: IfaceFamily;
+  ipv6: IfaceFamily;
+  public: { ipv4: IfacePublic | null; ipv6: IfacePublic | null };
+  egress_usable: { ipv4: IfaceUsable; ipv6: IfaceUsable };
+  rx_bytes: number;
+  tx_bytes: number;
+}
+export interface Egress { ipv4: string; ipv6: string }
+export interface InterfacesResponse {
+  capability: { children: boolean; reason: string };
+  egress: Egress;
+  interfaces: IfaceEntry[];
+}
+// Body of POST /interfaces and PUT /interfaces/{name}.
+export interface ChildIfaceBody {
+  name: string;
+  parent: string;
+  mode: 'builtin' | 'system';
+  mac: string;
+  vlan: { enabled: boolean; id: number };
+  mtu: number;
+  enabled: boolean;
+  ipv4: { mode: 'off' | 'dhcp' | 'static'; addrs: string[]; gateway: string; dns: string[]; hostname: string; client_id: string };
+  ipv6: { mode: 'off' | 'slaac' | 'static'; addrs: string[]; gateway: string; dns: string[] };
+}
+export type IfaceReference =
+  | { type: 'egress'; family: IfaceFamilyKey }
+  | { type: 'node_address'; node: string; address: string }
+  | { type: string; [k: string]: any };
 
 // ===== Online Update =====
 // Mirrors the upgradeJobSnapshot served by /api/upgrade/{status,events}.

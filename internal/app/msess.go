@@ -39,12 +39,10 @@ func (a *App) initMsess() {
 	a.ms = &msessState{legacy: map[string]time.Time{}, noted: map[string]time.Time{}}
 	a.ms.server = msess.NewServer(msess.ServerConfig{
 		DialTarget: func(ctx context.Context, addr string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, "tcp", rewriteLocalAddr(addr))
+			return a.dialDirect(ctx, "tcp", rewriteLocalAddr(addr))
 		},
 		DialPacketTarget: func(ctx context.Context, addr string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, "udp", rewriteLocalAddr(addr))
+			return a.dialDirect(ctx, "udp", rewriteLocalAddr(addr))
 		},
 		Logf: log.Printf,
 	})

@@ -202,5 +202,5 @@ printf '  Uninstall curl -fsSL https://raw.githubusercontent.com/%s/main/install
 printf '\n'
 
 if command -v ufw >/dev/null 2>&1 || command -v firewall-cmd >/dev/null 2>&1; then
-  warn "A host firewall is present. Allow TCP+UDP $PORT (and 500/4500/1701/51820/UDP if you use VPN services)."
+  warn "A host firewall is present. Allow TCP+UDP $PORT (and 500/4500/1194/51820/UDP if you use VPN services)."
 fi

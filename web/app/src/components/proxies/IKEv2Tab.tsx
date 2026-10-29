@@ -5,21 +5,24 @@ import { Card, Button, Input, Select, Toggle, FormGroup, FormGrid, useToast } fr
 import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
 import * as api from '@/api';
 import { useServerFormInit } from '@/hooks/useFormInit';
+import VPNStatus from './VPNStatus';
 
-export default function IKEv2Tab({ limited }: { limited?: boolean }) {
+export default function IKEv2Tab() {
   const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
 
-  const ikev2Q = useQuery({ queryKey: ['ikev2'], queryFn: api.getIKEv2 });
+  const ikev2Q = useQuery({ queryKey: ['ikev2'], queryFn: api.getIKEv2, refetchInterval: 5000 });
   const ikev2 = ikev2Q.data;
   const { data: certs = [] } = useQuery({ queryKey: ['certs'], queryFn: api.getCerts });
 
   const [enabled, setEnabled] = useState(false);
   const [mode, setMode] = useState<'mschapv2' | 'psk'>('mschapv2');
   const [pool, setPool] = useState('');
+  const [pool6, setPool6] = useState('');
   const [certId, setCertId] = useState('');
   const [psk, setPsk] = useState('');
+  const [pskUserMode, setPskUserMode] = useState(false);
   const [localId, setLocalId] = useState('');
   const [mtu, setMtu] = useState('1400');
   const [exitPath, setExitPath] = useState<ExitPathValue>({ paths: [''], mode: '' });
@@ -32,8 +35,10 @@ export default function IKEv2Tab({ limited }: { limited?: boolean }) {
       setEnabled(ikev2.enabled);
       setMode(ikev2.mode || 'mschapv2');
       setPool(ikev2.pool || '');
+      setPool6(ikev2.pool6 || '');
       setCertId(ikev2.cert_id || '');
       setPsk(ikev2.psk || '');
+      setPskUserMode(!!ikev2.psk_user_mode);
       setLocalId(ikev2.local_id || '');
       setMtu(String(ikev2.mtu || 1400));
       setExitPath(apiToExitPath(ikev2.default_exit, ikev2.default_exit_paths, ikev2.default_exit_mode));
@@ -49,7 +54,7 @@ export default function IKEv2Tab({ limited }: { limited?: boolean }) {
     try {
       const exitData = mode === 'psk' ? exitPathToApi(exitPath) : {};
       await api.updateIKEv2({
-        enabled, mode, pool, cert_id: certId, psk, local_id: localId,
+        enabled, mode, pool, pool6: pool6.trim(), cert_id: certId, psk, local_id: localId, psk_user_mode: pskUserMode,
         mtu: parseInt(mtu) || 1400,
         default_exit: (exitData as any).exit_via || '',
         default_exit_paths: (exitData as any).exit_paths,
@@ -65,24 +70,14 @@ export default function IKEv2Tab({ limited }: { limited?: boolean }) {
     }
   };
 
-  const isLimited = limited || (ikev2 && !ikev2.capable);
-
   const certOptions = [
-    { value: '', label: t('ikev2.selectCert') },
-    ...certs.map((c) => ({ value: c.id, label: c.name || c.id })),
+    { value: '', label: t('ikev2.selectCACert') },
+    ...certs.filter((c) => c.is_ca).map((c) => ({ value: c.id, label: c.name || c.id })),
   ];
 
   return (
-    <>
-      {isLimited && (
-        <div className="hy-warn-banner">
-          {(ikev2 as any)?.reason
-            ? (ikev2 as any).reason
-            : ikev2?.host_network === false ? t('ikev2.warnHostNetwork') : t('ikev2.warnText')}
-        </div>
-      )}
-    <Card fill={1} title={t('ikev2.title')}>
-      <div style={{ maxWidth: 450, display: 'flex', flexDirection: 'column', gap: 14, ...(isLimited ? { opacity: 0.4, pointerEvents: 'none' as const } : {}) }}>
+    <Card fill={1} title={<>{t('ikev2.title')} <VPNStatus running={ikev2?.running} connected={ikev2?.connected} /></>}>
+      <div style={{ maxWidth: 450, display: 'flex', flexDirection: 'column', gap: 14 }}>
         <FormGrid>
           <FormGroup label={t('ikev2.mode')}>
             <Select
@@ -107,6 +102,10 @@ export default function IKEv2Tab({ limited }: { limited?: boolean }) {
           <Input value={pool} onChange={(e) => setPool(e.target.value)} placeholder="192.168.26.1/24" />
         </FormGroup>
 
+        <FormGroup label={t('ikev2.pool6')}>
+          <Input value={pool6} onChange={(e) => setPool6(e.target.value)} placeholder="fd00:10:10::1/64" />
+        </FormGroup>
+
         <FormGroup label={t('ikev2.mtu')}>
           <Input type="number" value={mtu} onChange={(e) => setMtu(e.target.value)} placeholder="1400" />
         </FormGroup>
@@ -123,14 +122,22 @@ export default function IKEv2Tab({ limited }: { limited?: boolean }) {
             <FormGroup label={t('ikev2.psk')} required>
               <Input value={psk} onChange={(e) => setPsk(e.target.value)} />
             </FormGroup>
-            <ExitPathList value={exitPath} onChange={setExitPath} label={t('ikev2.defaultExit')} />
-            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('ikev2.pskDesc')}</div>
+            <FormGroup label={t('ikev2.pskUserMode')}>
+              <Toggle checked={pskUserMode} onChange={(e) => setPskUserMode(e.target.checked)} data-testid="psk-user-mode" />
+            </FormGroup>
+            {pskUserMode ? (
+              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('ikev2.pskUserModeDesc')}</div>
+            ) : (
+              <>
+                <ExitPathList value={exitPath} onChange={setExitPath} label={t('ikev2.defaultExit')} />
+                <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('ikev2.pskDesc')}</div>
+              </>
+            )}
           </>
         )}
 
         <Button variant="primary" onClick={handleSave} loading={loading} style={{ alignSelf: 'flex-start' }}>{t('app.save')}</Button>
       </div>
     </Card>
-    </>
   );
 }

@@ -20,7 +20,7 @@ interface SelectionLike {
 // Usage: pass the selection returned by useSelection plus a ref to the
 // element that bounds "inside the list" (typically the Card or table-wrap).
 // Clicks inside that element won't deselect — the table's own row-click
-// handlers govern that case (selectOnly already does the right thing).
+// handlers govern that case (checkboxes and the list's own row action).
 export function useDeselectOnBlankClick(
   selection: SelectionLike,
   insideRef: RefObject<HTMLElement | null>,

@@ -3,6 +3,7 @@ import * as React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
 import type { SelectionState } from './Table';
+import { ColumnMenu, Pager, SortTitle, sortBy, type SortState, tableId, useColumnPrefs, usePager } from './TableKit';
 
 // Mirror of Table's isInteractiveDescendant — kept inline to avoid making
 // it part of the framework's public surface. Walks up from the click
@@ -25,6 +26,12 @@ export interface TreeColumn<T> {
   render: (row: T, meta: TreeRowMeta) => ReactNode;
   className?: string;
   width?: string;
+  /** Column menu: name when `title` is not text; false = always shown. */
+  menuTitle?: string;
+  hideable?: boolean;
+  defaultHidden?: boolean;
+  /** Sort key of a row (siblings sort among themselves). */
+  sortValue?: (row: T) => string | number | null | undefined;
 }
 
 export interface TreeRowMeta {
@@ -41,6 +48,8 @@ export interface TreeNode<T> {
   children?: TreeNode<T>[];
   expanded?: boolean;
   className?: string;
+  /** Stays first among its siblings whatever the sort (e.g. this node). */
+  pinned?: boolean;
 }
 
 export interface TreeTableProps<T> {
@@ -49,6 +58,22 @@ export interface TreeTableProps<T> {
   emptyText?: ReactNode;
   selection?: SelectionState;
   isSelectable?: (node: TreeNode<T>, meta: TreeRowMeta) => boolean;
+  /** Optional full-width panel rendered under a row; return null for none. */
+  renderDetail?: (node: TreeNode<T>, meta: TreeRowMeta) => ReactNode;
+  /** Remembers column choices and page size (default: page path + columns). */
+  id?: string;
+  /** false = all rows on one page. Pages count top-level rows; children
+   *  stay with their parent. */
+  paginate?: boolean;
+  /** The list's own action for a click on a row (outside its controls). */
+  onRowClick?: (node: TreeNode<T>, meta: TreeRowMeta) => void;
+}
+
+function sortTree<T>(nodes: TreeNode<T>[], get: (r: T) => string | number | null | undefined, dir: SortState['dir']): TreeNode<T>[] {
+  // Level by level: siblings sort among themselves; pinned rows stay first.
+  const sorted = sortBy(nodes.filter((n) => !n.pinned), (n) => get(n.data), dir);
+  return [...nodes.filter((n) => n.pinned), ...sorted].map((n) =>
+    n.children ? { ...n, children: sortTree(n.children, get, dir) } : n);
 }
 
 function flattenNodes<T>(
@@ -75,16 +100,25 @@ function IndeterminateCheckbox({ checked, indeterminate, onChange }: { checked: 
   return <input ref={ref} type="checkbox" checked={checked} onChange={onChange} />;
 }
 
-export function TreeTable<T>({ columns, nodes, emptyText, selection, isSelectable }: TreeTableProps<T>) {
-  const rows = flattenNodes(nodes);
+export function TreeTable<T>({ columns: allColumns, nodes: rawNodes, emptyText, selection, isSelectable, renderDetail, id, paginate = true, onRowClick: rowAction }: TreeTableProps<T>) {
+  const tid = tableId(id, allColumns.map((c) => c.key));
+  const prefs = useColumnPrefs(tid, allColumns);
+  const columns = prefs.visible;
+  const sortCol = prefs.sort ? allColumns.find((c) => c.key === prefs.sort!.key) : undefined;
+  const nodes = sortCol?.sortValue ? sortTree(rawNodes, sortCol.sortValue, prefs.sort!.dir) : rawNodes;
+  const size = paginate ? prefs.pageSize : Math.max(1, nodes.length);
+  const pager = usePager(nodes.length, size, tid);
+  const rows = flattenNodes(paginate ? nodes.slice(pager.start, pager.end) : nodes);
 
-  if (rows.length === 0 && emptyText) {
+  if (nodes.length === 0 && emptyText) {
     return <div className="hy-empty" dangerouslySetInnerHTML={typeof emptyText === 'string' ? { __html: emptyText } : undefined}>{typeof emptyText !== 'string' ? emptyText : undefined}</div>;
   }
 
   return (
+    <div className="hy-table-box">
+    <ColumnMenu prefs={prefs} />
     <div className="hy-table-wrap">
-      <table className="hy-table">
+      <table className={clsx('hy-table', prefs.menuItems.length > 0 && 'has-col-menu')}>
         <thead>
           <tr>
             {selection && (
@@ -105,8 +139,8 @@ export function TreeTable<T>({ columns, nodes, emptyText, selection, isSelectabl
               </th>
             )}
             {columns.map((col) => (
-              <th key={col.key} style={col.width ? { width: col.width } : undefined} className={col.className}>
-                {col.title}
+              <th key={col.key} style={col.width ? { width: col.width } : undefined} className={col.className} aria-sort={prefs.sort?.key === col.key ? (prefs.sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
+                <SortTitle title={col.title} active={prefs.sort?.key === col.key} dir={prefs.sort?.dir} onClick={col.sortValue ? () => prefs.cycleSort(col.key) : undefined} />
               </th>
             ))}
           </tr>
@@ -116,10 +150,10 @@ export function TreeTable<T>({ columns, nodes, emptyText, selection, isSelectabl
             {rows.map(({ node, meta }) => {
               const selectable = !selection || !isSelectable || isSelectable(node, meta);
               const isSelected = selection && selectable && selection.selected.has(node.key);
-              const onRowClick = (selection && selectable)
+              const onRowClick = rowAction
                 ? (e: React.MouseEvent<HTMLTableRowElement>) => {
                     if (isInteractiveDescendant(e.target, e.currentTarget)) return;
-                    selection.selectOnly(node.key);
+                    rowAction(node, meta);
                   }
                 : undefined;
               // Mirror Table's enlarged-hit-area for the col-check cell:
@@ -134,11 +168,13 @@ export function TreeTable<T>({ columns, nodes, emptyText, selection, isSelectabl
                     }
                   }
                 : undefined;
+              const detail = renderDetail ? renderDetail(node, meta) : null;
               return (
+                <React.Fragment key={node.key}>
                 <motion.tr
                   key={node.key}
                   data-row-key={node.key}
-                  className={clsx(node.className, isSelected && 'selected', selection && selectable && 'hy-row-clickable')}
+                  className={clsx(node.className, isSelected && 'selected', rowAction && 'hy-row-action')}
                   onClick={onRowClick}
                   layout
                   initial={{ opacity: 0 }}
@@ -157,11 +193,19 @@ export function TreeTable<T>({ columns, nodes, emptyText, selection, isSelectabl
                     <td key={col.key} className={col.className}>{col.render(node.data, meta)}</td>
                   ))}
                 </motion.tr>
+                {detail != null && detail !== false && (
+                  <tr key={`${node.key}::detail`} className={clsx('hy-tree-detail', node.className)} data-row-key={`${node.key}::detail`}>
+                    <td colSpan={columns.length + (selection ? 1 : 0)}>{detail}</td>
+                  </tr>
+                )}
+                </React.Fragment>
               );
             })}
           </tbody>
         </AnimatePresence>
       </table>
+    </div>
+    {paginate && <Pager total={nodes.length} size={prefs.pageSize} onSize={prefs.setPageSize} pager={pager} />}
     </div>
   );
 }

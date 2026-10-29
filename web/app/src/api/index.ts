@@ -1,17 +1,18 @@
 import { api } from './client';
 import type {
-  NodeConfig, Stats, TopologyNode, ClientEntry,
+  NodeConfig, Stats, TopologyNode, ClientEntry, PathStatus,
   UserConfig, Session, ProxyConfig, SSConfig, L2TPConfig,
-  IKEv2Config, WireGuardConfig, WireGuardPeer,
+  IKEv2Config, OpenVPNConfig, WireGuardConfig, WireGuardPeer,
   RoutingRule, CertInfo, UISettings, PortConflict, PasswordConflicts,
-  UpgradeStatus, UpgradeCheckResult,
+  UpgradeStatus, UpgradeCheckResult, NodeEgress, NodeEgressFamily,
 } from './types';
 
-export type { NodeConfig, Stats, TopologyNode, ClientEntry, UserConfig, Session, ProxyConfig, SSConfig, L2TPConfig, IKEv2Config, WireGuardConfig, WireGuardPeer, RoutingRule, CertInfo, UISettings, PortConflict, PasswordConflicts, UpgradeStatus, UpgradeCheckResult };
+export type { NodeConfig, Stats, TopologyNode, ClientEntry, PathStatus, UserConfig, Session, ProxyConfig, SSConfig, L2TPConfig, IKEv2Config, OpenVPNConfig, WireGuardConfig, WireGuardPeer, RoutingRule, CertInfo, UISettings, PortConflict, PasswordConflicts, UpgradeStatus, UpgradeCheckResult, NodeEgress, NodeEgressFamily };
 
 // Auth
 export const login = (username: string, password: string) =>
   api<{ token: string; force_password_change?: boolean }>('/login', { method: 'POST', body: JSON.stringify({ username, password }) });
+export const getMe = () => api<{ username: string }>('/me');
 
 // Node
 export const getNode = () => api<NodeConfig>('/node');
@@ -23,6 +24,7 @@ export const getStats = () => api<Stats>('/stats');
 
 // Topology
 export const getTopology = () => api<TopologyNode[]>('/topology');
+export const getPathStatus = () => api<PathStatus[]>('/paths/status');
 
 // Build info — project licence + full compiled-in dependency list.
 // Rendered on the Settings → Upgrade page so users can audit what's
@@ -110,6 +112,13 @@ export const getIKEv2 = () => api<IKEv2Config>('/ikev2');
 export const updateIKEv2 = (data: Partial<IKEv2Config>) =>
   api('/ikev2', { method: 'PUT', body: JSON.stringify(data) });
 
+// OpenVPN
+export const getOpenVPN = () => api<OpenVPNConfig>('/openvpn');
+export const updateOpenVPN = (data: Partial<OpenVPNConfig>) =>
+  api('/openvpn', { method: 'PUT', body: JSON.stringify(data) });
+export const downloadOpenVPNProfile = (endpoint: string) =>
+  api<Response>(`/openvpn/profile?endpoint=${encodeURIComponent(endpoint)}`);
+
 // WireGuard
 export const getWireGuard = () => api<WireGuardConfig>('/wireguard');
 export const updateWireGuard = (data: Partial<WireGuardConfig>) =>
@@ -128,7 +137,7 @@ export const getWGQR = (text: string) =>
   api<Response>(`/wireguard/qr?text=${encodeURIComponent(text)}`);
 
 // Rules
-export const getRules = () => api<{ available: boolean; rules: RoutingRule[] }>('/rules');
+export const getRules = () => api<{ available: boolean; capture?: 'tproxy' | 'dnat' | 'none'; rules: RoutingRule[] }>('/rules');
 export const createRule = (data: Partial<RoutingRule>) =>
   api('/rules', { method: 'POST', body: JSON.stringify(data) });
 export const updateRule = (id: string, data: Partial<RoutingRule>) =>
@@ -140,6 +149,12 @@ export const toggleRule = (id: string, enabled: boolean) =>
 
 // TLS
 export const getCerts = () => api<CertInfo[]>('/tls');
+
+// Interfaces this node can bind a peer address to. Child interfaces come
+// with kind "child" and their parent NIC.
+export interface IfaceInfo { name: string; up: boolean; loopback: boolean; addrs: string[]; kind?: string; parent?: string; }
+export const getInterfaces = () => api<IfaceInfo[]>('/system/interfaces');
+export const getPunchStatus = () => api<import('./types').PunchStatus[]>('/punch/status');
 export const importCert = (data: { id: string; name: string; cert: string; key?: string }) =>
   api('/tls/import', { method: 'POST', body: JSON.stringify(data) });
 export const importCertPath = (data: { id: string; name: string; cert_path: string; key_path?: string }) =>
@@ -152,6 +167,23 @@ export const getCertPem = (id: string) =>
   api<{ cert: string; key: string }>(`/tls/${encodeURIComponent(id)}/pem`);
 export const deleteCert = (id: string) =>
   api(`/tls/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+// Interfaces (system NICs + child interfaces) and egress selection
+export const listInterfaces = () => api<import('./types').InterfacesResponse>('/interfaces');
+export const createChildIface = (data: import('./types').ChildIfaceBody) =>
+  api('/interfaces', { method: 'POST', body: JSON.stringify(data) });
+export const updateChildIface = (name: string, data: import('./types').ChildIfaceBody) =>
+  api(`/interfaces/${encodeURIComponent(name)}`, { method: 'PUT', body: JSON.stringify(data) });
+export const getIfaceReferences = (name: string) =>
+  api<import('./types').IfaceReference[]>(`/interfaces/${encodeURIComponent(name)}/references`);
+export const deleteChildIface = (name: string, replacement: string) =>
+  api(`/interfaces/${encodeURIComponent(name)}?replacement=${encodeURIComponent(replacement)}`, { method: 'DELETE' });
+export const renewIface = (name: string) =>
+  api(`/interfaces/${encodeURIComponent(name)}/renew`, { method: 'POST' });
+export const refreshPublicIP = (name: string) =>
+  api(`/interfaces/${encodeURIComponent(name)}/public-ip`, { method: 'POST' });
+export const setEgress = (data: import('./types').Egress) =>
+  api('/egress', { method: 'PUT', body: JSON.stringify(data) });
 
 // Settings
 export const getUISettings = () => api<UISettings>('/settings/ui');
@@ -231,3 +263,16 @@ export interface DiagPeerHistory {
 }
 export const getPeerHistory = () =>
   api<{ peers: Record<string, DiagPeerHistory> }>('/diag/peer-history');
+
+// Diag — process counters (subset used by the Overview page).
+export interface DiagRuntime {
+  uptime_seconds: number;
+  goroutines: number;
+  heap_alloc: number;
+  sys: number;
+  num_gc: number;
+}
+export const getRuntime = () => api<DiagRuntime>('/diag/runtime');
+export interface LogEntry { seq: number; ts: number; level: 'info' | 'warn' | 'error'; src: string; msg: string }
+export interface LogsResponse { entries: LogEntry[]; last: number; gap: boolean }
+export const getLogs = (after = 0, limit = 5000) => api<LogsResponse>(`/logs?after=${after}&limit=${limit}`);

@@ -6,11 +6,7 @@ export interface TabPanelProps {
   children: ReactNode;
   /** Ordered list of tab keys — used to determine slide direction */
   keys?: string[];
-  /**
-   * When true, the panel (and its active child) flexes to fill remaining
-   * height inside a `.hy-page` container. Use together with `Card fill={…}`
-   * so the tabbed content scrolls internally.
-   */
+  /** When true, the active child's panels stack with the page gap. */
   fill?: boolean;
 }
 
@@ -32,11 +28,11 @@ export function TabPanel({ activeKey, children, keys, fill }: TabPanelProps) {
 
   const dir = dirRef.current;
 
-  const rootStyle: CSSProperties = fill
-    ? { position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }
-    : { position: 'relative' };
+  // fill: the active child's panels stack with the page gap (panels take
+  // their content's height; nothing scrolls inside them).
+  const rootStyle: CSSProperties = { position: 'relative' };
   const motionStyle: CSSProperties | undefined = fill
-    ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 20 }
+    ? { display: 'flex', flexDirection: 'column', gap: 20 }
     : undefined;
 
   return (

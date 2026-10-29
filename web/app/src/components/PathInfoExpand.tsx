@@ -1,4 +1,4 @@
-// Status-graph rows for the bottom-left selected-path overlay.
+// Path breakdown and status-graph rows for the node details dialog.
 //
 // Data flows from `/api/diag/peer-history` (the in-process recorder in
 // internal/history records 1m/1h/1d rings per direct peer). The caller
@@ -60,12 +60,13 @@ export interface PathInfoExpandProps {
    *  starting from self. Each entry is the hop's own contribution.
    *  Negative = offline / unknown. */
   perHopLatencyMs: number[];
-  /** Realtime up / down rates in bytes/sec at the path's egress point. */
-  realtimeUpBps: number;
-  realtimeDownBps: number;
-  /** Cumulative bytes through the path. */
-  totalUpBytes: number;
-  totalDownBytes: number;
+  /** Realtime up / down rates in bytes/sec at the path's egress point.
+   *  Omitted = row not shown. */
+  realtimeUpBps?: number;
+  realtimeDownBps?: number;
+  /** Cumulative bytes through the path. Omitted = row not shown. */
+  totalUpBytes?: number;
+  totalDownBytes?: number;
 }
 
 /** Latency → discrete color tier. Matches the list-view `latClass`
@@ -318,6 +319,7 @@ export function PathInfoExpand({
             ))}
           </span>
         </div>
+        {realtimeUpBps !== undefined && realtimeDownBps !== undefined && (
         <div className="hy-topo-pathinfo-info-row">
           <span className="hy-topo-pathinfo-info-label">{t('nodes.graph.infoSpeed')}</span>
           <span className="hy-topo-pathinfo-info-vals">
@@ -327,6 +329,8 @@ export function PathInfoExpand({
             <span className="hy-topo-pathinfo-info-val">{fmtRate(realtimeDownBps)}</span>
           </span>
         </div>
+        )}
+        {totalUpBytes !== undefined && totalDownBytes !== undefined && (
         <div className="hy-topo-pathinfo-info-row">
           <span className="hy-topo-pathinfo-info-label">{t('nodes.graph.infoTotal')}</span>
           <span className="hy-topo-pathinfo-info-vals">
@@ -336,6 +340,7 @@ export function PathInfoExpand({
             <span className="hy-topo-pathinfo-info-val">{fmtBytes(totalDownBytes)}</span>
           </span>
         </div>
+        )}
       </div>
 
       {/* Status bars zone — 4 metrics × 24 time-buckets each */}

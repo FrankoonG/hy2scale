@@ -11,8 +11,10 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -107,12 +109,20 @@ func (s *TLSStore) Generate(id, name string, domains []string, days int) error {
 	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: domains[0]},
+		Subject:      pkix.Name{CommonName: strings.TrimSuffix(strings.TrimPrefix(domains[0], "["), "]")},
 		NotBefore:    time.Now(),
 		NotAfter:     time.Now().Add(time.Duration(days) * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     domains,
+	}
+	// IP literals (either family, IPv6 with or without brackets) are IP
+	// SANs; clients connecting by address never match them as DNS names.
+	for _, d := range domains {
+		if ip := net.ParseIP(strings.TrimSuffix(strings.TrimPrefix(d, "["), "]")); ip != nil {
+			tmpl.IPAddresses = append(tmpl.IPAddresses, ip)
+		} else if d != "" {
+			tmpl.DNSNames = append(tmpl.DNSNames, d)
+		}
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	if err != nil {
@@ -191,6 +201,11 @@ func (s *TLSStore) SignWithCA(caID, newID, name, cn string, days int) error {
 		NotAfter:     time.Now().Add(time.Duration(days) * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	// An address identity needs an IP SAN: clients that connect by IP match
+	// the server certificate against it, not against DNS names.
+	if ip := net.ParseIP(subject.CommonName); ip != nil {
+		tmpl.IPAddresses = []net.IP{ip}
 	}
 
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &newKey.PublicKey, caKey)

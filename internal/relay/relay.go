@@ -95,6 +95,15 @@ const (
 	// loopback-rewrite logic (which would redirect 127.0.0.1 to the Docker
 	// gateway and break this case).
 	StreamAPI = "_relay_api_:0"
+	// StreamPunch carries hole-punch signalling (probe tokens, punch
+	// requests) to the node at the end of a path; see SetPunchHandler.
+	// Nodes on the way only forward it.
+	StreamPunch = "_relay_punch_:0"
+	// streamEgress returns the node's egress (public address per family,
+	// JSON); streamWhoami returns the address the stream's connection
+	// comes from. Only sent to peers that advertised them (peerMeta.Eg).
+	streamEgress = "_relay_egress_:0"
+	streamWhoami = "_relay_whoami_:0"
 )
 
 // IsRelayStream returns true if addr is a relay internal stream.
@@ -105,6 +114,9 @@ func IsRelayStream(addr string) bool {
 		addr == streamPing ||
 		addr == streamLatencyReport ||
 		addr == StreamAPI ||
+		addr == StreamPunch ||
+		addr == streamEgress ||
+		addr == streamWhoami ||
 		strings.HasPrefix(addr, streamViaPrefix) ||
 		strings.HasPrefix(addr, streamDataPrefix) ||
 		strings.HasPrefix(addr, streamIPTunPrefix) ||
@@ -193,6 +205,11 @@ type PeerInfo struct {
 	// per configured address); omitted for one. A chain through that node
 	// can then be carried over each of them (see ConnHint).
 	Conns int `json:"conns,omitempty"`
+	// EgressCapable: the peer answers egress / whoami streams (1.4.0+).
+	EgressCapable bool `json:"egress_capable,omitempty"`
+	// Egress: the peer's egress as last fetched (SelfEgress JSON); absent
+	// = unknown. Carried in peer lists so nested nodes show it too.
+	Egress json.RawMessage `json:"egress,omitempty"`
 }
 
 // NodeVersion is the version string sent during peer registration.
@@ -209,8 +226,9 @@ var NodeVersion = "1.0.0"
 // set. v1.3.x ships protocol v3 — v1 = pre-1.0, v2 = 1.0–1.2.
 const ProtocolVersion = 3
 
-// NodeTunCapable is set by the app layer at startup if this node can handle
-// exit-side TUN (has NET_ADMIN + /dev/net/tun).
+// NodeTunCapable is advertised to peers as TunCapable. Always false since
+// 1.4.0 (no TUN rules): pre-1.4.0 peers then carry their TUN rules to us
+// per flow instead of opening IP tunnel streams.
 var NodeTunCapable bool
 
 // MinCompatVersion is the minimum peer version we can work with.
@@ -275,11 +293,13 @@ type peerMeta struct {
 	// that advertised it; older requesters get an immediately-closed data
 	// stream instead so they stop waiting.
 	DialNak bool `json:"dn,omitempty"`
+	// Eg: this node serves streamEgress / streamWhoami.
+	Eg bool `json:"eg,omitempty"`
 }
 
 // localMeta is what this node advertises in the register handshake.
 func (n *Node) localMeta() peerMeta {
-	return peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable, PV: ProtocolVersion, NodeID: n.nodeID, DialNak: true}
+	return peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable, PV: ProtocolVersion, NodeID: n.nodeID, DialNak: true, Eg: true}
 }
 
 // writeMeta sends a length-prefixed JSON metadata blob.
@@ -644,15 +664,18 @@ type Node struct {
 	// Injected handler: returns rich peer list JSON (with children) for nested discovery.
 	// If nil, falls back to flat n.Peers() JSON.
 	listPeersFunc func() []byte
+	egressFunc    func() []byte
+	peerEgress    sync.Map // peer name → json.RawMessage (its SelfEgress)
 	msessHandler  func(stream net.Conn)
 
 	// IP tunnel handler for TUN-based raw packet forwarding
-	ipTunHandler func(peerName string, stream net.Conn)
 
 	// API proxy handler for remote web-UI tunneling. Set by the app layer at
 	// startup so the relay can deliver _relay_api_ streams directly to the
 	// local HTTP API listener without routing through rewriteLocalAddr.
 	apiHandler func(stream net.Conn)
+	// punchHandler serves StreamPunch (hole-punch signalling).
+	punchHandler func(stream net.Conn)
 
 	// apiStreamWrap is the app-layer hook that wraps an inbound API stream
 	// so the api server can recover the peer-relay auth ID (used by the
@@ -1019,6 +1042,9 @@ func (n *Node) PeersAlt() []PeerInfo {
 		if c := p.ConnCount(); c > 1 {
 			info.Conns = c
 		}
+		if e, ok := n.peerEgress.Load(name); ok {
+			info.Egress = e.(json.RawMessage)
+		}
 		result = append(result, info)
 	}
 	return result
@@ -1250,7 +1276,7 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	}
 	childCtx, childCancel := context.WithCancel(ctx)
 	p := &peer{
-		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version, NodeID: remoteMeta.NodeID, Incompatible: !compat, TunCapable: remoteMeta.TunCapable, PV: remoteMeta.PV, Unsupported: unsupported},
+		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version, NodeID: remoteMeta.NodeID, Incompatible: !compat, TunCapable: remoteMeta.TunCapable, PV: remoteMeta.PV, Unsupported: unsupported, EgressCapable: remoteMeta.Eg},
 		client:  client,
 		waiting: make(map[string]chan net.Conn),
 		ctx:     childCtx,
@@ -1502,15 +1528,28 @@ func (n *Node) HandleStream(ctx context.Context, reqAddr string, stream net.Conn
 			stream.Close()
 		}
 
+	case streamEgress:
+		if f := n.egressFunc; f != nil {
+			stream.Write(f())
+		}
+		stream.Close()
+
+	case streamWhoami:
+		stream.Write([]byte(stream.RemoteAddr().String()))
+		stream.Close()
+
+	case StreamPunch:
+		if h := n.punchHandler; h != nil {
+			h(stream)
+		} else {
+			stream.Close()
+		}
+
 	default:
-		// IP tunnel stream for TUN-based raw packet forwarding
+		// IP tunnel streams (TUN rules, before 1.4.0): no longer served; we
+		// never advertise TunCapable, so peers only send one by mistake
 		if strings.HasPrefix(reqAddr, streamIPTunPrefix) {
-			peerName := reqAddr[len(streamIPTunPrefix):]
-			if n.ipTunHandler != nil {
-				n.ipTunHandler(peerName, stream)
-			} else {
-				stream.Close()
-			}
+			stream.Close()
 			return
 		}
 		if nodeName, targetAddr, ok := parseVia(reqAddr); ok {
@@ -1653,6 +1692,7 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 			TunCapable:   remoteMeta.TunCapable,
 			PV:           remoteMeta.PV,
 			Unsupported:  unsupported,
+			EgressCapable: remoteMeta.Eg,
 		},
 		waiting: make(map[string]chan net.Conn),
 		dialNak: remoteMeta.DialNak,
@@ -2134,6 +2174,9 @@ func (n *Node) Peers() []PeerInfo {
 		}
 		if c := p.ConnCount(); c > 1 {
 			info.Conns = c
+		}
+		if e, ok := n.peerEgress.Load(name); ok {
+			info.Egress = e.(json.RawMessage)
 		}
 		result = append(result, info)
 	}
@@ -3086,6 +3129,9 @@ func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.C
 	return n.wrapConn(peerName, conn), nil
 }
 
+// SetPunchHandler registers the handler for StreamPunch streams.
+func (n *Node) SetPunchHandler(h func(stream net.Conn)) { n.punchHandler = h }
+
 // SetMsessHandler registers the exit-side handler for StreamMsess subflows.
 func (n *Node) SetMsessHandler(h func(stream net.Conn)) {
 	n.msessHandler = h
@@ -3093,13 +3139,56 @@ func (n *Node) SetMsessHandler(h func(stream net.Conn)) {
 
 // SetListPeersFunc registers a function that returns rich peer list JSON (with children).
 // Used by handleListPeers so both outbound and inbound nested discovery return identical data.
-func (n *Node) SetListPeersFunc(fn func() []byte) {
-	n.listPeersFunc = fn
+// SetEgressFunc sets what streamEgress returns (this node's SelfEgress).
+func (n *Node) SetEgressFunc(fn func() []byte) { n.egressFunc = fn }
+
+// SetPeerEgress records a peer's egress (nil clears it).
+func (n *Node) SetPeerEgress(peerName string, raw json.RawMessage) {
+	if raw == nil {
+		n.peerEgress.Delete(peerName)
+		return
+	}
+	n.peerEgress.Store(peerName, raw)
 }
 
-// SetIPTunHandler registers a handler for incoming IP tunnel streams from peers.
-func (n *Node) SetIPTunHandler(handler func(peerName string, stream net.Conn)) {
-	n.ipTunHandler = handler
+// EgressOf fetches a direct peer's egress.
+func (n *Node) EgressOf(peerName string) ([]byte, error) {
+	return n.queryStream(peerName, streamEgress, 4096)
+}
+
+// WhoAmI asks a direct peer which address our connection comes from.
+func (n *Node) WhoAmI(peerName string) (string, error) {
+	b, err := n.queryStream(peerName, streamWhoami, 128)
+	return string(b), err
+}
+
+// queryStream opens a relay stream to a direct peer and reads its reply.
+func (n *Node) queryStream(peerName, addr string, max int64) ([]byte, error) {
+	n.mu.RLock()
+	p, ok := n.peers[peerName]
+	n.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var conn net.Conn
+	var err error
+	if p.client != nil {
+		conn, err = p.client.TCP(addr)
+	} else {
+		conn, err = n.DialTCP(ctx, peerName, addr)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	return io.ReadAll(io.LimitReader(conn, max))
+}
+
+func (n *Node) SetListPeersFunc(fn func() []byte) {
+	n.listPeersFunc = fn
 }
 
 // SetAPIHandler registers a handler for incoming _relay_api_ streams (remote
@@ -3126,56 +3215,6 @@ func (n *Node) SetAPIStreamWrap(fn func(stream net.Conn, authID string) net.Conn
 // Bug B.
 func (n *Node) SetOnInboundIdentity(handler func(declaredName, nodeID, remoteAddrIP string)) {
 	n.onInboundIdentity = handler
-}
-
-// DialIPTun opens a bidirectional IP packet tunnel stream to a peer.
-// The stream uses 2-byte length-prefixed framing for raw IP packets.
-func (n *Node) DialIPTun(ctx context.Context, peerName string) (net.Conn, error) {
-	// Handle path with self-prefix (e.g. "AUB/au-kbv" on AUB → strip to "au-kbv")
-	// and multi-hop via paths
-	if parts := strings.Split(peerName, "/"); len(parts) > 1 {
-		// Strip leading self-name segments
-		for len(parts) > 1 && parts[0] == n.name {
-			parts = parts[1:]
-		}
-		if len(parts) > 1 {
-			return n.DialVia(ctx, parts, streamIPTunPrefix+n.name)
-		}
-		peerName = parts[0]
-	}
-
-	n.mu.RLock()
-	p, ok := n.peers[peerName]
-	n.mu.RUnlock()
-	if !ok {
-		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
-	}
-
-	addr := streamIPTunPrefix + n.name
-
-	if p.client != nil {
-		cl := p.pickClient()
-		return cl.TCP(addr)
-	}
-
-	// Inbound peer: send request via control stream
-	ctrlW := n.peerCtrlS2C(peerName)
-	if ctrlW == nil {
-		return nil, fmt.Errorf("relay: peer %q control not ready", peerName)
-	}
-	id := fmt.Sprintf("%d", n.seq.Add(1))
-	ch := make(chan net.Conn, 1)
-	p.writeMu.Lock()
-	p.waiting[id] = ch
-	err := writeRequest(ctrlW, id, addr)
-	if err != nil {
-		delete(p.waiting, id)
-	}
-	p.writeMu.Unlock()
-	if err != nil {
-		return nil, err
-	}
-	return n.awaitDial(ctx, p, id, ch, fmt.Sprintf("IP tunnel to %q", peerName))
 }
 
 // DialVia dials addr through a chain of peers.

@@ -28,6 +28,7 @@ import (
 	"github.com/FrankoonG/hy2scale/internal/history"
 	"github.com/FrankoonG/hy2scale/internal/msess"
 	"github.com/FrankoonG/hy2scale/internal/relay"
+	"github.com/FrankoonG/hy2scale/internal/vpnmux"
 	"github.com/FrankoonG/hy2scale/internal/udphop"
 )
 
@@ -56,18 +57,22 @@ type ClientEntry struct {
 	FastOpen   bool   `yaml:"fast_open,omitempty" json:"fast_open"`
 	BBRProfile string `yaml:"bbr_profile,omitempty" json:"bbr_profile,omitempty"` // "", "standard", "conservative", "aggressive"
 	Disabled   bool   `yaml:"disabled,omitempty" json:"disabled"`
+
+	// Punch: routes set up by hole punching (see punch.go); Advanced: tuning.
+	Punch    *PunchConfig  `yaml:"punch,omitempty" json:"punch,omitempty"`
+	Advanced *PeerAdvanced `yaml:"advanced,omitempty" json:"advanced,omitempty"`
 }
 
 // AllAddrs returns the effective address list. If Addrs is populated, returns it.
 // Otherwise falls back to the single Addr field for backward compatibility.
 func (c ClientEntry) AllAddrs() []string {
+	var out []string
 	if len(c.Addrs) > 0 {
-		return c.Addrs
+		out = append(out, c.Addrs...)
+	} else if c.Addr != "" && !IsPunchAddr(c.Addr) {
+		out = append(out, c.Addr)
 	}
-	if c.Addr != "" {
-		return []string{c.Addr}
-	}
-	return nil
+	return append(out, c.punchAddrs()...)
 }
 
 // PrimaryAddr returns the first address (used as stable key and default connection).
@@ -115,8 +120,14 @@ type Config struct {
 	L2TP       *L2TPConfig           `yaml:"l2tp,omitempty" json:"l2tp,omitempty"`
 	IKEv2      *IKEv2Config          `yaml:"ikev2,omitempty" json:"ikev2,omitempty"`
 	WireGuard  *WireGuardConfig      `yaml:"wireguard,omitempty" json:"wireguard,omitempty"`
+	OpenVPN    *OpenVPNConfig        `yaml:"openvpn,omitempty" json:"openvpn,omitempty"`
 	Rules      []RoutingRule         `yaml:"rules,omitempty" json:"rules,omitempty"`
-	TunMode    *TunModeConfig        `yaml:"tun_mode,omitempty" json:"tun_mode,omitempty"`
+	// Interfaces: child interfaces on physical NICs; Egress: where direct
+	// flows leave (nil = never chosen: the system routes, as before 1.4.0);
+	// PublicIP: public address detection. See ifaces.go / egress.go.
+	Interfaces []InterfaceConfig     `yaml:"interfaces,omitempty" json:"interfaces,omitempty"`
+	Egress     *EgressConfig         `yaml:"egress,omitempty" json:"egress,omitempty"`
+	PublicIP   *PublicIPConfig       `yaml:"public_ip,omitempty" json:"public_ip,omitempty"`
 	UIListen    string                `yaml:"ui_listen,omitempty" json:"ui_listen,omitempty"`
 	UIBasePath  string                `yaml:"ui_base_path,omitempty" json:"ui_base_path,omitempty"`
 	WebUsername string                `yaml:"web_username,omitempty" json:"web_username,omitempty"`
@@ -156,6 +167,11 @@ type Config struct {
 	// already authenticated as a known node is allowed to administer this
 	// node's web UI without a separate admin password.
 	RelayAdminPassthrough bool `yaml:"relay_admin_passthrough,omitempty" json:"relay_admin_passthrough,omitempty"`
+
+	// AcceptPunch lets nodes that reach this one through the mesh set up a
+	// direct (hole-punched) connection to it. Off by default; like relay
+	// trust, the mesh handshake is the trust boundary.
+	AcceptPunch bool `yaml:"accept_punch,omitempty" json:"accept_punch,omitempty"`
 
 	// DNSResolver routes hy2scale's own internal name lookups (rules-engine
 	// `applyDomainRule`, future call sites) through a clean upstream DNS
@@ -255,19 +271,20 @@ type App struct {
 	srvCancel    context.CancelFunc
 	ssListener   net.Listener
 	ssCancel     context.CancelFunc
-	l2tpCancel   context.CancelFunc
-	l2tpWg       sync.WaitGroup // tracks all goroutines spawned by StartL2TP
-	l2tpRestartMu sync.Mutex    // serializes concurrent RestartL2TP
-	ikev2Cancel  context.CancelFunc
-	ikev2Wg      sync.WaitGroup // tracks all goroutines spawned by StartIKEv2
-	ikev2RestartMu sync.Mutex   // serializes concurrent RestartIKEv2
-	ipsecRegenMu  sync.Mutex    // serializes /etc/ipsec.{conf,secrets} writes (L2TP+IKEv2 share)
+	serverCert   atomic.Pointer[tls.Certificate] // the hy2 server's certificate (punch listeners reuse it)
+	punch        *punchManager
+	vpnMu        sync.Mutex // guards vpn and vpnMux (IKEv2 / L2TP / OpenVPN servers)
+	vpn          map[string]*vpnInstance
+	vpnMux       *vpnmux.Mux
 	usersMu       sync.RWMutex
 	userIndex     map[string]*UserConfig           // username → user (for fast auth lookup)
 	pwConflicted  map[string]map[string]bool       // username → proxy → conflicted
 	pwConflictAll map[string]map[string][]string   // proxy → password → []usernames (for API)
 	trafficDirty  sync.Map                         // username → true (needs flush)
 	Sessions     *SessionManager
+
+	ifaces *ifaceManager  // child interfaces, public address detection
+	egress egressPointer  // direct-flow dialers per family
 }
 
 func New(dataDir string) (*App, error) {
@@ -300,6 +317,10 @@ func New(dataDir string) (*App, error) {
 		proxyHandles: make(map[string]*proxyHandle),
 		Sessions:     NewSessionManager(),
 	}
+	a.punch = newPunchManager(a)
+	a.ifaces = newIfaceManager(a)
+	a.refreshEgress()
+	a.installChildListen()
 	a.initMsess()
 	return a, nil
 }
@@ -402,13 +423,16 @@ func (a *App) Run(ctx context.Context) error {
 		log.Printf("[debug] DEBUG mode enabled (set DEBUG=true in environment)")
 	}
 
-	// Ensure /dev/net/tun exists. When running with device_cgroup_rules
-	// instead of --device /dev/net/tun, the device node doesn't exist.
-	// Create it via mknod if the cgroup permits (major 10, minor 200).
-	ensureTunDevice()
-
 	// Detect runtime mode early (normal/bridge/compat/limited)
 	DetectRuntimeMode()
+
+	// Interfaces before anything that dials: peer addresses may be bound to
+	// a child interface, and direct flows leave through the egress.
+	a.ifaces.apply(cfg)
+	go a.initEgress(ctx)
+	go a.ifaces.pub.run(ctx)
+	a.node.SetEgressFunc(a.selfEgressJSON)
+	go a.egressPeersLoop(ctx)
 
 	// Start rate ticker, latency prober, and traffic flusher
 	go a.node.StartRateTicker(ctx)
@@ -418,8 +442,6 @@ func (a *App) Run(ctx context.Context) error {
 	go func() { defer a.persisters.Done(); a.StartTrafficFlusher(ctx) }()
 	go func() { defer a.persisters.Done(); a.runHistoryRecorder(ctx) }()
 
-	// Register IP tunnel handler on all nodes (any node can be an exit for TUN mode)
-	a.registerExitIPTunHandler(ctx)
 	a.rebuildUserIndex()
 
 	// Apply nested discovery
@@ -485,41 +507,22 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}
 
-	// Start L2TP server if configured
+	// Userspace VPN servers (IKEv2 and L2TP share udp/500+4500)
 	if cfg.L2TP != nil && cfg.L2TP.Enabled {
-		lPort := 1701
-		if cfg.L2TP.Listen != "" {
-			if pn, err := strconv.Atoi(cfg.L2TP.Listen); err == nil {
-				lPort = pn
-			}
-		}
-		if c := CheckPorts([]PortConflict{{Port: lPort, Proto: "udp", Desc: "l2tp"}}); len(c) > 0 {
-			log.Printf("[l2tp] port %d/udp in use — l2tp disabled", lPort)
-		} else if err := a.StartL2TP(*cfg.L2TP); err != nil {
+		if err := a.StartL2TP(*cfg.L2TP); err != nil {
 			log.Printf("[l2tp] start error: %v", err)
 		}
 	}
-
-	// Start IKEv2/IPsec
-	// Skip port check if L2TP already started strongswan (shared 500/4500)
 	if cfg.IKEv2 != nil && cfg.IKEv2.Enabled {
-		l2tpActive := cfg.L2TP != nil && cfg.L2TP.Enabled
-		if !l2tpActive {
-			if c := CheckPorts([]PortConflict{
-				{Port: 500, Proto: "udp", Desc: "IKE"},
-				{Port: 4500, Proto: "udp", Desc: "IKE NAT-T"},
-			}); len(c) > 0 {
-				for _, cc := range c {
-					log.Printf("[ikev2] port %d/%s in use — ikev2 disabled", cc.Port, cc.Proto)
-				}
-				goto skipIKEv2
-			}
-		}
 		if err := a.StartIKEv2(*cfg.IKEv2); err != nil {
 			log.Printf("[ikev2] start error: %v", err)
 		}
 	}
-	skipIKEv2:
+	if cfg.OpenVPN != nil && cfg.OpenVPN.Enabled {
+		if err := a.StartOpenVPN(*cfg.OpenVPN); err != nil {
+			log.Printf("[openvpn] start error: %v", err)
+		}
+	}
 
 	// Start WireGuard
 	if cfg.WireGuard != nil && cfg.WireGuard.Enabled {
@@ -534,9 +537,8 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}
 
-	// Start rule engine (host mode only)
+	// Rule table always; capture only with host networking + NET_ADMIN
 	a.StartRuleEngine()
-	a.StartRuleReconciler(ctx)
 
 	// Start clients (block disabled ones from inbound too)
 	for _, cl := range cfg.Clients {
@@ -548,6 +550,7 @@ func (a *App) Run(ctx context.Context) error {
 
 	<-ctx.Done()
 	a.StopRuleEngine()
+	a.ifaces.closeAll() // DHCP release
 	return ctx.Err()
 }
 
@@ -948,17 +951,6 @@ func (a *App) LookupUser(username, password, proxy string) (*UserConfig, error) 
 	return u, nil
 }
 
-// syncVPNSecrets updates chap-secrets (L2TP) and EAP secrets (IKEv2) after user changes.
-func (a *App) syncVPNSecrets() {
-	cfg := a.store.Get()
-	if cfg.L2TP != nil && cfg.L2TP.Enabled {
-		a.updateChapSecrets()
-	}
-	if cfg.IKEv2 != nil && cfg.IKEv2.Enabled && cfg.IKEv2.Mode == "mschapv2" {
-		a.updateEAPSecrets()
-	}
-}
-
 func (a *App) AddUser(u UserConfig) error {
 	err := a.store.Update(func(c *Config) {
 		for _, existing := range c.Users {
@@ -970,7 +962,6 @@ func (a *App) AddUser(u UserConfig) error {
 	})
 	if err == nil {
 		a.rebuildUserIndex()
-		a.syncVPNSecrets()
 	}
 	return err
 }
@@ -995,7 +986,6 @@ func (a *App) UpdateUser(id string, u UserConfig) error {
 	})
 	if err == nil {
 		a.rebuildUserIndex()
-		a.syncVPNSecrets()
 		// If credentials OR per-proxy access changed, disconnect all active
 		// sessions for this user. ProxyDisabled changing means a previously
 		// permitted protocol is now revoked — keeping the in-flight tunnel
@@ -1024,7 +1014,6 @@ func (a *App) RemoveUser(id string) error {
 	})
 	if err == nil {
 		a.rebuildUserIndex()
-		a.syncVPNSecrets()
 	}
 	return err
 }
@@ -1040,7 +1029,6 @@ func (a *App) ToggleUser(id string, enabled bool) error {
 	})
 	if err == nil {
 		a.rebuildUserIndex()
-		a.syncVPNSecrets()
 	}
 	return err
 }
@@ -1282,6 +1270,7 @@ func (a *App) restartServer() error {
 // extractPrimaryAddr takes an address like "0.0.0.0:5565,44000-45000"
 // and returns "0.0.0.0:5565" (first port only) for net.ListenPacket.
 func extractPrimaryAddr(addr string) string {
+	addr = stripAddrBind(addr)
 	idx := strings.LastIndex(addr, ":")
 	if idx < 0 {
 		return addr
@@ -1300,6 +1289,10 @@ func extractPrimaryAddr(addr string) string {
 // hysteria port hopping: one connection to host that moves to another of
 // those ports every 30 s.
 func hy2Dial(spec string) (net.Addr, hyclient.ConnFactory, net.IP, error) {
+	spec, bind, err := splitAddrBind(spec)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	_, ports, err := net.SplitHostPort(spec)
 	if err != nil {
 		return nil, nil, nil, err
@@ -1309,20 +1302,26 @@ func hy2Dial(spec string) (net.Addr, hyclient.ConnFactory, net.IP, error) {
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		return ua, nil, ua.IP, nil
+		if bind.none() {
+			return ua, nil, ua.IP, nil
+		}
+		return ua, boundConnFactory{bind}, ua.IP, nil
 	}
 	ha, err := udphop.ResolveUDPHopAddr(spec)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return ha, hopConnFactory{}, ha.IP, nil
+	return ha, hopConnFactory{bind}, ha.IP, nil
 }
 
-type hopConnFactory struct{}
+// hopConnFactory opens a port-hopping connection; every hop's socket gets
+// the address's binding.
+type hopConnFactory struct{ bind addrBind }
 
-func (hopConnFactory) New(addr net.Addr) (net.PacketConn, error) {
-	return udphop.NewUDPHopPacketConn(addr.(*udphop.UDPHopAddr), udphop.HopIntervalConfig{},
-		func() (net.PacketConn, error) { return net.ListenUDP("udp", nil) })
+func (f hopConnFactory) New(addr net.Addr) (net.PacketConn, error) {
+	ha := addr.(*udphop.UDPHopAddr)
+	return udphop.NewUDPHopPacketConn(ha, udphop.HopIntervalConfig{},
+		func() (net.PacketConn, error) { return f.bind.listen(ha.IP) })
 }
 
 // Port hopping, server side: hysteria listens on one port; the other ports
@@ -1331,12 +1330,11 @@ func (hopConnFactory) New(addr net.Addr) (net.PacketConn, error) {
 const hopChain = "HY2SCALE-HOP"
 
 func setPortHopRedirect(listen string) {
-	ipt := iptVariant()
-	host, ports, err := net.SplitHostPort(listen)
+	host, ports, err := net.SplitHostPort(stripAddrBind(listen))
 	extra := []udphop.PortRange(nil)
 	primary := ""
 	if err == nil && strings.ContainsAny(ports, ",-") {
-		primary = strings.TrimPrefix(extractPrimaryAddr(listen), host+":")
+		primary = hopPrimaryPort(ports)
 		for _, r := range udphop.ParsePortUnion(ports) {
 			if p := strconv.Itoa(int(r.Start)); r.Start == r.End && p == primary {
 				continue
@@ -1344,33 +1342,74 @@ func setPortHopRedirect(listen string) {
 			extra = append(extra, r)
 		}
 	}
-	if len(extra) == 0 {
-		if iptExec(ipt, "-t", "nat", "-L", hopChain, "-n").Run() == nil {
-			iptExec(ipt, "-t", "nat", "-D", "PREROUTING", "-p", "udp", "-j", hopChain).Run()
-			iptExec(ipt, "-t", "nat", "-F", hopChain).Run()
-			iptExec(ipt, "-t", "nat", "-X", hopChain).Run()
-		}
+	// The families the server socket serves: a wildcard (0.0.0.0, ::, "")
+	// or a host name is a dual-stack socket, so both get the redirect.
+	ip := net.ParseIP(host)
+	fams := map[bool]bool{false: true, true: true} // v6 → wanted
+	if ip != nil && !ip.IsUnspecified() {
+		v6 := ip.To4() == nil
+		fams = map[bool]bool{v6: true, !v6: false}
+	}
+	if len(extra) == 0 || primary == "" {
+		hopRedirectClear(false)
+		hopRedirectClear(true)
 		return
 	}
 	if !cachedIptablesAvail() {
 		log.Printf("[server] listen %s: no iptables here, so only port %s is reachable (redirect the other ports to it on the host)", listen, primary)
 		return
 	}
-	iptExec(ipt, "-t", "nat", "-N", hopChain).Run() // exists already: fine
-	iptExec(ipt, "-t", "nat", "-F", hopChain).Run()
-	iptRun(ipt, "-t", "nat", "-I", "PREROUTING", "-p", "udp", "-j", hopChain)
-	target := []string{"-j", "REDIRECT", "--to-ports", primary}
-	if ip := net.ParseIP(host); ip != nil && !ip.IsUnspecified() {
-		target = []string{"-j", "DNAT", "--to-destination", net.JoinHostPort(host, primary)}
+	for _, v6 := range []bool{false, true} {
+		if !fams[v6] {
+			hopRedirectClear(v6)
+			continue
+		}
+		target := []string{"-j", "REDIRECT", "--to-ports", primary}
+		if ip != nil && !ip.IsUnspecified() {
+			target = []string{"-j", "DNAT", "--to-destination", net.JoinHostPort(host, primary)}
+		}
+		hopRedirectSet(v6, extra, target)
 	}
+	log.Printf("[server] port hopping: udp %s redirected to %s", ports, primary)
+}
+
+// hopPrimaryPort is the port hysteria listens on for a port spec: the first
+// port of the first element ("5565,44000-45000" → "5565").
+func hopPrimaryPort(ports string) string {
+	first := strings.SplitN(ports, ",", 2)[0]
+	first = strings.TrimSpace(strings.SplitN(first, "-", 2)[0])
+	if n, err := strconv.Atoi(first); err != nil || n < 1 || n > 65535 {
+		return ""
+	}
+	return first
+}
+
+// hopRedirectSet rewrites the hop chain of one family (iptables / ip6tables).
+func hopRedirectSet(v6 bool, extra []udphop.PortRange, target []string) {
+	ipt := iptProg(v6)
+	iptExec(ipt, "-t", "nat", "-N", hopChain).Run() // exists already: fine
+	if out, err := iptExec(ipt, "-t", "nat", "-F", hopChain).CombinedOutput(); err != nil {
+		log.Printf("[server] port hopping: %s nat table unavailable: %v %s", ipt, err, out)
+		return
+	}
+	iptRun(ipt, "-t", "nat", "-I", "PREROUTING", "-p", "udp", "-j", hopChain)
 	for _, r := range extra {
 		dport := fmt.Sprintf("%d:%d", r.Start, r.End)
 		args := append([]string{"-t", "nat", "-A", hopChain, "-p", "udp", "--dport", dport}, target...)
 		if out, err := iptExec(ipt, args...).CombinedOutput(); err != nil {
-			log.Printf("[server] port hopping redirect %s: %v %s", dport, err, out)
+			log.Printf("[server] port hopping redirect %s (%s): %v %s", dport, ipt, err, out)
 		}
 	}
-	log.Printf("[server] port hopping: udp %s redirected to %s", ports, primary)
+}
+
+// hopRedirectClear removes the hop chain of one family, if present.
+func hopRedirectClear(v6 bool) {
+	ipt := iptProg(v6)
+	if iptExec(ipt, "-t", "nat", "-L", hopChain, "-n").Run() == nil {
+		iptExec(ipt, "-t", "nat", "-D", "PREROUTING", "-p", "udp", "-j", hopChain).Run()
+		iptExec(ipt, "-t", "nat", "-F", hopChain).Run()
+		iptExec(ipt, "-t", "nat", "-X", hopChain).Run()
+	}
 }
 
 func (a *App) startServer(ctx context.Context, sc *ServerConfig) error {
@@ -1385,15 +1424,31 @@ func (a *App) startServer(ctx context.Context, sc *ServerConfig) error {
 	}
 	setPortHopRedirect(sc.Listen)
 	authImpl := &hy2Auth{app: a, sysPassword: sc.Password}
-	hyServer, err := hyserver.NewServer(&hyserver.Config{
+	a.serverCert.Store(&cert)
+	hyServer, err := a.newHy2Server(ctx, conn, cert, authImpl, authImpl)
+	if err != nil {
+		conn.Close()
+		return err
+	}
+	go func() { <-ctx.Done(); hyServer.Close(); conn.Close() }()
+	go hyServer.Serve()
+	log.Printf("[%s] hy2 server on %s", a.node.Name(), sc.Listen)
+	return nil
+}
+
+// newHy2Server builds the node's hy2 server over conn: the main listener, or
+// a punched socket serving one peer.
+func (a *App) newHy2Server(ctx context.Context, conn net.PacketConn, cert tls.Certificate,
+	auth hyserver.Authenticator, events hyserver.EventLogger) (hyserver.Server, error) {
+	return hyserver.NewServer(&hyserver.Config{
 		Conn: conn,
 		TLSConfig: hyserver.TLSConfig{
 			Certificates: []tls.Certificate{cert},
 		},
-		// EventLogger: authImpl already implements hyserver.EventLogger; its
+		// EventLogger: hy2Auth implements hyserver.EventLogger; its
 		// TCPRequest stashes the authID for the next Outbound.TCP call so
 		// nodeOutbound.TCP can gate _relay_api_ streams on auth class.
-		EventLogger: authImpl,
+		EventLogger: events,
 		QUICConfig: hyserver.QUICConfig{
 			// 8 MB stream / 16 MB connection. Smaller than upstream hy2's
 			// 64 MB / 128 MB on purpose: in a multi-hop relay chain, each
@@ -1409,17 +1464,9 @@ func (a *App) startServer(ctx context.Context, sc *ServerConfig) error {
 			MaxConnectionReceiveWindow:     16777216,
 			MaxIncomingStreams:              4096,
 		},
-		Authenticator: authImpl,
+		Authenticator: auth,
 		Outbound:      &nodeOutbound{app: a, node: a.node, ctx: ctx},
 	})
-	if err != nil {
-		conn.Close()
-		return err
-	}
-	go func() { <-ctx.Done(); hyServer.Close(); conn.Close() }()
-	go hyServer.Serve()
-	log.Printf("[%s] hy2 server on %s", a.node.Name(), sc.Listen)
-	return nil
 }
 
 func (a *App) connectLoop(ctx context.Context, cl ClientEntry) {
@@ -1527,7 +1574,7 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 		}
 		log.Printf("[%s] connecting extra IP %s for %s (#%d)", a.node.Name(), extraAddr, peerName, index)
 
-		addr, connFactory, _, err := hy2Dial(extraAddr)
+		addr, connFactory, password, dialDone, err := a.dialTarget(ctx, cl, extraAddr)
 		if err != nil {
 			log.Printf("[%s] extra IP %s: %v", a.node.Name(), extraAddr, err)
 			select {
@@ -1554,7 +1601,7 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 		c, _, err := hyclient.NewClient(&hyclient.Config{
 			ConnFactory: connFactory,
 			ServerAddr:  addr,
-			Auth:        cl.Password,
+			Auth:        password,
 			TLSConfig:   tlsCfg,
 			QUICConfig: hyclient.QUICConfig{
 				// See server-side comment at NewServer for why these are 8/16 MB
@@ -1566,7 +1613,6 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 				MaxStreamReceiveWindow:         8388608,
 				InitialConnectionReceiveWindow: 16777216,
 				MaxConnectionReceiveWindow:     16777216,
-				DisablePathMTUDiscovery:        TunCaptureActive(), // only in compat mode where Docker bridge may drop large UDP
 			},
 			CongestionConfig: hyclient.CongestionConfig{
 				BBRProfile: cl.BBRProfile,
@@ -1576,6 +1622,7 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 				MaxRx: 125000000,
 			},
 		})
+		dialDone(err == nil)
 		if err != nil {
 			log.Printf("[%s] extra IP %s: connect failed: %v", a.node.Name(), extraAddr, err)
 			select {
@@ -1608,6 +1655,9 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 					log.Printf("[%s] extra IP %s for %s: connection lost, reconnecting", a.node.Name(), extraAddr, peerName)
 					a.node.RemovePeerConn(peerName, extraAddr)
 					c.Close()
+					if IsPunchAddr(extraAddr) {
+						a.punch.lost(extraAddr, cl.Advanced)
+					}
 					break // break select, continue outer for loop to reconnect
 				}
 				probe.Close()
@@ -1680,15 +1730,9 @@ func (a *App) connect(ctx context.Context, cl ClientEntry) error {
 
 // connectAt dials dialAddr; cl.Addr stays the peer's identity key.
 func (a *App) connectAt(ctx context.Context, cl ClientEntry, dialAddr string) error {
-	addr, connFactory, ip, err := hy2Dial(dialAddr)
+	addr, connFactory, password, dialDone, err := a.dialTarget(ctx, cl, dialAddr)
 	if err != nil {
-		return fmt.Errorf("invalid address %q: %w", cl.Addr, err)
-	}
-
-	// Ensure relay traffic bypasses VPN routing (strongSwan table 220).
-	// Without this, QUIC to the relay gets routed through ipsec0 → ESP loop.
-	if TunCaptureActive() {
-		excludeFromVPNRouting(ip.String())
+		return fmt.Errorf("address %q: %w", dialAddr, err)
 	}
 
 	// TLS
@@ -1740,14 +1784,13 @@ func (a *App) connectAt(ctx context.Context, cl ClientEntry, dialAddr string) er
 	c, _, err := hyclient.NewClient(&hyclient.Config{
 		ConnFactory: connFactory,
 		ServerAddr:  addr,
-		Auth:        cl.Password,
+		Auth:        password,
 		TLSConfig:   tlsCfg,
 		QUICConfig: hyclient.QUICConfig{
 			InitialStreamReceiveWindow:     isw,
 			MaxStreamReceiveWindow:         msw,
 			InitialConnectionReceiveWindow: icw,
 			MaxConnectionReceiveWindow:     mcw,
-			DisablePathMTUDiscovery:        TunCaptureActive(), // only in compat mode where Docker bridge may drop large UDP
 		},
 		CongestionConfig: hyclient.CongestionConfig{
 			BBRProfile: cl.BBRProfile,
@@ -1758,10 +1801,14 @@ func (a *App) connectAt(ctx context.Context, cl ClientEntry, dialAddr string) er
 		},
 		FastOpen: cl.FastOpen,
 	})
+	dialDone(err == nil)
 	if err != nil {
 		return err
 	}
 	defer c.Close()
+	if IsPunchAddr(dialAddr) {
+		defer a.punch.lost(dialAddr, cl.Advanced)
+	}
 	log.Printf("[%s] connected to %s (%s)", a.node.Name(), cl.Name, dialAddr)
 
 	// Try hy2scale relay protocol first
@@ -1975,48 +2022,33 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 		exitPaths = pc.ExitPaths
 	}
 
-	// DNS-pollution recovery for SOCKS5: when the client supplied an IPv4
-	// or IPv6 destination (ATYP=0x01/0x04), peek up to 1500 bytes of the
-	// first application-layer chunk and try to recover the original
-	// hostname from a TLS Client Hello SNI or an HTTP Host header. This
-	// is precisely what xray-core's `sniffing.destOverride: [tls, http]`
-	// does. We send the SOCKS5 SUCCESS reply BEFORE the dial (and the
-	// peek) so the client starts transmitting; on dial failure the
-	// connection just RSTs — the same fate the client would see for any
-	// mid-session network failure. Hostname ATYP requests skip the peek
-	// entirely (sniffOverrideHost no-ops when host is already a name) so
-	// existing well-configured clients pay zero latency.
-	var peeked []byte
-	if buf[3] == 0x01 || buf[3] == 0x04 {
-		conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
-		peeked = peekFirstChunk(conn)
-		addr = sniffOverrideHost(addr, peeked)
-	}
-
+	// IP destination: reply first so the client sends its hello, recover the
+	// host name from it (sniff_override.go), then dial. A failed dial can no
+	// longer be reported and just closes the connection.
 	var remote net.Conn
 	var err error
-	if exitVia == "" {
-		remote, err = net.DialTimeout("tcp", addr, 10*time.Second)
-	} else {
-		remote, err = a.dialExitWithPaths(context.Background(), exitVia, exitPaths, exitMode, addr)
-	}
-	if err != nil {
-		if peeked == nil {
-			conn.Write([]byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
-		}
-		return
-	}
-	defer remote.Close()
-	if peeked == nil {
-		// Hostname ATYP path — old behaviour, send SUCCESS now after the
-		// dial succeeded (no sniffing was attempted).
+	if wantSniff(addr) {
 		conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
-	} else if len(peeked) > 0 {
-		// Forward the peeked first chunk before relay starts; the dialed
-		// server sees the original Client Hello / request unchanged.
-		if _, werr := remote.Write(peeked); werr != nil {
+		peeked, waited := peekHello(conn, nil)
+		remote, err = a.dialSniffedTCP(context.Background(), a.exitRoute(exitVia, exitPaths, exitMode), nil,
+			addr, peeked, waited, isLoopbackAddr(conn.RemoteAddr()))
+		if err != nil {
 			return
 		}
+		defer remote.Close()
+		if len(peeked) > 0 {
+			if _, werr := remote.Write(peeked); werr != nil {
+				return
+			}
+		}
+	} else {
+		remote, err = a.dialRoutedTCP(context.Background(), exitVia, exitPaths, exitMode, addr)
+		if err != nil {
+			conn.Write([]byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+			return
+		}
+		defer remote.Close()
+		conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 	}
 
 	// Device row (username+IP+protocol) with live accounting
@@ -2025,6 +2057,16 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 		remoteIP = ta.IP.String()
 	}
 	a.relayUser(conn, remote, username, remoteIP, "socks5", true)
+}
+
+// bufferedBytes drains what br has read past the request header.
+func bufferedBytes(br *bufio.Reader) []byte {
+	if br.Buffered() == 0 {
+		return nil
+	}
+	b := make([]byte, br.Buffered())
+	n, _ := br.Read(b)
+	return b[:n]
 }
 
 // halfCloseWriteOrClose forwards an end-of-stream signal on `c`'s write
@@ -2169,21 +2211,19 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 
 	var addr string
 	var connectPeeked []byte
+	connectSniff, connectWaited := false, false
 	if method == "CONNECT" {
 		// CONNECT method: tunnel mode
 		addr = target
 		if !strings.Contains(addr, ":") {
 			addr += ":443"
 		}
-		// DNS-pollution recovery for HTTP CONNECT: if the client supplied
-		// `CONNECT <ip>:<port>` (because its own resolver was poisoned),
-		// reply 200 immediately, peek the first TLS chunk, sniff SNI, and
-		// override addr with the recovered hostname before dialing the
-		// exit. Same flow as SOCKS5 above; see sniff_override.go.
-		if host, _, splitErr := net.SplitHostPort(addr); splitErr == nil && net.ParseIP(host) != nil {
+		// IP destination: answer first so the client sends its hello and
+		// the host name can be recovered (sniff_override.go).
+		if wantSniff(addr) {
 			conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
-			connectPeeked = peekFirstChunk(conn)
-			addr = sniffOverrideHost(addr, connectPeeked)
+			connectSniff = true
+			connectPeeked, connectWaited = peekHello(conn, bufferedBytes(br))
 		}
 	} else {
 		// Plain HTTP: extract host from URL or Host header
@@ -2203,25 +2243,23 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
 			return
 		}
-		if !strings.Contains(host, ":") {
-			host += ":80"
+		if _, _, err := net.SplitHostPort(host); err != nil {
+			host = net.JoinHostPort(strings.Trim(host, "[]"), "80")
 		}
 		addr = host
 	}
 
 	// Dial remote
 	var remote net.Conn
-	if exitVia == "" {
-		remote, err = net.DialTimeout("tcp", addr, 10*time.Second)
+	if connectSniff {
+		remote, err = a.dialSniffedTCP(context.Background(), a.exitRoute(exitVia, exitPaths, exitMode), nil,
+			addr, connectPeeked, connectWaited, isLoopbackAddr(conn.RemoteAddr()))
 	} else {
-		remote, err = a.dialExitWithPaths(context.Background(), exitVia, exitPaths, exitMode, addr)
+		remote, err = a.dialRoutedTCP(context.Background(), exitVia, exitPaths, exitMode, addr)
 	}
 	if err != nil {
-		// On the IP-form CONNECT path the 200 reply has already been
-		// sent (so the client can produce a Client Hello for us to peek);
-		// we can't send a 502 anymore — just close. The client sees a
-		// TCP reset which is what they'd see for any in-flight outage.
-		if connectPeeked == nil {
+		// After the early 200 a 502 can no longer be sent; just close.
+		if !connectSniff {
 			conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
 		}
 		return
@@ -2229,13 +2267,9 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 	defer remote.Close()
 
 	if method == "CONNECT" {
-		// 200 reply was already sent BEFORE the peek in the IP-form path;
-		// only send it now if we skipped the peek (hostname target).
-		if connectPeeked == nil {
+		if !connectSniff {
 			conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 		} else if len(connectPeeked) > 0 {
-			// Forward the peeked Client Hello bytes to the upstream so the
-			// dialed server sees the original handshake.
 			if _, werr := remote.Write(connectPeeked); werr != nil {
 				return
 			}
@@ -2250,9 +2284,7 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 		}
 		fmt.Fprintf(remote, "\r\n")
 		// Forward any remaining buffered data
-		if br.Buffered() > 0 {
-			buffered := make([]byte, br.Buffered())
-			br.Read(buffered)
+		if buffered := bufferedBytes(br); len(buffered) > 0 {
 			remote.Write(buffered)
 		}
 	}
@@ -2585,7 +2617,7 @@ func (a *App) dialExit(ctx context.Context, exitVia, addr string) (net.Conn, err
 		return nil, err
 	}
 	if len(parts) == 0 {
-		return net.DialTimeout("tcp", rewriteLocalAddr(addr), 10*time.Second)
+		return a.dialDirect(ctx, "tcp", rewriteLocalAddr(addr))
 	}
 	if len(parts) == 1 {
 		// If target is not a direct peer, find a path through intermediates
@@ -2652,7 +2684,7 @@ func (a *App) dialExitUDP(ctx context.Context, exitVia, addr string) (net.Conn, 
 		parts = parts[1:]
 	}
 	if len(parts) == 0 {
-		return net.DialTimeout("udp", rewriteLocalAddr(addr), 5*time.Second)
+		return a.dialDirect(ctx, "udp", rewriteLocalAddr(addr))
 	}
 	// Indirect single-hop: target peer is reachable only through a known
 	// path. Re-enter via the resolved path.
@@ -2871,36 +2903,41 @@ func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
 
 // hy2UserTCP dials an hy2 user's stream: its exit route, or here.
 func (o *nodeOutbound) hy2UserTCP(authID, actualAddr string, isBridged bool) (net.Conn, error) {
-	if via, paths, mode, ok := o.app.hy2UserRoute(authID); ok {
-		return o.app.dialExitWithPaths(o.ctx, via, paths, mode, actualAddr)
+	via, paths, mode, viaUser := o.app.hy2UserRoute(authID)
+	route := func(addr string) (string, []string, string, error) {
+		if viaUser {
+			return via, paths, mode, nil
+		}
+		return o.app.routeFor("", nil, "", addr)
+	}
+	if !isBridged && wantSniff(actualAddr) {
+		return o.sniffedTCP(route, actualAddr), nil
+	}
+	if v, p, m, err := route(actualAddr); err == nil && v != "" {
+		return o.app.dialExitWithPaths(o.ctx, v, p, m, actualAddr)
 	}
 	return o.localTCP(actualAddr, isBridged)
 }
 
+// sniffedTCP returns the connection for a stream to an IP: dialled once the
+// client's first bytes are in, with the host name they carry (the client is
+// on another host). See sniff_override.go.
+func (o *nodeOutbound) sniffedTCP(route flowRoute, actualAddr string) net.Conn {
+	here := func(ctx context.Context, addr string) (net.Conn, error) {
+		return o.app.dialDirect(ctx, "tcp", rewriteLocalAddr(addr))
+	}
+	return newDeferredDialConn(func(peeked []byte, waited bool) (net.Conn, error) {
+		return o.app.dialSniffedTCP(o.ctx, route, here, actualAddr, peeked, waited, false)
+	})
+}
+
 // localTCP dials a stream's target from this node.
 func (o *nodeOutbound) localTCP(actualAddr string, isBridged bool) (net.Conn, error) {
-	// DNS-pollution recovery for the hy2 server path: if a user's hy2
-	// client supplied an IP-form destination (because its own resolver
-	// was poisoned), we want to peek the first client bytes to recover
-	// the real hostname via TLS Client Hello SNI / HTTP Host before the
-	// upstream net.Dial. The hysteria server requires a synchronously-
-	// returned net.Conn here, so we hand back a deferredDialConn that
-	// performs the actual dial on first Write (which carries the
-	// client's data). See sniff_override.go for the wrapper and the
-	// server-speaks-first fallback.
-	if host, _, splitErr := net.SplitHostPort(actualAddr); splitErr == nil && net.ParseIP(host) != nil && !isBridged {
-		dialer := func(addr string) (net.Conn, error) {
-			return net.DialTimeout("tcp", rewriteLocalAddr(addr), 10*time.Second)
-		}
-		return newDeferredDialConn(actualAddr, dialer), nil
+	// A peer's stream to an IP: the client behind it resolved elsewhere.
+	if !isBridged && wantSniff(actualAddr) {
+		return o.sniffedTCP(func(string) (string, []string, string, error) { return "", nil, "", nil }, actualAddr), nil
 	}
-
-	conn, err := net.DialTimeout("tcp", rewriteLocalAddr(actualAddr), 10*time.Second)
-	if err != nil {
-		return nil, err
-	}
-
-	return conn, nil
+	return o.app.dialDirect(o.ctx, "tcp", rewriteLocalAddr(actualAddr))
 }
 
 func (o *nodeOutbound) UDP(reqAddr string) (hyserver.UDPConn, error) {
@@ -2932,19 +2969,21 @@ func (o *nodeOutbound) UDP(reqAddr string) (hyserver.UDPConn, error) {
 		var err error
 		if via, paths, mode, ok := o.app.hy2UserRoute(authID); ok {
 			c, err = o.app.dialExitUDPPaths(o.ctx, via, paths, mode, reqAddr)
+		} else if via, paths, mode, rerr := o.app.routeFor("", nil, "", reqAddr); rerr == nil && via != "" {
+			c, err = o.app.dialExitUDPPaths(o.ctx, via, paths, mode, reqAddr)
 		} else {
-			c, err = net.DialTimeout("udp", rewriteLocalAddr(reqAddr), 5*time.Second)
+			c, err = o.app.dialDirect(o.ctx, "udp", rewriteLocalAddr(reqAddr))
 		}
 		if err != nil {
 			return nil, err
 		}
 		return &netConnUDPAdapter{nc: o.app.meterHy2(authID, peerAddr, c), addr: reqAddr}, nil
 	}
-	conn, err := net.DialTimeout("udp", rewriteLocalAddr(reqAddr), 5*time.Second)
+	conn, err := o.app.dialDirect(o.ctx, "udp", rewriteLocalAddr(reqAddr))
 	if err != nil {
 		return nil, err
 	}
-	return &realUDP{conn: conn.(*net.UDPConn), addr: reqAddr}, nil
+	return &realUDP{conn: conn, addr: reqAddr}, nil
 }
 
 // hy2UserUsable refuses a new stream of an hy2 user that expired or used up
@@ -3008,6 +3047,10 @@ type hy2Auth struct {
 }
 
 func (a *hy2Auth) Authenticate(addr net.Addr, auth string, tx uint64) (bool, string) {
+	// A hole-punch probe: record where it came from, never log it in.
+	if a.app.punch != nil && a.app.punch.observeProbe(auth, addr) {
+		return false, ""
+	}
 	// Check user passwords first
 	cfg := a.app.store.Get()
 	for _, u := range cfg.Users {
@@ -3041,13 +3084,13 @@ func (a *hy2Auth) Authenticate(addr net.Addr, auth string, tx uint64) (bool, str
 }
 
 type realUDP struct {
-	conn *net.UDPConn
+	conn net.Conn // a connected UDP socket (system or a child interface's)
 	addr string
 }
 
 func (u *realUDP) ReadFrom(b []byte) (int, string, error) {
 	u.conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-	n, _, err := u.conn.ReadFromUDP(b)
+	n, err := u.conn.Read(b)
 	return n, u.addr, err
 }
 

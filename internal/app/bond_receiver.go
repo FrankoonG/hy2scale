@@ -151,7 +151,7 @@ func (a *App) handleBondStream(bondAddr string, pathConn net.Conn) error {
 	}
 
 	if needsInit {
-		targetConn, err := net.DialTimeout("tcp", realAddr, 10*time.Second)
+		targetConn, err := a.dialDirect(a.appCtx, "tcp", realAddr)
 		if err != nil {
 			bondReceivers.Delete(bondID)
 			return fmt.Errorf("bond receiver: dial target %s failed: %w", realAddr, err)

@@ -84,25 +84,10 @@ type RoutingRule struct {
 	ExitPaths []string `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
 	ExitMode  string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"` // ""|"quality"|"aggregate"
 	Enabled   bool     `yaml:"enabled" json:"enabled"`
-	// Priority resolves overlaps between rules. Higher priority wins for the
-	// same IP/CIDR. At equal priority, use_tun=true wins (TUN naturally
-	// preempts proxy at the routing layer anyway). Default 0.
+	// Priority resolves overlaps between rules: the higher Priority wins,
+	// then the more specific target. Default 0. (The pre-1.4.0 use_tun field
+	// is ignored: every rule is carried per flow.)
 	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
-	// UseTun requests full TUN forwarding for this rule. When the exit peer is
-	// TUN-capable (has NET_ADMIN + /dev/net/tun) and the target is routable,
-	// packets go through a raw IP tunnel (source IP preserved, ICMP supported).
-	// Otherwise silently falls back to normal relay proxy. When UseTun is set
-	// ExitPaths and ExitMode are ignored — only a single exit_via is honored.
-	UseTun bool `yaml:"use_tun,omitempty" json:"use_tun,omitempty"`
-}
-
-// TunModeConfig controls TUN-based IP packet forwarding for the rules engine.
-// When enabled, raw IP packets are forwarded through the relay instead of
-// TCP/UDP proxy, preserving end-to-end connections (required for protocols
-// like Moonlight ENC-RTSP that bind encryption to TCP sessions).
-type TunModeConfig struct {
-	Enabled bool   `yaml:"enabled" json:"enabled"`
-	Mode    string `yaml:"mode" json:"mode"` // "mixed" (routable=TUN, others=proxy) or "full" (all TUN)
 }
 
 // ConfigStore manages dynamic configuration with persistence.
@@ -186,6 +171,14 @@ func LoadOrInitConfig(dataDir string) (Config, error) {
 		if cfg.NodeID == "" {
 			cfg.NodeID = nodeID
 		}
+		// A punch-only node entry is keyed by its first punch route.
+		for i := range cfg.Clients {
+			if c := &cfg.Clients[i]; c.Addr == "" && len(c.Addrs) == 0 {
+				if pa := c.punchAddrs(); len(pa) > 0 {
+					c.Addr = pa[0]
+				}
+			}
+		}
 		// Legacy `name` field migration: cfg.Name and cfg.NodeID used to be
 		// independent, but the UI conflated them on save (every PUT
 		// /api/node sent name = node_id), so in practice every deployed
@@ -207,19 +200,6 @@ func LoadOrInitConfig(dataDir string) (Config, error) {
 		cfg.Name = ""
 		if cfg.Peers == nil {
 			cfg.Peers = make(map[string]PeerConfig)
-		}
-		// Migration: old global tun_mode → per-rule use_tun. When the legacy
-		// global flag was enabled, mark every IP rule as TUN-using so existing
-		// deployments keep their current behaviour after upgrade. The global
-		// TunMode struct is left in place (unused) and will be dropped on the
-		// next config save naturally.
-		if cfg.TunMode != nil && cfg.TunMode.Enabled {
-			for i := range cfg.Rules {
-				if cfg.Rules[i].Type == "ip" {
-					cfg.Rules[i].UseTun = true
-				}
-			}
-			cfg.TunMode = nil
 		}
 		return cfg, nil
 	}

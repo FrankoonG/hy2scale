@@ -2,15 +2,14 @@ import { useState, useCallback, useRef, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Card, Button, Table, Toggle, Badge, Modal, Input, Tabs, TabPanel,
-  FormGroup, Autocomplete, useToast, useConfirm, useSelection, type Column,
+  Card, Button, Table, Modal, Input, Tabs, TabPanel,
+  FormGroup, useToast, useConfirm, useSelection, type Column,
 } from '@hy2scale/ui';
 import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
 import { TargetList } from '@/components/TargetList';
-import { ExitViaCell } from '@/components/ExitViaCell';
+import { ExitViaCell, exitViaSortValue } from '@/components/ExitViaCell';
 import ImportExportButton from '@/components/ImportExportButton';
 import ResponsiveActions from '@/components/ResponsiveActions';
-import { useExitPaths } from '@/hooks/useExitPaths';
 import { useDeselectOnBlankClick } from '@/hooks/useDeselectOnBlankClick';
 import type { RoutingRule } from '@/api';
 import * as api from '@/api';
@@ -22,10 +21,8 @@ export default function RulesPage() {
   const queryClient = useQueryClient();
 
   const { data } = useQuery({ queryKey: ['rules'], queryFn: api.getRules });
-  const { exitPaths } = useExitPaths();
 
   const rules = data?.rules || [];
-  const available = data?.available !== false;
 
   const [tab, setTab] = useState('ip');
 
@@ -45,15 +42,13 @@ export default function RulesPage() {
   const [name, setName] = useState('');
   const [targets, setTargets] = useState<string[]>([]);
   const [exitPath, setExitPath] = useState<ExitPathValue>({ paths: [''], mode: '' });
-  const [useTun, setUseTun] = useState(false);
-  const [tunExitVia, setTunExitVia] = useState('');
   const [priority, setPriority] = useState<string>('0');
   const [ruleEnabled, setRuleEnabled] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const resetForm = () => {
     setName(''); setTargets([]); setExitPath({ paths: [''], mode: '' });
-    setUseTun(false); setTunExitVia(''); setPriority('0'); setRuleEnabled(true);
+    setPriority('0'); setRuleEnabled(true);
   };
 
   const openAdd = (e: MouseEvent) => {
@@ -68,8 +63,6 @@ export default function RulesPage() {
     setEditId(r.id);
     setName(r.name);
     setTargets([...r.targets]);
-    setUseTun(!!r.use_tun);
-    setTunExitVia(r.use_tun ? r.exit_via : '');
     setPriority(String(r.priority || 0));
     setExitPath(apiToExitPath(r.exit_via, r.exit_paths, r.exit_mode));
     setRuleEnabled(r.enabled);
@@ -80,14 +73,8 @@ export default function RulesPage() {
     const targetList = targets.filter(Boolean);
     if (targetList.length === 0) { toast.error(t('rules.targetsRequired')); return; }
 
-    let exitData: { exit_via: string; exit_paths?: string[]; exit_mode?: '' | 'quality' | 'aggregate' };
-    if (useTun) {
-      if (!tunExitVia.trim()) { toast.error(t('rules.exitRequired')); return; }
-      exitData = { exit_via: tunExitVia.trim(), exit_paths: undefined, exit_mode: '' };
-    } else {
-      exitData = exitPathToApi(exitPath) as typeof exitData;
-      if (!exitData.exit_via) { toast.error(t('rules.exitRequired')); return; }
-    }
+    const exitData = exitPathToApi(exitPath) as { exit_via: string; exit_paths?: string[]; exit_mode?: '' | 'quality' | 'aggregate' };
+    if (!exitData.exit_via) { toast.error(t('rules.exitRequired')); return; }
 
     setSaving(true);
     try {
@@ -97,7 +84,6 @@ export default function RulesPage() {
         id: editId || `${ruleType}-${Date.now().toString(36)}`,
         name, type: ruleType, targets: targetList,
         ...exitData,
-        use_tun: useTun || undefined,
         priority: Number.isFinite(prioN) ? prioN : 0,
         enabled: ruleEnabled,
       };
@@ -134,21 +120,22 @@ export default function RulesPage() {
     } catch (e: any) { toast.error(String(e.message || e)); }
   }, [selection, confirmDlg, queryClient, toast, t]);
 
-  const unavailableBanner = !available ? (
+  const captureNote = data?.capture === 'dnat' ? 'rules.localOnlyCapture'
+    : data?.capture === 'none' ? 'rules.noCapture' : '';
+  const unavailableBanner = captureNote ? (
     <div className="hy-warn-banner">
-      {t('rules.unavailable')}
+      {t(captureNote)}
     </div>
   ) : null;
 
   const columns: Column<RoutingRule>[] = [
-    { key: 'name', title: t('rules.name'), render: (r) => (
+    { key: 'name', title: t('rules.name'), sortValue: (r) => r.name || null, render: (r) => (
       <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <strong>{r.name || '—'}</strong>
-        {r.tun_active && <Badge variant="blue">{t('rules.tun')}</Badge>}
       </span>
     )},
-    { key: 'targets', title: t('rules.targets'), render: (r) => <span className="mono" style={{ fontSize: 11 }}>{r.targets.slice(0, 3).join(', ')}{r.targets.length > 3 ? ` +${r.targets.length - 3}` : ''}</span> },
-    { key: 'exit', title: t('rules.exitVia'), render: (r) => <ExitViaCell exitVia={r.exit_via} exitPaths={r.exit_paths} exitMode={r.exit_mode} /> },
+    { key: 'targets', title: t('rules.targets'), sortValue: (r) => r.targets[0] ?? null, render: (r) => <span className="mono" style={{ fontSize: 11 }}>{r.targets.slice(0, 3).join(', ')}{r.targets.length > 3 ? ` +${r.targets.length - 3}` : ''}</span> },
+    { key: 'exit', title: t('rules.exitVia'), sortValue: (r) => exitViaSortValue(r.exit_via, r.exit_paths), render: (r) => <ExitViaCell exitVia={r.exit_via} exitPaths={r.exit_paths} exitMode={r.exit_mode} /> },
     // Per-row edit column retired — select a row and use the top-right Edit button.
   ];
 
@@ -208,6 +195,7 @@ export default function RulesPage() {
         >
           <div ref={listScopeRef} style={{ display: 'contents' }}>
           <Table
+            id={`rules.${tab}`}
             columns={columns}
             data={currentRules}
             rowKey={(r) => r.id}
@@ -240,7 +228,7 @@ export default function RulesPage() {
           <TargetList type={tab as 'ip' | 'domain'} value={targets} onChange={setTargets} />
 
           <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-            <div style={{ flex: tab === 'ip' ? '0 0 120px' : 1 }}>
+            <div style={{ flex: '0 0 120px' }}>
               <FormGroup label={t('rules.priority')}>
                 <Input
                   type="number"
@@ -250,37 +238,9 @@ export default function RulesPage() {
                 />
               </FormGroup>
             </div>
-            {tab === 'ip' && (
-              <div style={{ flex: 1 }}>
-                <FormGroup label={t('rules.useTun')}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    <Toggle checked={useTun} onChange={(e) => {
-                      const on = e.target.checked;
-                      setUseTun(on);
-                      if (on && !tunExitVia) {
-                        const first = exitPath.paths.find(Boolean);
-                        if (first) setTunExitVia(first);
-                      }
-                    }} />
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('rules.useTunHint')}</div>
-                  </div>
-                </FormGroup>
-              </div>
-            )}
           </div>
 
-          {useTun ? (
-            <FormGroup label={t('rules.exitVia')} required>
-              <Autocomplete
-                value={tunExitVia}
-                onChange={setTunExitVia}
-                options={exitPaths}
-                placeholder={t('users.exitViaHint')}
-              />
-            </FormGroup>
-          ) : (
-            <ExitPathList value={exitPath} onChange={setExitPath} label={t('rules.exitVia')} />
-          )}
+          <ExitPathList value={exitPath} onChange={setExitPath} label={t('rules.exitVia')} />
         </div>
       </Modal>
     </div>
