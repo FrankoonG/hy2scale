@@ -668,7 +668,7 @@ export default function SettingsPage() {
                                 variant="primary"
                                 onClick={handleApplyUpdate}
                                 loading={applying}
-                                style={{ background: 'var(--success, #10b981)', borderColor: 'var(--success, #10b981)' }}
+                                style={{ background: 'var(--green)', borderColor: 'var(--green)' }}
                               >
                                 {t('settings.applyUpdate')}
                               </Button>
@@ -699,7 +699,7 @@ export default function SettingsPage() {
                           </span>
                         )}
                         {upgradeStatus.state === 'error' && upgradeStatus.error && (
-                          <span style={{ fontSize: 12, color: 'var(--danger, #ef4444)' }}>{upgradeStatus.error}</span>
+                          <span style={{ fontSize: 12, color: 'var(--red)' }}>{upgradeStatus.error}</span>
                         )}
                       </div>
                     )}

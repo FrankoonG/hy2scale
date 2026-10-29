@@ -8,7 +8,7 @@
 .hy-col-btn{position:absolute;top:4px;right:10px;z-index:2;width:26px;height:26px;padding:4px;border:1px solid transparent;border-radius:var(--radius-sm);background:var(--surface);color:var(--text-muted);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;opacity:.7;transition:color .12s,background .12s,opacity .12s,border-color .12s}
 .hy-col-btn svg{width:15px;height:15px}
 .hy-col-btn:hover,.hy-col-btn.active{opacity:1;color:var(--primary);background:var(--primary-light)}
-.hy-col-menu{position:fixed;z-index:1060;min-width:200px;max-width:280px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:0 4px 12px rgba(0,0,0,.15);padding:4px 0;font-size:13px}
+.hy-col-menu{position:fixed;z-index:1060;min-width:200px;max-width:280px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-pop);padding:4px 0;font-size:13px}
 .hy-col-menu-head{display:flex;align-items:center;gap:8px;padding:6px 12px 6px;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border-light);margin-bottom:4px}
 .hy-col-menu-reset{margin-left:auto;border:none;background:none;color:var(--primary);font-size:11px;cursor:pointer;padding:0;text-transform:none;letter-spacing:0}
 .hy-col-menu-item{display:flex;align-items:center;gap:8px;padding:5px 12px;cursor:pointer;user-select:none;color:var(--text)}

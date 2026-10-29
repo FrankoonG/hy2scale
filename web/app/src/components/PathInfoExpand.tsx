@@ -19,6 +19,7 @@
 import { useState, useRef, useLayoutEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Tooltip } from '@hy2scale/ui';
+import { useTheme } from '@/theme';
 
 /** Loose alias for the i18next translate function returned by
  *  useTranslation(); matches the runtime call signatures we use here
@@ -107,14 +108,19 @@ function onlineColor(pct: number): string {
  *  row reads as "relative intensity". Gray is reserved for missing data
  *  only; a real 0 bps bucket renders as the faintest blue (peer online
  *  but idle) — same as the "below 10% of window max" tier. */
-function rateColor(bps: number, windowMax: number): string {
+function rateColor(bps: number, windowMax: number, dark: boolean): string {
   if (bps < 0) return '#6b7280';
-  if (windowMax === 0) return '#93c5fd';
+  // Dark theme: intensity reads as brightness, so the scale runs the
+  // other way (faint = deep blue, peak = light blue).
+  const scale = dark
+    ? ['#93c5fd', '#60a5fa', '#3b82f6', '#1e40af']
+    : ['#1d4ed8', '#3b82f6', '#60a5fa', '#93c5fd'];
+  if (windowMax === 0) return scale[3];
   const frac = bps / windowMax;
-  if (frac >= 0.66) return '#1d4ed8';
-  if (frac >= 0.33) return '#3b82f6';
-  if (frac >= 0.10) return '#60a5fa';
-  return '#93c5fd';
+  if (frac >= 0.66) return scale[0];
+  if (frac >= 0.33) return scale[1];
+  if (frac >= 0.10) return scale[2];
+  return scale[3];
 }
 
 /** Format bytes/sec as "1.2 MB/s" etc. */
@@ -222,6 +228,8 @@ export function PathInfoExpand({
   perHopLatencyMs, realtimeUpBps, realtimeDownBps, totalUpBytes, totalDownBytes,
 }: PathInfoExpandProps) {
   const { t } = useTranslation();
+  const dark = useTheme().theme === 'dark';
+  const upColor = dark ? '#60a5fa' : '#2563eb';
   const [latPrec, setLatPrec] = useState<Precision>('m1');
   const [onlinePrec, setOnlinePrec] = useState<Precision>('m1');
   const [txPrec, setTxPrec] = useState<Precision>('m1');
@@ -297,9 +305,9 @@ export function PathInfoExpand({
   // Window-max excludes negatives (placeholders / missing samples) so
   // the colour scale is set by real observed peaks only.
   const txWinMax = Math.max(0, ...txPeak[txPrec].map(b => Math.max(0, b.bps)));
-  const txTicks  = buildRow(txPeak[txPrec], b => rateColor(b.bps, txWinMax), b => fmtRate(b.bps), txPrec);
+  const txTicks  = buildRow(txPeak[txPrec], b => rateColor(b.bps, txWinMax, dark), b => fmtRate(b.bps), txPrec);
   const rxWinMax = Math.max(0, ...rxPeak[rxPrec].map(b => Math.max(0, b.bps)));
-  const rxTicks  = buildRow(rxPeak[rxPrec], b => rateColor(b.bps, rxWinMax), b => fmtRate(b.bps), rxPrec);
+  const rxTicks  = buildRow(rxPeak[rxPrec], b => rateColor(b.bps, rxWinMax, dark), b => fmtRate(b.bps), rxPrec);
 
   return (
     <div className="hy-topo-pathinfo-expanded">
@@ -323,7 +331,7 @@ export function PathInfoExpand({
         <div className="hy-topo-pathinfo-info-row">
           <span className="hy-topo-pathinfo-info-label">{t('nodes.graph.infoSpeed')}</span>
           <span className="hy-topo-pathinfo-info-vals">
-            <span className="hy-topo-pathinfo-info-arrow" style={{ color: '#2563eb' }}>↑</span>
+            <span className="hy-topo-pathinfo-info-arrow" style={{ color: upColor }}>↑</span>
             <span className="hy-topo-pathinfo-info-val">{fmtRate(realtimeUpBps)}</span>
             <span className="hy-topo-pathinfo-info-arrow" style={{ color: '#22c55e', marginLeft: 10 }}>↓</span>
             <span className="hy-topo-pathinfo-info-val">{fmtRate(realtimeDownBps)}</span>
@@ -334,7 +342,7 @@ export function PathInfoExpand({
         <div className="hy-topo-pathinfo-info-row">
           <span className="hy-topo-pathinfo-info-label">{t('nodes.graph.infoTotal')}</span>
           <span className="hy-topo-pathinfo-info-vals">
-            <span className="hy-topo-pathinfo-info-arrow" style={{ color: '#2563eb' }}>↑</span>
+            <span className="hy-topo-pathinfo-info-arrow" style={{ color: upColor }}>↑</span>
             <span className="hy-topo-pathinfo-info-val">{fmtBytes(totalUpBytes)}</span>
             <span className="hy-topo-pathinfo-info-arrow" style={{ color: '#22c55e', marginLeft: 10 }}>↓</span>
             <span className="hy-topo-pathinfo-info-val">{fmtBytes(totalDownBytes)}</span>

@@ -4,34 +4,34 @@
 .iface-lines{display:flex;flex-direction:column;gap:2px;min-width:0}
 .iface-line{display:flex;align-items:center;gap:6px;min-height:20px;font-family:var(--mono);font-size:12px;white-space:nowrap}
 .iface-line-main{flex:1;min-width:0;display:inline-flex;align-items:center;gap:6px}
-.iface-muted{color:#9098a8}
-.iface-bad{color:#ef4444;font-weight:500;font-family:var(--font)}
-.iface-pending{color:#9098a8;font-style:italic;font-family:var(--font)}
+.iface-muted{color:var(--text-muted)}
+.iface-bad{color:var(--red);font-weight:500;font-family:var(--font)}
+.iface-pending{color:var(--text-muted);font-style:italic;font-family:var(--font)}
 /* Egress badge: hy-badge look; solid = selected, ghost = hover-only switch. */
-.iface-egress{font-family:var(--mono);font-size:10px;line-height:14px;padding:0 5px;border:1px solid transparent;flex-shrink:0;text-transform:none;background:var(--blue-bg);color:#3b82f6;cursor:default}
-.iface-egress.warn{background:var(--orange-bg);color:#d97706;border-color:#f59e0b}
+.iface-egress{font-family:var(--mono);font-size:10px;line-height:14px;padding:0 5px;border:1px solid transparent;flex-shrink:0;text-transform:none;background:var(--blue-bg);color:var(--blue);cursor:default}
+.iface-egress.warn{background:var(--orange-bg);color:var(--c-orange);border-color:var(--orange)}
 /* Small name tags (mode / VLAN / state) and the faint "direct" tag. */
-.iface-tag{display:inline-flex;align-items:center;font-size:10px;font-weight:600;line-height:14px;padding:0 5px;border:1px solid #c4cad6;border-radius:4px;color:#5a6070;font-family:var(--font);white-space:nowrap;user-select:none;-webkit-user-select:none}
-.iface-tag.faint{color:#9098a8;border-color:#d5d9e2;font-weight:500}
-.iface-tag.off{color:#9098a8;border-style:dashed}
+.iface-tag{display:inline-flex;align-items:center;font-size:10px;font-weight:600;line-height:14px;padding:0 5px;border:1px solid var(--tag-border);border-radius:4px;color:var(--text-secondary);font-family:var(--font);white-space:nowrap;user-select:none;-webkit-user-select:none}
+.iface-tag.faint{color:var(--text-muted);border-color:var(--tag-border-faint);font-weight:500}
+.iface-tag.off{color:var(--text-muted);border-style:dashed}
 /* Link-type badge beside an interface name */
-.iface-type{display:inline-flex;align-items:center;flex-shrink:0;font-size:10px;font-weight:600;line-height:14px;padding:1px 6px;border-radius:4px;font-family:var(--font);white-space:nowrap;user-select:none;-webkit-user-select:none;color:#5a6070;background:rgba(144,152,168,.14)}
-.iface-type[data-t=ethernet]{color:#2563eb;background:rgba(59,130,246,.12)}
-.iface-type[data-t=wlan]{color:#0891b2;background:rgba(6,182,212,.12)}
-.iface-type[data-t=child]{color:#4361ee;background:rgba(67,97,238,.12)}
-.iface-type[data-t=bridge]{color:#7c3aed;background:rgba(139,92,246,.12)}
-.iface-type[data-t=bond]{color:#4f46e5;background:rgba(99,102,241,.12)}
-.iface-type[data-t=vlan]{color:#d97706;background:rgba(245,158,11,.14)}
-.iface-type[data-t=veth]{color:#0d9488;background:rgba(20,184,166,.12)}
-.iface-type[data-t=macvlan],.iface-type[data-t=ipvlan]{color:#db2777;background:rgba(236,72,153,.12)}
-.iface-type[data-t=tun],.iface-type[data-t=wireguard]{color:#16a34a;background:rgba(34,197,94,.12)}
-.iface-type[data-t=vxlan],.iface-type[data-t=ovs]{color:#ea580c;background:rgba(249,115,22,.12)}
+.iface-type{display:inline-flex;align-items:center;flex-shrink:0;font-size:10px;font-weight:600;line-height:14px;padding:1px 6px;border-radius:4px;font-family:var(--font);white-space:nowrap;user-select:none;-webkit-user-select:none;color:var(--text-secondary);background:var(--type-bg)}
+.iface-type[data-t=ethernet]{color:var(--type-ethernet);background:var(--type-ethernet-bg)}
+.iface-type[data-t=wlan]{color:var(--type-wlan);background:var(--type-wlan-bg)}
+.iface-type[data-t=child]{color:var(--type-child);background:var(--type-child-bg)}
+.iface-type[data-t=bridge]{color:var(--type-bridge);background:var(--type-bridge-bg)}
+.iface-type[data-t=bond]{color:var(--type-bond);background:var(--type-bond-bg)}
+.iface-type[data-t=vlan]{color:var(--type-vlan);background:var(--type-vlan-bg)}
+.iface-type[data-t=veth]{color:var(--type-veth);background:var(--type-veth-bg)}
+.iface-type[data-t=macvlan],.iface-type[data-t=ipvlan]{color:var(--type-macvlan);background:var(--type-macvlan-bg)}
+.iface-type[data-t=tun],.iface-type[data-t=wireguard]{color:var(--type-tun);background:var(--type-tun-bg)}
+.iface-type[data-t=vxlan],.iface-type[data-t=ovs]{color:var(--type-vxlan);background:var(--type-vxlan-bg)}
 
 .iface-name{font-weight:600}
 .iface-name-wrap{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
 .iface-group-name{font-weight:500;color:var(--text-secondary)}
 .iface-pub{cursor:pointer;border-radius:4px}
-.iface-pub:hover .iface-pub-ip{color:#4361ee;text-decoration:underline dotted}
+.iface-pub:hover .iface-pub-ip{color:var(--primary);text-decoration:underline dotted}
 .iface-pub.busy{cursor:progress;opacity:.6}
 .hy-table .col-iface-addr{min-width:240px}
 .hy-table .col-iface-pub{width:190px}

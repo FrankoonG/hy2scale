@@ -9,6 +9,7 @@ import type { TopologyNode, DiagPeerHistory, DiagHistoryBucket } from '@/api';
 import type { IfaceEntry, IfaceFamilyKey } from '@/api/types';
 import { useNodeStore } from '@/store/node';
 import { fmtBytes, fmtRate, fmtDuration } from '@/hooks/useFormat';
+import { useTheme } from '@/theme';
 
 // ---------------------------------------------------------------------------
 // Live samples. Kept at module level so the chart and sparklines survive a
@@ -191,11 +192,15 @@ function SegBar({ parts }: { parts: Part[] }) {
   );
 }
 
-const C = { ok: '#22c55e', bad: '#ef4444', warn: '#f59e0b', off: '#b8bfcc', pri: '#4361ee' };
-const SVC_COLORS: Record<string, string> = {
+// Literal hex per theme (inline colours stay readable for Dark Reader in
+// the light theme; the dark theme has its own set).
+const C_LIGHT = { ok: '#22c55e', bad: '#ef4444', warn: '#f59e0b', off: '#b8bfcc', pri: '#4361ee' };
+const C_DARK = { ok: '#22c55e', bad: '#f05252', warn: '#f59e0b', off: '#4b5262', pri: '#5a78f8' };
+const SVC_LIGHT: Record<string, string> = {
   hy2: '#4361ee', socks5: '#0ea5e9', http: '#14b8a6', ss: '#8b5cf6',
   l2tp: '#f59e0b', ikev2: '#ec4899', wg: '#22c55e', openvpn: '#f97316',
 };
+const SVC_DARK: Record<string, string> = { ...SVC_LIGHT, hy2: '#5a78f8', ss: '#a78bfa' };
 
 function KV({ label, children, onClick }: { label: ReactNode; children: ReactNode; onClick?: () => void }) {
   return (
@@ -427,6 +432,9 @@ export default function OverviewPage() {
   const node = useNodeStore((s) => s.node);
   const topology = useNodeStore((s) => s.topology);
   const [range, setRange] = useState<Range>('live');
+  const dark = useTheme().theme === 'dark';
+  const C = dark ? C_DARK : C_LIGHT;
+  const SVC_COLORS = dark ? SVC_DARK : SVC_LIGHT;
 
   const { data: stats, dataUpdatedAt: statsTick } = useQuery({ queryKey: ['stats'], queryFn: api.getStats, refetchInterval: 2000 });
   const { data: runtime } = useQuery({ queryKey: ['runtime'], queryFn: api.getRuntime, refetchInterval: 5000 });

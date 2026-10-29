@@ -104,7 +104,7 @@ export default function NodeImportModal({ open, onClose, animateFrom }: Props) {
 
         {parsed && (
           <FormGroup label={t('nodes.importPreview')}>
-            <div style={{ background: 'var(--bg-secondary)', borderRadius: 6, padding: '6px 12px' }} data-testid="hy2-import-preview">
+            <div style={{ background: 'var(--surface-hover)', borderRadius: 6, padding: '6px 12px' }} data-testid="hy2-import-preview">
               <Row label={t('nodes.address')} value={`${parsed.host}:${parsed.port}`} mono />
               <Row label={t('nodes.password')} value={parsed.password ? mask(parsed.password) : '—'} mono />
               {parsed.name && <Row label={t('nodes.importLabel')} value={parsed.name} />}
