@@ -9,7 +9,7 @@ import { useExitPaths } from '@/hooks/useExitPaths';
 import { fmtRate } from '@/hooks/useFormat';
 import { copyToClipboard } from '@/utils/buildHy2Url';
 import { versionAtLeast } from '../utils/version';
-import { buildGraph, type GraphEdge } from './NodesGraphView';
+import { buildGraph, type GraphEdge } from './topo/graphModel';
 import { PathInfoExpand, type PathInfoExpandProps, type Precision } from './PathInfoExpand';
 
 type Pos = { x: number; y: number };

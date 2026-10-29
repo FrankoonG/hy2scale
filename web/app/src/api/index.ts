@@ -40,14 +40,26 @@ export interface BuildInfo {
 }
 export const getBuildInfo = () => api<BuildInfo>('/build-info');
 
-// Graph layout — persisted per-node positions for the Nodes graph view.
-// Stored on the server so the layout follows the user across browsers
-// and multiple concurrent sessions converge on a single source of truth.
-export type GraphLayoutMap = Record<string, { x: number; y: number }>;
-export const getGraphLayout = () =>
-  api<{ positions: GraphLayoutMap }>('/graph-layout');
-export const setGraphLayout = (positions: GraphLayoutMap) =>
-  api('/graph-layout', { method: 'PUT', body: JSON.stringify({ positions }) });
+// Topology canvases — user-authored layouts of the Nodes graph (node
+// positions, edge bends, label positions). Built-in automatic layouts are
+// computed in the browser; only custom canvases are stored on the server,
+// shared by every session and pushed live over SSE.
+export interface GraphWaypoint { u: number; v: number }
+export interface GraphCanvasEdge { waypoints?: GraphWaypoint[]; label_t?: number }
+export interface GraphCanvas {
+  id: string;
+  name: string;
+  nodes: Record<string, { x: number; y: number }> | null;
+  edges: Record<string, GraphCanvasEdge> | null;
+}
+export const getGraphCanvases = () => api<{ canvases: GraphCanvas[] }>('/graph-canvases');
+export const putGraphCanvas = (c: GraphCanvas) =>
+  api(`/graph-canvases/${encodeURIComponent(c.id)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ name: c.name, nodes: c.nodes || {}, edges: c.edges || {} }),
+  });
+export const deleteGraphCanvas = (id: string) =>
+  api(`/graph-canvases/${encodeURIComponent(id)}`, { method: 'DELETE' });
 
 // Clients (Peers)
 export const getClients = () => api<ClientEntry[]>('/clients');

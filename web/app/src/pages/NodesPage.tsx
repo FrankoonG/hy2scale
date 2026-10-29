@@ -529,11 +529,13 @@ export default function NodesPage() {
 
   // Card header actions in list view; floated at the top-right of the
   // graph in topology view.
-  const actionsEl = (
+  // `more`: the topology canvas's own secondary controls (⋯ menu).
+  const actionsFor = (more?: ReactNode) => (
     <ResponsiveActions
       selectedCount={selection.count}
       onClearSelection={selection.clear}
       selectedLabel={t('app.selected', { count: selection.count })}
+      more={more || undefined}
     >
       {(() => {
         // Inspect selected nodes to decide which buttons to show.
@@ -646,11 +648,12 @@ export default function NodesPage() {
       </Button>
     </ResponsiveActions>
   );
+  const actionsEl = actionsFor();
 
   const graphEl = (
     <NodesGraphView
       full
-      actions={actionsEl}
+      actions={actionsFor}
       topology={topology}
       selfId={node?.node_id || ''}
       selfName={node?.name}

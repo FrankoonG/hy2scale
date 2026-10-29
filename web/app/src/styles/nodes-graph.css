@@ -1,41 +1,48 @@
 /* Nodes topology graph. */
-/* ====== Tabs (proxy-style button group) ====== */
-/* Topology graph view: infinite pan/zoom canvas hosted inside a fill Card's
-   body. Background grid lives inside the SVG's transformed group (see
-   <pattern id="hy-topo-grid">) so it pans and zooms with the nodes. */
-.hy-topo-graph{position:relative;width:100%;height:calc(100vh - 330px);height:calc(100dvh - 330px);min-height:460px;display:flex;flex-direction:column;background:var(--surface);overflow:hidden}
+/* Canvas: pan/zoom SVG filling the page, tools top-left, page actions
+   top-right (same chrome as the interfaces topology), path panel bottom-left. */
+.hy-topo-graph{position:relative;width:100%;height:calc(100vh - 330px);height:calc(100dvh - 330px);min-height:460px;display:flex;flex-direction:column;background:var(--surface);overflow:hidden;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+.hy-topo-graph:active{cursor:grabbing}
 /* Full-bleed variant (Nodes topology view): fills .hy-topo-full edge to edge. */
 .hy-topo-graph.is-full{flex:1;height:auto;min-height:0}
-/* Top bar: graph tools left, page actions right, one flex row so they can't
-   overlap. The bar passes the pointer through so the canvas pans under it. */
-.hy-topo-graph-topbar{position:absolute;top:8px;left:8px;right:8px;z-index:3;display:flex;align-items:center;justify-content:space-between;gap:12px;pointer-events:none}
+.hy-topo-graph-topbar{position:absolute;top:10px;left:12px;right:12px;z-index:3;display:flex;align-items:center;justify-content:space-between;gap:12px;pointer-events:none;cursor:default}
 .hy-topo-graph-topbar>*{pointer-events:auto}
-.hy-topo-graph-toolbar{display:flex;gap:6px;align-items:center;font-size:11px;flex:0 1 auto;min-width:0}
-.hy-topo-graph-toolbar>.hy-topo-snap{margin-left:4px;flex-shrink:0}
-.hy-topo-graph-toolbar>.hy-topo-btn{flex-shrink:0}
 .hy-topo-graph-actions{flex:0 1 auto;min-width:0}
-/* Page actions sit on the canvas like the tools on the left: no panel,
-   one height, the ⋯ button styled as a tool. */
-.hy-topo-graph-toolbar>.hy-topo-btn{height:28px;display:inline-flex;align-items:center}
-.hy-topo-graph-actions .hy-btn{height:28px}
+.hy-topo-graph-actions .hy-btn{height:30px}
 /* Ghost buttons (Import / Export) get an outline on the canvas. */
 .hy-topo-graph-actions .hy-btn.ghost,.iface-topo-actions .hy-btn.ghost{border:1px solid var(--border);background:var(--surface);color:var(--text)}
 .hy-topo-graph-actions .hy-btn.ghost:hover,.iface-topo-actions .hy-btn.ghost:hover{border-color:var(--primary);color:var(--primary);background:var(--surface)}
 .hy-topo-graph-actions .hy-actions-overflow,.iface-topo-actions .hy-actions-overflow{border-color:var(--border);background:var(--surface);color:var(--text-secondary)}
-.hy-topo-graph-actions .hy-actions-overflow{width:28px;height:28px}
+.hy-topo-graph-actions .hy-actions-overflow{width:30px;height:30px}
 .hy-topo-graph-actions .hy-actions-overflow:hover,.hy-topo-graph-actions .hy-actions-overflow.open,
 .iface-topo-actions .hy-actions-overflow:hover,.iface-topo-actions .hy-actions-overflow.open{background:var(--surface);color:var(--primary);border-color:var(--primary)}
 .hy-topo-graph-actions .hy-actions-row{flex-wrap:wrap;justify-content:flex-end;gap:6px}
-/* Checkbox sits directly on the canvas — no button-style frame. */
-.hy-topo-snap{display:inline-flex;align-items:center;gap:6px;color:var(--text-muted);cursor:pointer;user-select:none;padding:0;background:none;border:none}
-.hy-topo-snap:hover{color:var(--primary)}
-.hy-topo-snap input{accent-color:var(--primary);cursor:pointer;margin:0}
-.hy-topo-btn{border:1px solid var(--border);background:var(--surface);color:var(--text-secondary);padding:4px 10px;border-radius:var(--radius-sm);cursor:pointer;font-size:11px}
-.hy-topo-btn:hover{background:var(--primary-light);color:var(--primary);border-color:var(--primary-light)}
-.hy-topo-graph-hint{color:var(--text-muted);font-size:10px;margin-left:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-@media(max-width:640px){.hy-topo-graph-hint{display:none}}
-.hy-topo-graph-svg{flex:1;min-height:0;width:100%;cursor:grab;user-select:none;-webkit-user-select:none;touch-action:none;-webkit-touch-callout:none}
-.hy-topo-graph-svg:active{cursor:grabbing}
+.hy-topo-graph-svg{flex:1;min-height:0;width:100%;display:block}
+.hy-topo-graph.is-preset .hy-topo-dot{cursor:pointer}
+.hy-topo-graph.is-custom .hy-topo-dot{cursor:grab}
+/* No glides while something is being dragged or the layout morphs. */
+.hy-topo-graph.is-busy .hy-topo-edge-label-group{transition:none}
+
+/* Canvas menu: a tool button with the canvas name + caret, opening a
+   dropdown; inside the ⋯ menu the same items expand inline. */
+.hy-topo-canvas{position:relative;flex-shrink:0;min-width:0}
+.iface-topo-tool.hy-topo-canvas-btn{width:auto;max-width:220px;gap:6px;padding:0 9px;font-size:12px;font-weight:500;color:var(--text)}
+.iface-topo-tool.hy-topo-canvas-btn.open{color:var(--primary);border-color:var(--primary)}
+.hy-topo-canvas-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hy-topo-canvas-caret{flex-shrink:0;transition:transform .15s}
+.hy-topo-canvas-btn.open .hy-topo-canvas-caret{transform:rotate(180deg)}
+.hy-topo-canvas-menu{left:0;top:calc(100% + 6px);min-width:210px;max-width:300px;max-height:min(70vh,520px);overflow-y:auto}
+.hy-topo-canvas-menu .hy-dropdown-item,.hy-topo-canvas-inline .hy-dropdown-item{font-family:var(--font);padding:7px 12px}
+.hy-topo-canvas-menu .hy-dropdown-item.current,.hy-topo-canvas-inline .hy-dd-sub .hy-dropdown-item.current{color:var(--primary);font-weight:600}
+.hy-topo-canvas-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hy-topo-canvas-sec{padding:6px 12px 2px;font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-muted)}
+.hy-topo-canvas-empty{padding:4px 12px 6px 36px;font-size:12px;color:var(--text-muted)}
+.hy-topo-canvas-menu svg,.hy-topo-canvas-inline svg,.hy-topo-canvas-btn svg{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.hy-topo-canvas-inline{width:100%}
+.hy-topo-canvas-inline>.hy-dropdown-item{border-radius:var(--radius-sm)}
+.hy-topo-canvas-inline .hy-dd-caret{margin-left:4px;transition:transform .15s}
+.hy-topo-canvas-inline>.hy-dropdown-item[aria-expanded="true"] .hy-dd-caret{transform:rotate(90deg)}
+.hy-topo-canvas-inline .hy-dd-sub{max-height:50vh;overflow-y:auto}
 
 /* Selected-path info overlay — bottom-left of the graph canvas. Matches
    ExitViaCell styling: monospace, 12px, green/red per-hop colour, muted
@@ -57,7 +64,7 @@
       regardless of how often the backdrop re-samples
    Dark Reader inverts the rgba into a dark-transparent surface and
    keeps the blur, so the same recipe holds in both modes. */
-.hy-topo-graph-pathinfo{position:absolute;left:10px;bottom:10px;z-index:2;display:flex;flex-direction:column;gap:8px;padding:6px 10px;background:rgba(255,255,255,.42);backdrop-filter:blur(20px) saturate(180%);-webkit-backdrop-filter:blur(20px) saturate(180%);will-change:backdrop-filter;transform:translateZ(0);isolation:isolate;border:1px solid rgba(228,231,237,.5);border-radius:var(--radius-sm);font-family:var(--mono);font-size:12px;max-width:calc(100% - 20px);transition:padding .12s ease;box-shadow:0 4px 18px rgba(0,0,0,.08)}
+.hy-topo-graph-pathinfo{position:absolute;left:10px;bottom:10px;z-index:2;display:flex;flex-direction:column;gap:6px;padding:6px 10px;cursor:default;background:rgba(255,255,255,.42);backdrop-filter:blur(20px) saturate(180%);-webkit-backdrop-filter:blur(20px) saturate(180%);will-change:backdrop-filter;transform:translateZ(0);isolation:isolate;border:1px solid rgba(228,231,237,.5);border-radius:var(--radius-sm);font-family:var(--mono);font-size:12px;max-width:calc(100% - 20px);transition:padding .12s ease;box-shadow:0 4px 18px rgba(0,0,0,.08)}
 .hy-topo-graph-pathinfo::before{content:"";position:absolute;inset:0;border-radius:inherit;background:linear-gradient(120deg,rgba(255,255,255,.18) 0%,rgba(255,255,255,0) 35%,rgba(255,255,255,0) 65%,rgba(255,255,255,.10) 100%);background-size:220% 220%;animation:hy-topo-pathinfo-sheen 14s ease-in-out infinite;pointer-events:none;z-index:-1}
 @keyframes hy-topo-pathinfo-sheen{0%,100%{background-position:0% 0%}50%{background-position:100% 100%}}
 /* No min-width on the expanded panel — width is driven by content.
@@ -225,7 +232,7 @@
    side/spot to another the labels glide there over 300 ms instead of
    teleporting. */
 .hy-topo-edge-label-group{transition:transform .3s cubic-bezier(.25,1,.5,1)}
-.hy-topo-edge-label-halo{stroke-width:3;stroke-linejoin:round;fill:none}
+.hy-topo-edge-label-halo{stroke:var(--surface);stroke-width:3;stroke-linejoin:round;fill:none}
 .hy-topo-edge-label{fill:currentColor;stroke:none}
 .hy-topo-edge-label.rate{color:#6b7280}
 /* Direction arrow on the rate label: only the arrow is tinted, the
@@ -305,3 +312,79 @@
 .hy-topo-edge.offline .hy-topo-edge-base{color:#ef4444;stroke:currentColor;stroke-opacity:.65}
 .hy-topo-edge-x{color:#ef4444;stroke:currentColor;stroke-opacity:.9;stroke-width:1.6;fill:none;stroke-linecap:round}
 .hy-topo-edge-punch{color:#8b5cf6;stroke:currentColor;stroke-width:2;fill:none}
+
+/* Multi-path panel: "path i / N" with prev / next, the list of every route
+   to the selected node (shortest first), and a toggle that shows the other
+   routes as faint dashed lines. */
+.hy-topo-pathinfo-nav{display:flex;align-items:center;gap:6px;font-family:var(--font);font-size:11.5px}
+.hy-topo-pathinfo-nav>button{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--text-secondary);cursor:pointer}
+.hy-topo-pathinfo-nav>button:hover{border-color:var(--primary);color:var(--primary)}
+.hy-topo-pathinfo-nav>button svg{fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.hy-topo-pathinfo-count{font-family:var(--mono);font-weight:600;color:var(--primary);white-space:nowrap}
+.hy-topo-pathinfo-alt{display:inline-flex;align-items:center;gap:5px;margin-left:auto;padding-left:10px;color:var(--text-muted);cursor:pointer;white-space:nowrap}
+.hy-topo-pathinfo-alt input{margin:0;accent-color:var(--primary)}
+.hy-topo-pathinfo-list{display:flex;flex-direction:column;gap:2px;max-height:150px;overflow-y:auto;margin:0 -4px}
+.hy-topo-pathinfo-item{display:flex;align-items:center;gap:10px;padding:3px 6px;border:none;border-radius:5px;background:transparent;color:var(--text-secondary);font-family:var(--mono);font-size:11.5px;text-align:left;cursor:pointer}
+.hy-topo-pathinfo-item:hover{background:var(--primary-light)}
+.hy-topo-pathinfo-item.on{background:var(--primary-light);color:var(--primary)}
+.hy-topo-pathinfo-item-chain{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hy-topo-pathinfo-item-lat{margin-left:auto;flex-shrink:0;font-weight:700}
+.hy-topo-pathinfo-item-lat.lat-ok{color:#22c55e}
+.hy-topo-pathinfo-item-lat.lat-mid{color:#d97706}
+.hy-topo-pathinfo-item-lat.lat-bad{color:#ef4444}
+.hy-topo-pathinfo-item-lat.lat-na{color:#6b7280}
+@media(max-width:640px){.hy-topo-graph-pathinfo{right:10px}.hy-topo-pathinfo-list{max-height:96px}}
+
+/* Other routes of the selected node: faint dashed overlay. */
+.hy-topo-edge-alt{color:#7f95ea;stroke:currentColor;stroke-width:2.5;stroke-dasharray:5 4;stroke-opacity:.85;fill:none;pointer-events:none}
+
+/* Custom canvases: edited lines are tinted; a wide transparent hit path
+   catches hover / tap; bend handles show on hover (mouse) or after a tap
+   (touch). Ghost = insert a bend there; solid = an existing bend. */
+.hy-topo-edge.custom .hy-topo-edge-base{color:#6b5bd2;stroke-opacity:.55}
+.hy-topo-edge-hit{stroke:transparent;stroke-width:14;fill:none;vector-effect:non-scaling-stroke;pointer-events:stroke;cursor:pointer}
+.hy-topo-ghost{color:#4361ee;stroke:currentColor;fill:currentColor;fill-opacity:.14;cursor:copy}
+.hy-topo-handle{color:#4361ee;stroke:#ffffff;fill:currentColor;cursor:grab}
+.hy-topo-ghost:hover,.hy-topo-handle:hover{color:#2f4ad8}
+.hy-topo-edge-label-group.editable{cursor:grab}
+.hy-topo-edge-label-hit{fill:transparent;pointer-events:all}
+.hy-topo-edge-label-group.editable:hover .hy-topo-edge-label-hit,.hy-topo-edge-label-group.placed .hy-topo-edge-label-hit{fill:#4361ee;fill-opacity:.06}
+
+/* App dark theme (data-theme="dark" on <html>; Dark Reader is off then).
+   The SVG palette keeps literal colours for Dark Reader, so it is redone
+   here for the native dark surface. */
+:root[data-theme="dark"] .hy-topo-dot-outer{color:#6f8fca;fill-opacity:.42}
+:root[data-theme="dark"] .hy-topo-dot-inner{color:#c9d6f0}
+:root[data-theme="dark"] .hy-topo-dot.self .hy-topo-dot-inner{color:#6d8bff}
+:root[data-theme="dark"] .hy-topo-dot-name{color:#e3e6ed}
+:root[data-theme="dark"] .hy-topo-dot.self .hy-topo-dot-name{color:#8ea4ff}
+:root[data-theme="dark"] .hy-topo-dot.native .hy-topo-dot-inner,:root[data-theme="dark"] .hy-topo-dot.native .hy-topo-dot-name{color:#fbbf24}
+:root[data-theme="dark"] .hy-topo-dot.offline .hy-topo-dot-outer{color:#f87171}
+:root[data-theme="dark"] .hy-topo-dot.offline .hy-topo-dot-inner{color:#fca5a5}
+:root[data-theme="dark"] .hy-topo-dot.offline .hy-topo-dot-name{color:#fca5a5}
+:root[data-theme="dark"] .hy-topo-dot.selected .hy-topo-dot-outer{color:#6d8bff}
+:root[data-theme="dark"] .hy-topo-edge-base,:root[data-theme="dark"] .hy-topo-edge-flow{color:#7f9bd6}
+:root[data-theme="dark"] .hy-topo-edge.custom .hy-topo-edge-base{color:#9d8cf0}
+:root[data-theme="dark"] .hy-topo-edge.to-native .hy-topo-edge-base,:root[data-theme="dark"] .hy-topo-edge.to-native .hy-topo-edge-flow{color:#b8923a}
+:root[data-theme="dark"] .hy-topo-edge-draw{color:#6d8bff}
+:root[data-theme="dark"] .hy-topo-edge.to-native .hy-topo-edge-draw{color:#eab308}
+:root[data-theme="dark"] .hy-topo-edge-draw.offline,:root[data-theme="dark"] .hy-topo-edge.offline .hy-topo-edge-base,:root[data-theme="dark"] .hy-topo-edge-x{color:#f87171}
+:root[data-theme="dark"] .hy-topo-edge-alt{color:#8ea4ff}
+:root[data-theme="dark"] .hy-topo-edge-label.rate,:root[data-theme="dark"] .hy-topo-edge-label.lat-na{color:#a9b0be}
+:root[data-theme="dark"] .hy-topo-edge-label .rate-arrow-up{color:#60a5fa}
+:root[data-theme="dark"] .hy-topo-edge-label.lat-mid{color:#f59e0b}
+:root[data-theme="dark"] .hy-topo-edge-label.lat-bad{color:#f87171}
+:root[data-theme="dark"] .hy-topo-ghost,:root[data-theme="dark"] .hy-topo-handle{color:#6d8bff}
+:root[data-theme="dark"] .hy-topo-handle{stroke:#181b22}
+:root[data-theme="dark"] .hy-topo-graph-pathinfo{background:rgba(24,27,34,.62);border-color:rgba(60,66,80,.7);box-shadow:0 4px 18px rgba(0,0,0,.4)}
+:root[data-theme="dark"] .hy-topo-graph-pathinfo::before{background:linear-gradient(120deg,rgba(255,255,255,.04) 0%,rgba(255,255,255,0) 35%,rgba(255,255,255,0) 65%,rgba(255,255,255,.03) 100%)}
+:root[data-theme="dark"] .hy-topo-pathinfo-lat.lat-mid,:root[data-theme="dark"] .hy-topo-pathinfo-item-lat.lat-mid{color:#f59e0b}
+:root[data-theme="dark"] .hy-topo-pathinfo-lat.lat-bad,:root[data-theme="dark"] .hy-topo-pathinfo-item-lat.lat-bad{color:#f87171}
+:root[data-theme="dark"] .hy-topo-pathinfo-lat.lat-na,:root[data-theme="dark"] .hy-topo-pathinfo-item-lat.lat-na,
+:root[data-theme="dark"] .hy-topo-pathinfo-toggle,:root[data-theme="dark"] .hy-topo-pathinfo-copy,
+:root[data-theme="dark"] .hy-topo-pathinfo-info-label,:root[data-theme="dark"] .hy-topo-pathinfo-section-title,
+:root[data-theme="dark"] .hy-topo-pathinfo-precision-tab{color:#a9b0be}
+:root[data-theme="dark"] .hy-topo-pathinfo-info-vals,:root[data-theme="dark"] .hy-topo-pathinfo-precision-tab:hover{color:#e3e6ed}
+:root[data-theme="dark"] .hy-topo-pathinfo-precision-tabs{background:rgba(255,255,255,.06)}
+:root[data-theme="dark"] .hy-topo-pathinfo-precision-tab.active{background:#2c313c;color:#e3e6ed;box-shadow:none}
+:root[data-theme="dark"] .hy-topo-pathinfo-expanded,:root[data-theme="dark"] .hy-topo-pathinfo-info{border-color:rgba(255,255,255,.08)}
