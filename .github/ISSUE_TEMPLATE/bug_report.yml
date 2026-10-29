@@ -142,7 +142,7 @@ body:
     attributes:
       label: Container / server logs
       description: |
-        Please attach logs captured with `DEBUG=true` — it exposes iptables probes, capability checks, TUN / xfrm packet flow, and strongSwan verbose output.
+        Please attach logs captured with `DEBUG=true` — it exposes iptables probes, capability checks, TUN packet flow, and verbose VPN server logs (IKEv2 / L2TP / OpenVPN).
 
         ```bash
         # Recreate with DEBUG and capture ~60 s of logs while reproducing

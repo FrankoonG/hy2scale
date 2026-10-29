@@ -213,7 +213,7 @@ func (a *App) dialPath(ctx context.Context, path, addr string) (net.Conn, error)
 func (a *App) dialPathIdx(ctx context.Context, path, addr string, clientIdx int) (net.Conn, error) {
 	parts := splitPath(path)
 	if len(parts) == 0 {
-		return net.DialTimeout("tcp", addr, 10*time.Second)
+		return a.dialDirect(ctx, "tcp", addr)
 	}
 	if len(parts) == 1 {
 		return a.node.DialTCPIdx(ctx, parts[0], addr, clientIdx)

@@ -6,16 +6,21 @@ import { getNode } from '@/api';
 import { useNodeStore } from '@/store/node';
 import LoginPage from '@/pages/LoginPage';
 import MainLayout from '@/components/MainLayout';
+import OverviewPage from '@/pages/OverviewPage';
 import NodesPage from '@/pages/NodesPage';
+import InterfacesPage from '@/pages/InterfacesPage';
 import UsersPage from '@/pages/UsersPage';
 import ProxiesPage from '@/pages/ProxiesPage';
+import EndpointsPage from '@/pages/EndpointsPage';
 import RulesPage from '@/pages/RulesPage';
 import TLSPage from '@/pages/TLSPage';
 import SettingsPage from '@/pages/SettingsPage';
+import LogsPage from '@/pages/LogsPage';
 
 function AuthenticatedRoutes() {
   const setNode = useNodeStore((s) => s.setNode);
   const setTopology = useNodeStore((s) => s.setTopology);
+  const setPathStatus = useNodeStore((s) => s.setPathStatus);
   const node = useNodeStore((s) => s.node);
   const navigate = useNavigate();
 
@@ -48,6 +53,18 @@ function AuthenticatedRoutes() {
     refetchInterval: 5000,
   });
 
+  // Exit path status (nested gate, disabled, offline) as routing sees it
+  useQuery({
+    queryKey: ['pathStatus'],
+    queryFn: async () => {
+      const { getPathStatus } = await import('@/api');
+      const list = await getPathStatus();
+      setPathStatus(list);
+      return list;
+    },
+    refetchInterval: 3000,
+  });
+
   // Listen for session expired events
   useEffect(() => {
     const handler = () => {
@@ -61,13 +78,17 @@ function AuthenticatedRoutes() {
   return (
     <MainLayout>
       <Routes>
+        <Route path="/overview" element={<OverviewPage />} />
         <Route path="/nodes" element={<NodesPage />} />
+        <Route path="/interfaces" element={<InterfacesPage />} />
         <Route path="/users" element={<UsersPage />} />
         <Route path="/proxies" element={<ProxiesPage />} />
+        <Route path="/endpoints" element={<EndpointsPage />} />
         <Route path="/rules" element={<RulesPage />} />
         <Route path="/tls" element={<TLSPage />} />
+        <Route path="/logs" element={<LogsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
-        <Route path="*" element={<Navigate to="/nodes" replace />} />
+        <Route path="*" element={<Navigate to="/overview" replace />} />
       </Routes>
     </MainLayout>
   );
@@ -86,7 +107,7 @@ export default function App() {
   }
 
   if (location.pathname === '/login') {
-    return <Navigate to={forcePasswordChange ? '/settings' : '/nodes'} replace />;
+    return <Navigate to={forcePasswordChange ? '/settings' : '/overview'} replace />;
   }
 
   // Force password change: only allow /settings

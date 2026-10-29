@@ -5,278 +5,157 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"sort"
+	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// ruleEngine manages iptables-based routing rules on the host.
-// It redirects matching traffic to a local transparent proxy,
-// which then dials through the specified exit node.
+// The rule engine routes destinations (IPs, CIDRs, ranges, domains) to
+// exits, per flow (L4). The rule table always exists: it routes the flows
+// of VPN and proxy users without their own exit (see route.go). Where the
+// node has host networking and NET_ADMIN it also captures this host's
+// matching traffic — its own and that of hosts routed through it — into
+// transparent listeners on loopback (rules_capture_linux.go).
 type ruleEngine struct {
-	app         *App
-	mu          sync.Mutex
-	proxyAddr   string // transparent proxy listen address
-	proxyPort   int
-	listener    net.Listener
-	cancel      context.CancelFunc
-	appliedIPT  map[string][]string // ruleID → iptables args (for cleanup)
-	domainIPs   map[string][]string // ruleID → resolved IPs (for domain rules)
-	dnsCancel   context.CancelFunc
-	destToExit  sync.Map // "ip:port" → exitVia (for proxy routing)
+	app        *App
+	mu         sync.Mutex
+	cancel     context.CancelFunc
+	appliedIPT map[string][]string // ruleID → capture lines (captureLines format)
+	domainIPs  map[string][]string // ruleID → resolved IPs (for domain rules)
+	dnsCancel  context.CancelFunc
+	destToExit sync.Map // "ruleID|target" → ruleExitInfo
+	mode       captureMode
+	mode6      captureMode
 }
 
-var (
-	ruleEng     *ruleEngine
-	ruleEngOnce sync.Once
-)
+var ruleEng *ruleEngine
 
 const (
 	ruleProxyPort    = 12380
 	ruleUDPProxyPort = 12381
-	ruleBypassMark   = 0x1234 // SO_MARK value to exclude proxy traffic from REDIRECT
+	ruleBypassMark   = 0x1234 // SO_MARK of our own dials: never captured
 )
 
-// StartRuleEngine initializes the rule engine if in host network mode.
-// Each rule decides independently whether to use TUN (via r.UseTun) or normal
-// relay proxy; the TUN engine starts lazily when the first TUN rule is
-// applied and stops automatically when the last one is removed.
+// StartRuleEngine builds the rule table and, when the node may, the capture.
 func (a *App) StartRuleEngine() {
-	if !CheckHostNetwork() {
-		debugLog("[rules] not in host network mode, rule engine disabled")
-		return
-	}
-	if ok, _ := CheckCapability(); !ok {
-		debugLog("[rules] no NET_ADMIN capability, rule engine disabled")
-		return
-	}
-
 	cfg := a.store.Get()
-	ruleEngOnce = sync.Once{} // allow re-init
-	ruleEng = &ruleEngine{
+	e := &ruleEngine{
 		app:        a,
-		proxyPort:  ruleProxyPort,
-		proxyAddr:  fmt.Sprintf("127.0.0.99:%d", ruleProxyPort),
 		appliedIPT: make(map[string][]string),
 		domainIPs:  make(map[string][]string),
 	}
-
-	// Add the proxy bind address to loopback
-	run("ip", "addr", "add", "127.0.0.99/32", "dev", "lo")
-
 	ctx, cancel := context.WithCancel(a.appCtx)
-	ruleEng.cancel = cancel
-
-	// Start transparent TCP proxy
-	ln, err := net.Listen("tcp", ruleEng.proxyAddr)
-	if err != nil {
-		log.Printf("[rules] proxy listen error: %v", err)
-		return
+	e.cancel = cancel
+	if !CheckHostNetwork() {
+		debugLog("[rules] not in host network mode: no capture")
+	} else if ok, _ := CheckCapability(); !ok {
+		debugLog("[rules] no NET_ADMIN: no capture")
+	} else {
+		e.startCapture(ctx, cfg)
 	}
-	ruleEng.listener = ln
-	go ruleEng.serveProxy(ctx)
-	go func() { <-ctx.Done(); ln.Close() }()
-
-	// Start UDP+TCP proxy — add bypass rules in both OUTPUT and PREROUTING
-	for _, chain := range []string{"OUTPUT", "PREROUTING"} {
-		for _, proto := range []string{"tcp", "udp"} {
-			iptRun(iptVariant(), "-t", "nat", "-I", chain, "-m", "mark", "--mark",
-				fmt.Sprintf("0x%x", ruleBypassMark), "-p", proto, "-j", "RETURN")
-		}
-	}
-	go ruleEng.serveUDPProxy(ctx)
-
-	log.Printf("[rules] engine started, proxy on %s", ruleEng.proxyAddr)
-
-	// Exclude relay peer ports from rules (prevent DNAT intercepting QUIC)
-	for _, cl := range cfg.Clients {
-		addr := extractPrimaryAddr(cl.Addr)
-		host, port, err := net.SplitHostPort(addr)
-		if err != nil {
-			continue
-		}
-		ips, _ := net.LookupHost(host)
-		for _, ip := range ips {
-			for _, chain := range []string{"OUTPUT", "PREROUTING"} {
-				for _, proto := range []string{"tcp", "udp"} {
-					iptRun(iptVariant(), "-t", "nat", "-I", chain,
-						"-d", ip, "-p", proto, "--dport", port, "-j", "RETURN")
-				}
-			}
-		}
-	}
-
-	// Apply all enabled rules
+	e.mu.Lock()
+	ruleEng = e
 	for _, r := range cfg.Rules {
 		if r.Enabled {
-			ruleEng.applyRule(r)
+			e.applyRule(r)
 		}
 	}
-
-	// Start periodic DNS resolver for domain rules
+	e.mu.Unlock()
 	dnsCtx, dnsCancel := context.WithCancel(ctx)
-	ruleEng.dnsCancel = dnsCancel
-	go ruleEng.dnsRefreshLoop(dnsCtx)
+	e.dnsCancel = dnsCancel
+	go e.dnsRefreshLoop(dnsCtx)
+	log.Printf("[rules] engine started (capture=%s, ipv6 capture=%s)", e.mode, e.mode6)
 }
 
-// StopRuleEngine removes all rules and stops the proxy.
+// startCapture opens the loopback listeners and installs each family's
+// capture whose listeners are up.
+func (e *ruleEngine) startCapture(ctx context.Context, cfg Config) {
+	captureTeardown()
+	exec.Command("ip", "addr", "add", ruleProxyIP+"/32", "dev", "lo").Run()
+	for _, v6 := range []bool{false, true} {
+		ip := ruleProxyIP
+		if v6 {
+			ip = "[" + ruleProxyIP6 + "]"
+		}
+		ln, err := listenTCPTransparent(fmt.Sprintf("%s:%d", ip, ruleProxyPort))
+		if err != nil {
+			log.Printf("[rules] capture listen %s: %v", ip, err)
+			continue
+		}
+		uln, err := listenUDPTransparent(fmt.Sprintf("%s:%d", ip, ruleUDPProxyPort))
+		if err != nil {
+			ln.Close()
+			log.Printf("[rules] capture UDP listen %s: %v", ip, err)
+			continue
+		}
+		mode := captureSetup(v6, cfg)
+		if mode == captureNone {
+			ln.Close()
+			uln.Close()
+			continue
+		}
+		if v6 {
+			e.mode6 = mode
+		} else {
+			e.mode = mode
+		}
+		go e.serveProxy(ctx, ln)
+		go e.serveUDPProxy(ctx, uln)
+		go func() { <-ctx.Done(); ln.Close(); uln.Close() }()
+	}
+	if e.mode == captureDNAT {
+		log.Printf("[rules] capture=dnat: only this node's own traffic is captured (no TPROXY)")
+	}
+}
+
+// StopRuleEngine removes the capture and stops the engine.
 func (a *App) StopRuleEngine() {
-	if ruleEng == nil {
+	e := ruleEng
+	if e == nil {
 		return
 	}
-	ruleEng.mu.Lock()
-	defer ruleEng.mu.Unlock()
-	// Remove all iptables rules
-	for id := range ruleEng.appliedIPT {
-		ruleEng.removeIPTRulesLocked(id)
+	e.mu.Lock()
+	for id := range e.appliedIPT {
+		e.removeRuleLocked(id)
 	}
-	if ruleEng.dnsCancel != nil {
-		ruleEng.dnsCancel()
+	e.mu.Unlock()
+	captureTeardown()
+	if e.dnsCancel != nil {
+		e.dnsCancel()
 	}
-	if ruleEng.cancel != nil {
-		ruleEng.cancel()
-	}
-	if ruleEng.listener != nil {
-		ruleEng.listener.Close()
+	if e.cancel != nil {
+		e.cancel()
 	}
 	log.Printf("[rules] engine stopped")
 }
 
-// RuleEngineAvailable returns true if the rule engine can operate.
-func RuleEngineAvailable() bool {
-	return CheckHostNetwork()
-}
-
-// TunModeActive returns whether the TUN IP forwarding engine is running.
-func TunModeActive() bool {
-	return ipfwdActive.Load()
-}
-
-// RuleUsesTun reports whether an enabled rule is actually running through
-// the TUN path right now (as opposed to the relay proxy fallback). A rule
-// with UseTun=true only takes the TUN path when the exit peer is TUN-capable
-// and the target is locally routable.
-func (a *App) RuleUsesTun(r RoutingRule) bool {
-	if !r.Enabled || r.Type != "ip" || !r.UseTun || r.ExitVia == "" {
-		return false
-	}
-	if !a.node.IsPeerTunCapable(r.ExitVia) {
-		return false
-	}
-	return a.isRuleRoutable(r)
-}
-
-func (a *App) isRuleRoutable(r RoutingRule) bool {
-	return isTargetRoutableCheck(r.Targets)
-}
-
-// reconcileRuleModes re-evaluates every enabled rule's TUN eligibility and
-// re-applies any whose current mode (proxy vs TUN) doesn't match what
-// RuleUsesTun says it should be. Called periodically so rules flip to TUN
-// once their exit peer comes online, and fall back to proxy when it drops.
-func (a *App) reconcileRuleModes() {
+// RuleCaptureMode reports how this host's own and routed traffic is
+// captured: "tproxy", "dnat" (this node only) or "none" (rules then apply
+// to VPN and proxy users only).
+func RuleCaptureMode() string {
 	if ruleEng == nil {
-		return
+		return captureNone.String()
 	}
-	cfg := a.store.Get()
-	ruleEng.mu.Lock()
-	// Snapshot current mode per rule: if eng.appliedIPT[id] has any entry
-	// starting with "iprule:" it is currently on the TUN path, otherwise proxy.
-	currentOnTun := make(map[string]bool)
-	for id, args := range ruleEng.appliedIPT {
-		for _, a := range args {
-			if len(a) > 7 && a[:7] == "iprule:" {
-				currentOnTun[id] = true
-				break
-			}
-		}
-	}
-	ruleEng.mu.Unlock()
-
-	for _, r := range cfg.Rules {
-		if !r.Enabled || r.Type != "ip" {
-			continue
-		}
-		wantTun := a.RuleUsesTun(r)
-		haveTun := currentOnTun[r.ID]
-		if wantTun != haveTun {
-			// Re-read the rule right before applying to avoid overwriting a
-			// concurrent UpdateRule that just persisted new fields (priority,
-			// exit_via, etc.) between our snapshot and now.
-			latest := a.store.Get()
-			var fresh *RoutingRule
-			for i := range latest.Rules {
-				if latest.Rules[i].ID == r.ID {
-					fresh = &latest.Rules[i]
-					break
-				}
-			}
-			if fresh == nil || !fresh.Enabled {
-				continue
-			}
-			if a.RuleUsesTun(*fresh) == haveTun {
-				continue // state already matches after re-read
-			}
-			log.Printf("[rules] reconcile %s: re-apply (wantTun=%v haveTun=%v)", fresh.Name, !haveTun, haveTun)
-			ruleEng.mu.Lock()
-			ruleEng.removeIPTRulesLocked(fresh.ID)
-			ruleEng.mu.Unlock()
-			a.ensureTunEngineForRules()
-			ruleEng.mu.Lock()
-			ruleEng.applyRule(*fresh)
-			ruleEng.mu.Unlock()
-		}
-	}
-	// After reconciling, stop TUN engine if nothing uses it
-	a.ensureTunEngineForRules()
+	return ruleEng.mode.String()
 }
 
-// StartRuleReconciler periodically re-evaluates rule modes (TUN vs proxy).
-func (a *App) StartRuleReconciler(ctx context.Context) {
-	go func() {
-		t := time.NewTicker(10 * time.Second)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				a.reconcileRuleModes()
-			}
-		}
-	}()
+// RuleEngineAvailable reports whether routing rules can be used (always:
+// without capture they still route VPN and proxy users).
+func RuleEngineAvailable() bool { return true }
+
+// RuleExitFor returns the exit of the enabled routing rule that owns host
+// (an IP literal or a host name), for flows of users without their own exit.
+func RuleExitFor(host string) (via, mode string, paths []string, ok bool) {
+	if ruleEng == nil {
+		return "", "", nil, false
+	}
+	via, mode, paths = ruleEng.lookupExitFull(host)
+	return via, mode, paths, via != ""
 }
 
-// ensureTunEngineForRules starts the TUN engine if any enabled rule currently
-// qualifies for TUN, or stops it if none do. Safe to call repeatedly.
-func (a *App) ensureTunEngineForRules() {
-	cfg := a.store.Get()
-	var tunTargets []ipfwdTarget
-	for _, r := range cfg.Rules {
-		if !a.RuleUsesTun(r) {
-			continue
-		}
-		tunTargets = append(tunTargets, ipfwdTarget{
-			cidrs:   r.Targets,
-			exitVia: r.ExitVia,
-			ruleID:  r.ID,
-		})
-	}
-	if len(tunTargets) == 0 {
-		if ipfwdActive.Load() {
-			a.StopIPForwarding()
-		}
-		return
-	}
-	if !ipfwdActive.Load() {
-		if err := a.StartIPForwarding(tunTargets); err != nil {
-			log.Printf("[rules] TUN engine start failed: %v — affected rules will run as proxy", err)
-		}
-	}
-}
-
-// ApplyRule enables a routing rule (adds iptables + proxy mapping).
+// ApplyRule enables a routing rule.
 func (a *App) ApplyRule(r RoutingRule) {
 	if ruleEng == nil {
 		return
@@ -286,260 +165,70 @@ func (a *App) ApplyRule(r RoutingRule) {
 	ruleEng.applyRule(r)
 }
 
-// RemoveRule disables a routing rule (removes iptables + proxy mapping).
+// RemoveRule disables a routing rule.
 func (a *App) RemoveRule(id string) {
 	if ruleEng == nil {
 		return
 	}
 	ruleEng.mu.Lock()
-	ruleEng.removeIPTRulesLocked(id)
-	ruleEng.destToExit.Range(func(k, v any) bool {
-		if exit, ok := v.(ruleExitInfo); ok && exit.ruleID == id {
-			ruleEng.destToExit.Delete(k)
-		}
-		return true
-	})
-	ruleEng.mu.Unlock()
-	// After removing, re-evaluate whether the TUN engine should still run.
-	a.ensureTunEngineForRules()
+	defer ruleEng.mu.Unlock()
+	ruleEng.removeRuleLocked(id)
 }
 
 type ruleExitInfo struct {
 	ruleID    string
+	target    string // IP, CIDR, a-b range, or "name:<domain>"
+	priority  int
 	exitVia   string
 	exitMode  string
 	exitPaths []string
 }
 
 func (e *ruleEngine) applyRule(r RoutingRule) {
+	e.removeRuleLocked(r.ID)
 	switch r.Type {
 	case "ip":
-		e.applyIPRule(r)
+		var lines []string
+		for _, target := range r.Targets {
+			target = strings.TrimSpace(target)
+			if target == "" {
+				continue
+			}
+			lines = append(lines, e.captureLines(target)...)
+			e.registerTargetExit(r, target)
+		}
+		e.installLines(r.ID, lines)
+		log.Printf("[rules] applied IP rule %q (prio %d): %d targets → exit %s", r.Name, r.Priority, len(r.Targets), r.ExitVia)
 	case "domain":
 		e.applyDomainRule(r)
 	}
 }
 
-func (e *ruleEngine) applyIPRule(r RoutingRule) {
-	// Remove old rules for this ID first
-	e.removeIPTRulesLocked(r.ID)
-
-	// Per-rule TUN: if the rule requests TUN AND the exit peer is capable AND
-	// the target is routable, take the TUN path. Otherwise fall through to
-	// the normal proxy DNAT path.
-	if e.app.RuleUsesTun(r) {
-		// Lazily start the TUN engine if this is the first TUN rule
-		e.app.ensureTunEngineForRules()
-		if ipfwdActive.Load() {
-			e.applyIPRuleTun(r)
-			return
-		}
-		log.Printf("[rules] rule %q requested TUN but engine failed to start — falling back to proxy", r.Name)
+func (e *ruleEngine) installLines(id string, lines []string) {
+	for _, l := range lines {
+		runCaptureLine(l, false)
 	}
-
-	// Proxy mode: DNAT to transparent proxy
-	var iptArgs []string
-	udpProxyAddr := fmt.Sprintf("127.0.0.99:%d", ruleUDPProxyPort)
-	for _, target := range r.Targets {
-		target = strings.TrimSpace(target)
-		if target == "" {
-			continue
-		}
-		for _, chain := range []string{"OUTPUT", "PREROUTING"} {
-			if strings.Contains(target, "-") && !strings.Contains(target, "/") {
-				for _, proto := range []string{"tcp", "udp"} {
-					dst := e.proxyAddr
-					if proto == "udp" {
-						dst = udpProxyAddr
-					}
-					args := []string{"-t", "nat", "-A", chain,
-						"-m", "iprange", "--dst-range", target,
-						"-p", proto, "-j", "DNAT",
-						"--to-destination", dst}
-					iptRun(iptVariant(), args...)
-					iptArgs = append(iptArgs, strings.Join(args, " "))
-				}
-			} else {
-				for _, proto := range []string{"tcp", "udp"} {
-					dst := e.proxyAddr
-					if proto == "udp" {
-						dst = udpProxyAddr
-					}
-					args := []string{"-t", "nat", "-A", chain,
-						"-d", target,
-						"-p", proto, "-j", "DNAT",
-						"--to-destination", dst}
-					iptRun(iptVariant(), args...)
-					iptArgs = append(iptArgs, strings.Join(args, " "))
-				}
-			}
-		}
-		e.registerTargetExit(r.ID, target, r.ExitVia, r.ExitMode, r.ExitPaths)
-	}
-	e.appliedIPT[r.ID] = iptArgs
-	log.Printf("[rules] applied IP rule %q (prio %d): %d targets → exit %s (proxy)", r.Name, r.Priority, len(r.Targets), r.ExitVia)
-	// Re-sort proxy chain so higher-priority rules are evaluated first.
-	e.resortProxyChain()
+	e.appliedIPT[id] = lines
 }
 
-// resortProxyChain removes every proxy (DNAT) iptables entry installed by
-// the rule engine and re-inserts them in priority order (desc). Rules with
-// higher Priority end up earlier in the chain so they win on CIDR overlap.
-// TUN rules are untouched (they live in the routing layer via ip rule).
-func (e *ruleEngine) resortProxyChain() {
-	cfg := e.app.store.Get()
-	idToRule := make(map[string]RoutingRule)
-	for _, r := range cfg.Rules {
-		idToRule[r.ID] = r
-	}
-	type entry struct {
-		id   string
-		rule RoutingRule
-		args []string
-	}
-	var proxyEntries []entry
-	for id, args := range e.appliedIPT {
-		r, ok := idToRule[id]
-		if !ok || !r.Enabled {
-			continue
-		}
-		isProxy := false
-		for _, a := range args {
-			if !strings.HasPrefix(a, "iprule:") {
-				isProxy = true
-				break
-			}
-		}
-		if !isProxy {
-			continue
-		}
-		proxyEntries = append(proxyEntries, entry{id, r, args})
-	}
-	if len(proxyEntries) <= 1 {
-		return
-	}
-	// Remove every proxy line
-	for _, pe := range proxyEntries {
-		for _, argStr := range pe.args {
-			if strings.HasPrefix(argStr, "iprule:") {
-				continue
-			}
-			parts := strings.Fields(argStr)
-			for i, p := range parts {
-				if p == "-A" {
-					parts[i] = "-D"
-					break
-				}
-			}
-			iptExec(iptVariant(), parts...).Run()
-		}
-	}
-	// Sort: Priority desc, then ID asc for deterministic tie-break
-	sort.SliceStable(proxyEntries, func(i, j int) bool {
-		if proxyEntries[i].rule.Priority != proxyEntries[j].rule.Priority {
-			return proxyEntries[i].rule.Priority > proxyEntries[j].rule.Priority
-		}
-		return proxyEntries[i].id < proxyEntries[j].id
-	})
-	// Re-add in sorted order (each chain is -A, so first added = first match)
-	for _, pe := range proxyEntries {
-		for _, argStr := range pe.args {
-			if strings.HasPrefix(argStr, "iprule:") {
-				continue
-			}
-			parts := strings.Fields(argStr)
-			iptRun(iptVariant(), parts...)
-		}
-	}
-}
-
-// applyIPRuleTun adds ip routing rules to capture traffic into the TUN device.
-// Rule Priority (user-facing, higher=wins) maps to Linux ip rule priority
-// (kernel, lower=wins) as prio = 100 - clamp(Priority, -99, 99). Default
-// Priority 0 → kernel priority 100 (the historical value).
-func (e *ruleEngine) applyIPRuleTun(r RoutingRule) {
-	kernelPrio := 100 - r.Priority
-	if kernelPrio < 1 {
-		kernelPrio = 1
-	}
-	if kernelPrio > 32765 {
-		kernelPrio = 32765
-	}
-	prioStr := fmt.Sprintf("%d", kernelPrio)
-	var ipRuleArgs []string
-	for _, target := range r.Targets {
-		target = strings.TrimSpace(target)
-		if target == "" {
-			continue
-		}
-		run("ip", "rule", "add", "to", target, "lookup", ipfwdTable, "priority", prioStr)
-		ipRuleArgs = append(ipRuleArgs, "to "+target+" lookup "+ipfwdTable+" priority "+prioStr)
-		e.registerTargetExit(r.ID, target, r.ExitVia, r.ExitMode, r.ExitPaths)
-	}
-	// Store for cleanup (use appliedIPT with "iprule:" prefix to distinguish)
-	for _, arg := range ipRuleArgs {
-		e.appliedIPT[r.ID] = append(e.appliedIPT[r.ID], "iprule:"+arg)
-	}
-	// Update TUN target list for packet routing
-	if ipfwdEng != nil {
-		ipfwdEng.addTargets(r.ID, r.Targets, r.ExitVia)
-	}
-	log.Printf("[rules] applied IP rule %q (prio %d, kernel %s): %d targets → exit %s (tun)", r.Name, r.Priority, prioStr, len(r.Targets), r.ExitVia)
-}
-
-// isTargetRoutableCheck checks if the first target in the list is reachable
-// via the host's routing table (e.g. through a WG tunnel or direct route).
-func isTargetRoutableCheck(targets []string) bool {
-	for _, t := range targets {
-		t = strings.TrimSpace(t)
-		if t == "" {
-			continue
-		}
-		// Extract a test IP from the target (CIDR or range)
-		testIP := t
-		if idx := strings.Index(t, "/"); idx >= 0 {
-			testIP = t[:idx]
-		}
-		if idx := strings.Index(t, "-"); idx >= 0 {
-			testIP = t[:idx]
-		}
-		ip := net.ParseIP(testIP)
-		if ip == nil {
-			continue
-		}
-		// Try dialing UDP with a very short timeout to check routability
-		conn, err := net.DialTimeout("udp", net.JoinHostPort(testIP, "1"), 100*time.Millisecond)
-		if err != nil {
-			return false
-		}
-		localAddr := conn.LocalAddr().String()
-		conn.Close()
-		// If local address is NOT loopback and NOT the target IP itself,
-		// the target is routable via a real interface
-		host, _, _ := net.SplitHostPort(localAddr)
-		if host != "" && host != "127.0.0.1" && host != testIP {
-			log.Printf("[rules] target %s routable via %s", testIP, host)
-			return true
-		}
-		return false
-	}
-	return false
-}
-
+// applyDomainRule registers the domains themselves (for flows that carry a
+// host name) and their current A/AAAA addresses (for IP flows and capture).
 func (e *ruleEngine) applyDomainRule(r RoutingRule) {
-	e.removeIPTRulesLocked(r.ID)
-
-	var ruleArgs []string
-	var resolvedIPs []string
+	e.removeRuleLocked(r.ID)
+	var lines, resolved []string
 	for _, domain := range r.Targets {
-		domain = strings.TrimSpace(domain)
+		domain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
 		if domain == "" {
 			continue
 		}
-		// Routes through the relay when DNSResolver is enabled — keeps the
-		// DNS query out of the host's polluted resolv.conf so we install
-		// real upstream IPs in iptables/ip-rule, not poisoned ones.
-		// Falls back to net.LookupHost when disabled or upstream fails.
+		// "*.example.com" = its subdomains: matched by name, nothing to resolve
+		if base, wild := strings.CutPrefix(domain, "*."); wild {
+			e.registerTargetExit(r, "name:"+base)
+			continue
+		}
+		e.registerTargetExit(r, "name:"+domain)
+		// through the exit's resolver when DNSResolver is on (keeps a
+		// polluted local resolv.conf out of the table)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		ips, err := e.app.ResolveViaExit(ctx, domain, r.ExitVia)
 		cancel()
@@ -548,130 +237,138 @@ func (e *ruleEngine) applyDomainRule(r RoutingRule) {
 			continue
 		}
 		for _, ip := range ips {
-			if ipfwdActive.Load() {
-				// TUN mode: add ip rule for each resolved IP
-				target := ip + "/32"
-				run("ip", "rule", "add", "to", target, "lookup", ipfwdTable, "priority", "100")
-				ruleArgs = append(ruleArgs, "iprule:to "+target+" lookup "+ipfwdTable+" priority 100")
-			} else {
-				// Proxy mode: DNAT
-				udpDst := fmt.Sprintf("127.0.0.99:%d", ruleUDPProxyPort)
-				for _, chain := range []string{"OUTPUT", "PREROUTING"} {
-					for _, proto := range []string{"tcp", "udp"} {
-						dst := e.proxyAddr
-						if proto == "udp" {
-							dst = udpDst
-						}
-						args := []string{"-t", "nat", "-A", chain,
-							"-d", ip,
-							"-p", proto, "-j", "DNAT",
-							"--to-destination", dst}
-						iptRun(iptVariant(), args...)
-						ruleArgs = append(ruleArgs, strings.Join(args, " "))
-					}
-				}
+			if net.ParseIP(ip) == nil {
+				continue
 			}
-			resolvedIPs = append(resolvedIPs, ip)
-			e.destToExit.Store(ip, ruleExitInfo{ruleID: r.ID, exitVia: r.ExitVia, exitMode: r.ExitMode, exitPaths: r.ExitPaths})
+			lines = append(lines, e.captureLines(ip)...)
+			e.registerTargetExit(r, ip)
+			resolved = append(resolved, ip)
 		}
 	}
-	e.appliedIPT[r.ID] = ruleArgs
-	e.domainIPs[r.ID] = resolvedIPs
-	// Update TUN target list for domain resolved IPs
-	if ipfwdActive.Load() && ipfwdEng != nil {
-		var cidrs []string
-		for _, ip := range resolvedIPs {
-			cidrs = append(cidrs, ip+"/32")
-		}
-		ipfwdEng.addTargets(r.ID, cidrs, r.ExitVia)
-	}
-	mode := "proxy"
-	if ipfwdActive.Load() {
-		mode = "tun"
-	}
-	log.Printf("[rules] applied domain rule %q: %d domains → %d IPs → exit %s (%s)",
-		r.Name, len(r.Targets), len(resolvedIPs), r.ExitVia, mode)
+	e.installLines(r.ID, lines)
+	e.domainIPs[r.ID] = resolved
+	log.Printf("[rules] applied domain rule %q: %d domains → %d IPs → exit %s", r.Name, len(r.Targets), len(resolved), r.ExitVia)
 }
 
-func (e *ruleEngine) registerTargetExit(ruleID, target, exitVia, exitMode string, exitPaths []string) {
-	e.destToExit.Store(target, ruleExitInfo{ruleID: ruleID, exitVia: exitVia, exitMode: exitMode, exitPaths: exitPaths})
+func (e *ruleEngine) registerTargetExit(r RoutingRule, target string) {
+	e.destToExit.Store(r.ID+"|"+target, ruleExitInfo{ruleID: r.ID, target: target, priority: r.Priority,
+		exitVia: r.ExitVia, exitMode: r.ExitMode, exitPaths: r.ExitPaths})
 }
 
-func (e *ruleEngine) removeIPTRulesLocked(id string) {
-	args, ok := e.appliedIPT[id]
-	if !ok {
-		return
-	}
-	for _, argStr := range args {
-		// Handle ip rule entries (TUN mode)
-		if strings.HasPrefix(argStr, "iprule:") {
-			ruleSpec := strings.TrimPrefix(argStr, "iprule:")
-			parts := append([]string{"rule", "del"}, strings.Fields(ruleSpec)...)
-			run("ip", parts...)
-			continue
-		}
-		// Handle iptables entries (proxy mode)
-		parts := strings.Fields(argStr)
-		for i, p := range parts {
-			if p == "-A" {
-				parts[i] = "-D"
-				break
-			}
-		}
-		cmd := iptExec(iptVariant(), parts...)
-		cmd.Run()
-	}
-	// Remove TUN targets
-	if ipfwdEng != nil {
-		ipfwdEng.removeTargetsForRule(id)
+func (e *ruleEngine) removeRuleLocked(id string) {
+	for _, l := range e.appliedIPT[id] {
+		runCaptureLine(l, true)
 	}
 	delete(e.appliedIPT, id)
 	delete(e.domainIPs, id)
-}
-
-// lookupExit finds the exit route and mode for a destination IP.
-func (e *ruleEngine) lookupExit(dstIP string) (string, string) {
-	via, mode, _ := e.lookupExitFull(dstIP)
-	return via, mode
-}
-
-// lookupExitFull is like lookupExit but also returns the configured exit_paths
-// so callers can honour quality-mode failover across multiple paths.
-func (e *ruleEngine) lookupExitFull(dstIP string) (string, string, []string) {
-	var resultVia, resultMode string
-	var resultPaths []string
 	e.destToExit.Range(func(k, v any) bool {
-		target := k.(string)
-		info := v.(ruleExitInfo)
-		if target == dstIP {
-			resultVia, resultMode, resultPaths = info.exitVia, info.exitMode, info.exitPaths
-			return false
-		}
-		if strings.Contains(target, "/") {
-			_, cidr, err := net.ParseCIDR(target)
-			if err == nil && cidr.Contains(net.ParseIP(dstIP)) {
-				resultVia, resultMode, resultPaths = info.exitVia, info.exitMode, info.exitPaths
-				return false
-			}
-		}
-		if strings.Contains(target, "-") && !strings.Contains(target, "/") {
-			parts := strings.SplitN(target, "-", 2)
-			if len(parts) == 2 {
-				startIP := net.ParseIP(strings.TrimSpace(parts[0]))
-				endIP := net.ParseIP(strings.TrimSpace(parts[1]))
-				ip := net.ParseIP(dstIP)
-				if startIP != nil && endIP != nil && ip != nil {
-					if bytesCompare(ip.To4(), startIP.To4()) >= 0 &&
-						bytesCompare(ip.To4(), endIP.To4()) <= 0 {
-						resultVia, resultMode, resultPaths = info.exitVia, info.exitMode, info.exitPaths
-						return false
-					}
-				}
-			}
+		if v.(ruleExitInfo).ruleID == id {
+			e.destToExit.Delete(k)
 		}
 		return true
 	})
-	return resultVia, resultMode, resultPaths
+}
+
+// lookupExitFull returns the exit of the rule that owns host: the highest
+// Priority among the rules whose targets contain it, then the most specific
+// target, then the lowest rule ID — the same answer for every flow.
+func (e *ruleEngine) lookupExitFull(host string) (string, string, []string) {
+	host = strings.Trim(host, "[]")
+	ip := net.ParseIP(host)
+	name := ""
+	if ip == nil {
+		name = strings.ToLower(strings.TrimSuffix(host, "."))
+		if name == "" {
+			return "", "", nil
+		}
+	}
+	var best *ruleExitInfo
+	bestSpec := -1
+	e.destToExit.Range(func(_, v any) bool {
+		info := v.(ruleExitInfo)
+		var spec int
+		if ip != nil {
+			spec = targetSpecificity(info.target, ip)
+		} else {
+			spec = nameSpecificity(info.target, name)
+		}
+		if spec < 0 {
+			return true
+		}
+		if best == nil || info.priority > best.priority ||
+			(info.priority == best.priority && (spec > bestSpec || (spec == bestSpec && info.ruleID < best.ruleID))) {
+			i := info
+			best, bestSpec = &i, spec
+		}
+		return true
+	})
+	if best == nil {
+		return "", "", nil
+	}
+	return best.exitVia, best.exitMode, best.exitPaths
+}
+
+// targetSpecificity reports how narrowly target (IP, CIDR or a-b range, of
+// either family) matches ip, in prefix bits, or -1 if it does not.
+func targetSpecificity(target string, ip net.IP) int {
+	if strings.HasPrefix(target, "name:") {
+		return -1
+	}
+	if strings.Contains(target, "/") {
+		_, cidr, err := net.ParseCIDR(target)
+		if err != nil || !cidr.Contains(ip) {
+			return -1
+		}
+		ones, _ := cidr.Mask.Size()
+		return ones
+	}
+	if lo, hi, ok := strings.Cut(target, "-"); ok {
+		start, end := normIP(net.ParseIP(strings.TrimSpace(lo))), normIP(net.ParseIP(strings.TrimSpace(hi)))
+		x := normIP(ip)
+		if start == nil || end == nil || len(start) != len(x) || len(end) != len(x) ||
+			bytesCompare(x, start) < 0 || bytesCompare(x, end) > 0 {
+			return -1
+		}
+		return commonPrefixBits(start, end)
+	}
+	if t := net.ParseIP(target); t != nil && t.Equal(ip) {
+		return len(normIP(ip)) * 8
+	}
+	return -1
+}
+
+// nameSpecificity matches a host name against a "name:<domain>" target
+// (the domain or any subdomain); longer domains are more specific.
+func nameSpecificity(target, name string) int {
+	d, ok := strings.CutPrefix(target, "name:")
+	if !ok || (name != d && !strings.HasSuffix(name, "."+d)) {
+		return -1
+	}
+	return len(d)
+}
+
+func normIP(ip net.IP) net.IP {
+	if v4 := ip.To4(); v4 != nil {
+		return v4
+	}
+	return ip
+}
+
+func commonPrefixBits(a, b []byte) int {
+	n := 0
+	for i := range a {
+		x := a[i] ^ b[i]
+		if x == 0 {
+			n += 8
+			continue
+		}
+		for x&0x80 == 0 {
+			n++
+			x <<= 1
+		}
+		break
+	}
+	return n
 }
 
 func bytesCompare(a, b []byte) int {
@@ -686,10 +383,10 @@ func bytesCompare(a, b []byte) int {
 	return 0
 }
 
-// serveProxy handles redirected TCP connections.
-func (e *ruleEngine) serveProxy(ctx context.Context) {
+// serveProxy handles captured TCP connections.
+func (e *ruleEngine) serveProxy(ctx context.Context, ln net.Listener) {
 	for {
-		conn, err := e.listener.Accept()
+		conn, err := ln.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -700,179 +397,272 @@ func (e *ruleEngine) serveProxy(ctx context.Context) {
 	}
 }
 
+// capturedDst is a captured connection's original destination: TPROXY
+// leaves it as the local address, IPv4 DNAT needs SO_ORIGINAL_DST.
+func capturedDst(conn net.Conn) (string, error) {
+	la, ok := conn.LocalAddr().(*net.TCPAddr)
+	if ok && !la.IP.Equal(net.ParseIP(ruleProxyIP)) && !la.IP.Equal(net.ParseIP(ruleProxyIP6)) {
+		return la.String(), nil
+	}
+	return getOriginalDst(conn)
+}
+
 func (e *ruleEngine) handleConn(parentCtx context.Context, conn net.Conn) {
 	defer conn.Close()
 	ctx, cancel := context.WithCancel(parentCtx)
 	defer cancel()
 
-	origDst, err := getOriginalDst(conn)
+	origDst, err := capturedDst(conn)
 	if err != nil {
-		debugLog("[rules] getOriginalDst failed: %v", err)
+		debugLog("[rules] original destination: %v", err)
 		return
 	}
-
 	host, _, _ := net.SplitHostPort(origDst)
 	exitVia, exitMode, exitPaths := e.lookupExitFull(host)
+	var remote net.Conn
 	if exitVia == "" {
-		debugLog("[rules] no exit for %s, direct", origDst)
-		remote, err := net.DialTimeout("tcp", origDst, 10*time.Second)
-		if err != nil {
-			return
-		}
-		defer remote.Close()
-		done := make(chan struct{})
-		go func() {
-			// Upload: client → remote.
-			copyCtx(ctx, remote, conn)
-			halfCloseAndBound(remote)
-			done <- struct{}{}
-		}()
-		// Download: remote → client.
-		copyCtx(ctx, conn, remote)
-		halfCloseAndBound(conn)
-		<-done
-		cancel()
+		// no rule owns it any more (removed while the flow was in flight)
+		remote, err = dialTCPMarked(origDst, ruleBypassMark)
+	} else {
+		// Fail closed: a rule-matched flow only ever leaves through its exit.
+		remote, err = e.app.dialExitWithPaths(ctx, exitVia, exitPaths, exitMode, origDst)
+	}
+	if err != nil {
+		log.Printf("[rules] %s via %q: %v", origDst, exitVia, err)
 		return
 	}
-
-	log.Printf("[rules] %s → exit %s mode=%s", origDst, exitVia, exitMode)
-	// Route through hy2 relay network (exit node dials the actual destination).
-	// exitPaths is honoured for quality failover; empty falls back to single primary.
-	remote, err := e.app.dialExitWithPaths(ctx, exitVia, exitPaths, exitMode, origDst)
-	if err != nil {
-		// Fallback: direct dial with SO_MARK bypass (for TUN/routing mode)
-		remote, err = dialTCPMarked(origDst, ruleBypassMark)
-		if err != nil {
-			log.Printf("[rules] dial %s error: %v", origDst, err)
-			return
-		}
-		log.Printf("[rules] %s connected (direct fallback) local=%s remote=%s", origDst, remote.LocalAddr(), remote.RemoteAddr())
-	} else {
-		log.Printf("[rules] %s connected via %s", origDst, exitVia)
-	}
+	debugLog("[rules] %s connected via %q", origDst, exitVia)
 	defer remote.Close()
 	done := make(chan struct{})
 	go func() {
-		n, err := copyCtx(ctx, remote, conn)
-		log.Printf("[rules] %s relay→client: %d bytes, err=%v", origDst, n, err)
+		copyCtx(ctx, remote, conn)
+		halfCloseAndBound(remote)
 		done <- struct{}{}
 	}()
-	n, err2 := copyCtx(ctx, conn, remote)
-	log.Printf("[rules] %s client→relay: %d bytes, err=%v", origDst, n, err2)
+	copyCtx(ctx, conn, remote)
+	halfCloseAndBound(conn)
 	<-done
 }
 
-// serveUDPProxy handles redirected UDP packets.
-// Uses conntrack to recover original destination since IP_RECVORIGDSTADDR
-// doesn't work for OUTPUT chain REDIRECT/DNAT on Linux.
-func (e *ruleEngine) serveUDPProxy(ctx context.Context) {
-	udpAddr, _ := net.ResolveUDPAddr("udp4", fmt.Sprintf("127.0.0.99:%d", ruleUDPProxyPort))
-	udpConn, err := net.ListenUDP("udp4", udpAddr)
-	if err != nil {
-		log.Printf("[rules] UDP proxy listen error: %v", err)
-		return
-	}
-	go func() { <-ctx.Done(); udpConn.Close() }()
+const (
+	ruleUDPIdle     = 120 * time.Second
+	ruleUDPDNSIdle  = 20 * time.Second
+	ruleUDPMaxFlows = 4096
+	ruleUDPQueue    = 64
+)
 
+// udpFlow is one captured UDP flow: a (client, original destination) pair
+// carried through the exit by one exit-side socket.
+type udpFlow struct {
+	key    string
+	client *net.UDPAddr
+	dst    *net.UDPAddr
+	idle   time.Duration
+	last   atomic.Int64
+	// reply sends a datagram back to the client from dst
+	reply func([]byte) error
+	// local: the connected transparent socket (tproxy), closed with the flow
+	local *net.UDPConn
+
+	mu     sync.Mutex
+	remote net.Conn
+	queue  [][]byte
+	closed bool
+}
+
+func (f *udpFlow) touch() { f.last.Store(time.Now().UnixNano()) }
+
+// send forwards a client datagram, queueing it while the exit dial is
+// still in flight.
+func (f *udpFlow) send(b []byte) {
+	f.touch()
+	f.mu.Lock()
+	r := f.remote
+	if r == nil && !f.closed && len(f.queue) < ruleUDPQueue {
+		f.queue = append(f.queue, append([]byte(nil), b...))
+	}
+	f.mu.Unlock()
+	if r != nil {
+		r.Write(b)
+	}
+}
+
+func (f *udpFlow) close() {
+	f.mu.Lock()
+	f.closed = true
+	r := f.remote
+	f.queue = nil
+	f.mu.Unlock()
+	if r != nil {
+		r.Close()
+	}
+	if f.local != nil {
+		f.local.Close()
+	}
+}
+
+// serveUDPProxy handles captured UDP on one listener. Each (client,
+// destination) pair is its own flow and exit-side socket, so one client
+// socket may talk to many destinations. Under TPROXY the destination comes
+// with every datagram and replies leave from it; under DNAT conntrack
+// supplies it and un-NATs the replies sent from the listener.
+func (e *ruleEngine) serveUDPProxy(ctx context.Context, ln *net.UDPConn) {
+	var mu sync.Mutex
+	flows := map[string]*udpFlow{}
+	dnatDst := map[string]*net.UDPAddr{} // DNAT mode: client → original destination
+	full := false
+	remove := func(f *udpFlow) {
+		mu.Lock()
+		if flows[f.key] == f {
+			delete(flows, f.key)
+			if d := dnatDst[f.client.String()]; d != nil && d.String() == f.dst.String() {
+				delete(dnatDst, f.client.String())
+			}
+		}
+		mu.Unlock()
+		f.close()
+	}
+	go func() {
+		<-ctx.Done()
+		mu.Lock()
+		all := make([]*udpFlow, 0, len(flows))
+		for _, f := range flows {
+			all = append(all, f)
+		}
+		mu.Unlock()
+		for _, f := range all {
+			f.close()
+		}
+	}()
+	listenerAddr := ln.LocalAddr().(*net.UDPAddr)
 	buf := make([]byte, 65535)
-	log.Printf("[rules] UDP proxy listening on %s", udpAddr)
+	oob := make([]byte, 256)
 	for {
-		n, srcAddr, err := udpConn.ReadFromUDP(buf)
+		n, oobn, _, src, err := ln.ReadMsgUDP(buf, oob)
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("[rules] UDP read error: %v", err)
 			continue
 		}
-		log.Printf("[rules] UDP pkt from %s, %d bytes", srcAddr, n)
-
-		data := make([]byte, n)
-		copy(data, buf[:n])
-
-		// Check if there's an existing session for this source
-		srcKey := srcAddr.String()
-		udpSessionsMu.Lock()
-		sess, ok := udpSessions[srcKey]
-		udpSessionsMu.Unlock()
-		if ok {
-			sess.lastActivity = time.Now()
-			sess.remote.Write(data)
-			continue
+		dst := udpOrigDst(oob[:oobn])
+		tproxied := dst != nil && !(dst.IP.Equal(listenerAddr.IP) && dst.Port == listenerAddr.Port)
+		if !tproxied {
+			mu.Lock()
+			dst = dnatDst[src.String()]
+			mu.Unlock()
+			if dst == nil {
+				if dst, _ = net.ResolveUDPAddr("udp", conntrackOrigDst("udp", src.String(), ruleUDPProxyPort)); dst == nil {
+					debugLog("[rules] UDP from %s: no original destination", src)
+					continue
+				}
+			}
 		}
-
-		// New source: look up original destination via conntrack
-		log.Printf("[rules] UDP new session for %s, querying conntrack", srcKey)
-		origDst := conntrackOrigDst("udp", srcAddr.String(), ruleUDPProxyPort)
-		log.Printf("[rules] UDP conntrack result for %s: %q", srcKey, origDst)
-		if origDst == "" {
-			debugLog("[rules] UDP no conntrack for %s", srcAddr)
-			continue
+		key := src.String() + ">" + dst.String()
+		mu.Lock()
+		f := flows[key]
+		if f == nil {
+			if len(flows) >= ruleUDPMaxFlows {
+				if !full {
+					log.Printf("[rules] UDP flow limit %d reached, dropping new flows", ruleUDPMaxFlows)
+				}
+				full = true
+				mu.Unlock()
+				continue
+			}
+			full = false
+			f = &udpFlow{key: key, client: src, dst: dst, idle: ruleUDPIdle}
+			if dst.Port == 53 {
+				f.idle = ruleUDPDNSIdle
+			}
+			f.touch()
+			flows[key] = f
+			if !tproxied {
+				dnatDst[src.String()] = dst
+			}
+			mu.Unlock()
+			if !e.startUDPFlow(ctx, f, tproxied, ln, func() { remove(f) }) {
+				remove(f)
+				continue
+			}
+		} else {
+			mu.Unlock()
 		}
-		origAddr, _ := net.ResolveUDPAddr("udp4", origDst)
-		if origAddr == nil {
-			continue
-		}
-
-		e.createUDPSession(ctx, srcAddr, origAddr, data, udpConn)
+		f.send(buf[:n])
 	}
 }
 
-// udpSession tracks an ongoing UDP relay for a specific src→dst pair.
-type udpSession struct {
-	remote net.Conn
-	lastActivity time.Time
-}
-
-var (
-	udpSessions   = make(map[string]*udpSession) // "srcIP:srcPort→dstIP:dstPort" → session
-	udpSessionsMu sync.Mutex
-)
-
-func (e *ruleEngine) createUDPSession(ctx context.Context, src, origDst *net.UDPAddr, data []byte, listener *net.UDPConn) {
-	srcKey := src.String()
-
-	// New session: create relay connection
-	host := origDst.IP.String()
-	exitVia, _ := e.lookupExit(host)
-
-	// Dial destination directly with SO_MARK bypass (like native hy2 server).
-	remote, err := dialUDPMarked(origDst.String(), ruleBypassMark)
-	if err != nil {
-		udpSessionsMu.Unlock()
-		debugLog("[rules] UDP dial %s: %v", origDst, err)
-		return
-	}
-
-	sess := &udpSession{remote: remote, lastActivity: time.Now()}
-	udpSessionsMu.Lock()
-	udpSessions[srcKey] = sess
-	udpSessionsMu.Unlock()
-
-	debugLog("[rules] UDP session %s → %s (exit=%s)", src, origDst, exitVia)
-
-	// Forward the first packet
-	remote.Write(data)
-
-	// Start reverse relay: remote → listener (runs until idle timeout)
-	go func() {
-		defer func() {
-			udpSessionsMu.Lock()
-			delete(udpSessions, srcKey)
-			udpSessionsMu.Unlock()
-			remote.Close()
+// startUDPFlow sets up the client side of a new flow and dials its exit in
+// the background. Returns false when the flow cannot be served.
+func (e *ruleEngine) startUDPFlow(ctx context.Context, f *udpFlow, tproxied bool, ln *net.UDPConn, done func()) bool {
+	if tproxied {
+		local, err := dialUDPAs(f.dst, f.client)
+		if err != nil {
+			log.Printf("[rules] UDP %s → %s: reply socket: %v", f.client, f.dst, err)
+			return false
+		}
+		f.local = local
+		f.reply = func(b []byte) error { _, err := local.Write(b); return err }
+		// later datagrams of this flow arrive on the connected socket
+		go func() {
+			b := make([]byte, 65535)
+			for {
+				n, err := local.Read(b)
+				if err != nil {
+					return
+				}
+				f.send(b[:n])
+			}
 		}()
-		buf := make([]byte, 65535)
+	} else {
+		client := f.client
+		f.reply = func(b []byte) error { _, err := ln.WriteToUDP(b, client); return err }
+	}
+	go func() {
+		defer done()
+		exitVia, exitMode, exitPaths := e.lookupExitFull(f.dst.IP.String())
+		var remote net.Conn
+		var err error
+		if exitVia == "" {
+			remote, err = dialUDPMarked(f.dst.String(), ruleBypassMark)
+		} else {
+			// Fail closed: never dialled from this node when the exit is down.
+			remote, err = e.app.dialExitUDPPaths(ctx, exitVia, exitPaths, exitMode, f.dst.String())
+		}
+		if err != nil {
+			log.Printf("[rules] UDP %s → %s via %q: %v", f.client, f.dst, exitVia, err)
+			return
+		}
+		f.mu.Lock()
+		if f.closed {
+			f.mu.Unlock()
+			remote.Close()
+			return
+		}
+		f.remote = remote
+		queued := f.queue
+		f.queue = nil
+		f.mu.Unlock()
+		for _, b := range queued {
+			remote.Write(b)
+		}
+		debugLog("[rules] UDP flow %s → %s via %q", f.client, f.dst, exitVia)
+		b := make([]byte, 65535)
 		for {
-			remote.SetReadDeadline(time.Now().Add(60 * time.Second))
-			n, err := remote.Read(buf)
+			remote.SetReadDeadline(time.Now().Add(f.idle))
+			n, err := remote.Read(b)
 			if err != nil {
+				if ne, ok := err.(net.Error); ok && ne.Timeout() &&
+					time.Since(time.Unix(0, f.last.Load())) < f.idle {
+					continue // the client is still sending
+				}
 				return
 			}
-			sess.lastActivity = time.Now()
-			listener.WriteToUDP(buf[:n], src)
+			f.touch()
+			f.reply(b[:n])
 		}
 	}()
+	return true
 }
 
 // dnsRefreshLoop periodically re-resolves domain rules.
@@ -955,6 +745,3 @@ func (a *App) ToggleRule(id string, enabled bool) {
 		a.RemoveRule(id)
 	}
 }
-
-// getOriginalDst is defined in l2tp.go — reuse it for rules proxy.
-// It uses SO_ORIGINAL_DST to get the pre-DNAT destination.

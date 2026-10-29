@@ -4,7 +4,14 @@ import en from './en.json';
 import ko from './ko.json';
 import zh from './zh.json';
 
+const LANG_KEY = 'hy-lang';
+const SUPPORTED = ['en', 'ko', 'zh'];
+
 const detectLanguage = (): string => {
+  try {
+    const saved = localStorage.getItem(LANG_KEY);
+    if (saved && SUPPORTED.includes(saved)) return saved;
+  } catch { /* storage unavailable */ }
   const lang = navigator.language;
   if (lang.startsWith('ko')) return 'ko';
   if (lang.startsWith('zh')) return 'zh';
@@ -22,6 +29,10 @@ i18n.use(initReactI18next).init({
   interpolation: {
     escapeValue: false,
   },
+});
+
+i18n.on('languageChanged', (lng) => {
+  try { localStorage.setItem(LANG_KEY, lng); } catch { /* storage unavailable */ }
 });
 
 export default i18n;

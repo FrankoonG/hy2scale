@@ -169,7 +169,7 @@ export default function TLSPage() {
 
   const certColumns: Column<CertInfo>[] = [
     {
-      key: 'name', title: t('tls.name'), render: (cert) => (
+      key: 'name', title: t('tls.name'), sortValue: (cert) => cert.name || cert.id, render: (cert) => (
         <>
           <b>{cert.name || cert.id}</b>
           <span className="peer-addr-sub">{cert.id}</span>
@@ -177,10 +177,14 @@ export default function TLSPage() {
         </>
       ),
     },
-    { key: 'subject', title: t('tls.subject'), render: (cert) => cert.subject },
-    { key: 'issuer', title: t('tls.issuer'), render: (cert) => <>{cert.issuer}{cert.is_ca && <> <Badge variant="blue">CA</Badge></>}</> },
-    { key: 'expires', title: t('tls.expires'), render: (cert) => <span className="mono">{cert.not_after}</span> },
-    { key: 'key', title: t('tls.hasKey'), render: (cert) => cert.key_file ? <Badge variant="green">{t('app.yes')}</Badge> : <Badge variant="muted">{t('app.no')}</Badge> },
+    { key: 'subject', title: t('tls.subject'), sortValue: (cert) => cert.subject || null, render: (cert) => cert.subject },
+    { key: 'issuer', title: t('tls.issuer'), sortValue: (cert) => cert.issuer || null, render: (cert) => <>{cert.issuer}{cert.is_ca && <> <Badge variant="blue">CA</Badge></>}</> },
+    {
+      key: 'expires', title: t('tls.expires'),
+      sortValue: (cert) => { const ts = Date.parse(cert.not_after); return Number.isNaN(ts) ? null : ts; },
+      render: (cert) => <span className="mono">{cert.not_after}</span>,
+    },
+    { key: 'key', title: t('tls.hasKey'), sortValue: (cert) => cert.key_file ? 1 : 0, render: (cert) => cert.key_file ? <Badge variant="green">{t('app.yes')}</Badge> : <Badge variant="muted">{t('app.no')}</Badge> },
     // Per-row edit column retired — select a row and use the top-right Edit button.
   ];
 
@@ -216,6 +220,7 @@ export default function TLSPage() {
       >
         <div ref={listScopeRef} style={{ display: 'contents' }}>
         <Table
+          id="tls"
           columns={certColumns}
           data={certs}
           rowKey={(c) => c.id}

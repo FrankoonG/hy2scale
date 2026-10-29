@@ -1,6 +1,7 @@
 import { type ReactNode, useRef, useEffect } from 'react';
 import * as React from 'react';
 import clsx from 'clsx';
+import { ColumnMenu, Pager, SortTitle, sortBy, tableId, useColumnPrefs, usePager } from './TableKit';
 
 export interface Column<T> {
   key: string;
@@ -8,15 +9,20 @@ export interface Column<T> {
   render: (row: T, index: number) => ReactNode;
   className?: string;
   width?: string;
+  /** Column menu: name when `title` is not text; false = always shown. */
+  menuTitle?: string;
+  hideable?: boolean;
+  defaultHidden?: boolean;
+  /** Sort key of a row; the title becomes clickable (asc → desc → off). */
+  sortValue?: (row: T) => string | number | null | undefined;
 }
 
 export interface SelectionState {
   selected: Set<string>;
   toggle: (key: string) => void;
   toggleAll: () => void;
-  // selectOnly is the row-body click action: replaces the entire
-  // selection with just this one key. The leading checkbox still uses
-  // toggle() so multi-select via checkbox stays additive.
+  // selectOnly replaces the selection with one key (e.g. a graph click).
+  // Tables no longer bind it to row clicks: rows run the list's onRowClick.
   selectOnly: (key: string) => void;
   isAllSelected: boolean;
   isSomeSelected: boolean;
@@ -47,6 +53,12 @@ export interface TableProps<T> {
   rowClassName?: (row: T, index: number) => string | undefined;
   emptyText?: ReactNode;
   selection?: SelectionState;
+  /** Remembers column choices and page size (default: page path + columns). */
+  id?: string;
+  /** false = all rows on one page. */
+  paginate?: boolean;
+  /** The list's own action for a click on a row (outside its controls). */
+  onRowClick?: (row: T, index: number) => void;
 }
 
 function IndeterminateCheckbox({ checked, indeterminate, onChange }: { checked: boolean; indeterminate: boolean; onChange: () => void }) {
@@ -55,14 +67,25 @@ function IndeterminateCheckbox({ checked, indeterminate, onChange }: { checked: 
   return <input ref={ref} type="checkbox" checked={checked} onChange={onChange} />;
 }
 
-export function Table<T>({ columns, data, rowKey, rowClassName, emptyText, selection }: TableProps<T>) {
+export function Table<T>({ columns: allColumns, data: rawData, rowKey, rowClassName, emptyText, selection, id, paginate = true, onRowClick: rowAction }: TableProps<T>) {
+  const tid = tableId(id, allColumns.map((c) => c.key));
+  const prefs = useColumnPrefs(tid, allColumns);
+  const columns = prefs.visible;
+  const sortCol = prefs.sort ? allColumns.find((c) => c.key === prefs.sort!.key) : undefined;
+  const data = sortCol?.sortValue ? sortBy(rawData, sortCol.sortValue, prefs.sort!.dir) : rawData;
+  const size = paginate ? prefs.pageSize : Math.max(1, data.length);
+  const pager = usePager(data.length, size, tid);
   if (data.length === 0 && emptyText) {
     return <div className="hy-empty" dangerouslySetInnerHTML={typeof emptyText === 'string' ? { __html: emptyText } : undefined}>{typeof emptyText !== 'string' ? emptyText : undefined}</div>;
   }
+  const pageRows = paginate ? data.slice(pager.start, pager.end) : data;
+  const offset = paginate ? pager.start : 0;
 
   return (
+    <div className="hy-table-box">
+    <ColumnMenu prefs={prefs} />
     <div className="hy-table-wrap">
-      <table className="hy-table">
+      <table className={clsx('hy-table', prefs.menuItems.length > 0 && 'has-col-menu')}>
         <thead>
           <tr>
             {selection && (
@@ -83,20 +106,21 @@ export function Table<T>({ columns, data, rowKey, rowClassName, emptyText, selec
               </th>
             )}
             {columns.map((col) => (
-              <th key={col.key} style={col.width ? { width: col.width } : undefined} className={col.className}>
-                {col.title}
+              <th key={col.key} style={col.width ? { width: col.width } : undefined} className={col.className} aria-sort={prefs.sort?.key === col.key ? (prefs.sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
+                <SortTitle title={col.title} active={prefs.sort?.key === col.key} dir={prefs.sort?.dir} onClick={col.sortValue ? () => prefs.cycleSort(col.key) : undefined} />
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {data.map((row, i) => {
+          {pageRows.map((row, pi) => {
+            const i = offset + pi;
             const key = rowKey(row, i);
             const isSelected = selection?.selected.has(key);
-            const onRowClick = selection
+            const onRowClick = rowAction
               ? (e: React.MouseEvent<HTMLTableRowElement>) => {
                   if (isInteractiveDescendant(e.target, e.currentTarget)) return;
-                  selection.selectOnly(key);
+                  rowAction(row, i);
                 }
               : undefined;
             // Click anywhere in the col-check cell — including its padding —
@@ -115,7 +139,7 @@ export function Table<T>({ columns, data, rowKey, rowClassName, emptyText, selec
               <tr
                 key={key}
                 data-row-key={key}
-                className={clsx(rowClassName?.(row, i), isSelected && 'selected', selection && 'hy-row-clickable')}
+                className={clsx(rowClassName?.(row, i), isSelected && 'selected', rowAction && 'hy-row-action')}
                 onClick={onRowClick}
               >
                 {selection && (
@@ -131,6 +155,8 @@ export function Table<T>({ columns, data, rowKey, rowClassName, emptyText, selec
           })}
         </tbody>
       </table>
+    </div>
+    {paginate && <Pager total={data.length} size={prefs.pageSize} onSize={prefs.setPageSize} pager={pager} />}
     </div>
   );
 }

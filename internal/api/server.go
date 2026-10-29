@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
@@ -30,7 +29,9 @@ import (
 	"time"
 
 	"github.com/FrankoonG/hy2scale/internal/app"
+	"github.com/FrankoonG/hy2scale/internal/logbuf"
 	"github.com/FrankoonG/hy2scale/internal/relay"
+	"github.com/FrankoonG/hy2scale/internal/selfupdate"
 	"github.com/FrankoonG/hy2scale/internal/web"
 	qrcode "github.com/skip2/go-qrcode"
 )
@@ -48,6 +49,9 @@ type topoSubPeer struct {
 	TunCapable bool           `json:"tun_capable,omitempty"`
 	// Conns: connections the parent holds to this node (several addresses)
 	Conns      int            `json:"conns,omitempty"`
+	// Punched (inbound children of self): who set up a live hole-punched
+	// connection with this peer.
+	Punched    []string       `json:"punched,omitempty"`
 	TxRate     uint64         `json:"tx_rate"`
 	RxRate     uint64         `json:"rx_rate"`
 	// MaxRate is the configured peak the link can sustain (bytes/sec),
@@ -58,6 +62,9 @@ type topoSubPeer struct {
 	// to populate a peak. 0 = unknown → falls back to observed peak
 	// on the frontend.
 	MaxRate    uint64         `json:"max_rate,omitempty"`
+	// Egress: the node's egress (public address per family, null family =
+	// not provided); null = unknown (older node).
+	Egress     json.RawMessage `json:"egress"`
 	// Connected mirrors the direct-peer Connected flag for nested
 	// sub-peers. A sub-peer that the parent has configured but is
 	// currently offline is propagated with Connected=false so the
@@ -126,13 +133,105 @@ func (s *Server) restartProcess(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-// validAddrSpec checks "host:portspec" where portspec can be "5565", "1000,2000", "20000-30000"
+// normalizeClient validates a node entry: manual addresses and/or punch
+// routes. An entry with punch routes only is keyed by its first punch route.
+func normalizeClient(cl *app.ClientEntry) error {
+	if p := cl.Punch; p != nil {
+		if len(p.Signal) == 0 && len(p.Reflectors) == 0 && len(p.Binds) == 0 {
+			cl.Punch = nil
+		} else {
+			if len(p.Signal) == 0 {
+				return fmt.Errorf("punch needs at least one signalling path")
+			}
+			for _, path := range p.Signal {
+				hops := strings.Split(path, "/")
+				if hops[len(hops)-1] != cl.Name {
+					return fmt.Errorf("signalling path %q must end at %q", path, cl.Name)
+				}
+				for _, h := range hops {
+					if h == "" {
+						return fmt.Errorf("invalid signalling path %q", path)
+					}
+				}
+			}
+			if len(p.Reflectors) == 0 {
+				return fmt.Errorf("punch needs at least one reflector")
+			}
+			for _, r := range p.Reflectors {
+				if r == "" || strings.Contains(r, "/") || r == cl.Name {
+					return fmt.Errorf("invalid reflector %q", r)
+				}
+			}
+			if !app.ValidPunchFamily(p.Family) {
+				return fmt.Errorf("invalid punch family %q", p.Family)
+			}
+			for _, b := range p.Binds {
+				if b == "" {
+					continue
+				}
+				_, _, src, err := app.SplitAddrBind("x:1#" + b)
+				if err != nil {
+					return err
+				}
+				if src != "" && (strings.Contains(src, ":") != (p.Family == app.PunchFamilyIPv6)) {
+					return fmt.Errorf("punch source %s does not match family %s", src, punchFamilyName(p.Family))
+				}
+			}
+		}
+	}
+	manual := cl.Addrs
+	if len(manual) == 0 && cl.Addr != "" && !app.IsPunchAddr(cl.Addr) {
+		manual = []string{cl.Addr}
+	}
+	for _, a := range manual {
+		if !validAddrSpec(a) || app.IsPunchAddr(a) {
+			return fmt.Errorf("invalid address format %q", a)
+		}
+	}
+	switch {
+	case len(manual) > 0:
+		cl.Addr, cl.Addrs = manual[0], manual
+		if cl.Password == "" {
+			return fmt.Errorf("password required")
+		}
+	case cl.Punch != nil:
+		// punch only: the token is the password; the key is the first route
+		cl.Addrs = nil
+		if !app.IsPunchAddr(cl.Addr) {
+			cl.Addr = cl.AllAddrs()[0]
+		}
+	default:
+		return fmt.Errorf("an address or a punch route is required")
+	}
+	return nil
+}
+
+// validAddrSpec checks "host:portspec" where portspec can be "5565", "1000,2000", "20000-30000".
+// An IPv6 host must be bracketed ("[2001:db8::1]:5565"); a bare IPv6
+// address is ambiguous with the port and is refused.
 func validAddrSpec(addr string) bool {
-	idx := strings.LastIndex(addr, ":")
-	if idx <= 0 || idx == len(addr)-1 {
+	if i := strings.LastIndexByte(addr, '#'); i >= 0 {
+		if _, _, _, err := app.SplitAddrBind(addr); err != nil {
+			return false
+		}
+		addr = addr[:i]
+	}
+	// SplitHostPort refuses unbracketed IPv6 ("too many colons") and
+	// unbalanced brackets; the port part may be a list / ranges.
+	host, portSpec, err := net.SplitHostPort(addr)
+	if err != nil || host == "" || portSpec == "" {
 		return false
 	}
-	portSpec := addr[idx+1:]
+	if strings.ContainsAny(host, "[]/# ") {
+		return false
+	}
+	if strings.Contains(host, ":") || strings.HasPrefix(addr, "[") {
+		// bracketed: must be an IPv6 address (with an optional zone)
+		h, _, _ := strings.Cut(host, "%")
+		if net.ParseIP(h) == nil {
+			return false
+		}
+	}
 	for _, part := range strings.Split(portSpec, ",") {
 		part = strings.TrimSpace(part)
 		if strings.Contains(part, "-") {
@@ -150,6 +249,13 @@ func validAddrSpec(addr string) bool {
 		}
 	}
 	return true
+}
+
+func punchFamilyName(f string) string {
+	if f == "" {
+		return app.PunchFamilyIPv4
+	}
+	return f
 }
 
 func sha256Hex(s string) string {
@@ -217,10 +323,12 @@ func (s *Server) Start(ctx context.Context) error {
 	// Authed API routes
 	authed := http.NewServeMux()
 	authed.HandleFunc("GET /api/node", s.getNode)
+	authed.HandleFunc("GET /api/me", s.getMe)
 	authed.HandleFunc("GET /api/stats", s.getStats)
 	authed.HandleFunc("PUT /api/node", s.updateNode)
 	authed.HandleFunc("GET /api/peers", s.getPeers)
 	authed.HandleFunc("GET /api/topology", s.getTopology)
+	authed.HandleFunc("GET /api/paths/status", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, s.app.PathStatuses()) })
 	authed.HandleFunc("GET /api/graph-layout", s.getGraphLayout)
 	authed.HandleFunc("PUT /api/graph-layout", s.setGraphLayout)
 	authed.HandleFunc("GET /api/graph-layout/stream", s.streamGraphLayout)
@@ -250,6 +358,13 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("PUT /api/ikev2", s.updateIKEv2Config)
 
 	// WireGuard
+	authed.HandleFunc("GET /api/punch/status", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, s.app.PunchStatuses()) })
+	authed.HandleFunc("GET /api/system/interfaces", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, s.app.BindableInterfaces()) })
+	s.registerInterfaceRoutes(authed)
+	authed.HandleFunc("GET /api/openvpn", s.getOpenVPNConfig)
+	authed.HandleFunc("PUT /api/openvpn", s.updateOpenVPNConfig)
+	authed.HandleFunc("GET /api/openvpn/profile", s.downloadOpenVPNProfile)
+
 	authed.HandleFunc("GET /api/wireguard", s.getWireGuardConfig)
 	authed.HandleFunc("PUT /api/wireguard", s.updateWireGuardConfig)
 	authed.HandleFunc("POST /api/wireguard/generate-key", s.generateWGKey)
@@ -297,6 +412,7 @@ func (s *Server) Start(ctx context.Context) error {
 	//                                the first thing to read when a node's
 	//                                memory keeps growing
 	authed.HandleFunc("GET /api/diag/runtime", s.diagRuntime)
+	authed.HandleFunc("GET /api/logs", s.handleLogs)
 
 	// Sessions (active connections)
 	authed.HandleFunc("GET /api/sessions", s.getSessions)
@@ -360,14 +476,18 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Known frontend routes that should serve index.html
 	frontendRoutes := map[string]bool{
-		"":         true,
-		"login":    true,
-		"nodes":    true,
-		"proxies":  true,
-		"users":    true,
-		"tls":      true,
-		"rules":    true,
-		"settings": true,
+		"":           true,
+		"login":      true,
+		"overview":   true,
+		"nodes":      true,
+		"proxies":    true,
+		"users":      true,
+		"tls":        true,
+		"rules":      true,
+		"interfaces": true,
+		"endpoints":  true,
+		"logs":       true,
+		"settings":   true,
 	}
 
 	// Remote node proxy — no local auth, remote handles its own
@@ -705,6 +825,14 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// getMe returns the signed-in web user (shown in the top bar user menu).
+func (s *Server) getMe(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	u := s.username
+	s.mu.RUnlock()
+	writeJSON(w, map[string]string{"username": u})
+}
+
 func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		CurrentPassword string `json:"current_password"`
@@ -766,6 +894,7 @@ func (s *Server) getUISettings(w http.ResponseWriter, r *http.Request) {
 		"max_fetch_fan_out":  lim.MaxFetchFanOut,
 		// Off by default: relay-delivered admin requests still need a token.
 		"relay_admin_passthrough": cfg.RelayAdminPassthrough,
+		"accept_punch":            cfg.AcceptPunch,
 		// DNS resolver (relay-routed). Defaults baked into app.dnsResolverDefaults.
 		// Upstream resolver list reuses the top-level `dns` field above —
 		// no separate knob. Enabled exposes the *effective* value: nil
@@ -776,6 +905,7 @@ func (s *Server) getUISettings(w http.ResponseWriter, r *http.Request) {
 		"dns_resolver_negative_ttl":     dr.NegativeTTL,
 		"dns_resolver_cache_size":       dr.CacheSize,
 		"dns_resolver_query_timeout_ms": dr.QueryTimeoutMs,
+		"public_ip":                     publicIPSettings(cfg),
 	})
 }
 
@@ -794,6 +924,7 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 		MaxResponseBytes *int    `json:"max_response_bytes"`
 		MaxFetchFanOut   *int    `json:"max_fetch_fan_out"`
 		RelayAdminPassthrough *bool `json:"relay_admin_passthrough"`
+		AcceptPunch           *bool `json:"accept_punch"`
 		// DNS resolver (relay-routed) — see app.DNSResolverConfig docs.
 		// No separate upstream knob: the resolver uses the top-level
 		// `dns` field above, same as VPN-client DNS push does.
@@ -802,6 +933,7 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 		DNSResolverNegativeTTL    *int  `json:"dns_resolver_negative_ttl"`
 		DNSResolverCacheSize      *int  `json:"dns_resolver_cache_size"`
 		DNSResolverQueryTimeoutMs *int  `json:"dns_resolver_query_timeout_ms"`
+		PublicIP                  *app.PublicIPConfig `json:"public_ip"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), 400)
@@ -850,6 +982,9 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 		if body.RelayAdminPassthrough != nil {
 			c.RelayAdminPassthrough = *body.RelayAdminPassthrough
 		}
+		if body.AcceptPunch != nil {
+			c.AcceptPunch = *body.AcceptPunch
+		}
 		if body.DNSResolverEnabled != nil {
 			// Store as *bool so a future GET keeps round-tripping the
 			// explicit choice; never collapses back to "unset → default".
@@ -867,6 +1002,9 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if body.DNSResolverQueryTimeoutMs != nil {
 			c.DNSResolver.QueryTimeoutMs = *body.DNSResolverQueryTimeoutMs
+		}
+		if body.PublicIP != nil {
+			applyPublicIPSettings(c, body.PublicIP)
 		}
 	})
 	// Hot-reload resolver snapshot on any DNS-resolver field touch +
@@ -980,6 +1118,18 @@ func (s *Server) diagRuntime(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleLogs returns recent process log lines kept in memory.
+// ?after=SEQ returns only newer lines; ?limit caps the count (newest kept).
+func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	after, _ := strconv.ParseUint(r.URL.Query().Get("after"), 10, 64)
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > 5000 {
+		limit = 5000
+	}
+	entries, last, gap := logbuf.Default.Since(after, limit)
+	writeJSON(w, map[string]any{"entries": entries, "last": last, "gap": gap})
+}
+
 // diagPeerHistory — rolled-up time-bucketed metrics (1m / 1h / 1d
 // precisions) backing the PathInfoExpand status bars. With ?peer=NAME
 // only that peer is returned; otherwise all peers are surfaced so the
@@ -1017,8 +1167,6 @@ const Version = "1.3.12"
 func init() {
 	app.AppVersion = Version
 	relay.NodeVersion = Version
-	capOK, _ := app.CheckCapability()
-	relay.NodeTunCapable = capOK
 }
 
 func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
@@ -1380,6 +1528,10 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		// entry's max(MaxTx, MaxRx).
 		MaxRate      uint64            `json:"max_rate,omitempty"`
 		IsSelf       bool              `json:"is_self,omitempty"`
+		Egress       json.RawMessage   `json:"egress"`
+		// Punched: who set up the hole-punched connection(s) to this peer
+		// (this node's name and/or the peer's).
+		Punched      []string          `json:"punched,omitempty"`
 		Children     []topoSubPeer     `json:"children,omitempty"`
 	}
 
@@ -1432,6 +1584,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	}
 	selfChildren := make([]topoSubPeer, 0)
 	inboundNames := make(map[string]bool)
+	punched := s.app.PunchedPeers()
 	for _, p := range allPeers {
 		if p.Direction == "inbound" {
 			inboundNames[p.Name] = true
@@ -1443,6 +1596,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				LatencyMs:  latencyCache[p.Name],
 				Version:    p.Version,
 				TunCapable: p.TunCapable,
+				Egress:     p.Egress,
 				// Inbound peers in the live `peers` slice are connected
 				// by definition — `p` was added when the inbound stream
 				// registered. The new `connected` field on topoSubPeer
@@ -1450,6 +1604,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				// the row defaults to false → list shows "offline" for
 				// every active inbound peer.
 				Connected: true,
+				Punched:   punched[p.Name],
 			}
 			if pc, ok := cfg.Peers[p.Name]; ok {
 				if pc.Nested {
@@ -1493,6 +1648,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		IsSelf:     true,
 		LatencyMs:  0,
 		TunCapable: relay.NodeTunCapable,
+		Egress:     selfEgressJSON(s.app),
 		Children:   selfChildren,
 	})
 
@@ -1511,6 +1667,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		tn := treeNode{Name: name, Connected: connected[name] && !disabledMap[name], Disabled: disabledMap[name]}
+		tn.Punched = punched[name]
 		if cl, ok := clientMap[name]; ok {
 			tn.Addr = cl.PrimaryAddr()
 			addrs := cl.AllAddrs()
@@ -1555,6 +1712,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				}
 				tn.TunCapable = p.TunCapable
 				tn.Conns = p.Conns
+				tn.Egress = p.Egress
 				if p.Direction == "outbound" {
 					// Found the matching outbound entry — prefer this and
 					// stop. (Continuing would overwrite with inbound
@@ -2070,6 +2228,7 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 					TunCapable: c.TunCapable,
 					LatencyMs:  lat,
 					Conns:      c.Conns,
+					Egress:     c.Egress,
 				})
 			}
 			if len(infos) > 0 {
@@ -2155,6 +2314,7 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 		// bandwidth, even before any traffic flows.
 		MaxRate   uint64        `json:"max_rate,omitempty"`
 		Conns     int           `json:"conns,omitempty"`
+		Egress    json.RawMessage `json:"egress,omitempty"`
 		Children  []topoSubPeer `json:"children,omitempty"`
 	}
 	var remotePeers []peerWithChildren
@@ -2206,6 +2366,7 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 			Version:    rp.Version,
 			TunCapable: rp.TunCapable,
 			Conns:      rp.Conns,
+			Egress:     rp.Egress,
 			Connected:  connected,
 			MaxRate:    rp.MaxRate,
 			Children:   embedded,
@@ -2433,6 +2594,7 @@ func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map
 			Direction: sp.Direction,
 			Via:       peerName,
 			LatencyMs: childLatency,
+			Egress:    sp.Egress,
 			// Default to connected=true — this code path is for peers
 			// the source actively reported (relay PeerInfo from PeersOf).
 			// Offline propagation flows through fetchSubPeersViaStream's
@@ -2546,18 +2708,15 @@ func (s *Server) updateClient(w http.ResponseWriter, r *http.Request) {
 	// Sync Addrs ↔ Addr
 	if len(cl.Addrs) > 0 {
 		cl.Addr = cl.Addrs[0]
-	} else if cl.Addr != "" {
+	} else if cl.Addr != "" && !app.IsPunchAddr(cl.Addr) {
 		cl.Addrs = []string{cl.Addr}
 	}
-	if cl.Addr == "" || cl.Password == "" {
-		http.Error(w, "addr and password required", 400)
-		return
+	if cl.Name == "" {
+		cl.Name = name
 	}
-	for _, a := range cl.AllAddrs() {
-		if !validAddrSpec(a) {
-			http.Error(w, fmt.Sprintf("invalid address format %q", a), 400)
-			return
-		}
+	if err := normalizeClient(&cl); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
 	}
 	// Look up by URL path name, update with body (may include rename)
 	oldName := name
@@ -2580,18 +2739,16 @@ func (s *Server) addClient(w http.ResponseWriter, r *http.Request) {
 	// Sync Addrs ↔ Addr for backward compat
 	if len(cl.Addrs) > 0 {
 		cl.Addr = cl.Addrs[0]
-	} else if cl.Addr != "" {
+	} else if cl.Addr != "" && !app.IsPunchAddr(cl.Addr) {
 		cl.Addrs = []string{cl.Addr}
 	}
-	if cl.Name == "" || cl.Addr == "" || cl.Password == "" {
-		http.Error(w, "name, addr, password required", 400)
+	if cl.Name == "" {
+		http.Error(w, "name required", 400)
 		return
 	}
-	for _, a := range cl.AllAddrs() {
-		if !validAddrSpec(a) {
-			http.Error(w, fmt.Sprintf("invalid address format %q", a), 400)
-			return
-		}
+	if err := normalizeClient(&cl); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
 	}
 	if err := s.app.AddClient(cl); err != nil {
 		http.Error(w, err.Error(), 500)
@@ -2737,23 +2894,16 @@ func (s *Server) updateSSConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
-// --- L2TP ---
+// --- L2TP / IKEv2 / OpenVPN (userspace servers, always available) ---
 
 func (s *Server) getL2TPConfig(w http.ResponseWriter, r *http.Request) {
-	capOK, capReason := app.CheckL2TPCapability()
-	capable := capOK
-	hostNet := app.CheckHostNetwork()
 	cfg := s.app.Store().Get()
 	result := map[string]any{
-		"capable":      capable,
-		"host_network": hostNet,
-		// Surface the precise reason CheckL2TPCapability turned us down
-		// (cgroup blocking /dev/ppp, l2tp_ppp module missing, NET_ADMIN
-		// not granted, …). The UI used to fall back to a hard-coded
-		// "needs --cap-add NET_ADMIN and --network host" message which
-		// was wrong when both were already granted; with reason exposed
-		// the banner can name the actual gap.
-		"reason": capReason,
+		"capable":      true,
+		"host_network": app.CheckHostNetwork(),
+		"reason":       "",
+		"running":      s.app.VPNRunning("l2tp"),
+		"connected":    s.app.VPNClientCount("l2tp"),
 	}
 	if cfg.L2TP != nil {
 		result["listen"] = cfg.L2TP.Listen
@@ -2774,10 +2924,6 @@ func (s *Server) getL2TPConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateL2TPConfig(w http.ResponseWriter, r *http.Request) {
-	if ok, reason := app.CheckL2TPCapability(); !ok {
-		http.Error(w, "L2TP unavailable: "+reason, 403)
-		return
-	}
 	var l2tp app.L2TPConfig
 	if err := json.NewDecoder(r.Body).Decode(&l2tp); err != nil {
 		http.Error(w, err.Error(), 400)
@@ -2786,52 +2932,51 @@ func (s *Server) updateL2TPConfig(w http.ResponseWriter, r *http.Request) {
 	s.app.Store().Update(func(c *app.Config) {
 		c.L2TP = &l2tp
 	})
-	// Hot reload L2TP
-	go func() {
-		if err := s.app.RestartL2TP(); err != nil {
-			log.Printf("[l2tp] hot reload failed: %v", err)
-		}
-	}()
+	if err := s.app.RestartL2TP(); err != nil {
+		log.Printf("[l2tp] reload failed: %v", err)
+		http.Error(w, err.Error(), 500)
+		return
+	}
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
-// --- IKEv2 ---
-
 func (s *Server) getIKEv2Config(w http.ResponseWriter, r *http.Request) {
-	capable := app.CheckIKEv2Capability()
-	hostNet := app.CheckHostNetwork()
-	// Pick up whatever reason CheckCapability returned for transparency —
-	// IKEv2's own capability test is just a bool, but the underlying gate
-	// (NET_ADMIN, xfrm) shares CheckCapability with L2TP and that one
-	// reports a useful message.
-	_, capReason := app.CheckCapability()
 	cfg := s.app.Store().Get()
 	result := map[string]any{
-		"capable":      capable,
-		"host_network": hostNet,
-		"reason":       capReason,
+		"capable":      true,
+		"host_network": app.CheckHostNetwork(),
+		"reason":       "",
+		"running":      s.app.VPNRunning("ikev2"),
+		"connected":    s.app.VPNClientCount("ikev2"),
 	}
 	nodeID := cfg.NodeID
 	if cfg.IKEv2 != nil {
 		result["enabled"] = cfg.IKEv2.Enabled
 		result["mode"] = cfg.IKEv2.Mode
 		result["pool"] = cfg.IKEv2.Pool
+		result["pool6"] = orDefault(cfg.IKEv2.Pool6, app.DefaultIKEv2Pool6)
 		result["cert_id"] = cfg.IKEv2.CertID
 		result["psk"] = cfg.IKEv2.PSK
 		result["local_id"] = cfg.IKEv2.LocalID
 		result["remote_id"] = cfg.IKEv2.RemoteID
+		result["psk_user_mode"] = cfg.IKEv2.PSKUserMode
 		result["default_exit"] = cfg.IKEv2.DefaultExit
+		result["default_exit_mode"] = cfg.IKEv2.DefaultExitMode
+		result["default_exit_paths"] = cfg.IKEv2.DefaultExitPaths
 		result["proxy_port"] = cfg.IKEv2.ProxyPort
 		result["mtu"] = cfg.IKEv2.MTU
 	} else {
 		result["enabled"] = false
 		result["mode"] = "mschapv2"
 		result["pool"] = "192.168.26.1/24"
+		result["pool6"] = app.DefaultIKEv2Pool6
 		result["cert_id"] = ""
 		result["psk"] = ""
 		result["local_id"] = nodeID
 		result["remote_id"] = ""
+		result["psk_user_mode"] = false
 		result["default_exit"] = ""
+		result["default_exit_mode"] = ""
 		result["proxy_port"] = 12350
 		result["mtu"] = 1400
 	}
@@ -2839,10 +2984,6 @@ func (s *Server) getIKEv2Config(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateIKEv2Config(w http.ResponseWriter, r *http.Request) {
-	if ok, reason := app.CheckCapability(); !ok {
-		http.Error(w, "IKEv2 unavailable: "+reason, 403)
-		return
-	}
 	var ikev2 app.IKEv2Config
 	if err := json.NewDecoder(r.Body).Decode(&ikev2); err != nil {
 		http.Error(w, err.Error(), 400)
@@ -2855,13 +2996,77 @@ func (s *Server) updateIKEv2Config(w http.ResponseWriter, r *http.Request) {
 	s.app.Store().Update(func(c *app.Config) {
 		c.IKEv2 = &ikev2
 	})
-	// Hot reload IKEv2
-	go func() {
-		if err := s.app.RestartIKEv2(); err != nil {
-			log.Printf("[ikev2] hot reload failed: %v", err)
-		}
-	}()
+	if err := s.app.RestartIKEv2(); err != nil {
+		log.Printf("[ikev2] reload failed: %v", err)
+		http.Error(w, err.Error(), 500)
+		return
+	}
 	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) getOpenVPNConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := s.app.Store().Get()
+	result := map[string]any{
+		"running":   s.app.VPNRunning("openvpn"),
+		"connected": s.app.VPNClientCount("openvpn"),
+		"enabled":   false,
+		"port":      1194,
+		"pool":      "10.8.0.1/24",
+		"pool6":     app.DefaultOpenVPNPool6,
+		"cert_id":   "",
+		"mtu":       1400,
+	}
+	if c := cfg.OpenVPN; c != nil {
+		result["enabled"] = c.Enabled
+		result["port"] = c.Port
+		result["pool"] = c.Pool
+		result["pool6"] = orDefault(c.Pool6, app.DefaultOpenVPNPool6)
+		result["cert_id"] = c.CertID
+		result["mtu"] = c.MTU
+	}
+	writeJSON(w, result)
+}
+
+func (s *Server) updateOpenVPNConfig(w http.ResponseWriter, r *http.Request) {
+	var ovpn app.OpenVPNConfig
+	if err := json.NewDecoder(r.Body).Decode(&ovpn); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if ovpn.Port < 0 || ovpn.Port > 65535 {
+		http.Error(w, "invalid port", 400)
+		return
+	}
+	s.app.Store().Update(func(c *app.Config) {
+		c.OpenVPN = &ovpn
+	})
+	if err := s.app.RestartOpenVPN(); err != nil {
+		log.Printf("[openvpn] reload failed: %v", err)
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// downloadOpenVPNProfile returns a client profile (auth-user-pass) for the
+// address the operator gives as ?endpoint=host.
+func (s *Server) downloadOpenVPNProfile(w http.ResponseWriter, r *http.Request) {
+	prof, err := s.app.OpenVPNProfile(r.URL.Query().Get("endpoint"))
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-openvpn-profile")
+	w.Header().Set("Content-Disposition", "attachment; filename=hy2scale.ovpn")
+	w.Write([]byte(prof))
+}
+
+// orDefault is v, or def when v is blank.
+func orDefault(v, def string) string {
+	if strings.TrimSpace(v) == "" {
+		return def
+	}
+	return v
 }
 
 // --- WireGuard ---
@@ -2877,6 +3082,7 @@ func (s *Server) getWireGuardConfig(w http.ResponseWriter, r *http.Request) {
 		result["listen_port"] = cfg.WireGuard.ListenPort
 		result["private_key"] = cfg.WireGuard.PrivateKey
 		result["address"] = cfg.WireGuard.Address
+		result["address6"] = cfg.WireGuard.WGAddress6()
 		result["dns"] = cfg.WireGuard.DNS
 		result["mtu"] = cfg.WireGuard.MTU
 		result["peers"] = cfg.WireGuard.Peers
@@ -2889,6 +3095,7 @@ func (s *Server) getWireGuardConfig(w http.ResponseWriter, r *http.Request) {
 		result["listen_port"] = 51820
 		result["private_key"] = ""
 		result["address"] = "10.0.0.1/24"
+		result["address6"] = app.DefaultWGAddress6
 		result["dns"] = ""
 		result["mtu"] = 1420
 		result["peers"] = []app.WireGuardPeer{}
@@ -3216,23 +3423,15 @@ func (s *Server) resetUserTrafficAPI(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getRules(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
-	// Annotate each rule with its live TUN status: true only when UseTun is
-	// requested AND the exit peer is TUN-capable AND the target is routable
-	// (i.e. the rule is really running on the TUN path, not the proxy fallback).
-	type ruleWithTun struct {
-		app.RoutingRule
-		TunActive bool `json:"tun_active,omitempty"`
+	rules := cfg.Rules
+	if rules == nil {
+		rules = []app.RoutingRule{}
 	}
-	rules := make([]ruleWithTun, len(cfg.Rules))
-	for i, rr := range cfg.Rules {
-		rules[i] = ruleWithTun{RoutingRule: rr}
-		rules[i].TunActive = s.app.RuleUsesTun(rr)
-	}
-	result := map[string]any{
+	writeJSON(w, map[string]any{
 		"available": app.RuleEngineAvailable(),
+		"capture":   app.RuleCaptureMode(),
 		"rules":     rules,
-	}
-	writeJSON(w, result)
+	})
 }
 
 func (s *Server) addRule(w http.ResponseWriter, r *http.Request) {
@@ -3494,6 +3693,7 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 		"api": true, "login": true, "nodes": true, "proxies": true,
 		"tls": true, "settings": true, "remote": true,
 		"scale": true, "users": true, "rules": true, "assets": true,
+		"interfaces": true, "overview": true, "endpoints": true, "logs": true,
 	}
 	chainLen := 0
 	for _, seg := range segments {
@@ -3830,9 +4030,8 @@ func (s *Server) getBuildInfo(w http.ResponseWriter, r *http.Request) {
 	// are the pieces whose licences directly constrain the umbrella
 	// licence of this project.
 	natives := []native{
-		{Name: "strongSwan", Version: "5.8.4", License: "GPL-2.0-or-later", Source: "https://www.strongswan.org/"},
+		{Name: "veepin (vendored, patched)", Version: "bcac178", License: "MIT", Source: "https://github.com/xen0bit/veepin"},
 		{Name: "iptables (nf_tables backend)", Version: "distro-packaged", License: "GPL-2.0-or-later", Source: "https://www.netfilter.org/projects/iptables/"},
-		{Name: "xl2tpd", Version: "distro-packaged", License: "GPL-2.0-or-later", Source: "https://www.xelerance.com/software/xl2tpd/"},
 	}
 	writeJSON(w, map[string]any{
 		"version":     Version,
@@ -3865,7 +4064,7 @@ func (s *Server) uploadUpgrade(w http.ResponseWriter, r *http.Request) {
 	tmp.Close()
 	defer os.Remove(tmp.Name())
 
-	if err := applyTarball(tmp.Name()); err != nil {
+	if err := applyTarball(tmp.Name(), s.app.DataDir()); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
@@ -3880,12 +4079,14 @@ func (s *Server) uploadUpgrade(w http.ResponseWriter, r *http.Request) {
 }
 
 // applyTarball extracts the matching platform binary from a gzipped tar
-// archive at path and atomically swaps it into place, leaving the previous
-// binary as <self>.bak. Caller is responsible for triggering os.Exit so
+// archive at path. In a container it is stored in the data directory (see
+// internal/selfupdate: the container's own filesystem is reset whenever it
+// is recreated); otherwise it is atomically swapped into place, leaving the
+// previous binary as <self>.bak. Caller is responsible for triggering os.Exit so
 // the process restarts on the new binary. Used by both the manual upload
 // path (uploadUpgrade) and the online-update path
 // (applyDownloadedUpgrade) so the two stay in lock-step.
-func applyTarball(path string) error {
+func applyTarball(path, dataDir string) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("open: %w", err)
@@ -3939,9 +4140,10 @@ func applyTarball(path string) error {
 		return fmt.Errorf("no matching binary for %s found in archive", expectedArch)
 	}
 
-	// Smoke test — non-fatal because some builds may not support --version.
-	out, _ := exec.Command(tmpPath, "--version").CombinedOutput()
-	_ = out
+	if isRunningInDocker() {
+		defer os.Remove(tmpPath)
+		return selfupdate.Install(dataDir, tmpPath, Version)
+	}
 
 	self, err := os.Executable()
 	if err != nil {

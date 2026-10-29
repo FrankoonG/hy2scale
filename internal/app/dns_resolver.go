@@ -196,10 +196,35 @@ func (a *App) dnsLookupOverExit(ctx context.Context, name, exitVia string) ([]st
 	return nil, lastErr
 }
 
-// dnsQueryOne does a single TCP/53 lookup against `upstream` via the
-// rule's exit. Returns the list of A-record IPs, or an error covering
-// every failure mode (dial, write, framing, RCODE, no-answer).
+// dnsQueryOne looks name up against `upstream` via the rule's exit: A and
+// AAAA in parallel. Returns the addresses of both families (IPv4 first), or
+// an error when neither query produced one.
 func (a *App) dnsQueryOne(ctx context.Context, name, exitVia, upstream string, timeout time.Duration) ([]string, error) {
+	type res struct {
+		ips []string
+		err error
+	}
+	ch6 := make(chan res, 1)
+	go func() {
+		ips, err := a.dnsQueryType(ctx, name, exitVia, upstream, timeout, dnsmessage.TypeAAAA)
+		ch6 <- res{ips, err}
+	}()
+	ips4, err4 := a.dnsQueryType(ctx, name, exitVia, upstream, timeout, dnsmessage.TypeA)
+	r6 := <-ch6
+	ips := append(ips4, r6.ips...)
+	if len(ips) == 0 {
+		if err4 != nil {
+			return nil, err4
+		}
+		return nil, r6.err
+	}
+	return ips, nil
+}
+
+// dnsQueryType does a single TCP/53 query of one type (A or AAAA). Returns
+// the answer's addresses, or an error covering every failure mode (dial,
+// write, framing, RCODE, no-answer).
+func (a *App) dnsQueryType(ctx context.Context, name, exitVia, upstream string, timeout time.Duration, qtype dnsmessage.Type) ([]string, error) {
 	dialCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	conn, err := a.dialExit(dialCtx, exitVia, upstream)
@@ -215,7 +240,7 @@ func (a *App) dnsQueryOne(ctx context.Context, name, exitVia, upstream string, t
 	if err != nil {
 		return nil, fmt.Errorf("encode name: %w", err)
 	}
-	msg.Questions = []dnsmessage.Question{{Name: q, Type: dnsmessage.TypeA, Class: dnsmessage.ClassINET}}
+	msg.Questions = []dnsmessage.Question{{Name: q, Type: qtype, Class: dnsmessage.ClassINET}}
 	wire, err := msg.Pack()
 	if err != nil {
 		return nil, fmt.Errorf("pack: %w", err)
@@ -252,17 +277,19 @@ func (a *App) dnsQueryOne(ctx context.Context, name, exitVia, upstream string, t
 
 	var ips []string
 	for _, ans := range resp.Answers {
-		if ans.Header.Type != dnsmessage.TypeA {
-			continue
+		switch body := ans.Body.(type) {
+		case *dnsmessage.AResource:
+			if qtype == dnsmessage.TypeA {
+				ips = append(ips, net.IP(body.A[:]).String())
+			}
+		case *dnsmessage.AAAAResource:
+			if qtype == dnsmessage.TypeAAAA {
+				ips = append(ips, net.IP(body.AAAA[:]).String())
+			}
 		}
-		ar, ok := ans.Body.(*dnsmessage.AResource)
-		if !ok {
-			continue
-		}
-		ips = append(ips, net.IP(ar.A[:]).String())
 	}
 	if len(ips) == 0 {
-		return nil, fmt.Errorf("no A records in response")
+		return nil, fmt.Errorf("no %s records in response", qtype)
 	}
 	return ips, nil
 }

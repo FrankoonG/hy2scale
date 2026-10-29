@@ -250,13 +250,7 @@ func (a *App) handleSSUDPPacket(
 		// path: re-read the flow under flow.mu and skip re-dial.
 		flow.mu.Lock()
 		if flow.upstream == nil {
-			var remote net.Conn
-			var derr error
-			if u.ExitVia == "" {
-				remote, derr = net.DialTimeout("udp", dst, 5*time.Second)
-			} else {
-				remote, derr = a.dialExitUDPPaths(ctx, u.ExitVia, u.ExitPaths, u.ExitMode, dst)
-			}
+			remote, derr := a.dialRoutedUDP(ctx, u.ExitVia, u.ExitPaths, u.ExitMode, dst)
 			if derr != nil {
 				flow.mu.Unlock()
 				flowsMu.Lock()

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { NodeConfig, TopologyNode } from '@/api';
+import type { NodeConfig, PathStatus, TopologyNode } from '@/api';
 
 interface NodeState {
   node: NodeConfig | null;
@@ -9,8 +9,10 @@ interface NodeState {
   connectedPeers: Set<string>;
   disabledPeers: Set<string>;           // root-level disabled names (client disables)
   disabledPaths: Set<string>;           // qualified paths disabled (sub-row disables), backend convention
+  pathStatus: Map<string, PathStatus>;  // configured exit paths, as the backend routes them
 
   setNode: (node: NodeConfig) => void;
+  setPathStatus: (list: PathStatus[]) => void;
   setTopology: (topo: TopologyNode[]) => void;
   setSyncing: (qualifiedPath: string, enabled: boolean) => void;
   clearSyncing: (qualifiedPath: string) => void;
@@ -108,8 +110,10 @@ export const useNodeStore = create<NodeState>((set, get) => ({
   connectedPeers: new Set(),
   disabledPeers: new Set(),
   disabledPaths: new Set(),
+  pathStatus: new Map(),
 
   setNode: (node) => set({ node }),
+  setPathStatus: (list) => set({ pathStatus: new Map(list.map((p) => [p.path, p])) }),
 
   setTopology: (topo) => {
     const { node, syncingNodes } = get();

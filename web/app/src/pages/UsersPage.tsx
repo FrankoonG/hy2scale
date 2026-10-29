@@ -1,14 +1,14 @@
-import { useState, useCallback, useRef, type MouseEvent } from 'react';
+import { useState, useCallback, useRef, useMemo, type MouseEvent } from 'react';
 import { useDeselectOnBlankClick } from '@/hooks/useDeselectOnBlankClick';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Card, Button, Badge, AlertBadge, useToast, useConfirm, useSelection, isInteractiveDescendant } from '@hy2scale/ui';
+import { Card, Button, Badge, AlertBadge, Table, Tooltip, useToast, useConfirm, useSelection, type Column } from '@hy2scale/ui';
 import type { UserConfig, Session, PasswordConflicts } from '@/api';
 import * as api from '@/api';
-import { fmtBytes, fmtDuration } from '@/hooks/useFormat';
-import { ExitViaCell } from '@/components/ExitViaCell';
+import { ExitViaCell, exitViaSortValue } from '@/components/ExitViaCell';
 import UserModal from '@/components/UserModal';
 import UserDetailModal from '@/components/UserDetailModal';
+import UserInfoModal from '@/components/UserInfoModal';
 import ImportExportButton from '@/components/ImportExportButton';
 import ResponsiveActions from '@/components/ResponsiveActions';
 
@@ -21,13 +21,30 @@ export default function UsersPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [clickPos, setClickPos] = useState<{ x: number; y: number } | undefined>();
-  const [detailUser, setDetailUser] = useState<UserConfig | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const [detailSnap, setDetailSnap] = useState<UserConfig | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailPos, setDetailPos] = useState<{ x: number; y: number } | undefined>();
+  const [preview, setPreview] = useState<UserConfig | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewPos, setPreviewPos] = useState<{ x: number; y: number } | undefined>();
 
   const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: api.getUsers, refetchInterval: 5000 });
   const { data: conflicts = {} } = useQuery<PasswordConflicts>({ queryKey: ['userConflicts'], queryFn: api.getUserConflicts, refetchInterval: 5000 });
   const { data: sessions = [] } = useQuery({ queryKey: ['sessions'], queryFn: api.getSessions, refetchInterval: 3000 });
+
+  const sessionsByUser = useMemo(() => {
+    const m = new Map<string, Session[]>();
+    for (const s of sessions) {
+      const list = m.get(s.username);
+      if (list) list.push(s); else m.set(s.username, [s]);
+    }
+    return m;
+  }, [sessions]);
+  const noSessions: Session[] = [];
+  // The dialog follows the live user row (traffic etc. keep polling); the
+  // snapshot covers the close animation after a delete.
+  const detailUser = (detailId && users.find((u) => u.id === detailId)) || detailSnap;
 
   const openAdd = (e: MouseEvent) => {
     setClickPos({ x: e.clientX, y: e.clientY });
@@ -41,11 +58,20 @@ export default function UsersPage() {
     setModalOpen(true);
   };
 
-  const openDetail = (u: UserConfig, e: MouseEvent) => {
-    setDetailPos({ x: e.clientX, y: e.clientY });
-    setDetailUser(u);
+  const openDetailAt = (u: UserConfig, pos?: { x: number; y: number }) => {
+    setDetailPos(pos);
+    setDetailId(u.id);
+    setDetailSnap(u);
     setDetailOpen(true);
   };
+  // Username click: the quick preview (links / QR codes).
+  const openPreview = (u: UserConfig, e: MouseEvent) => {
+    setPreviewPos({ x: e.clientX, y: e.clientY });
+    setPreview(u);
+    setPreviewOpen(true);
+  };
+  // Where the last click in the user list landed (modal animation origin).
+  const userClickPos = useRef<{ x: number; y: number } | undefined>(undefined);
 
   const handleToggle = useCallback(async (u: UserConfig) => {
     try {
@@ -134,6 +160,96 @@ export default function UsersPage() {
     } catch (e: any) { toast.error(String(e.message || e)); }
   }, [selection, confirm, queryClient, toast, t]);
 
+  const userColumns: Column<UserConfig>[] = [
+    {
+      key: 'username', title: t('users.username'), width: '120px',
+      sortValue: (u) => u.username,
+      render: (u) => (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          {conflicts[u.username] && (
+            <AlertBadge tooltip={
+              <div style={{ fontSize: 12 }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>{t('users.conflictWarning')}</div>
+                {Object.entries(conflicts[u.username]).map(([proxy, others]) => (
+                  <div key={proxy}>{proxy}: {others.join(', ')}</div>
+                ))}
+              </div>
+            } />
+          )}
+          <a className="peer-link peer-name-cell" style={{ cursor: 'pointer' }} onClick={(e) => openPreview(u, e)}>{u.username}</a>
+        </span>
+      ),
+    },
+    {
+      key: 'exit', title: t('users.exitVia'),
+      sortValue: (u) => exitViaSortValue(u.exit_via, u.exit_paths),
+      render: (u) => (
+        <div style={{ minWidth: 180 }}>
+          <ExitViaCell exitVia={u.exit_via} exitPaths={u.exit_paths} exitMode={u.exit_mode} />
+        </div>
+      ),
+    },
+    {
+      key: 'devices', title: t('users.devices'), width: '80px', className: 'col-right',
+      sortValue: (u) => sessionsByUser.get(u.username)?.length ?? 0,
+      render: (u) => {
+        const list = sessionsByUser.get(u.username);
+        if (!list || list.length === 0) {
+          return <div style={{ textAlign: 'right', color: 'var(--text-muted)' }}>—</div>;
+        }
+        return (
+          <div style={{ textAlign: 'right' }}>
+            <Tooltip content={
+              <div style={{ fontSize: 12 }}>
+                {list.map((s) => (
+                  <div key={s.key}>{s.protocol} <span className="mono">{s.remote_ip}</span></div>
+                ))}
+              </div>
+            }>
+              <Badge variant="green">{list.length}</Badge>
+            </Tooltip>
+          </div>
+        );
+      },
+    },
+    {
+      key: 'traffic', title: t('users.traffic'), width: '130px', className: 'col-right',
+      sortValue: (u) => u.traffic_used,
+      render: (u) => {
+        const limitGB = u.traffic_limit > 0 ? (u.traffic_limit / 1073741824).toFixed(1) + ' GB' : '∞';
+        const usedGB = (u.traffic_used / 1073741824).toFixed(2) + ' GB';
+        const pct = u.traffic_limit > 0 ? Math.min(100, (u.traffic_used / u.traffic_limit * 100)) : 0;
+        return (
+          <div style={{ textAlign: 'right' }}>
+            <span style={{ fontSize: 12 }}>
+              <span style={{ color: pct > 90 ? 'var(--red)' : 'var(--primary)', fontWeight: 600 }}>{usedGB}</span>
+              <span className="sep">/</span>
+              <span style={{ color: 'var(--text-muted)' }}>{limitGB}</span>
+            </span>
+            {u.traffic_limit > 0 && (
+              <div style={{ background: 'var(--border-light)', height: 3, borderRadius: 2, marginTop: 3 }}>
+                <div style={{ background: pct > 90 ? 'var(--red)' : 'var(--primary)', height: '100%', width: `${pct}%`, borderRadius: 2 }} />
+              </div>
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      key: 'expiry', title: t('users.expiry'), width: '90px', className: 'col-right',
+      sortValue: (u) => {
+        if (!u.expiry_date) return null;
+        const ts = Date.parse(u.expiry_date);
+        return Number.isNaN(ts) ? null : ts;
+      },
+      render: (u) => (
+        <div style={{ textAlign: 'right' }}>
+          <span style={{ fontSize: 12, color: isExpired(u.expiry_date) ? 'var(--red)' : undefined }}>{u.expiry_date || '—'}</span>
+        </div>
+      ),
+    },
+  ];
+
   return (
     <div className="hy-page">
       {/* Users */}
@@ -175,156 +291,22 @@ export default function UsersPage() {
         }
         noPadding
       >
-        <div ref={listScopeRef} style={{ display: 'contents' }}>
-        {users.length === 0 ? (
-          <div className="hy-empty" dangerouslySetInnerHTML={{ __html: t('users.noUsers') }} />
-        ) : (
-          <div className="hy-table-wrap">
-            <table className="hy-table">
-              <thead>
-                <tr>
-                  <th
-                    className="col-check"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if ((e.target as HTMLElement).tagName !== 'INPUT') {
-                        selection.toggleAll();
-                      }
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selection.isAllSelected}
-                      ref={(el) => { if (el) el.indeterminate = selection.isSomeSelected; }}
-                      onChange={selection.toggleAll}
-                    />
-                  </th>
-                  <th style={{ width: 120 }}>{t('users.username')}</th>
-                  <th style={{ minWidth: 180 }}>{t('users.exitVia')}</th>
-                  <th style={{ width: 130, textAlign: 'right' }}>{t('users.traffic')}</th>
-                  <th style={{ width: 90, textAlign: 'right' }}>{t('users.expiry')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((u) => {
-                  const limitGB = u.traffic_limit > 0 ? (u.traffic_limit / 1073741824).toFixed(1) + ' GB' : '∞';
-                  const usedGB = (u.traffic_used / 1073741824).toFixed(2) + ' GB';
-                  const pct = u.traffic_limit > 0 ? Math.min(100, (u.traffic_used / u.traffic_limit * 100)) : 0;
-                  const expired = isExpired(u.expiry_date);
-                  const isSelected = selection.selected.has(u.id);
-                  return (
-                    <tr
-                      key={u.id}
-                      className={`${!u.enabled ? 'disabled-row ' : ''}${isSelected ? 'selected ' : ''}hy-row-clickable`}
-                      onClick={(e) => {
-                        // Mirrors the framework Table's row-body click:
-                        // clicking blank cells exclusively selects this row.
-                        // The username link, edit button, and checkbox are
-                        // interactive descendants and bail out via the helper.
-                        if (isInteractiveDescendant(e.target, e.currentTarget)) return;
-                        selection.selectOnly(u.id);
-                      }}
-                    >
-                      <td
-                        className="col-check"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if ((e.target as HTMLElement).tagName !== 'INPUT') {
-                            selection.toggle(u.id);
-                          }
-                        }}
-                      >
-                        <input type="checkbox" checked={isSelected} onChange={() => selection.toggle(u.id)} />
-                      </td>
-                      <td>
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                          {conflicts[u.username] && (
-                            <AlertBadge tooltip={
-                              <div style={{ fontSize: 12 }}>
-                                <div style={{ fontWeight: 600, marginBottom: 4 }}>{t('users.conflictWarning')}</div>
-                                {Object.entries(conflicts[u.username]).map(([proxy, others]) => (
-                                  <div key={proxy}>{proxy}: {others.join(', ')}</div>
-                                ))}
-                              </div>
-                            } />
-                          )}
-                          <a className="peer-link peer-name-cell" style={{ cursor: 'pointer' }} onClick={(e) => openDetail(u, e)}>{u.username}</a>
-                        </span>
-                      </td>
-                      <td><ExitViaCell exitVia={u.exit_via} exitPaths={u.exit_paths} exitMode={u.exit_mode} /></td>
-                      <td style={{ textAlign: 'right' }}>
-                        <span style={{ fontSize: 12 }}>
-                          <span style={{ color: pct > 90 ? 'var(--red)' : 'var(--primary)', fontWeight: 600 }}>{usedGB}</span>
-                          <span className="sep">/</span>
-                          <span style={{ color: 'var(--text-muted)' }}>{limitGB}</span>
-                        </span>
-                        {u.traffic_limit > 0 && (
-                          <div style={{ background: 'var(--border-light)', height: 3, borderRadius: 2, marginTop: 3 }}>
-                            <div style={{ background: pct > 90 ? 'var(--red)' : 'var(--primary)', height: '100%', width: `${pct}%`, borderRadius: 2 }} />
-                          </div>
-                        )}
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <span style={{ fontSize: 12, color: expired ? 'var(--red)' : undefined }}>{u.expiry_date || '—'}</span>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+        <div
+          ref={listScopeRef}
+          style={{ display: 'contents' }}
+          onClickCapture={(e) => { userClickPos.current = { x: e.clientX, y: e.clientY }; }}
+        >
+          <Table
+            id="users"
+            columns={userColumns}
+            data={users}
+            rowKey={(u) => u.id}
+            rowClassName={(u) => !u.enabled ? 'disabled-row' : undefined}
+            emptyText={t('users.noUsers')}
+            selection={selection}
+            onRowClick={(u) => openDetailAt(u, userClickPos.current)}
+          />
         </div>
-      </Card>
-
-      {/* Active Devices */}
-      <Card fill={1} title={t('devices.title')} count={sessions.length} noPadding>
-        {sessions.length === 0 ? (
-          <div className="hy-empty">{t('devices.noDevices')}</div>
-        ) : (
-          <div className="hy-table-wrap">
-            <table className="hy-table">
-              <thead>
-                <tr>
-                  <th>{t('devices.user')}</th>
-                  <th>{t('devices.ip')}</th>
-                  <th>{t('devices.proxy')}</th>
-                  <th>{t('devices.conn')}</th>
-                  <th>{t('devices.traffic')}</th>
-                  <th>{t('devices.duration')}</th>
-                  <th style={{ width: 60 }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {sessions.map((s) => (
-                  <tr key={s.key}>
-                    <td><b>{s.username}</b></td>
-                    <td><span className="mono">{s.remote_ip}</span></td>
-                    <td>{s.protocol}</td>
-                    <td>{s.conn_count}</td>
-                    <td>
-                      <span className="mono" style={{ fontSize: 12 }}>
-                        <span className="stat-up">↑{fmtBytes(s.tx_bytes)}</span>
-                        <span className="sep">/</span>
-                        <span className="stat-down">↓{fmtBytes(s.rx_bytes)}</span>
-                      </span>
-                    </td>
-                    <td>{fmtDuration(s.duration)}</td>
-                    <td>
-                      <button className="hy-row-edit hy-row-kick" onClick={() => handleKick(s)} title={t('devices.kick')}>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-                          <polyline points="16 17 21 12 16 7"/>
-                          <line x1="21" y1="12" x2="9" y2="12"/>
-                        </svg>
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
       </Card>
 
       <UserModal
@@ -335,10 +317,20 @@ export default function UsersPage() {
       />
 
       <UserDetailModal
+        open={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        user={preview}
+        animateFrom={previewPos}
+      />
+
+      <UserInfoModal
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
         user={detailUser}
         animateFrom={detailPos}
+        sessions={(detailUser && sessionsByUser.get(detailUser.username)) || noSessions}
+        conflicts={detailUser ? conflicts[detailUser.username] : undefined}
+        onKick={handleKick}
       />
     </div>
   );

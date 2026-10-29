@@ -41,6 +41,8 @@ export type { DropdownMenuProps, DropdownItem } from './components/DropdownMenu'
 export { Table, isInteractiveDescendant } from './components/Table';
 export type { TableProps, Column, SelectionState } from './components/Table';
 export { TreeTable, TreeCell } from './components/TreeTable';
+export { TableLabelsProvider, PAGE_SIZES, sortBy } from './components/TableKit';
+export type { TableLabels, SortDir, SortState } from './components/TableKit';
 export type { TreeTableProps, TreeColumn, TreeNode, TreeRowMeta, TreeCellProps } from './components/TreeTable';
 
 // Navigation
@@ -49,7 +51,7 @@ export type { TabsProps, TabItem } from './components/Tabs';
 export { IconTabs } from './components/IconTabs';
 export type { IconTabsProps, IconTabItem } from './components/IconTabs';
 export { Sidebar } from './components/Sidebar';
-export type { SidebarProps, SidebarItem as SidebarNavItem } from './components/Sidebar';
+export type { SidebarProps, SidebarItem as SidebarNavItem, SidebarSection } from './components/Sidebar';
 export { Topbar } from './components/Topbar';
 export type { TopbarProps } from './components/Topbar';
 export { StatsGrid } from './components/StatsGrid';

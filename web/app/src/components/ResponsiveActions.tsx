@@ -15,7 +15,18 @@ interface Props {
   /** Action buttons. Rendered inline when there's room, otherwise
    *  stacked vertically inside a dropdown triggered by a ⋯ button. */
   children: ReactNode;
+  /** Secondary controls (view options etc.). Wide: behind a trailing ⋯
+   *  "more" button. Narrow: at the end of the overflow menu. */
+  more?: ReactNode;
 }
+
+const dots = (
+  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+    <circle cx="12" cy="5" r="1" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="19" r="1" fill="currentColor" stroke="none" />
+  </svg>
+);
 
 /**
  * Card-header action toolbar that collapses into a ⋯ overflow dropdown
@@ -30,7 +41,7 @@ interface Props {
  * button then toggles on/off as buttons re-render with different
  * content during normal polling refreshes.
  */
-export default function ResponsiveActions({ selectedCount = 0, onClearSelection, selectedLabel, children }: Props) {
+export default function ResponsiveActions({ selectedCount = 0, onClearSelection, selectedLabel, children, more }: Props) {
   const [narrow, setNarrow] = useState(typeof window !== 'undefined' && window.innerWidth <= 640);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -56,7 +67,7 @@ export default function ResponsiveActions({ selectedCount = 0, onClearSelection,
 
   if (!narrow) {
     return (
-      <div className="hy-actions-row">
+      <div className="hy-actions-row" ref={rootRef}>
         {selectedCount > 0 && (
           <span className="hy-bulk-bar">
             <span className="hy-bulk-count">{selectedLabel ?? `${selectedCount} selected`}</span>
@@ -64,6 +75,18 @@ export default function ResponsiveActions({ selectedCount = 0, onClearSelection,
           </span>
         )}
         {children}
+        {more && (
+          <span className="hy-actions-more">
+            <button
+              type="button"
+              className={`hy-actions-overflow${open ? ' open' : ''}`}
+              aria-expanded={open}
+              data-testid="actions-more"
+              onClick={() => setOpen((v) => !v)}
+            >{dots}</button>
+            {open && <div className="hy-actions-menu">{more}</div>}
+          </span>
+        )}
       </div>
     );
   }
@@ -86,11 +109,7 @@ export default function ResponsiveActions({ selectedCount = 0, onClearSelection,
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-          <circle cx="12" cy="5" r="1" fill="currentColor" stroke="none" />
-          <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
-          <circle cx="12" cy="19" r="1" fill="currentColor" stroke="none" />
-        </svg>
+        {dots}
       </button>
       {open && (
         // Intentionally NOT closing the menu on inner clicks. Some
@@ -101,6 +120,8 @@ export default function ResponsiveActions({ selectedCount = 0, onClearSelection,
         // or Escape, handled by the effect above.
         <div className="hy-actions-menu">
           {children}
+          {more && <div className="hy-actions-menu-sep" />}
+          {more}
         </div>
       )}
     </div>

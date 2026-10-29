@@ -1,11 +1,13 @@
 import { create } from 'zustand';
 import { login as apiLogin } from '@/api';
-import { sha256, getToken, setToken, clearToken, getSavedCredentials, saveCredentials, clearCredentials, setSessionHash, clearSessionHash, setHubSessionCookie, clearHubSessionCookie } from '@/hooks/useAuth';
+import { sha256, getToken, setToken, clearToken, getSavedCredentials, saveCredentials, clearCredentials, setSessionHash, clearSessionHash, setHubSessionCookie, clearHubSessionCookie, getLoginUser, setLoginUser, clearLoginUser } from '@/hooks/useAuth';
 
 const isProxy = () => !!(window as any).__PROXY__;
 
 interface AuthState {
   token: string | null;
+  /** Username entered at login (null after a passthrough/handoff session). */
+  username: string | null;
   loading: boolean;
   error: string | null;
   forcePasswordChange: boolean;
@@ -18,6 +20,7 @@ interface AuthState {
 
 export const useAuthStore = create<AuthState>((set) => ({
   token: getToken(),
+  username: getLoginUser(),
   loading: false,
   error: null,
   forcePasswordChange: false,
@@ -28,6 +31,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       const passHash = await sha256(password);
       const res = await apiLogin(username, passHash);
       setToken(res.token);
+      setLoginUser(username);
       if (remember) {
         saveCredentials(username, passHash);
       } else {
@@ -43,7 +47,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         setSessionHash(username, passHash);
         setHubSessionCookie(res.token);
       }
-      set({ token: res.token, loading: false, forcePasswordChange: !!res.force_password_change });
+      set({ token: res.token, username, loading: false, forcePasswordChange: !!res.force_password_change });
       return true;
     } catch (e: any) {
       set({ loading: false, error: String(e?.message || e) });
@@ -56,12 +60,13 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       const res = await apiLogin(username, passHash);
       setToken(res.token);
+      setLoginUser(username);
       if (remember) saveCredentials(username, passHash);
       if (!isProxy()) {
         setSessionHash(username, passHash);
         setHubSessionCookie(res.token);
       }
-      set({ token: res.token, loading: false, forcePasswordChange: !!res.force_password_change });
+      set({ token: res.token, username, loading: false, forcePasswordChange: !!res.force_password_change });
       return true;
     } catch (e: any) {
       clearCredentials();
@@ -72,11 +77,12 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   logout: () => {
     clearToken();
+    clearLoginUser();
     if (!isProxy()) {
       clearSessionHash();
       clearHubSessionCookie();
     }
-    set({ token: null, forcePasswordChange: false });
+    set({ token: null, username: null, forcePasswordChange: false });
     // Hard-reload rather than a soft react-router navigation: picks up
     // any new JS bundle deployed since this tab was first opened, so a
     // subsequent login lands on the current build instead of continuing

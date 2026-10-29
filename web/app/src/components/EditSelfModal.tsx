@@ -7,6 +7,20 @@ import { useNodeStore } from '@/store/node';
 import { useDialogInit } from '@/hooks/useFormInit';
 import { buildHy2Url, canExportAsHy2Url, copyToClipboard } from '@/utils/buildHy2Url';
 
+// IPv6 hosts are kept bare in the inputs ("::", "2001:db8::1") and
+// bracketed only when joined with a port.
+function bareHost(h: string): string {
+  return h.trim().replace(/^\[(.*)\]$/, '$1');
+}
+function joinHostPort(h: string, port: string): string {
+  const b = bareHost(h);
+  return `${b.includes(':') ? `[${b}]` : b}:${port}`;
+}
+function isWildcardHost(h: string): boolean {
+  const b = bareHost(h);
+  return b === '' || b === '0.0.0.0' || (b.includes(':') && /^[0:]+$/.test(b));
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -58,15 +72,14 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
       setNodeId(node.node_id || '');
       const listen = node.server?.listen || '0.0.0.0:5565';
       const match = listen.match(/^(.+):(.+)$/);
-      const ip = match ? match[1] : '0.0.0.0';
+      const ip = match ? bareHost(match[1]) : '0.0.0.0';
       setListenIp(ip);
       setListenPort(match ? match[2] : '5565');
       setPassword(node.server?.password || '');
       // Default share host: bound IP if non-wildcard, else the browser's
       // current hostname (typed once by the operator to reach this UI,
       // therefore externally reachable from where they sit).
-      const isWildcard = ip === '0.0.0.0' || ip === '::' || ip === '0:0:0:0:0:0:0:0';
-      setShareHost(isWildcard ? (typeof window !== 'undefined' ? window.location.hostname : '') : ip);
+      setShareHost(isWildcardHost(ip) ? (typeof window !== 'undefined' ? bareHost(window.location.hostname) : '') : ip);
       // Resolve tls_cert path to cert id: /data/tls/{id}.crt → id
       const certPath = node.server?.tls_cert || '';
       const certMatch = certPath.match(/\/data\/tls\/(.+)\.crt$/);
@@ -77,7 +90,7 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
   const handleExport = async () => {
     const host = shareHost.trim();
     const port = listenPort.trim();
-    const addr = host && port ? `${host}:${port}` : '';
+    const addr = host && port ? joinHostPort(host, port) : '';
     if (!canExportAsHy2Url(addr)) {
       toast.error(t('nodes.exportNotShareable'));
       return;
@@ -119,7 +132,7 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
     }
     setLoading(true);
     try {
-      const listen = `${listenIp.trim() || '0.0.0.0'}:${listenPort.trim() || '5565'}`;
+      const listen = joinHostPort(listenIp.trim() || '0.0.0.0', listenPort.trim() || '5565');
       const tls_cert = tlsCertId ? `/data/tls/${tlsCertId}.crt` : '';
       const tls_key = tlsCertId ? `/data/tls/${tlsCertId}.key` : '';
       await api.updateNode({

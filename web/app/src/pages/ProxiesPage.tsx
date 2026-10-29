@@ -1,18 +1,16 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Tabs, TabPanel } from '@hy2scale/ui';
-import { useNodeStore } from '@/store/node';
 import Hy2Tab from '@/components/proxies/Hy2Tab';
 import Socks5Tab from '@/components/proxies/Socks5Tab';
 import HttpTab from '@/components/proxies/HttpTab';
 import SSTab from '@/components/proxies/SSTab';
 import L2TPTab from '@/components/proxies/L2TPTab';
 import IKEv2Tab from '@/components/proxies/IKEv2Tab';
-import WireGuardTab from '@/components/proxies/WireGuardTab';
+import OpenVPNTab from '@/components/proxies/OpenVPNTab';
 
 export default function ProxiesPage() {
   const { t } = useTranslation();
-  const limited = useNodeStore((s) => s.node?.limited);
   const [tab, setTab] = useState('hy2');
 
   const tabs = [
@@ -22,7 +20,7 @@ export default function ProxiesPage() {
     { key: 'ss', label: t('proxies.ss') },
     { key: 'l2tp', label: t('proxies.l2tp'), disabled: false },
     { key: 'ikev2', label: t('proxies.ikev2'), disabled: false },
-    { key: 'wg', label: t('proxies.wireguard'), disabled: false },
+    { key: 'openvpn', label: t('proxies.openvpn') },
   ];
 
   const renderTab = () => {
@@ -31,9 +29,9 @@ export default function ProxiesPage() {
       case 'socks5': return <Socks5Tab />;
       case 'http': return <HttpTab />;
       case 'ss': return <SSTab />;
-      case 'l2tp': return <L2TPTab limited={limited} />;
-      case 'ikev2': return <IKEv2Tab limited={limited} />;
-      case 'wg': return <WireGuardTab limited={limited} />;
+      case 'l2tp': return <L2TPTab />;
+      case 'ikev2': return <IKEv2Tab />;
+      case 'openvpn': return <OpenVPNTab />;
       default: return null;
     }
   };

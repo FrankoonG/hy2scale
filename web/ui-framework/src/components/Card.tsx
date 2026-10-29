@@ -8,18 +8,12 @@ export interface CardProps {
   children: ReactNode;
   className?: string;
   noPadding?: boolean;
-  /**
-   * When set, the card flexes to share remaining height with sibling cards
-   * inside a `.hy-page` container. `fill={1}` + `fill={2}` gives a 1:2 split.
-   * The card's body scrolls internally; page-level scrolling is avoided.
-   */
+  /** Legacy: panels now take their content's height (kept for callers). */
   fill?: number | boolean;
+  style?: CSSProperties;
 }
 
-export function Card({ title, count, actions, children, className, noPadding, fill }: CardProps) {
-  const style: CSSProperties | undefined = fill
-    ? { flex: `${typeof fill === 'number' ? fill : 1} 1 0` }
-    : undefined;
+export function Card({ title, count, actions, children, className, noPadding, fill, style }: CardProps) {
   return (
     <div className={clsx('hy-card', noPadding && 'no-pad', fill && 'fill', className)} style={style}>
       {(title || actions) && (

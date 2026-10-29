@@ -20,13 +20,33 @@ let nextId = 1;
 
 // Validation patterns
 const IP_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
-const CIDR_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$/;
-const RANGE_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}-\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 const DOMAIN_RE = /^(\*\.)?[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
 
+function isIPv4(s: string): boolean {
+  return IP_RE.test(s) && s.split('.').every((o) => Number(o) <= 255);
+}
+
+function isIPv6(s: string): boolean {
+  if (!s.includes(':') || /[[\]/%]/.test(s)) return false;
+  try { new URL(`http://[${s}]/`); return true; } catch { return false; }
+}
+
+// IPv4 or IPv6: an address, a CIDR, or an a-b range of one family
 function validateIP(val: string): boolean {
   if (!val) return true;
-  return IP_RE.test(val) || CIDR_RE.test(val) || RANGE_RE.test(val);
+  const slash = val.indexOf('/');
+  if (slash >= 0) {
+    const ip = val.slice(0, slash), bits = val.slice(slash + 1);
+    if (!/^\d{1,3}$/.test(bits)) return false;
+    if (isIPv4(ip)) return Number(bits) <= 32;
+    return isIPv6(ip) && Number(bits) <= 128;
+  }
+  const dash = val.indexOf('-');
+  if (dash >= 0) {
+    const a = val.slice(0, dash), b = val.slice(dash + 1);
+    return (isIPv4(a) && isIPv4(b)) || (isIPv6(a) && isIPv6(b));
+  }
+  return isIPv4(val) || isIPv6(val);
 }
 
 function validateDomain(val: string): boolean {

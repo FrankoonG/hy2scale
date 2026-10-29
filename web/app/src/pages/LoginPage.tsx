@@ -65,7 +65,7 @@ export default function LoginPage() {
       setHasSaved(false);
       ok = await login(username, password, remember);
     }
-    if (ok) navigate('/nodes', { replace: true });
+    if (ok) navigate('/overview', { replace: true });
   };
 
   if (isProxy) {

@@ -11,11 +11,13 @@ import { useServerFormInit } from '@/hooks/useFormInit';
 import { useAuthStore } from '@/store/auth';
 import { sha256 } from '@/hooks/useAuth';
 import UpgradeUploadModal from '@/components/UpgradeUploadModal';
+import { OrderedList, toListItems, fromListItems, type ListItem } from '@/components/OrderedList';
+import { isPublicIPServer } from '@/utils/ipaddr';
 
 /**
- * LicensePanel — renders the project's umbrella licence, the two
- * hand-maintained native components (strongSwan + friends) that
- * constrain our licence choice, and the full Go module dependency
+ * LicensePanel — renders the project's umbrella licence, the
+ * hand-maintained native components listed by the server, and the full
+ * Go module dependency
  * list pulled from debug.BuildInfo on the server. Lives inside the
  * Upgrade card so the compliance-relevant info sits alongside the
  * "what version am I running" display.
@@ -98,6 +100,7 @@ export default function SettingsPage() {
   const [savingSystem, setSavingSystem] = useState(false);
   const [nestedExpanded, setNestedExpanded] = useState(false);
   const [relayPassthrough, setRelayPassthrough] = useState(false);
+  const [acceptPunch, setAcceptPunch] = useState(false);
   // DNS resolver (relay-routed) — see UISettings docs.
   // Upstream list reuses the `dns` field above; no separate state.
   const [dnsResolverEnabled, setDnsResolverEnabled] = useState(false);
@@ -106,6 +109,11 @@ export default function SettingsPage() {
   const [dnsResolverCacheSize, setDnsResolverCacheSize] = useState('1024');
   const [dnsResolverQueryTimeoutMs, setDnsResolverQueryTimeoutMs] = useState('3000');
   const [dnsResolverExpanded, setDnsResolverExpanded] = useState(false);
+  // Public-IP detection
+  const [publicMethod, setPublicMethod] = useState<'public' | 'peer+public'>('public');
+  const [publicInterval, setPublicInterval] = useState('600');
+  const [publicServers, setPublicServers] = useState<ListItem[]>(toListItems([]));
+  const [publicExpanded, setPublicExpanded] = useState(false);
 
   // Password
   const [curPw, setCurPw] = useState('');
@@ -144,12 +152,17 @@ export default function SettingsPage() {
     setMaxResponseBytes(String(settings.max_response_bytes || 1048576));
     setMaxFetchFanOut(String(settings.max_fetch_fan_out || 8));
     setRelayPassthrough(!!settings.relay_admin_passthrough);
+    setAcceptPunch(!!settings.accept_punch);
     setPathLossGrace(String(settings.path_loss_grace_s || 15));
     setDnsResolverEnabled(!!settings.dns_resolver_enabled);
     setDnsResolverCacheTtl(String(settings.dns_resolver_cache_ttl || 300));
     setDnsResolverNegativeTtl(String(settings.dns_resolver_negative_ttl || 30));
     setDnsResolverCacheSize(String(settings.dns_resolver_cache_size || 1024));
     setDnsResolverQueryTimeoutMs(String(settings.dns_resolver_query_timeout_ms || 3000));
+    const pip = settings.public_ip;
+    setPublicMethod(pip?.method === 'peer+public' ? 'peer+public' : 'public');
+    setPublicInterval(String(pip?.interval || 600));
+    setPublicServers(toListItems(pip?.servers || []));
   });
 
   const handleSaveWeb = async () => {
@@ -180,11 +193,25 @@ export default function SettingsPage() {
   // store.Get() reads in ikev2/l2tp at handshake time, nested limits via
   // atomic.Pointer swap inside the API server.
   const handleSaveSystem = async () => {
+    const interval = Number(publicInterval);
+    if (!/^\d+$/.test(publicInterval.trim()) || interval < 60) {
+      setPublicExpanded(true);
+      toast.error(t('settings.publicIpIntervalInvalid'));
+      return;
+    }
+    const servers = fromListItems(publicServers);
+    const badServer = servers.find((v) => !isPublicIPServer(v));
+    if (badServer !== undefined) {
+      setPublicExpanded(true);
+      toast.error(t('settings.publicIpServerInvalid', { v: badServer }));
+      return;
+    }
     setSavingSystem(true);
     try {
       await api.updateUISettings({
         dns,
         relay_admin_passthrough: relayPassthrough,
+        accept_punch: acceptPunch,
         path_loss_grace_s: parseInt(pathLossGrace) || 15,
         max_nested_depth: parseInt(maxNestedDepth) || 5,
         max_response_nodes: parseInt(maxResponseNodes) || 1024,
@@ -202,6 +229,7 @@ export default function SettingsPage() {
         dns_resolver_negative_ttl: parseInt(dnsResolverNegativeTtl) || 30,
         dns_resolver_cache_size: parseInt(dnsResolverCacheSize) || 1024,
         dns_resolver_query_timeout_ms: parseInt(dnsResolverQueryTimeoutMs) || 3000,
+        public_ip: { method: publicMethod, interval, servers },
       });
       toast.success(t('settings.savedHot'));
       resyncSystem();
@@ -437,6 +465,43 @@ export default function SettingsPage() {
                       </>
                     )}
 
+                    {/* Public-IP detection (interfaces page / egress). */}
+                    <div
+                      className="section-divider"
+                      onClick={() => setPublicExpanded(!publicExpanded)}
+                      role="button"
+                      aria-expanded={publicExpanded}
+                      data-testid="public-ip-section"
+                    >
+                      <span style={{ display: 'inline-block', width: 10, transform: publicExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▸</span>
+                      {t('settings.publicIp')}
+                    </div>
+                    {publicExpanded && (
+                      <>
+                        <FormGroup label={t('settings.publicIpMethod')}>
+                          <Select
+                            value={publicMethod}
+                            onChange={(e) => setPublicMethod(e.target.value === 'peer+public' ? 'peer+public' : 'public')}
+                            options={[
+                              { value: 'public', label: t('settings.publicIpMethodPublic') },
+                              { value: 'peer+public', label: t('settings.publicIpMethodPeer') },
+                            ]}
+                          />
+                        </FormGroup>
+                        <FormGroup label={t('settings.publicIpInterval')}>
+                          <Input type="number" min={60} value={publicInterval} onChange={(e) => setPublicInterval(e.target.value)} suffix="s" data-testid="public-ip-interval" />
+                        </FormGroup>
+                        <FormGroup label={t('settings.publicIpServers')}>
+                          <OrderedList items={publicServers} onChange={setPublicServers} options={[]}
+                            placeholder="stun:host:3478 / https://..." addLabel={t('settings.publicIpAddServer')}
+                            deleteTitle={t('app.delete')} testId="public-ip-servers" />
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.4 }}>
+                            {t('settings.publicIpServersHint')}
+                          </div>
+                        </FormGroup>
+                      </>
+                    )}
+
                     {/* Relay-delivered admin requests bypass auth when on.
                         Off by default — backwards compatible. The trust
                         boundary becomes the peer-to-peer relay handshake. */}
@@ -444,6 +509,13 @@ export default function SettingsPage() {
                       <Toggle checked={relayPassthrough} onChange={(e) => setRelayPassthrough(e.target.checked)} />
                       <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.4 }}>
                         {t('settings.relayPassthroughDesc')}
+                      </div>
+                    </FormGroup>
+
+                    <FormGroup label={t('settings.acceptPunch')}>
+                      <Toggle checked={acceptPunch} onChange={(e) => setAcceptPunch(e.target.checked)} data-testid="accept-punch" />
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.4 }}>
+                        {t('settings.acceptPunchDesc')}
                       </div>
                     </FormGroup>
 

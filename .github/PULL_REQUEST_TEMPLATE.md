@@ -35,8 +35,9 @@ Questions or discussions belong in:
 - [ ] Nested discovery
 - [ ] Hysteria 2 server
 - [ ] SOCKS5 / HTTP / Shadowsocks
-- [ ] L2TP/IPsec (strongSwan + xl2tpd)
-- [ ] IKEv2/IPsec (strongSwan)
+- [ ] L2TP/IPsec (userspace)
+- [ ] IKEv2/IPsec (userspace)
+- [ ] OpenVPN (userspace)
 - [ ] WireGuard (wireguard-go + gvisor)
 - [ ] Routing rules / TUN mode
 - [ ] TLS / certificate store

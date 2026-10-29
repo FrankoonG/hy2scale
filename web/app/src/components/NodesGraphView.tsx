@@ -7,50 +7,6 @@ import { fmtRate } from '@/hooks/useFormat';
 import { useExitPaths } from '@/hooks/useExitPaths';
 import { useConfirm, useToast } from '@hy2scale/ui';
 import { copyToClipboard } from '@/utils/buildHy2Url';
-import { motion, AnimatePresence } from 'framer-motion';
-import { PathInfoExpand, type PathInfoExpandProps, type Precision } from './PathInfoExpand';
-
-// Backend Snapshot → PathInfoExpandProps shape. The four metric props
-// drop everything except the relevant field per bucket; info-zone
-// props are left at their empty defaults because the caller fills
-// them in from live edges, not from the recorded rings.
-function snapshotToHistoryProps(snap: api.DiagPeerHistory): PathInfoExpandProps {
-  const buckets: Record<Precision, api.DiagHistoryBucket[]> = {
-    m1: snap.m1 ?? [],
-    h1: snap.h1 ?? [],
-    d1: snap.d1 ?? [],
-  };
-  const project = <T,>(fn: (b: api.DiagHistoryBucket) => T): Record<Precision, T[]> => ({
-    m1: buckets.m1.map(fn),
-    h1: buckets.h1.map(fn),
-    d1: buckets.d1.map(fn),
-  });
-  return {
-    latency: project((b) => ({ ms: b.latencyMs })),
-    online:  project((b) => ({ pct: b.onlinePct })),
-    txPeak:  project((b) => ({ bps: b.txPeak })),
-    rxPeak:  project((b) => ({ bps: b.rxPeak })),
-    perHopLatencyMs: [],
-    realtimeUpBps: 0,
-    realtimeDownBps: 0,
-    totalUpBytes: 0,
-    totalDownBytes: 0,
-  };
-}
-function emptyHistoryProps(): PathInfoExpandProps {
-  const empty: Record<Precision, never[]> = { m1: [], h1: [], d1: [] };
-  return {
-    latency: empty,
-    online: empty,
-    txPeak: empty,
-    rxPeak: empty,
-    perHopLatencyMs: [],
-    realtimeUpBps: 0,
-    realtimeDownBps: 0,
-    totalUpBytes: 0,
-    totalDownBytes: 0,
-  };
-}
 
 interface Props {
   topology: TopologyNode[];
@@ -58,6 +14,9 @@ interface Props {
   selfId: string;
   selfName?: string;
   onOpenRemote?: (qpath: string, anchor?: { x: number; y: number }) => void;
+  /** Details button in the selected-path overlay. `qpath` is the same key
+   *  onSelectQPath receives ('__self__' for the local node). */
+  onOpenDetails?: (qpath: string, anchor?: { x: number; y: number }) => void;
   /** Invoked with the bare node name (or '__self__' for the local node)
    *  when the user clicks the edit button in the selected-path overlay.
    *  The click coords let the parent anchor the edit-modal enter animation
@@ -69,11 +28,15 @@ interface Props {
    *  bulk action buttons respond the same way. */
   selectedQPath?: string | null;
   onSelectQPath?: (qpath: string | null) => void;
+  /** Fill the parent (flex) container instead of the fixed card height. */
+  full?: boolean;
+  /** Page actions floated at the graph's top-right corner. */
+  actions?: ReactNode;
 }
 
 interface Pos { x: number; y: number }
 
-interface GraphNode {
+export interface GraphNode {
   key: string;
   name: string;
   isSelf: boolean;
@@ -95,9 +58,11 @@ interface GraphNode {
    *  client) and therefore editable via the same modal the list view uses.
    *  Nested descendants discovered via peer-introspection are read-only. */
   editable: boolean;
+  /** Direct peer with a live hole-punched connection: who initiated it. */
+  punched?: string[];
 }
 
-interface GraphEdge {
+export interface GraphEdge {
   key: string;
   from: string;             // dialer side (arrow source)
   to: string;               // dialee side
@@ -163,7 +128,7 @@ function nodeRadiusFor(n: GraphNode | undefined): number {
  * local node). Each returned path is an array of peer-name segments; the
  * first segment is always the self id (topology root key).
  */
-function findPathsToName(
+export function findPathsToName(
   topology: TopologyNode[],
   targetKey: string,
   selfId: string,
@@ -255,7 +220,7 @@ function resolveOverlap(
   return { x, y };
 }
 
-function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
+export function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
   const nodes = new Map<string, GraphNode>();
   const edges = new Map<string, GraphEdge>();
   const selfSet = new Set<string>([selfId, selfName || ''].filter(Boolean));
@@ -288,6 +253,7 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
         qpath,
         totalLatencyMs: n.is_self ? 0 : (typeof n.latency_ms === 'number' ? n.latency_ms : 0),
         editable,
+        punched: depth === 1 && n.punched?.length ? n.punched : undefined,
       };
       // Seed reachability tracking — see merge branch below for why.
       if (thisUnreachable) node._anyUnreachable = true;
@@ -322,6 +288,7 @@ function buildGraph(topo: TopologyNode[], selfId: string, selfName?: string) {
       const thisUnreachable = n.connected === false && !n.is_self;
       if (!thisUnreachable) (existing as any)._anyReachable = true;
       else (existing as any)._anyUnreachable = true;
+      if (depth === 1 && n.punched?.length) existing.punched = n.punched;
       existing.offline = !!existing.disabled ||
         (!!(existing as any)._anyUnreachable && !(existing as any)._anyReachable);
       if (depth < existing.depth) {
@@ -477,7 +444,7 @@ function fmtLatency(ms: number): string {
   return `${Math.round(ms)}ms`;
 }
 
-export default function NodesGraphView({ topology, selfId, selfName, onOpenRemote, onEditNode, selectedQPath, onSelectQPath }: Props) {
+export default function NodesGraphView({ topology, selfId, selfName, onOpenRemote, onOpenDetails, onEditNode, selectedQPath, onSelectQPath, full, actions }: Props) {
   const { t } = useTranslation();
   const { isReachableAt } = useExitPaths();
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -1286,173 +1253,6 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // to commit the new transform, one for the browser to paint it. After
   // that, drag-driven label glides work normally.
   const [labelsAnim, setLabelsAnim] = useState(false);
-  // Expanded path-info overlay (status-bar history). Default collapsed
-  // so the bottom-left widget stays compact for normal use; operator
-  // expands when they want to look at the time-series.
-  const [pathInfoExpanded, setPathInfoExpanded] = useState(false);
-  // Real per-peer history snapshot — keyed by peer name as the relay
-  // sees it. Empty until the first poll completes. Refreshed every 30 s
-  // while the panel is expanded; closes the poll loop when it collapses
-  // so dormant tabs don't keep hitting the API.
-  const [peerHistory, setPeerHistory] = useState<Record<string, api.DiagPeerHistory>>({});
-  useEffect(() => {
-    if (!pathInfoExpanded) return;
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const res = await api.getPeerHistory();
-        if (!cancelled) setPeerHistory(res.peers || {});
-      } catch {
-        // Silently ignore — the next tick retries. The fallback render
-        // shows empty bars (no data yet) which is the correct UX for
-        // either a recorder still warming up or a transient API blip.
-      }
-    };
-    tick();
-    const id = setInterval(tick, 30_000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [pathInfoExpanded]);
-  // User-resizable panel width (only meaningful when expanded). null =
-  // auto-size by compact-row content; number = explicit width set by
-  // dragging the right-edge handle. Clamped to [compactRowNatWidth,
-  // 60-bar-max] in the drag handler.
-  const [pathInfoWidth, setPathInfoWidth] = useState<number | null>(null);
-  // Track the compact-row's natural max-content width so we can use it
-  // as the resize MIN. Refreshed whenever the panel is in auto-size
-  // mode (i.e. user hasn't grabbed the handle yet). When user resizes,
-  // we lock this value.
-  const compactRowRef = useRef<HTMLDivElement | null>(null);
-  // Mirror `pathInfoWidth === null` into a ref so any layout-time
-  // callbacks read the current mode at fire-time, not the stale value
-  // captured when an effect ran.
-  const isAutoModeRef = useRef(true);
-  useEffect(() => { isAutoModeRef.current = pathInfoWidth === null; }, [pathInfoWidth]);
-  const setCompactRowRef = useCallback((el: HTMLDivElement | null) => {
-    compactRowRef.current = el;
-  }, []);
-  /** Precise measurement of the compact row's "max-content" width —
-   *  what the row would need to keep the path chain on a single line.
-   *  scrollWidth doesn't help here: when the row's content fits the
-   *  current panel (no overflow), scrollWidth === clientWidth, which
-   *  is just the current panel width. Instead we temporarily force
-   *  chain to nowrap, then sum each flex child's offsetWidth + the
-   *  flex gap. offsetWidth of a flex child with `flex: 0 1 auto` is
-   *  the child's natural max-content size when the row is wider than
-   *  its total content — exactly what we want. */
-  const measureCompactNatural = useCallback((): number => {
-    const row = compactRowRef.current;
-    if (!row) return 0;
-    const chain = row.querySelector('.hy-topo-pathinfo-chain') as HTMLElement | null;
-    const prevWrap = chain?.style.flexWrap;
-    const prevShrink = chain?.style.flexShrink;
-    if (chain) {
-      chain.style.flexWrap = 'nowrap';
-      // Without `flex-shrink: 0`, the chain element is still subject
-      // to flex-shrink inside a constrained row — offsetWidth would
-      // then reflect the shrunk width, not the chain's true natural
-      // content. Pin shrink to 0 so chain stays at its content size.
-      chain.style.flexShrink = '0';
-    }
-    // Force layout after style changes so reads see the new geometry.
-    void row.offsetHeight;
-    let total = 0;
-    let count = 0;
-    for (const child of Array.from(row.children) as HTMLElement[]) {
-      // Skip absolutely-positioned children (e.g. the resize handle):
-      // they sit on top, not in flow, so they don't add to the row's
-      // intrinsic width.
-      if (getComputedStyle(child).position === 'absolute') continue;
-      // getBoundingClientRect().width keeps sub-pixel precision; both
-      // offsetWidth and scrollWidth round-down to integers, which
-      // accumulates a 4-8 px shortfall over a 4-element row. Use the
-      // float reading and Math.ceil it at the end so the result is
-      // always ≥ the true content width.
-      const r = child.getBoundingClientRect();
-      total += r.width;
-      count++;
-    }
-    const ROW_GAP = 10;
-    total += Math.max(0, count - 1) * ROW_GAP;
-    if (chain) {
-      if (prevWrap !== undefined) chain.style.flexWrap = prevWrap;
-      if (prevShrink !== undefined) chain.style.flexShrink = prevShrink;
-    }
-    // Round up, then add 4 px slack for any remaining sub-pixel
-    // discrepancy between the rect-sum and the actual flex layout.
-    return Math.ceil(total) + 4;
-  }, []);
-  // Drag state for the right-edge resize handle.
-  const resizeDragRef = useRef<{ startX: number; startW: number } | null>(null);
-  const handleResizePointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const panel = (e.currentTarget.parentElement) as HTMLElement | null;
-    if (!panel) return;
-    // Measure the compact-row's natural one-line width BEFORE flipping
-    // out of auto mode. measureCompactNatural temporarily forces the
-    // chain to nowrap so the reading reflects how wide the row needs
-    // to be to keep the path on one line — independent of however
-    // the chain may currently be wrapped under a narrow panel.
-    const natural = measureCompactNatural();
-    // Add the panel chrome: padding (12 + 12) + borders (1 + 1). The
-    // +2 slack measureCompactNatural already adds covers sub-pixel
-    // rounding so the clamp sits a hair above the wrap threshold.
-    isAutoModeRef.current = false;
-    const startW = panel.getBoundingClientRect().width;
-    resizeDragRef.current = { startX: e.clientX, startW };
-    // 60 ticks * (10 + 2) px - 2 (no trailing gap) + 24 panel padding
-    // + ~6 slack for borders/scrollbars
-    const MAX = 60 * 12 - 2 + 24 + 6;
-    const MIN = Math.max(160, natural + 24 + 2);
-    const onMove = (ev: PointerEvent) => {
-      if (!resizeDragRef.current) return;
-      const dx = ev.clientX - resizeDragRef.current.startX;
-      let w = resizeDragRef.current.startW + dx;
-      w = Math.min(MAX, Math.max(MIN, w));
-      setPathInfoWidth(w);
-    };
-    const onUp = () => {
-      resizeDragRef.current = null;
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-      document.removeEventListener('pointercancel', onUp);
-    };
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-    document.addEventListener('pointercancel', onUp);
-  }, []);
-  // Reset to auto-size on double-click of the handle (UX rescue).
-  const handleResizeDoubleClick = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    isAutoModeRef.current = true;
-    setPathInfoWidth(null);
-  }, []);
-  // When the user picks a different path while the panel is in manual
-  // (user-resized) mode, the previously-chosen explicit width may no
-  // longer be enough to fit the new path on one line — causing the
-  // chain to wrap until the user manually re-resizes. Re-clamp here
-  // against the new path's natural width so manual width grows as
-  // needed but never shrinks below the user's preference (the
-  // `> pathInfoWidth` branch only grows it).
-  const displayPathKey = displayPath?.join('/') ?? '';
-  useLayoutEffect(() => {
-    if (pathInfoWidth === null) return;
-    if (!compactRowRef.current) return;
-    const natural = measureCompactNatural();
-    const newMin = Math.max(160, natural + 24);
-    // Iterate until convergence: the first measurement after a path
-    // change is taken with the panel still at the OLD width, so the
-    // row's flex-shrunk geometry can underreport the chain's natural
-    // by a few pixels. After setPathInfoWidth re-renders with the
-    // new width, this effect re-fires (pathInfoWidth dep) and
-    // re-measures against the new layout. The `newMin > pathInfoWidth`
-    // condition is the stop signal: once the panel is wide enough,
-    // newMin <= current and we stop growing.
-    if (newMin > pathInfoWidth) {
-      setPathInfoWidth(newMin);
-    }
-  }, [displayPathKey, pathInfoWidth, measureCompactNatural]);
   useEffect(() => {
     if (!snapshotApplied) return;
     let r2 = 0;
@@ -1770,6 +1570,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         const clearT = Math.max(0.02, clearDist / len);
         forbidden.push([tNode - clearT, tNode + clearT]);
       }
+      // A punched self↔peer edge carries its ring at the midpoint: keep the
+      // labels clear of it.
+      const fn = nodes.get(e.from), tn = nodes.get(e.to);
+      if ((fn?.isSelf && tn?.punched) || (tn?.isSelf && fn?.punched)) {
+        const clearT = 26 / len;
+        forbidden.push([0.5 - clearT, 0.5 + clearT]);
+      }
       // Also mark previously-placed labels' positions along this edge.
       for (const pl of placed) {
         const vx = pl.x - p.x, vy = pl.y - p.y;
@@ -1825,21 +1632,25 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   }, [edges, nodes, positions]);
 
   return (
-    <div className="hy-topo-graph">
-      <div className="hy-topo-graph-toolbar">
-        <button type="button" className="hy-topo-btn" onClick={fitView} title={t('nodes.graph.resetView')}>
-          {t('nodes.graph.resetView')}
-        </button>
-        <button type="button" className="hy-topo-btn" onClick={resetLayout} title={t('nodes.graph.resetLayout')}>
-          {t('nodes.graph.resetLayout')}
-        </button>
-        <span className="hy-topo-graph-hint">{t('nodes.graph.hint')}</span>
-      </div>
-      <div className="hy-topo-graph-toolbar-right">
-        <label className="hy-topo-snap">
-          <input type="checkbox" checked={snap} onChange={(e) => setSnap(e.target.checked)} />
-          <span>{t('nodes.graph.snap')}</span>
-        </label>
+    <div className={`hy-topo-graph${full ? ' is-full' : ''}`}>
+      {/* One top bar: graph tools on the left, page actions on the right,
+          laid out in a single flex row so they never overlap. The bar
+          itself ignores the pointer so panning works through its gaps. */}
+      <div className="hy-topo-graph-topbar">
+        <div className="hy-topo-graph-toolbar">
+          <button type="button" className="hy-topo-btn" onClick={fitView} title={t('nodes.graph.resetView')}>
+            {t('nodes.graph.resetView')}
+          </button>
+          <button type="button" className="hy-topo-btn" onClick={resetLayout} title={t('nodes.graph.resetLayout')}>
+            {t('nodes.graph.resetLayout')}
+          </button>
+          <label className="hy-topo-snap">
+            <input type="checkbox" checked={snap} onChange={(e) => setSnap(e.target.checked)} />
+            <span>{t('nodes.graph.snap')}</span>
+          </label>
+          <span className="hy-topo-graph-hint">{t('nodes.graph.hint')}</span>
+        </div>
+        {actions && <div className="hy-topo-graph-actions" data-testid="topo-actions">{actions}</div>}
       </div>
       <svg ref={svgRef} className="hy-topo-graph-svg" onPointerDown={onPointerDown}>
         {/*
@@ -2023,6 +1834,19 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                     ref={getFlowRefCb(e.key)}
                   />
                 )}
+                {/* Punched marker — a small violet ring where the offline ×
+                    would sit, on a live self ↔ peer edge carried by a
+                    hole-punched connection. Colours of line and dots stay. */}
+                {!offline && (() => {
+                  const peer = nodes.get(e.from)?.isSelf ? nodes.get(e.to) : nodes.get(e.to)?.isSelf ? nodes.get(e.from) : undefined;
+                  if (!peer?.punched) return null;
+                  return (
+                    <g transform={`translate(${mx},${my})`} className="hy-topo-edge-punch" data-punched={peer.name}>
+                      <title>{t('punch.ringTitle', { names: peer.punched.join(', ') })}</title>
+                      <circle r={4} />
+                    </g>
+                  );
+                })()}
                 {/* Offline × marker — small red cross at the midpoint,
                     constant size independent of edge thickness. */}
                 {offline && (
@@ -2162,12 +1986,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       {displayPath && displayPath.length > 0 && (() => {
         const selNode = nodes.get(displayPath[displayPath.length - 1]);
         // Sum segment latencies along the SELECTED path, not whatever value
-        // was last written into the per-node map. The per-node
-        // totalLatencyMs is overwritten on every visit during topology
-        // traversal, so it represents "the last path that happened to be
-        // walked", not the path the user is currently viewing — which made
-        // the displayed sum identical for every selection of the same
-        // final node.
+        // was last written into the per-node map (that one reflects the last
+        // path walked during traversal, not the path being viewed).
         const fullPath = displayPath[0] === selfId ? displayPath : [selfId, ...displayPath];
         let totalLat = 0;
         let anyOffline = false;
@@ -2181,10 +2001,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         }
         if (anyOffline) totalLat = -1;
         const offline = !!selNode?.offline || totalLat < 0;
-        // Both display name and the underlying graph key per hop — the
-        // key is what the qualifiedPath is built from (and what `selfId`
-        // is compared against to identify the self hop), while the name
-        // is what we actually render.
+        // Both display name and the underlying graph key per hop — the key
+        // builds the remote-open path (and identifies the self hop), the
+        // name is what we render.
         const hops = displayPath.map((k) => {
           const gn = nodes.get(k);
           return { key: k, name: gn?.name || k, native: !!gn?.native };
@@ -2193,89 +2012,25 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         // Copy target: the routable exit path (hop names without the local
         // node), the form exit_via / exit paths accept.
         const copyPath = hops.filter((h) => h.key !== selfId).map((h) => h.name).join('/');
-        // Edit button retired from the path-info overlay; selecting a node
-        // and pressing the top-right Edit button is now the unified entry
-        // point for both list and graph views. Per-hop remote-open is now
-        // handled inline by clicking the hop itself.
-        // History bars: feed from the QUALIFIED path (self prefix
-        // stripped). The backend recorder walks every cfg.Peers key
-        // and every ExitPaths entry the operator declared, summing
-        // per-hop latency and ANDing online flags — so a multi-hop
-        // path with a broken final hop registers as offline / -1ms,
-        // not as "first hop is fine". fullPath[0] is always selfId;
-        // the remaining elements form the qualified-path key the
-        // recorder uses.
-        const qualifiedPath = fullPath.length >= 2 ? fullPath.slice(1).join('/') : '';
-        const snap = peerHistory[qualifiedPath];
-        const history = snap
-          ? snapshotToHistoryProps(snap)
-          : emptyHistoryProps();
-        // Per-hop latency segments for the Info zone. Re-walks the
-        // same edges as `totalLat` above so the displayed sum reads
-        // identically. Each entry is a single hop's contribution.
-        const perHopLatencyMs: number[] = [];
-        for (let i = 1; i < fullPath.length; i++) {
-          const a = fullPath[i - 1], b = fullPath[i];
-          const e = edges.get(`${a}→${b}`) ?? edges.get(`${b}→${a}`)
-            ?? edges.get(`?${a < b ? a : b}|${a < b ? b : a}`);
-          perHopLatencyMs.push(e?.segmentLatencyMs ?? -1);
-        }
-        // Realtime / total bytes — take the LAST edge's rates as the
-        // path's current throughput. Per-path totals come from the
-        // backend in task #312; for the concept we derive a plausible
-        // estimate from the same mock seed so the rendering is stable.
-        let realtimeUpBps = 0;
-        let realtimeDownBps = 0;
-        if (fullPath.length >= 2) {
-          const a = fullPath[fullPath.length - 2];
-          const b = fullPath[fullPath.length - 1];
-          const lastE = edges.get(`${a}→${b}`) ?? edges.get(`${b}→${a}`)
-            ?? edges.get(`?${a < b ? a : b}|${a < b ? b : a}`);
-          realtimeUpBps = lastE?.txRate ?? 0;
-          realtimeDownBps = lastE?.rxRate ?? 0;
-        }
-        // Cumulative path bytes are not recorded in the history rings —
-        // per-path bytes are an O(N²) tracking surface and the user's
-        // primary ask was the four time-bucketed metrics. Surfaced as 0
-        // so the info zone reads "0 B" rather than a fabricated total.
-        const totalUpBytes = 0;
-        const totalDownBytes = 0;
+        // Details key: same convention as the list rows / onSelectQPath.
+        const detailKey = displayPath.length === 1 && displayPath[0] === selfId ? '__self__' : displayPath.join('/');
         return (
-          <div
-            className={`hy-topo-graph-pathinfo ${pathInfoExpanded ? 'is-expanded' : ''}`}
-            role="status"
-            aria-live="polite"
-            style={pathInfoExpanded && pathInfoWidth !== null ? { width: pathInfoWidth } : undefined}
-          >
-            <div className="hy-topo-pathinfo-row" ref={setCompactRowRef}>
+          <div className="hy-topo-graph-pathinfo" role="status" aria-live="polite">
+            <div className="hy-topo-pathinfo-row">
             <span className="hy-topo-pathinfo-label">{t('nodes.graph.selectedPath')}</span>
             <span className="hy-topo-pathinfo-chain">
               {hops.map((hop, i) => {
-                // Reach check is name-keyed (matches the topology store's
-                // connectedPeers/disabledPaths sets); the remote-open URL
-                // is key-keyed so NodesPage's onOpenRemote can strip the
-                // self-id prefix correctly. Display names and node_ids
-                // diverge for the local node (e.g. id=`ea1b2adb`,
-                // name=`sg-home`), so the two paths must be distinct.
+                // Reach check is name-keyed (topology store's sets); the
+                // remote-open path is key-keyed so the parent can strip the
+                // self-id prefix. Self id and self name differ, so the two
+                // paths must be distinct.
                 const qpForReach = hops.slice(0, i + 1).map((h) => h.name).join('/');
                 const qpForOpen = hops.slice(0, i + 1).map((h) => h.key).join('/');
                 const isSelfHop = hop.key === selfId;
-                // Reach: self is trivially reachable from itself; everyone
-                // else is checked via the topology store. The previous
-                // `i === 0` shortcut also skipped the check when the first
-                // hop was the SELECTED outbound peer (displayPath then is
-                // just [peerName]), painting offline peers green.
                 const reach = isSelfHop || isReachableAt(qpForReach);
                 const color = reach ? 'var(--green)' : 'var(--red)';
-                // Self hop: plain colored text — opening "remote into self"
-                // would render the same UI we're already in, so the link
-                // is suppressed there.
-                // Native hop: a vanilla hysteria2 server has no relay-API
-                // surface; /remote/<native>/scale/ would hit a peer that
-                // can't answer. v1.2 already gated this; restoring here.
-                // Unreachable hop: refuse the click — chained remote into
-                // an offline target would just hang in the proxy with a
-                // 502 with no useful failure surface.
+                // No link for: self (would open this same UI), native
+                // hysteria2 servers (no relay API), unreachable hops.
                 const hopEl = isSelfHop || hop.native || !onOpenRemote || !reach ? (
                   <span className="hy-topo-pathinfo-hop" style={{ color }}>{hop.name}</span>
                 ) : (
@@ -2283,7 +2038,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                     href="#"
                     className="hy-topo-pathinfo-hop hy-topo-pathinfo-hop-link"
                     style={{ color }}
-                    title={t('nodes.openRemote') || 'Open remote'}
+                    title={t('nodes.openRemote')}
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
@@ -2301,13 +2056,6 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
               })}
             </span>
             <span className={`hy-topo-pathinfo-lat ${latClass}`}>
-              {/*
-               * Use the same status word the list view's status column uses:
-               * `nodes.offline` for both `connected=false` and explicitly
-               * `disabled=true`. The previous generic `nodes.graph.unreachable`
-               * literal made graph and list disagree on what to call the
-               * same condition.
-               */}
               {offline ? t('nodes.offline') : fmtLatency(totalLat)}
             </span>
             {copyPath && (
@@ -2327,77 +2075,23 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
                 </svg>
               </button>
             )}
-            <button
-              type="button"
-              className="hy-topo-pathinfo-toggle"
-              aria-expanded={pathInfoExpanded}
-              aria-label={pathInfoExpanded ? t('nodes.graph.collapseHistory') : t('nodes.graph.expandHistory')}
-              title={pathInfoExpanded ? t('nodes.graph.collapseHistory') : t('nodes.graph.expandHistory')}
-              onClick={() => setPathInfoExpanded(v => !v)}
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                <path
-                  d={pathInfoExpanded ? 'M2 4L6 8L10 4' : 'M2 8L6 4L10 8'}
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
-            </div>
-            {/*
-              * Non-linear expand/collapse — framer-motion height animation
-              * with an ease-out-expo curve. The same curve the framework's
-              * Tooltip uses, so the chrome feels consistent across surfaces.
-              * `overflow:hidden` on the motion wrapper hides the partial
-              * contents while height interpolates.
-              */}
-            {/*
-              * Right-edge resize handle. Only present when expanded so a
-              * collapsed panel stays edge-cleaner. Drag horizontally to set
-              * explicit width; double-click to reset to auto-size.
-              * Min-width = compact-row natural width (captured at drag start).
-              * Max-width = 60 ticks worth of bar-row chrome + panel padding.
-              */}
-            {pathInfoExpanded && (
-              <div
-                className="hy-topo-pathinfo-resize-handle"
-                onPointerDown={handleResizePointerDown}
-                onDoubleClick={handleResizeDoubleClick}
-                aria-label={t('nodes.graph.resizeHandle')}
-                title={t('nodes.graph.resizeHandleTitle')}
-                role="separator"
-                aria-orientation="vertical"
-              />
+            {onOpenDetails && (
+              <button
+                type="button"
+                className="hy-topo-pathinfo-toggle"
+                aria-label={t('nodes.detail.open')}
+                title={t('nodes.detail.open')}
+                onClick={(e) => {
+                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  onOpenDetails(detailKey, { x: r.left + r.width / 2, y: r.top + r.height / 2 });
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <path d="M2 8L6 4L10 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
             )}
-            <AnimatePresence initial={false}>
-              {pathInfoExpanded && (
-                <motion.div
-                  key="pi-expand"
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{
-                    height:  { duration: 0.32, ease: [0.16, 1, 0.3, 1] },
-                    opacity: { duration: 0.22, ease: [0.16, 1, 0.3, 1] },
-                  }}
-                  style={{ overflow: 'hidden' }}
-                >
-                  <PathInfoExpand
-                    latency={history.latency}
-                    online={history.online}
-                    txPeak={history.txPeak}
-                    rxPeak={history.rxPeak}
-                    perHopLatencyMs={perHopLatencyMs}
-                    realtimeUpBps={realtimeUpBps}
-                    realtimeDownBps={realtimeDownBps}
-                    totalUpBytes={totalUpBytes}
-                    totalDownBytes={totalDownBytes}
-                  />
-                </motion.div>
-              )}
-            </AnimatePresence>
+            </div>
           </div>
         );
       })()}

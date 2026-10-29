@@ -8,12 +8,14 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/internal/sniff"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
 )
@@ -183,42 +185,35 @@ func (a *App) handleSS(conn net.Conn, method string) {
 			return
 		}
 
-		// DNS-pollution recovery: when the client supplied an IPv4/IPv6
-		// (its resolver was poisoned, the IP it sent us is fake), peek
-		// at the actual application payload for a TLS Client Hello SNI
-		// or HTTP Host header. The hostname-ATYP path is left alone —
-		// sniffOverrideHost no-ops when host is already a name. The
-		// peeked bytes are forwarded verbatim below so the dialed server
-		// sees the original packet untouched. Docs: dns-pollution-real-world.md
-		//
-		// Why we may need to read another AEAD frame here: mihomo and
-		// most SS clients send `address` in the FIRST encrypted frame
-		// and the client's first data byte in the SECOND frame. If we
-		// only sniff `remaining` (residual from frame 1) it's typically
-		// empty and we miss the Client Hello. Read one more frame when
-		// the parsed address is IP-form and we have <32 bytes of
-		// residual. The extra frame is buffered and forwarded together
-		// with `remaining` once the upstream is dialed.
-		if host, _, splitErr := net.SplitHostPort(addr); splitErr == nil && net.ParseIP(host) != nil {
-			if len(remaining) < 32 {
-				if extra, err2 := readSSFrame(conn, sessionAEAD, nonce, overhead); err2 == nil && len(extra) > 0 {
-					remaining = append(remaining, extra...)
-				}
-			}
-			addr = sniffOverrideHost(addr, remaining)
-		}
-
 		// User identified! Route via their exit_via
 		exitVia := u.ExitVia
 		exitMode := u.ExitMode
 		exitPaths := u.ExitPaths
 		username := u.Username
 
+		// IP destination: read frames until the client's hello is whole so
+		// the host name can be recovered (sniff_override.go). Most clients
+		// send the address alone in the first frame.
 		var remote net.Conn
-		if exitVia == "" {
-			remote, err = net.DialTimeout("tcp", addr, 10*time.Second)
+		if wantSniff(addr) {
+			deadline := time.Now().Add(sniffWindow)
+			waited := false
+			for !sniff.Complete(remaining) {
+				extra, started, ferr := readSSFrame(conn, sessionAEAD, nonce, overhead, deadline)
+				if ferr != nil {
+					if started {
+						return // part of a frame is gone: the stream is unusable
+					}
+					var ne net.Error
+					waited = errors.As(ferr, &ne) && ne.Timeout()
+					break
+				}
+				remaining = append(remaining, extra...)
+			}
+			remote, err = a.dialSniffedTCP(a.appCtx, a.exitRoute(exitVia, exitPaths, exitMode), nil,
+				addr, remaining, waited, isLoopbackAddr(conn.RemoteAddr()))
 		} else {
-			remote, err = a.dialExitWithPaths(a.appCtx, exitVia, exitPaths, exitMode, addr)
+			remote, err = a.dialRoutedTCP(a.appCtx, exitVia, exitPaths, exitMode, addr)
 		}
 		if err != nil {
 			return
@@ -278,6 +273,9 @@ func (a *App) handleSS(conn net.Conn, method string) {
 					break
 				}
 			}
+			// The target finished: pass its FIN on to the client and bound
+			// the other direction, as relayUser does.
+			halfCloseAndBound(conn)
 			done <- struct{}{}
 		}()
 
@@ -310,6 +308,11 @@ func (a *App) handleSS(conn net.Conn, method string) {
 			remote.Write(plainData)
 			m.add(int64(len(plainData)), 0)
 		}
+		// The client finished sending: pass its FIN on to the target (which
+		// may close only after it) and bound the wait for the reply
+		// direction. Waiting for the target first kept both ends — and the
+		// exit's session — open forever with a target that waits for us.
+		halfCloseAndBound(remote)
 		<-done
 		return
 	}
@@ -352,10 +355,13 @@ func (a *App) handleSSNone(conn net.Conn) {
 	}
 
 	var remote net.Conn
-	if exitVia == "" {
-		remote, err = net.DialTimeout("tcp", addr, 10*time.Second)
+	if wantSniff(addr) {
+		peeked, waited := peekHello(conn, remaining)
+		remaining = peeked
+		remote, err = a.dialSniffedTCP(a.appCtx, a.exitRoute(exitVia, exitPaths, exitMode), nil,
+			addr, remaining, waited, isLoopbackAddr(conn.RemoteAddr()))
 	} else {
-		remote, err = a.dialExitWithPaths(a.appCtx, exitVia, exitPaths, exitMode, addr)
+		remote, err = a.dialRoutedTCP(a.appCtx, exitVia, exitPaths, exitMode, addr)
 	}
 	if err != nil {
 		return
@@ -454,44 +460,40 @@ func parseSocksAddr(buf []byte) (string, []byte, error) {
 	return addr, buf[pos:], nil
 }
 
-// readSSFrame reads ONE Shadowsocks AEAD frame from conn, advancing the
-// caller-supplied nonce in place. Used only on the DNS-sniff path when
-// the address-only first frame had no application-layer bytes to peek;
-// we pull one more frame so we have the client's TLS Client Hello /
-// HTTP request line. A 300 ms read deadline keeps us from stalling on
-// server-speaks-first protocols (SMTP/FTP/SSH) — in that case we return
-// what we have (possibly nil) and the sniffer no-ops; the dial then
-// proceeds with the original IP, preserving legacy behaviour.
-//
-// Caller is responsible for forwarding the returned bytes to the
-// upstream after dialing — exactly the same way the legacy `remaining`
-// slice from parseSocksAddr is forwarded.
-func readSSFrame(conn net.Conn, aead cipher.AEAD, nonce []byte, overhead int) ([]byte, error) {
-	_ = conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+// readSSFrame reads one Shadowsocks AEAD frame from conn, advancing nonce.
+// Only the wait for the frame to begin is bound by deadline: a frame that
+// has begun is read whole, since a partly read frame leaves the stream
+// unusable. started reports that bytes were consumed.
+func readSSFrame(conn net.Conn, aead cipher.AEAD, nonce []byte, overhead int, deadline time.Time) (plain []byte, started bool, err error) {
+	_ = conn.SetReadDeadline(deadline)
 	defer conn.SetReadDeadline(time.Time{})
 
 	lenBuf := make([]byte, 2+overhead)
-	if _, err := io.ReadFull(conn, lenBuf); err != nil {
-		return nil, err
+	if _, err := io.ReadFull(conn, lenBuf[:1]); err != nil {
+		return nil, false, err
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if _, err := io.ReadFull(conn, lenBuf[1:]); err != nil {
+		return nil, true, err
 	}
 	plainLen, err := aead.Open(lenBuf[:0], nonce, lenBuf, nil)
 	if err != nil {
-		return nil, err
+		return nil, true, err
 	}
 	increment(nonce)
 
 	payloadLen := int(binary.BigEndian.Uint16(plainLen))
 	if payloadLen == 0 || payloadLen > 16384 {
-		return nil, fmt.Errorf("bad ss frame length %d", payloadLen)
+		return nil, true, fmt.Errorf("bad ss frame length %d", payloadLen)
 	}
 	encPayload := make([]byte, payloadLen+overhead)
 	if _, err := io.ReadFull(conn, encPayload); err != nil {
-		return nil, err
+		return nil, true, err
 	}
-	plain, err := aead.Open(encPayload[:0], nonce, encPayload, nil)
+	plain, err = aead.Open(encPayload[:0], nonce, encPayload, nil)
 	if err != nil {
-		return nil, err
+		return nil, true, err
 	}
 	increment(nonce)
-	return plain, nil
+	return plain, true, nil
 }
