@@ -1,0 +1,37 @@
+/* Buttons. */
+/* ====== Buttons ====== */
+.hy-btn{padding:8px 16px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--surface);color:var(--text);cursor:pointer;font-size:13px;font-family:var(--font);font-weight:500;transition:all .15s;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.hy-btn:hover{border-color:var(--primary);color:var(--primary)}
+.hy-btn:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
+.hy-btn.sm{padding:5px 10px;font-size:12px}
+.hy-btn.primary{background:var(--primary);border-color:var(--primary);color:#fff;transition:all .15s ease}
+.hy-btn.primary:hover{background:var(--primary-dark);border-color:var(--primary-dark);color:#fff;transform:translateY(-1px);box-shadow:0 2px 8px rgba(67,97,238,.25)}
+.hy-btn.primary:active{transform:translateY(0);box-shadow:none}
+.hy-btn.success{background:var(--green);border-color:var(--green);color:#fff;transition:all .15s ease}
+.hy-btn.success:hover{background:#16a34a;border-color:#16a34a;color:#fff;transform:translateY(-1px);box-shadow:0 2px 8px rgba(34,197,94,.25)}
+.hy-btn.success:active{transform:translateY(0);box-shadow:none}
+.hy-btn.danger{color:var(--red);border-color:transparent;background:transparent;padding:4px 8px}
+.hy-btn.danger:hover{background:var(--red-bg)}
+.hy-btn.ghost{border:none;background:none;color:var(--text-secondary)}
+.hy-btn.ghost:hover{color:var(--primary);background:var(--primary-light)}
+.hy-btn.full-width{width:100%}
+.hy-icon-btn{padding:6px;border:none;background:transparent;color:var(--text-muted);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:all .15s;border-radius:var(--radius-sm);font-size:14px}
+.hy-icon-btn:hover{color:var(--red);background:var(--red-bg)}
+.hy-icon-btn.edit:hover{color:var(--primary);background:var(--primary-light)}
+.hy-icon-btn:disabled{opacity:.4;cursor:not-allowed}
+
+
+/* ====== Copy Button ====== */
+.hy-copy-btn{display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:var(--text-muted);font-size:12px;background:none;border:none;padding:2px 6px;border-radius:4px;transition:all .15s}
+.hy-copy-btn:hover{color:var(--primary);background:var(--primary-light)}
+.hy-copy-btn.copied{color:var(--green)}
+
+/* ====== Circle icon button ====== */
+.hy-circle-btn{width:32px;height:32px;border-radius:50%;border:1px solid var(--text-muted);background:var(--surface);color:var(--text-secondary);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;transition:all .15s;flex-shrink:0}
+.hy-circle-btn:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-light)}
+.hy-circle-btn:disabled{opacity:.4;cursor:not-allowed}
+.hy-circle-btn svg{width:14px;height:14px}
+
+/* ====== Language / text button ====== */
+.hy-lang-btn{border:none;background:none;cursor:pointer;display:flex;align-items:center;gap:4px;color:var(--text-secondary);font-size:13px;font-weight:500;font-family:var(--font);padding:4px 0}
+.hy-lang-btn:hover{color:var(--text)}

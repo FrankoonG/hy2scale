@@ -1,0 +1,14 @@
+/* Phone layout overrides for the shell. */
+/* ====== Mobile ====== */
+@media(max-width:768px){
+  .hy-sidebar{position:fixed;z-index:100;left:-220px;transition:left .25s;top:0;bottom:0;height:100vh;height:100dvh;overflow-y:auto}
+  .hy-sidebar.open{left:0}
+  .hy-layout.sb-collapsed{--sidebar-w:220px}
+  .hy-sidebar-toggle{display:none!important}
+  .hy-hamburger{display:flex!important}
+  .hy-topbar{padding:0 12px}
+  .hy-main{margin-left:0}
+  .hy-content{padding:16px}
+  .hy-modal{max-width:95vw;margin:16px}
+  .hy-input,.hy-textarea,.hy-select{font-size:16px}
+}

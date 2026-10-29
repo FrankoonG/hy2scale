@@ -1,0 +1,121 @@
+/* Form controls. */
+/* ====== Toggle ====== */
+.hy-toggle{position:relative;width:36px;height:20px;cursor:pointer;display:inline-block;vertical-align:middle}
+.hy-toggle input{opacity:0;width:0;height:0;position:absolute}
+.hy-toggle .slider{position:absolute;inset:0;background:var(--border);border-radius:4px;transition:background .2s ease}
+.hy-toggle .slider::before{content:'';position:absolute;height:14px;width:14px;left:3px;bottom:3px;background:#fff;border-radius:3px;transition:transform .2s cubic-bezier(.4,0,.2,1);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+.hy-toggle input:checked+.slider{background:var(--primary)}
+.hy-toggle input:checked+.slider::before{transform:translateX(16px)}
+.hy-toggle.disabled{opacity:.4;pointer-events:none}
+.hy-toggle input:disabled+.slider{opacity:.4;cursor:not-allowed}
+.hy-toggle.sm{width:30px;height:16px}
+.hy-toggle.sm .slider{border-radius:3px}
+.hy-toggle.sm .slider::before{width:10px;height:10px;border-radius:2px}
+.hy-toggle.sm input:checked+.slider::before{transform:translateX(14px)}
+
+/* ====== Forms ====== */
+.hy-form-group{display:flex;flex-direction:column;gap:4px}
+.hy-form-label{font-size:12px;font-weight:500;color:var(--text-muted);display:flex;align-items:center;gap:4px}
+.hy-form-label .required{color:var(--red)}
+.hy-form-error{font-size:11px;color:var(--red)}
+.hy-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.hy-form-grid.cols-1{grid-template-columns:1fr}
+.hy-form-grid .full-width{grid-column:1/-1}
+@media(max-width:768px){.hy-form-grid{grid-template-columns:1fr}}
+
+/* ====== Inputs ====== */
+.hy-input-wrap{display:flex;align-items:center;overflow:hidden}
+.hy-input-wrap .prefix,.hy-input-wrap .suffix{padding:0 10px;color:var(--text-muted);font-size:12px;white-space:nowrap;display:flex;align-items:center}
+.hy-input{background:#fafbfc;border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:var(--radius-sm);font-size:13px;font-family:var(--font);outline:none;transition:border .15s;width:100%}
+.hy-input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(67,97,238,.1)}
+.hy-input::placeholder{color:var(--text-muted)}
+.hy-input:disabled{opacity:.6;cursor:not-allowed}
+.hy-input.error{border-color:var(--red)}
+
+.hy-textarea{background:#fafbfc;border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:var(--radius-sm);font-size:12px;font-family:var(--mono);outline:none;transition:border .15s;width:100%;min-height:80px;resize:vertical}
+.hy-textarea:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(67,97,238,.1)}
+.hy-textarea::placeholder{color:var(--text-muted)}
+
+/* ====== File drop zone ====== */
+/* Border colour is a LITERAL mid-grey, not a CSS var: Dark Reader's
+ * brightness-preserving inversion lifts near-white var(--border) back
+ * to near-white in dark mode, which lights the dotted line up against
+ * the dark surface. #9ca3af stays mid-grey through DR's transform
+ * (same trick as the topology grid lines). The drag-over highlight is
+ * a literal blue + alpha-tinted background that composes legibly over
+ * either base. */
+.hy-dropzone{
+  border:2px dashed #9ca3af;
+  border-radius:8px;
+  padding:28px 20px;
+  /* Real token (defined in tokens.css) — `var(--bg-secondary)` was used
+   * earlier but is not defined anywhere and resolved to transparent,
+   * so the dropzone had no contrast against the modal body. */
+  background:var(--surface-hover);
+  text-align:center;
+  cursor:pointer;
+  transition:border-color .15s, background .15s, opacity .15s;
+  user-select:none;
+  opacity:.85;
+  outline:none;
+}
+.hy-dropzone:hover, .hy-dropzone:focus-visible{ opacity:1 }
+.hy-dropzone.is-drag-over{
+  border-color:#3b82f6;
+  background:rgba(59,130,246,.08);
+  opacity:1;
+}
+.hy-dropzone.is-disabled{
+  cursor:not-allowed;
+  opacity:.5;
+}
+.hy-dropzone-name{
+  font-size:14px;
+  font-family:var(--mono);
+  word-break:break-all;
+}
+.hy-dropzone-meta{
+  font-size:12px;
+  color:var(--text-muted);
+  margin-top:4px;
+}
+.hy-dropzone-replace{
+  font-size:12px;
+  color:var(--text-muted);
+  margin-top:8px;
+}
+.hy-dropzone-hint{
+  font-size:14px;
+}
+
+/* ====== Password ====== */
+.hy-pw-wrap{position:relative;display:flex;width:100%}
+.hy-pw-wrap .hy-input{flex:1;padding-right:34px}
+.hy-pw-wrap--gen .hy-input{padding-right:66px}
+.hy-pw-btn{position:absolute;top:1px;bottom:1px;width:32px;border:none;background:transparent;cursor:pointer;color:var(--text-muted);display:flex;align-items:center;justify-content:center;padding:0;font-size:14px}
+.hy-pw-btn:hover{color:var(--primary);background:var(--primary-light)}
+.hy-pw-eye{right:1px;border-radius:0 var(--radius-sm) var(--radius-sm) 0}
+.hy-pw-eye.visible{color:var(--primary)}
+.hy-pw-gen{right:33px;border-radius:0}
+.hy-pw-gen:hover{color:var(--primary)}
+
+/* ====== Select ====== */
+.hy-select-wrap{position:relative;width:100%}
+.hy-select{display:flex;align-items:center;width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);font-size:13px;font-family:var(--font);cursor:pointer;outline:none;transition:border .15s}
+.hy-select:hover{border-color:var(--text-muted)}
+.hy-select:focus,.hy-select.open{border-color:var(--primary);box-shadow:0 0 0 3px rgba(67,97,238,.1)}
+.hy-select:disabled{opacity:.6;cursor:not-allowed}
+.hy-select-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+.hy-select-label.placeholder{color:var(--text-muted)}
+.hy-select-arrow{width:14px;height:14px;flex-shrink:0;color:var(--text-muted);margin-left:8px;transition:transform .2s}
+.hy-select.open .hy-select-arrow{transform:rotate(180deg)}
+.hy-select-dropdown{max-height:240px;overflow-y:auto;z-index:10000}
+.hy-dropdown-item.active{color:var(--primary);font-weight:600;background:var(--primary-light)}
+
+
+/* ====== Autocomplete ====== */
+.hy-autocomplete{position:relative;width:100%}
+.hy-autocomplete .hy-input{width:100%;box-sizing:border-box}
+.hy-autocomplete-list{z-index:10000;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);max-height:180px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,.15)}
+.hy-autocomplete-item{padding:7px 10px;font-size:13px;cursor:pointer;font-family:var(--mono)}
+.hy-autocomplete-item:hover,.hy-autocomplete-item.highlighted{background:var(--primary-light);color:var(--primary)}

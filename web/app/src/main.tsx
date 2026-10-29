@@ -10,6 +10,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider, ConfirmProvider, setImperativeToast, useToast, TableLabelsProvider } from '@hy2scale/ui';
 import { useTranslation } from 'react-i18next';
 import '@hy2scale/ui/css';
+import '@/styles/index.css';
 import { setTokenGetter } from '@/api/client';
 import { getToken } from '@/hooks/useAuth';
 import '@/i18n';

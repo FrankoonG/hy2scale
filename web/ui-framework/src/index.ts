@@ -1,6 +1,5 @@
 // Styles
-import './styles/tokens.css';
-import './styles/components.css';
+import './styles/index.css';
 
 // Components
 export { Button, IconButton } from './components/Button';

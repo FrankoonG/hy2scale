@@ -1,0 +1,119 @@
+/* Small app widgets: version/node badges, exit mode, login, user menu, notices, address list, license panel. */
+/* ====== Version Badge ====== */
+.version-badge{display:inline-block;padding:1px 8px;font-size:10px;font-weight:600;color:#2ecc71;background:rgba(46,204,113,0.08);border:1px solid rgba(46,204,113,0.35);border-radius:10px;line-height:16px}
+.version-badge.limited{color:#e74c3c;background:rgba(231,76,60,0.08);border-color:rgba(231,76,60,0.35)}
+.version-badge.compat{color:#f39c12;background:rgba(243,156,18,0.08);border-color:rgba(243,156,18,0.35)}
+.version-badge.incompatible{color:#e74c3c;background:rgba(231,76,60,0.08);border-color:rgba(231,76,60,0.35)}
+
+
+/* ====== Exit Mode ====== */
+.exit-mode-options{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px}
+.exit-mode-opt{display:flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;font-size:12px;color:var(--text-secondary);transition:all .15s}
+.exit-mode-opt:has(input:checked){border-color:var(--primary);background:var(--primary-light);color:var(--primary);font-weight:500}
+.exit-mode-opt input[type="radio"]{display:none}
+.exit-mode-opt:has(input:disabled){opacity:0.4;cursor:not-allowed;pointer-events:none}
+.exit-mode-opt:has(input:disabled):has(input:checked){opacity:1}
+
+/* ====== Login ====== */
+.hy-login-wrap{display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg)}
+.hy-login-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:40px 32px;width:360px;box-shadow:var(--shadow-md);text-align:center}
+.hy-login-logo{margin-bottom:16px}
+.hy-login-logo img{width:48px;height:48px;border-radius:12px}
+.hy-login-title{font-size:20px;font-weight:700;margin-bottom:4px}
+.hy-login-sub{font-size:13px;color:var(--text-muted);margin-bottom:24px}
+.hy-login-form{display:flex;flex-direction:column;gap:12px;text-align:left}
+.hy-login-form .hy-input{width:100%;box-sizing:border-box}
+.hy-login-form .hy-pw-wrap{width:100%}
+.hy-login-form .hy-btn{margin-top:4px}
+.hy-login-remember{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary);cursor:pointer}
+.hy-login-remember input{width:auto;margin:0;accent-color:var(--primary)}
+
+
+/* ====== Top bar user menu ====== */
+.hy-user-menu{position:relative;display:inline-flex}
+.hy-user-btn{display:flex;align-items:center;gap:6px;height:32px;max-width:220px;padding:0 8px;margin-right:-8px;border:none;border-radius:var(--radius-sm);background:none;cursor:pointer;color:var(--text-secondary);font-family:var(--font);font-size:13px;font-weight:500;transition:background .15s,color .15s}
+.hy-user-btn:hover,.hy-user-btn.open{background:var(--primary-light);color:var(--primary)}
+.hy-user-btn svg{width:16px;height:16px;flex-shrink:0}
+.hy-user-btn .hy-user-caret{width:14px;height:14px;transition:transform .15s}
+.hy-user-btn.open .hy-user-caret{transform:rotate(180deg)}
+.hy-user-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hy-user-dropdown{top:calc(100% + 6px);right:0;min-width:200px}
+.hy-user-dropdown .hy-dropdown-item{font-family:var(--font)}
+.hy-user-dropdown .hy-dropdown-item svg{width:16px;height:16px;flex-shrink:0;opacity:.7}
+.hy-user-dropdown .hy-dropdown-item.current svg{opacity:1}
+.hy-user-dropdown .hy-dropdown-item:disabled{opacity:.4;cursor:not-allowed;background:none}
+.hy-dd-meta{margin-left:auto;color:var(--text-muted);font-size:12px;white-space:nowrap}
+.hy-user-dropdown .hy-dropdown-item .hy-dd-caret{width:14px;height:14px;margin-left:4px;transition:transform .15s}
+.hy-user-dropdown .hy-dropdown-item[aria-expanded="true"] .hy-dd-caret{transform:rotate(90deg)}
+.hy-dd-sub{display:flex;flex-direction:column;padding-bottom:4px}
+.hy-dd-sub .hy-dropdown-item.current{color:var(--primary);font-weight:600}
+.hy-dd-check{display:inline-flex;width:16px;height:16px;flex-shrink:0}
+.hy-dd-divider{height:1px;margin:4px 0;background:var(--border-light)}
+
+/* ====== Import drop zone ====== */
+.hy-import-dropzone{border:2px dashed var(--border);border-radius:var(--radius-sm);padding:24px;text-align:center;color:var(--text-muted);font-size:13px;cursor:pointer;transition:all .15s}
+.hy-import-dropzone:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-light)}
+
+/* ====== L2TP/IKEv2 warning ====== */
+.hy-vpn-warn{background:var(--red-bg);color:var(--red);padding:12px 16px;border-radius:var(--radius-sm);font-size:13px;font-weight:500;margin-bottom:12px;border:1px solid var(--red)}
+.hy-vpn-warn code{background:rgba(0,0,0,.06);padding:1px 5px;border-radius:3px;font-size:12px}
+
+/* ====== Limited overlay ====== */
+.hy-limited-overlay{position:relative;pointer-events:none;opacity:.5}
+.hy-limited-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.8);z-index:10;font-size:13px;color:var(--text-secondary);padding:20px;text-align:center}
+
+
+/* ====== Link box (copyable URI) ====== */
+.hy-link-box{font-family:var(--mono);font-size:12px;padding:8px 12px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:100%;box-sizing:border-box;transition:border-color .15s}
+.hy-link-box:hover{border-color:var(--primary);color:var(--primary)}
+/* QR code wrapper — forced white bg, immune to Dark Reader */
+.hy-qr-wrap{background:#fff !important;color-scheme:only light;padding:12px;border-radius:8px;display:inline-block;line-height:0}
+
+/* ====== Node badge ====== */
+.node-badge{font-family:var(--mono);font-size:11px;background:var(--primary-light);color:var(--primary);padding:3px 10px;border-radius:20px;font-weight:600}
+
+
+/* ====== Address list ====== */
+.addr-list{display:flex;flex-direction:column;gap:6px;position:relative}
+.addr-row{display:flex;gap:8px;align-items:center}
+.addr-row:has(.addr-drag){user-select:none;-webkit-user-select:none}
+body.dragging-active,body.dragging-active *{user-select:none!important;-webkit-user-select:none!important}
+.addr-drag{width:20px;height:32px;display:flex;align-items:center;justify-content:center;cursor:grab;color:var(--text-muted);flex-shrink:0;touch-action:none;opacity:.5;transition:opacity .15s;user-select:none;-webkit-user-select:none}
+.addr-drag:hover{opacity:1}
+.addr-drag:active{cursor:grabbing}
+.addr-drag svg{width:14px;height:14px}
+.addr-row .hy-input{flex:1;min-width:0}
+.addr-del{width:32px;height:32px;border:1px solid var(--border);border-radius:var(--radius-sm);background:none;cursor:pointer;color:var(--red);font-size:16px;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0;padding:0}
+.addr-del:hover{background:rgba(239,68,68,.1);border-color:var(--red)}
+.addr-del:disabled{opacity:.3;cursor:not-allowed;color:var(--text-muted)}
+.addr-add-row{border:2px dashed var(--border);border-radius:var(--radius-sm);padding:10px;text-align:center;color:var(--text-muted);font-size:13px;cursor:pointer;transition:all .15s;margin-top:8px}
+.addr-add-row:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-light)}
+.punch-sub{font-size:12px;color:var(--text-secondary);font-weight:500}
+
+/* ====== License panel (Settings → Upgrade) ====== */
+.hy-license-panel{margin-top:4px;display:flex;flex-direction:column;gap:10px;padding-top:14px;border-top:1px solid var(--border-light)}
+.hy-license-header{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.hy-license-label{font-size:13px;color:var(--text-secondary)}
+.hy-license-value{font-size:12px;font-family:var(--mono);font-weight:600;color:var(--primary);background:var(--primary-light);padding:2px 8px;border-radius:4px}
+.hy-license-link{font-size:12px;color:var(--text-muted)}
+.hy-license-link:hover{color:var(--primary)}
+.hy-license-hint{font-size:11px;color:var(--text-muted);line-height:1.5}
+.hy-license-summary{font-size:12px;color:var(--text-secondary);cursor:pointer;padding:4px 0;user-select:none}
+.hy-license-summary:hover{color:var(--primary)}
+.hy-license-table{display:flex;flex-direction:column;gap:2px;margin-top:6px;max-height:240px;overflow-y:auto;background:var(--bg);border:1px solid var(--border-light);border-radius:var(--radius-sm);padding:6px 8px}
+.hy-license-table--compact{max-height:200px}
+.hy-license-row{display:flex;gap:10px;align-items:baseline;font-size:11px;font-family:var(--mono);padding:2px 0;border-bottom:1px solid transparent}
+.hy-license-row:hover{background:var(--surface-hover);border-radius:3px}
+.hy-license-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.hy-license-name a{color:var(--text);text-decoration:none}
+.hy-license-name a:hover{color:var(--primary);text-decoration:underline}
+.hy-license-ver{color:var(--text-muted);flex-shrink:0}
+.hy-license-lic{color:var(--text-secondary);flex-shrink:0;font-weight:500}
+
+
+.hy-table .col-egress-ip{width:150px}
+
+@media(max-width:768px){
+  .hy-user-name,.hy-user-btn .hy-user-caret{display:none}
+  .hy-user-btn{padding:0 6px;margin-right:-6px}
+}
