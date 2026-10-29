@@ -1,6 +1,6 @@
 import {
-  useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
-  type KeyboardEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode,
+  useCallback, useLayoutEffect, useMemo, useRef, useState,
+  type KeyboardEvent, type MouseEvent, type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
@@ -8,6 +8,7 @@ import { type useSelection } from '@hy2scale/ui';
 import type { IfaceEntry, IfaceFamilyKey, Egress } from '@/api/types';
 import { isLinkLocal6 } from '@/utils/ipaddr';
 import IfaceTypeBadge, { ifaceType } from '@/components/IfaceTypeBadge';
+import { usePanZoom, type View } from '@/hooks/usePanZoom';
 
 /*
  * Interface topology: a deterministic, layered left-to-right diagram.
@@ -330,10 +331,8 @@ const route = (p: Port, laneY: number, frameX: number, tx: number, ty: number) =
     + ` C${mx},${laneY} ${mx},${ty} ${tx},${ty}`;
 };
 
-interface View { x: number; y: number; k: number }
 const K_MIN = 0.3;
 const K_MAX = 2.5;
-const clampK = (k: number) => Math.max(K_MIN, Math.min(K_MAX, k));
 const TOP_RESERVE = 52; // overlay bar height kept clear when fitting
 const FIT_PAD_X = 32;
 const FIT_PAD_Y = 16;
@@ -352,10 +351,16 @@ export default function InterfacesTopoView({
   const availW = size.w - FIT_PAD_X;
   const availH = size.h - TOP_RESERVE - FIT_PAD_Y;
   const layout = useMemo(() => chooseLayout(list, egress, availW, availH), [list, egress, availW, availH]);
-  const [view, setView] = useState<View>({ x: 0, y: 0, k: 1 });
-  const viewRef = useRef(view);
-  viewRef.current = view;
   const userMoved = useRef(false);
+  // Shared canvas gestures: trackpad pan / pinch, mouse-wheel zoom, touch
+  // pan + pinch; the toolbar glides.
+  const { view, setView, animateTo, zoomBy, consumeClick, clampK } = usePanZoom({
+    ref: wrapRef,
+    minK: K_MIN,
+    maxK: K_MAX,
+    isOverlay: (el) => !!el.closest('[data-overlay]'),
+    onUserMove: () => { userMoved.current = true; },
+  });
 
   useLayoutEffect(() => {
     const el = wrapRef.current;
@@ -367,140 +372,25 @@ export default function InterfacesTopoView({
     return () => ro.disconnect();
   }, []);
 
-  // Toolbar zoom/fit glide to the target; wheel and drag stay immediate.
-  const anim = useRef(0);
-  const stopAnim = () => { if (anim.current) { cancelAnimationFrame(anim.current); anim.current = 0; } };
-  useEffect(() => stopAnim, []);
-  const animateTo = (to: View) => {
-    stopAnim();
-    const from = viewRef.current;
-    const t0 = performance.now();
-    const DUR = 240;
-    const step = (now: number) => {
-      const p = Math.min(1, (now - t0) / DUR);
-      const e = 1 - Math.pow(1 - p, 3);
-      // Interpolate scale geometrically so zooming feels even.
-      const k = from.k * Math.pow(to.k / from.k, e);
-      setView({ k, x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e });
-      anim.current = p < 1 ? requestAnimationFrame(step) : 0;
-    };
-    anim.current = requestAnimationFrame(step);
-  };
-
   const fitTarget = useCallback((): View | null => {
     if (!size.w || !size.h) return null;
     const k = clampK(Math.min(1.15, availW / layout.w, availH / layout.h));
     const x = (size.w - layout.w * k) / 2;
     const y = TOP_RESERVE + Math.max(0, (size.h - TOP_RESERVE - layout.h * k) / 2);
     return { x, y, k };
-  }, [size.w, size.h, availW, availH, layout.w, layout.h]);
+  }, [size.w, size.h, availW, availH, layout.w, layout.h, clampK]);
 
   // Keep the diagram fitted until the user pans or zooms.
   useLayoutEffect(() => {
     if (userMoved.current) return;
     const v = fitTarget();
-    if (v) { stopAnim(); setView(v); }
-  }, [fitTarget]);
+    if (v) setView(v);
+  }, [fitTarget, setView]);
 
   const resetView = () => {
     userMoved.current = false;
     const v = fitTarget();
     if (v) animateTo(v);
-  };
-
-  const zoomAt = useCallback((factor: number, cx: number, cy: number) => {
-    userMoved.current = true;
-    stopAnim();
-    setView((v) => {
-      const k = clampK(v.k * factor);
-      const s = k / v.k;
-      return { k, x: cx - (cx - v.x) * s, y: cy - (cy - v.y) * s };
-    });
-  }, []);
-  const zoomCenter = (factor: number) => {
-    userMoved.current = true;
-    const v = viewRef.current;
-    const k = clampK(v.k * factor);
-    const s = k / v.k;
-    const cx = size.w / 2, cy = size.h / 2;
-    animateTo({ k, x: cx - (cx - v.x) * s, y: cy - (cy - v.y) * s });
-  };
-
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      if ((e.target as HTMLElement).closest('[data-overlay]')) return;
-      e.preventDefault();
-      const r = el.getBoundingClientRect();
-      zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX - r.left, e.clientY - r.top);
-    };
-    el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
-  }, [zoomAt]);
-
-  // Pan with one pointer, pinch with two. A press only becomes a pan after
-  // 4px of travel so clicks on nodes still register as clicks.
-  const pointers = useRef(new Map<number, { x: number; y: number }>());
-  const gesture = useRef<{ sx: number; sy: number; v: View; panning: boolean; pinch?: { d: number; mx: number; my: number } } | null>(null);
-  const suppressClick = useRef(false);
-
-  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if ((e.target as HTMLElement).closest('[data-overlay]')) return;
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    stopAnim();
-    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    const r = e.currentTarget.getBoundingClientRect();
-    if (pointers.current.size === 2) {
-      const [a, b] = [...pointers.current.values()];
-      gesture.current = {
-        sx: 0, sy: 0, v: viewRef.current, panning: true,
-        pinch: { d: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), mx: (a.x + b.x) / 2 - r.left, my: (a.y + b.y) / 2 - r.top },
-      };
-      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-      return;
-    }
-    gesture.current = { sx: e.clientX, sy: e.clientY, v: viewRef.current, panning: false };
-  };
-
-  const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (!pointers.current.has(e.pointerId)) return;
-    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    const g = gesture.current;
-    if (!g) return;
-    if (g.pinch && pointers.current.size >= 2) {
-      const [a, b] = [...pointers.current.values()];
-      const d = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
-      const k = clampK(g.v.k * (d / g.pinch.d));
-      const s = k / g.v.k;
-      userMoved.current = true;
-      setView({ k, x: g.pinch.mx - (g.pinch.mx - g.v.x) * s, y: g.pinch.my - (g.pinch.my - g.v.y) * s });
-      return;
-    }
-    const dxp = e.clientX - g.sx;
-    const dyp = e.clientY - g.sy;
-    if (!g.panning) {
-      if (Math.hypot(dxp, dyp) < 4) return;
-      g.panning = true;
-      try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-    }
-    userMoved.current = true;
-    setView({ ...g.v, x: g.v.x + dxp, y: g.v.y + dyp });
-  };
-
-  const onPointerUp = (e: ReactPointerEvent<HTMLDivElement>) => {
-    pointers.current.delete(e.pointerId);
-    const g = gesture.current;
-    if (g?.panning) {
-      suppressClick.current = true;
-      window.setTimeout(() => { suppressClick.current = false; }, 0);
-    }
-    if (pointers.current.size === 0) gesture.current = null;
-    else if (g?.pinch) {
-      // One finger left after a pinch: continue as a pan from here.
-      const [p] = [...pointers.current.values()];
-      gesture.current = { sx: p.x, sy: p.y, v: viewRef.current, panning: true };
-    }
   };
 
   // ---- selection ----
@@ -519,7 +409,7 @@ export default function InterfacesTopoView({
     'aria-pressed': selection.selected.has(name),
     onClick: (e: MouseEvent<HTMLDivElement>) => {
       e.stopPropagation();
-      if (suppressClick.current || e.detail > 1) return;
+      if (consumeClick() || e.detail > 1) return;
       select(name, e);
     },
     onDoubleClick: (e: MouseEvent<HTMLDivElement>) => {
@@ -534,7 +424,7 @@ export default function InterfacesTopoView({
   });
 
   const onBlankClick = (e: MouseEvent<HTMLDivElement>) => {
-    if (suppressClick.current) return;
+    if (consumeClick()) return;
     const el = e.target as HTMLElement;
     if (el.closest('[data-k]') || el.closest('[data-overlay]')) return;
     selection.clear();
@@ -699,10 +589,6 @@ export default function InterfacesTopoView({
       ref={wrapRef}
       className="iface-topo"
       data-testid="iface-topo"
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
       onClick={onBlankClick}
     >
       {empty ? (
@@ -761,10 +647,10 @@ export default function InterfacesTopoView({
           <button type="button" className="iface-topo-tool" onClick={resetView} title={t('iface.topo.fit')} data-testid="topo-fit">
             <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" /></svg>
           </button>
-          <button type="button" className="iface-topo-tool" onClick={() => zoomCenter(1 / 1.2)} title={t('iface.topo.zoomOut')}>
+          <button type="button" className="iface-topo-tool" onClick={() => zoomBy(1 / 1.2)} title={t('iface.topo.zoomOut')}>
             <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M5 12h14" /></svg>
           </button>
-          <button type="button" className="iface-topo-tool" onClick={() => zoomCenter(1.2)} title={t('iface.topo.zoomIn')}>
+          <button type="button" className="iface-topo-tool" onClick={() => zoomBy(1.2)} title={t('iface.topo.zoomIn')}>
             <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M5 12h14M12 5v14" /></svg>
           </button>
           <span className="iface-topo-legend">

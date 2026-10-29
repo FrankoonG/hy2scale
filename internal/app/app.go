@@ -140,10 +140,13 @@ type Config struct {
 	// seconds without any working path to their exit, then close.
 	// 0 = default (msess.OrphanBudget); clamped to [3, 300].
 	PathLossGraceS int `yaml:"path_loss_grace_s,omitempty" json:"path_loss_grace_s,omitempty"`
-	// Persisted topology-graph layout: node key → SVG coordinates. Stored
-	// server-side so the layout follows the user across browsers/devices
-	// and multiple concurrent sessions converge on a single source of truth.
+	// Pre-1.4.0 single shared topology layout (node key → coordinates).
+	// Read only for migration into GraphCanvases (see MigrateGraphLayout).
 	GraphLayout map[string]GraphLayoutPos `yaml:"graph_layout,omitempty" json:"graph_layout,omitempty"`
+	// Custom topology-graph canvases (node positions, edge bends, label
+	// positions). Stored server-side so they follow the user across
+	// browsers and concurrent sessions converge on one source of truth.
+	GraphCanvases []GraphCanvas `yaml:"graph_canvases,omitempty" json:"graph_canvases,omitempty"`
 	// Nested-discovery hard limits. Defensive backstops on the deep-cache
 	// machinery (see internal/api/server.go walkAndCache /
 	// assembleDeepTree). Under a sane config rule 1 cycle drop + rule 2
@@ -317,6 +320,11 @@ func New(dataDir string) (*App, error) {
 		proxyHandles: make(map[string]*proxyHandle),
 		Sessions:     NewSessionManager(),
 	}
+	if c := a.store.Get(); len(c.GraphLayout) > 0 {
+		if err := a.store.Update(func(c *Config) { MigrateGraphLayout(c) }); err != nil {
+			log.Printf("[graph] layout migration not persisted: %v", err)
+		}
+	}
 	a.punch = newPunchManager(a)
 	a.ifaces = newIfaceManager(a)
 	a.refreshEgress()
@@ -372,24 +380,6 @@ func (a *App) AllActivePaths() map[string]string {
 		cp[k] = v
 	}
 	return cp
-}
-
-// SetGraphLayout replaces the persisted graph-layout map with the supplied
-// one. A nil or empty map clears the layout (returns the UI to auto-layout).
-func (a *App) SetGraphLayout(pos map[string]GraphLayoutPos) error {
-	return a.store.Update(func(c *Config) {
-		if len(pos) == 0 {
-			c.GraphLayout = nil
-			return
-		}
-		// Defensive copy so future caller mutations don't leak into the
-		// persisted config.
-		cp := make(map[string]GraphLayoutPos, len(pos))
-		for k, v := range pos {
-			cp[k] = v
-		}
-		c.GraphLayout = cp
-	})
 }
 
 func (a *App) UpdateWebCredentials(username, passHash string) {

@@ -9,6 +9,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -91,11 +92,11 @@ type Server struct {
 	subPeersCache map[string][]topoSubPeer
 	subPeersKick  chan struct{} // signal immediate refresh
 
-	// Graph-layout SSE subscribers. Each entry is a buffered channel
+	// Graph-canvas SSE subscribers. Each entry is a buffered channel
 	// receiving full-snapshot updates; slow consumers drop messages
-	// rather than blocking the PUT handler. Protected by layoutMu.
+	// rather than blocking the write handlers. Protected by layoutMu.
 	layoutMu     sync.Mutex
-	layoutSubs   map[uint64]chan map[string]app.GraphLayoutPos
+	layoutSubs   map[uint64]chan []app.GraphCanvas
 	layoutSubSeq uint64
 
 	// Build ID derived from the embedded index.html hash. Frontend polls
@@ -292,7 +293,7 @@ func NewServer(a *app.App, addr, basePath string) *Server {
 		oldNodeIDs:    make(map[string]string),
 		subPeersCache: make(map[string][]topoSubPeer),
 		subPeersKick:  make(chan struct{}, 1),
-		layoutSubs:    make(map[uint64]chan map[string]app.GraphLayoutPos),
+		layoutSubs:    make(map[uint64]chan []app.GraphCanvas),
 		sessions: make(map[string]time.Time),
 		upgrade:  newUpgradeJob(),
 	}
@@ -329,9 +330,10 @@ func (s *Server) Start(ctx context.Context) error {
 	authed.HandleFunc("GET /api/peers", s.getPeers)
 	authed.HandleFunc("GET /api/topology", s.getTopology)
 	authed.HandleFunc("GET /api/paths/status", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, s.app.PathStatuses()) })
-	authed.HandleFunc("GET /api/graph-layout", s.getGraphLayout)
-	authed.HandleFunc("PUT /api/graph-layout", s.setGraphLayout)
-	authed.HandleFunc("GET /api/graph-layout/stream", s.streamGraphLayout)
+	authed.HandleFunc("GET /api/graph-canvases", s.getGraphCanvases)
+	authed.HandleFunc("GET /api/graph-canvases/stream", s.streamGraphCanvases)
+	authed.HandleFunc("PUT /api/graph-canvases/{id}", s.putGraphCanvas)
+	authed.HandleFunc("DELETE /api/graph-canvases/{id}", s.deleteGraphCanvas)
 	authed.HandleFunc("GET /api/peers/{name}/peers", s.getNestedPeers)
 	authed.HandleFunc("PUT /api/peers/{name}/nested", s.setNested)
 	authed.HandleFunc("PUT /api/peers/{name}/disable", s.setPeerDisabled)
@@ -1323,71 +1325,79 @@ func (s *Server) internalPeers(w http.ResponseWriter, r *http.Request) {
 }
 
 // getTopology returns a tree structure: direct peers with their nested sub-peers.
-// getGraphLayout returns the persisted topology-graph coordinates. Shape:
-// { "positions": { "<nodeKey>": { "x": number, "y": number } } }. An empty
-// map means "auto-layout" on the client side.
-func (s *Server) getGraphLayout(w http.ResponseWriter, r *http.Request) {
-	cfg := s.app.Store().Get()
-	pos := cfg.GraphLayout
-	if pos == nil {
-		pos = map[string]app.GraphLayoutPos{}
-	}
-	writeJSON(w, map[string]interface{}{"positions": pos})
+// getGraphCanvases returns the custom topology canvases:
+// { "canvases": [ {id, name, nodes, edges}, ... ] }.
+func (s *Server) getGraphCanvases(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]interface{}{"canvases": s.app.GraphCanvases()})
 }
 
-// setGraphLayout persists a full snapshot of the graph layout. Callers
-// always send the complete map — partial updates would race with other
-// concurrent sessions (last-writer-wins is easier to reason about and
-// matches how the UI treats its local state today).
-func (s *Server) setGraphLayout(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Positions map[string]app.GraphLayoutPos `json:"positions"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+// maxGraphCanvasBody bounds one canvas PUT (2000 nodes + 4000 edges with
+// bends fit well inside).
+const maxGraphCanvasBody = 2 << 20
+
+// putGraphCanvas creates or replaces one custom canvas. The body is the
+// full canvas ({name, nodes, edges}); the id comes from the path. Writes are
+// whole-canvas, last writer wins, and every SSE subscriber gets the new
+// snapshot.
+func (s *Server) putGraphCanvas(w http.ResponseWriter, r *http.Request) {
+	var body app.GraphCanvas
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxGraphCanvasBody))
+	if err := dec.Decode(&body); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	if err := s.app.SetGraphLayout(body.Positions); err != nil {
-		http.Error(w, err.Error(), 500)
+	body.ID = r.PathValue("id")
+	if err := app.ValidateGraphCanvas(body); err != nil {
+		http.Error(w, err.Error(), 400)
 		return
 	}
-	// Fan out to every active SSE subscriber so other sessions pick up
-	// the change with ~no delay. Always broadcast the committed config
-	// snapshot (not the raw request body) so every listener sees the
-	// same authoritative map, including any defensive copies performed
-	// by SetGraphLayout.
-	committed := s.app.Store().Get().GraphLayout
-	if committed == nil {
-		committed = map[string]app.GraphLayoutPos{}
+	if err := s.app.PutGraphCanvas(body); err != nil {
+		code := 500
+		if errors.Is(err, app.ErrGraphCanvasLimit) {
+			code = 409
+		}
+		http.Error(w, err.Error(), code)
+		return
 	}
-	s.broadcastGraphLayout(committed)
+	s.broadcastGraphCanvases()
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
-// broadcastGraphLayout sends the snapshot to every registered SSE
-// subscriber. Slow consumers with a full buffer simply drop the update —
-// each SSE frame carries the complete layout so a missed frame self-
-// heals on the next one. Never blocks the PUT path.
-func (s *Server) broadcastGraphLayout(positions map[string]app.GraphLayoutPos) {
+// deleteGraphCanvas removes one custom canvas.
+func (s *Server) deleteGraphCanvas(w http.ResponseWriter, r *http.Request) {
+	if err := s.app.DeleteGraphCanvas(r.PathValue("id")); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	s.broadcastGraphCanvases()
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// broadcastGraphCanvases sends the committed snapshot to every registered
+// SSE subscriber. Slow consumers with a full buffer simply drop the update;
+// each frame carries the complete list so a missed frame self-heals on the
+// next one. Never blocks the write path.
+func (s *Server) broadcastGraphCanvases() {
+	snap := s.app.GraphCanvases()
 	s.layoutMu.Lock()
-	subs := make([]chan map[string]app.GraphLayoutPos, 0, len(s.layoutSubs))
+	subs := make([]chan []app.GraphCanvas, 0, len(s.layoutSubs))
 	for _, ch := range s.layoutSubs {
 		subs = append(subs, ch)
 	}
 	s.layoutMu.Unlock()
 	for _, ch := range subs {
 		select {
-		case ch <- positions:
+		case ch <- snap:
 		default:
 		}
 	}
 }
 
-// streamGraphLayout pushes layout snapshots to the client as SSE events.
-// The first event after connect carries the current state so the client
-// doesn't have to also call GET on mount; subsequent events fire only
-// when SetGraphLayout runs (from any session).
-func (s *Server) streamGraphLayout(w http.ResponseWriter, r *http.Request) {
+// streamGraphCanvases pushes canvas snapshots to the client as SSE events.
+// The first event after connect carries the current state, so the client
+// needs no separate GET on mount; later events fire on every write (from
+// any session).
+func (s *Server) streamGraphCanvases(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -1399,7 +1409,7 @@ func (s *Server) streamGraphLayout(w http.ResponseWriter, r *http.Request) {
 	// Disable any buffering proxies that would defeat SSE.
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	ch := make(chan map[string]app.GraphLayoutPos, 4)
+	ch := make(chan []app.GraphCanvas, 4)
 	s.layoutMu.Lock()
 	s.layoutSubSeq++
 	id := s.layoutSubSeq
@@ -1411,8 +1421,8 @@ func (s *Server) streamGraphLayout(w http.ResponseWriter, r *http.Request) {
 		s.layoutMu.Unlock()
 	}()
 
-	writeEvent := func(pos map[string]app.GraphLayoutPos) bool {
-		payload, err := json.Marshal(map[string]interface{}{"positions": pos})
+	writeEvent := func(cs []app.GraphCanvas) bool {
+		payload, err := json.Marshal(map[string]interface{}{"canvases": cs})
 		if err != nil {
 			return false
 		}
@@ -1423,29 +1433,22 @@ func (s *Server) streamGraphLayout(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 
-	// Initial snapshot so the client renders something before the first
-	// SetGraphLayout fires.
-	initial := s.app.Store().Get().GraphLayout
-	if initial == nil {
-		initial = map[string]app.GraphLayoutPos{}
-	}
-	if !writeEvent(initial) {
+	if !writeEvent(s.app.GraphCanvases()) {
 		return
 	}
 
 	// Periodic keepalive so idle connections don't hit HTTP client or
-	// proxy timeouts. Nothing needs to be parsed from these, they just
-	// refresh the socket.
+	// proxy timeouts.
 	ping := time.NewTicker(20 * time.Second)
 	defer ping.Stop()
 
 	for {
 		select {
-		case pos, ok := <-ch:
+		case cs, ok := <-ch:
 			if !ok {
 				return
 			}
-			if !writeEvent(pos) {
+			if !writeEvent(cs) {
 				return
 			}
 		case <-ping.C:
@@ -3863,7 +3866,7 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 		// chunk. plain io.Copy(w, resp.Body) leaves chunks sitting in
 		// Go's ~4 KB ResponseWriter buffer until enough data accumulates,
 		// which made SSE endpoints (text/event-stream) silently fail
-		// through the proxy: the remote graph-layout snapshot is the
+		// through the proxy: the remote graph-canvas snapshot is the
 		// first event, ~100 bytes, so it never reached the browser and
 		// the remote-graph node-drag positions appeared not to persist
 		// on page reload.
