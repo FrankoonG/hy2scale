@@ -1,7 +1,7 @@
 /* Modal, toast, confirm, tooltip, dropdown. */
 /* ====== Modal ====== */
-.hy-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;z-index:200}
-.hy-modal{background:var(--surface);border-radius:12px;width:100%;max-width:520px;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.15)}
+.hy-modal-overlay{position:fixed;inset:0;background:var(--overlay);display:flex;align-items:center;justify-content:center;z-index:200}
+.hy-modal{background:var(--surface);border:1px solid var(--modal-border);border-radius:12px;width:100%;max-width:520px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow-modal)}
 .hy-modal.wide{max-width:680px}
 .hy-modal-header{display:flex;align-items:center;padding:20px 24px 16px;border-bottom:1px solid var(--border-light)}
 .hy-modal-header h2{font-size:16px;font-weight:600;flex:1}
@@ -29,11 +29,11 @@
    longer conflict messages or mono blocks size to content rather than
    clipping into a narrow strip. The `min(560px, …)` keeps small
    screens sane. */
-.hy-tooltip{position:fixed;z-index:99999;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:var(--mono);font-size:12px;box-shadow:0 4px 16px rgba(0,0,0,.12);pointer-events:none;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8;max-width:min(560px,calc(100vw - 24px));margin-top:2px}
+.hy-tooltip{position:fixed;z-index:99999;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:var(--mono);font-size:12px;box-shadow:var(--shadow-tip);pointer-events:none;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8;max-width:min(560px,calc(100vw - 24px));margin-top:2px}
 
 
 /* ====== Dropdown ====== */
-.hy-dropdown{position:absolute;z-index:1050;min-width:160px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:0 4px 12px rgba(0,0,0,.15);padding:4px 0;overflow:hidden}
+.hy-dropdown{position:absolute;z-index:1050;min-width:160px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-pop);padding:4px 0;overflow:hidden}
 .hy-dropdown-item{display:flex;align-items:center;gap:8px;padding:8px 14px;font-size:13px;cursor:pointer;color:var(--text);border:none;background:none;width:100%;text-align:left}
 .hy-dropdown-item:hover{background:var(--primary-light)}
 .hy-dropdown-item.danger{color:var(--red)}

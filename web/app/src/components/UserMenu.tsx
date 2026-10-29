@@ -9,15 +9,17 @@ import i18n from '@/i18n';
 import * as api from '@/api';
 import { useAuthStore } from '@/store/auth';
 import { languages } from '@/components/LanguageSwitcher';
+import { useTheme, setThemePref, themePrefs, themeLabelKey } from '@/theme';
 
 const userIcon = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 016-6h4a6 6 0 016 6v1"/></svg>;
 const caretDown = <svg className="hy-user-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9"/></svg>;
 const caretRight = <svg className="hy-dd-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="9 6 15 12 9 18"/></svg>;
 const globeIcon = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/></svg>;
+const themeIcon = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 010 18z" fill="currentColor"/></svg>;
 const checkIcon = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="5 12 10 17 19 7"/></svg>;
 const logoutIcon = <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>;
 
-/** Top bar account button: language (inline expand) and logout. */
+/** Top bar account button: language and theme (inline expand) and logout. */
 export default function UserMenu() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -29,8 +31,10 @@ export default function UserMenu() {
 
   const [open, setOpen] = useState(false);
   const [langOpen, setLangOpen] = useState(false);
+  const [themeOpen, setThemeOpen] = useState(false);
+  const { pref } = useTheme();
   const ref = useRef<HTMLDivElement>(null);
-  const close = useCallback(() => { setOpen(false); setLangOpen(false); }, []);
+  const close = useCallback(() => { setOpen(false); setLangOpen(false); setThemeOpen(false); }, []);
   useClickOutside(ref, close);
 
   useEffect(() => {
@@ -74,7 +78,7 @@ export default function UserMenu() {
               className="hy-dropdown-item"
               aria-expanded={langOpen}
               data-testid="user-menu-language"
-              onClick={() => setLangOpen((v) => !v)}
+              onClick={() => { setLangOpen((v) => !v); setThemeOpen(false); }}
             >
               {globeIcon}
               <span>{t('app.language')}</span>
@@ -94,6 +98,36 @@ export default function UserMenu() {
                   >
                     <span className="hy-dd-check">{l.code === current && checkIcon}</span>
                     <span>{l.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              type="button"
+              className="hy-dropdown-item"
+              aria-expanded={themeOpen}
+              data-testid="user-menu-theme"
+              onClick={() => { setThemeOpen((v) => !v); setLangOpen(false); }}
+            >
+              {themeIcon}
+              <span>{t('app.theme')}</span>
+              <span className="hy-dd-meta">{t(themeLabelKey[pref])}</span>
+              {caretRight}
+            </button>
+            {themeOpen && (
+              <div className="hy-dd-sub" role="group">
+                {themePrefs.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={p === pref}
+                    data-testid={`user-menu-theme-${p}`}
+                    className={clsx('hy-dropdown-item', p === pref && 'current')}
+                    onClick={() => { setThemePref(p); close(); }}
+                  >
+                    <span className="hy-dd-check">{p === pref && checkIcon}</span>
+                    <span>{t(themeLabelKey[p])}</span>
                   </button>
                 ))}
               </div>

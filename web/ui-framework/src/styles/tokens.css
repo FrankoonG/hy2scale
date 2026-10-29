@@ -15,6 +15,84 @@
   --font:-apple-system,BlinkMacSystemFont,'Segoe UI','Inter',sans-serif;
   --mono:'SF Mono','Cascadia Code','Consolas',monospace;
   --sidebar-w:220px;
+  /* Semantic palette. Light values equal the literals they replaced, so
+     the light theme (and Dark Reader on it) renders as before. */
+  --input-bg:#fafbfc;
+  --code-bg:rgba(0,0,0,.06);
+  --veil:rgba(255,255,255,.8);
+  --overlay:rgba(0,0,0,.35);
+  --focus-ring:rgba(67,97,238,.1);
+  --knob:#fff;
+  --shadow-pop:0 4px 12px rgba(0,0,0,.15);
+  --shadow-tip:0 4px 16px rgba(0,0,0,.12);
+  --shadow-modal:0 20px 60px rgba(0,0,0,.15);
+  --modal-border:transparent;
+  /* Mid-grey on purpose: survives Dark Reader's inversion as mid-grey. */
+  --dash-border:#9ca3af;
+  --track:#d5d9e2;--track-soft:#e5e8ee;
+  --tag-border:#c4cad6;--tag-border-faint:#d5d9e2;
+  --dot-off:#c4cad6;
+  --c-green:#16a34a;--c-orange:#d97706;--c-red-strong:#dc2626;
+  --c-yellow:#ca8a04;--c-yellow-bg:rgba(234,179,8,0.12);
+  --ver-ok:#2ecc71;--ver-bad:#e74c3c;--ver-warn:#f39c12;
+  --type-bg:rgba(144,152,168,.14);
+  --type-ethernet:#2563eb;--type-ethernet-bg:rgba(59,130,246,.12);
+  --type-wlan:#0891b2;--type-wlan-bg:rgba(6,182,212,.12);
+  --type-child:#4361ee;--type-child-bg:rgba(67,97,238,.12);
+  --type-bridge:#7c3aed;--type-bridge-bg:rgba(139,92,246,.12);
+  --type-bond:#4f46e5;--type-bond-bg:rgba(99,102,241,.12);
+  --type-vlan:#d97706;--type-vlan-bg:rgba(245,158,11,.14);
+  --type-veth:#0d9488;--type-veth-bg:rgba(20,184,166,.12);
+  --type-macvlan:#db2777;--type-macvlan-bg:rgba(236,72,153,.12);
+  --type-tun:#16a34a;--type-tun-bg:rgba(34,197,94,.12);
+  --type-vxlan:#ea580c;--type-vxlan-bg:rgba(249,115,22,.12);
+  --scroll-thumb:var(--border);--scroll-thumb-hover:var(--text-muted);
+  color-scheme:light;
+}
+/* Dark theme (<html data-theme="dark">, set by the app before first paint).
+   Status "-bg" tints are opaque mixes over --surface so they stack
+   cleanly on rows and hovers. Dark Reader is locked off in this theme. */
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0f1116;--surface:#181b22;--surface-hover:#1e222a;
+  --border:#2c313c;--border-light:#232731;
+  --text:#e3e6ed;--text-secondary:#a9b0be;--text-muted:#7d8597;
+  --primary:#5a78f8;--primary-light:#212a45;--primary-dark:#4a66ea;
+  --green:#22c55e;--green-bg:#18322a;
+  --red:#f05252;--red-bg:#3a2227;
+  --orange:#f59e0b;--orange-bg:#362c1e;
+  --blue:#4f93f8;--blue-bg:#1d2b43;
+  --shadow:0 1px 3px rgba(0,0,0,.35),0 1px 2px rgba(0,0,0,.25);
+  --shadow-md:0 4px 14px rgba(0,0,0,.45);
+  --input-bg:#13161c;
+  --code-bg:rgba(255,255,255,.08);
+  --veil:rgba(24,27,34,.85);
+  --overlay:rgba(0,0,0,.6);
+  --focus-ring:rgba(90,120,248,.2);
+  --knob:#e3e6ed;
+  --shadow-pop:0 4px 16px rgba(0,0,0,.5);
+  --shadow-tip:0 4px 16px rgba(0,0,0,.5);
+  --shadow-modal:0 20px 60px rgba(0,0,0,.5);
+  --modal-border:var(--border);
+  --dash-border:#4b5262;
+  --track:#2c313c;--track-soft:#2c313c;
+  --tag-border:#3a404d;--tag-border-faint:#323743;
+  --dot-off:#4b5262;
+  --c-green:#4ade80;--c-orange:#fbbf24;--c-red-strong:#f87171;
+  --c-yellow:#facc15;--c-yellow-bg:rgba(234,179,8,.16);
+  --ver-ok:#4ade80;--ver-bad:#f87171;--ver-warn:#fbbf24;
+  --type-bg:rgba(144,152,168,.16);
+  --type-ethernet:#60a5fa;--type-ethernet-bg:rgba(59,130,246,.16);
+  --type-wlan:#22d3ee;--type-wlan-bg:rgba(6,182,212,.16);
+  --type-child:#8ea2fb;--type-child-bg:rgba(90,120,248,.18);
+  --type-bridge:#a78bfa;--type-bridge-bg:rgba(139,92,246,.18);
+  --type-bond:#818cf8;--type-bond-bg:rgba(99,102,241,.18);
+  --type-vlan:#fbbf24;--type-vlan-bg:rgba(245,158,11,.16);
+  --type-veth:#2dd4bf;--type-veth-bg:rgba(20,184,166,.16);
+  --type-macvlan:#f472b6;--type-macvlan-bg:rgba(236,72,153,.16);
+  --type-tun:#4ade80;--type-tun-bg:rgba(34,197,94,.16);
+  --type-vxlan:#fb923c;--type-vxlan-bg:rgba(249,115,22,.16);
+  --scroll-thumb:#363c48;--scroll-thumb-hover:#4a5161;
 }
 html,body{min-height:100%;overscroll-behavior-y:none}
 body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;line-height:1.6}
@@ -25,5 +103,5 @@ a:hover{text-decoration:underline}
 /* scrollbar */
 ::-webkit-scrollbar{width:6px;height:6px}
 ::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
-::-webkit-scrollbar-thumb:hover{background:var(--text-muted)}
+::-webkit-scrollbar-thumb{background:var(--scroll-thumb);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--scroll-thumb-hover)}

@@ -251,18 +251,9 @@ export default function WireGuardTab() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = `${detailName}.conf`; a.click();
-    URL.revokeObjectURL(url);
+    // Revoking at once can cancel the download in some browsers.
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
-
-  if (wg && wg.enabled === undefined && !wg.listen_port) {
-    return (
-      <Card title={t('wg.title')}>
-        <div className="hy-limited-overlay">
-          <div className="hy-limited-msg">{t('l2tp.warnText')}</div>
-        </div>
-      </Card>
-    );
-  }
 
   const peers = wg?.peers || [];
   const peerSelection = useSelection(peers.map((p) => p.name));
@@ -297,6 +288,17 @@ export default function WireGuardTab() {
     { key: 'ka', title: t('wg.ka'), width: '50px', sortValue: (p) => p.keepalive || null, render: (p) => <>{p.keepalive || '—'}</> },
     // Per-row edit column retired — select a row and use the top-right Edit button.
   ];
+
+  // Limited runtime: placed after every hook so the hook order never changes.
+  if (wg && wg.enabled === undefined && !wg.listen_port) {
+    return (
+      <Card title={t('wg.title')}>
+        <div className="hy-limited-overlay">
+          <div className="hy-limited-msg">{t('l2tp.warnText')}</div>
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20, flex: 1, minHeight: 0 }}>

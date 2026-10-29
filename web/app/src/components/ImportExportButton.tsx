@@ -104,6 +104,7 @@ export default function ImportExportButton({ target }: Props) {
       }
 
       let added = 0, skipped = 0, errors = 0;
+      let existingUsers: api.UserConfig[] | undefined;
 
       for (const row of rows) {
         try {
@@ -136,8 +137,12 @@ export default function ImportExportButton({ target }: Props) {
                 enabled: row.enabled !== 'no',
               };
               if (overwrite) {
-                try { await api.createUser(data); added++; }
-                catch { skipped++; }
+                // Users are keyed by id; find an existing one by username.
+                existingUsers ??= await api.getUsers();
+                const existing = existingUsers.find((u) => u.username === data.username);
+                if (existing) await api.updateUser(existing.id, data);
+                else await api.createUser(data);
+                added++;
               } else {
                 try { await api.createUser(data); added++; }
                 catch { skipped++; }

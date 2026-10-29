@@ -3,6 +3,8 @@
 // store module body, which reads sessionStorage synchronously inside
 // its create() call.
 import './bootstrap/handoff';
+// Theme before the first React render (index.html already set it pre-paint).
+import './theme';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';

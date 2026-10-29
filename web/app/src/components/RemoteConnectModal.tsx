@@ -229,7 +229,7 @@ export default function RemoteConnectModal({ open, onClose, chain, targetLabel, 
             <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} />
           </FormGroup>
           {errorMsg && (
-            <div style={{ color: 'var(--red, #ef4444)', fontSize: 13 }}>{errorMsg}</div>
+            <div style={{ color: 'var(--red)', fontSize: 13 }}>{errorMsg}</div>
           )}
           {/* Hidden submit button so Enter in either field submits the form */}
           <button type="submit" style={{ display: 'none' }} />

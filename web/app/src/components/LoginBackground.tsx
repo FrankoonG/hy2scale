@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 // Logo colors
 const CR = 77, CG = 110, CB = 163;       // outer circle: #4D6EA3 — regular peers
 const HR = 16, HG = 37, HB = 69;         // hub inner:    #102545 — concentric for transit nodes
+const HDR = 150, HDG = 176, HDB = 226;   // hub inner on the dark theme: #96b0e2 (navy vanishes on dark)
 // Mirror of the topology graph's special-state palette (see
 // web/ui-framework/src/styles/components.css `.hy-topo-dot.{native,offline}`).
 // Keeping the login background's vocabulary in sync with the actual app
@@ -258,6 +259,7 @@ export default function LoginBackground() {
       ctx.clearRect(0, 0, w, h);
 
       const now = performance.now();
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
 
       // Prune ripples that have finished expanding (decay handles the rest)
       ripples.current = ripples.current.filter(r =>
@@ -359,7 +361,9 @@ export default function LoginBackground() {
           const hubAlpha = (g - 0.12) / 0.88 * 0.55;
           ctx.beginPath();
           ctx.arc(c.x, c.y, HUB_INNER, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(${HR},${HG},${HB},${hubAlpha})`;
+          ctx.fillStyle = dark
+            ? `rgba(${HDR},${HDG},${HDB},${hubAlpha})`
+            : `rgba(${HR},${HG},${HB},${hubAlpha})`;
           ctx.fill();
         }
       }
