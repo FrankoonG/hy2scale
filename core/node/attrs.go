@@ -1,8 +1,10 @@
 package node
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
+	"time"
 
 	"github.com/FrankoonG/hy2scale/core/proto"
 )
@@ -102,6 +104,39 @@ func (n *Node) withAttrs(name string, info *PeerInfo) {
 		info.Attrs = a
 		if e, ok := a[proto.AttrEgress]; ok {
 			info.Egress = e
+		}
+	}
+}
+
+// RunAttrs keeps the direct peers' attributes current until ctx ends:
+// fetched from every capable peer every 30 s, forgotten once the peer is
+// gone.
+func (n *Node) RunAttrs(ctx context.Context) {
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	for {
+		live := map[string]bool{}
+		for _, p := range append(n.Peers(), n.PeersAlt()...) {
+			live[p.Name] = true
+			if !p.AttrsCapable && !p.EgressCapable {
+				continue
+			}
+			go func(name string) {
+				if at, err := n.AttrsOf(name); err == nil && at != nil {
+					n.SetPeerAttrs(name, at)
+				}
+			}(p.Name)
+		}
+		n.attrs.peers.Range(func(k, _ any) bool {
+			if !live[k.(string)] {
+				n.attrs.peers.Delete(k)
+			}
+			return true
+		})
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
 		}
 	}
 }

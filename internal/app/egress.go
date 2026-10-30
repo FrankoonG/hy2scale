@@ -54,7 +54,7 @@ func (a *App) SetEgress(e EgressConfig) error {
 	}
 	a.store.Update(func(c *Config) { ec := e; c.Egress = &ec })
 	a.refreshEgress()
-	a.ifaces.pub.kickAll()
+	a.ifaces.pub.KickAll()
 	return nil
 }
 
@@ -79,7 +79,7 @@ func (a *App) initEgress(ctx context.Context) {
 			})
 			log.Printf("[egress] IPv4 via %s, IPv6 via %q", e.IPv4, e.IPv6)
 			a.refreshEgress()
-			a.ifaces.pub.kickAll()
+			a.ifaces.pub.KickAll()
 			return
 		}
 		select {

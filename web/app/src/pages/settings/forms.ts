@@ -127,7 +127,9 @@ export function useSystemForm(settingsQ: UseQueryResult<UISettings>) {
     if (!body) return;
     setSaving(sec);
     try {
-      await api.updateUISettings(body);
+      const { public_ip, ...node } = body;
+      await api.updateNodeSettings(node);
+      if (public_ip) await api.updatePublicIPSettings(public_ip);
       toast.success(t('settings.savedHot'));
       saved.current = sec;
       resync();
@@ -170,7 +172,7 @@ export function useWebForm(settingsQ: UseQueryResult<UISettings>) {
     }
     setSaving(true);
     try {
-      await api.updateUISettings({
+      await api.updateWebSettings({
         listen, base_path: basePath, force_https: forceHttps,
         https_cert_id: httpsCertId, session_timeout_h: parseInt(sessionTimeout) || 12,
       });
