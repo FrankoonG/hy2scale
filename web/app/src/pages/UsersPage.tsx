@@ -1,8 +1,8 @@
-import { useCallback, useMemo, useRef, type MouseEvent } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Card, Button, Badge, Table, Tooltip, IconCircleAlert, useToast, useSelection, useModalState, type Column,
+  Card, Button, ExpandButton, Badge, Table, Tooltip, IconCircleAlert, useToast, useSelection, useModalState, type Column,
 } from '@hy2scale/ui';
 import type { UserConfig, Session, PasswordConflicts } from '@/api';
 import * as api from '@/api';
@@ -14,7 +14,7 @@ import { ExitViaCell, exitViaSortValue } from '@/components/ExitViaCell';
 import UserModal from '@/components/UserModal';
 import UserLinksModal from '@/components/UserLinksModal';
 import UserDetailModal from '@/components/UserDetailModal';
-import ImportExportButton from '@/components/ImportExportButton';
+import { useImportExport } from '@/components/ImportExport';
 import ResponsiveActions from '@/components/ResponsiveActions';
 import UsageMeter from '@/components/UsageMeter';
 import { BulkButtons, EditSelectedButton, pickSelected } from '@/components/SelectionActions';
@@ -25,6 +25,7 @@ const noSessions: Session[] = [];
 
 export default function UsersPage() {
   const { t } = useTranslation();
+  const ie = useImportExport('users');
   const toast = useToast();
   const queryClient = useQueryClient();
 
@@ -149,9 +150,9 @@ export default function UsersPage() {
             <BulkButtons selected={selected} isEnabled={(u) => u.enabled} onToggle={bulkToggle} onDelete={bulkDelete}>
               <Button size="sm" onClick={bulkReset}>{t('users.bulkResetTraffic')}</Button>
             </BulkButtons>
-            <ImportExportButton target="users" />
             <EditSelectedButton selected={selected} onEdit={(u, e) => edit.show(u.id, e)} />
-            <Button size="sm" variant="primary" onClick={(e: MouseEvent) => edit.show(null, e)}>{t('users.addUser')}</Button>
+            <ExpandButton variant="primary" label={t('users.addUser')} moreLabel={t('app.moreActions')}
+              onClick={(e) => edit.show(null, e)} actions={ie.actions} />
           </ResponsiveActions>
         }
         noPadding
@@ -176,6 +177,7 @@ export default function UsersPage() {
       />
 
       <UserLinksModal {...links.modalProps} user={links.data ?? null} />
+      {ie.modal}
 
       <UserDetailModal
         {...detail.modalProps}

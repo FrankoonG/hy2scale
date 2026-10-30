@@ -1,10 +1,10 @@
 import { useCallback, useRef, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, type UseQueryResult } from '@tanstack/react-query';
-import { Card, Button, Table, useToast, useSelection, useModalState, type Column } from '@hy2scale/ui';
+import { Card, ExpandButton, Table, useToast, useSelection, useModalState, type Column } from '@hy2scale/ui';
 import { ExitViaCell, exitViaSortValue } from '@/components/ExitViaCell';
 import ResponsiveActions from '@/components/ResponsiveActions';
-import ImportExportButton from '@/components/ImportExportButton';
+import { useImportExport } from '@/components/ImportExport';
 import { BulkButtons, EditSelectedButton, pickSelected } from '@/components/SelectionActions';
 import { useBulkAction } from '@/hooks/useBulkAction';
 import { ListScope } from '@/hooks/useDeselectOnBlankClick';
@@ -37,6 +37,7 @@ export default function WireGuardTab() {
 
 function WireGuardPanels({ wgQ }: { wgQ: UseQueryResult<api.WireGuardConfig> }) {
   const { t } = useTranslation();
+  const ie = useImportExport('wg-peers');
   const toast = useToast();
   const peers = wgQ.data?.peers || [];
 
@@ -96,9 +97,9 @@ function WireGuardPanels({ wgQ }: { wgQ: UseQueryResult<api.WireGuardConfig> }) 
         actions={
           <ResponsiveActions selectedCount={selection.count} onClearSelection={selection.clear}>
             <BulkButtons selected={selected} onDelete={bulkDelete} />
-            <ImportExportButton target="wg-peers" />
             <EditSelectedButton selected={selected} onEdit={(p, e) => edit.show(p, e)} />
-            <Button size="sm" variant="primary" onClick={(e: MouseEvent) => edit.show(null, e)}>{t('wg.addPeer')}</Button>
+            <ExpandButton variant="primary" label={t('wg.addPeer')} moreLabel={t('app.moreActions')}
+              onClick={(e) => edit.show(null, e)} actions={ie.actions} />
           </ResponsiveActions>
         }
         noPadding
@@ -118,6 +119,7 @@ function WireGuardPanels({ wgQ }: { wgQ: UseQueryResult<api.WireGuardConfig> }) 
 
       <WgPeerModal {...edit.modalProps} editing={edit.data ?? null} suggestIPs={suggestIPs} />
       <WgPeerConfigModal {...config.modalProps} config={config.data} />
+      {ie.modal}
     </div>
   );
 }

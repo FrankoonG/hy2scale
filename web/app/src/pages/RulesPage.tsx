@@ -1,9 +1,9 @@
-import { useState, type MouseEvent } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { Card, Button, Table, Tabs, TabPanel, useSelection, useModalState, type Column } from '@hy2scale/ui';
+import { Card, ExpandButton, Table, Tabs, TabPanel, useSelection, useModalState, type Column } from '@hy2scale/ui';
 import { ExitViaCell, exitViaSortValue } from '@/components/ExitViaCell';
-import ImportExportButton from '@/components/ImportExportButton';
+import { useImportExport } from '@/components/ImportExport';
 import ResponsiveActions from '@/components/ResponsiveActions';
 import RuleModal from '@/components/RuleModal';
 import { BulkButtons, EditSelectedButton, pickSelected } from '@/components/SelectionActions';
@@ -16,6 +16,7 @@ type RuleType = 'ip' | 'domain';
 
 export default function RulesPage() {
   const { t } = useTranslation();
+  const ie = useImportExport('rules');
   const { data } = useQuery({ queryKey: ['rules'], queryFn: api.getRules });
   const rules = data?.rules || [];
 
@@ -66,9 +67,9 @@ export default function RulesPage() {
           actions={
             <ResponsiveActions selectedCount={selection.count} onClearSelection={selection.clear}>
               <BulkButtons selected={selected} isEnabled={(r) => r.enabled} onToggle={bulkToggle} onDelete={bulkDelete} />
-              <ImportExportButton target="rules" />
               <EditSelectedButton selected={selected} onEdit={(r, e) => edit.show(r, e)} />
-              <Button size="sm" variant="primary" onClick={(e: MouseEvent) => edit.show(null, e)}>{t('rules.newRule')}</Button>
+              <ExpandButton variant="primary" label={t('rules.newRule')} moreLabel={t('app.moreActions')}
+                onClick={(e) => edit.show(null, e)} actions={ie.actions} />
             </ResponsiveActions>
           }
           noPadding
@@ -89,6 +90,7 @@ export default function RulesPage() {
 
       {/* Type follows the active tab */}
       <RuleModal {...edit.modalProps} type={tab} editing={edit.data ?? null} />
+      {ie.modal}
     </div>
   );
 }
