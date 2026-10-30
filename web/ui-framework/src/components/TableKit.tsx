@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import clsx from 'clsx';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useUiLabels } from './UiLabels';
 import { useDismiss } from '../hooks/useDismiss';
+import { popMotion } from './Menu';
+import { Select } from './Select';
 import { readStored, writeStored } from '../hooks/useStoredState';
 import { IconChevronLeft, IconChevronRight, IconColumns3, IconGripVertical } from '../icons';
 
@@ -163,30 +166,34 @@ export function ColumnMenu<C extends ColumnPrefsSpec>({ prefs }: { prefs: Return
       >
         <IconColumns3 size={15} />
       </button>
-      {open && pos && createPortal(
-        <div ref={pop} className="hy-col-menu" style={{ top: pos.top, right: pos.right }} role="menu">
-          <div className="hy-col-menu-head">
-            <span>{L.columns}</span>
-            {prefs.customized && (
-              <button type="button" className="hy-col-menu-reset" onClick={prefs.reset}>{L.reset}</button>
-            )}
-          </div>
-          {prefs.menuItems.map((c) => (
-            <label
-              key={c.key}
-              className={clsx('hy-col-menu-item', drag === c.key && 'dragging')}
-              draggable
-              onDragStart={(e) => { setDrag(c.key); e.dataTransfer.effectAllowed = 'move'; }}
-              onDragEnter={() => { if (drag && drag !== c.key) prefs.move(drag, c.key); }}
-              onDragOver={(e) => e.preventDefault()}
-              onDragEnd={() => setDrag(null)}
-            >
-              <span className="hy-col-menu-grip" aria-hidden="true"><IconGripVertical size={12} /></span>
-              <input type="checkbox" checked={!prefs.hidden.has(c.key)} onChange={() => prefs.toggle(c.key)} />
-              <span className="hy-col-menu-label">{label(c)}</span>
-            </label>
-          ))}
-        </div>,
+      {createPortal(
+        <AnimatePresence>
+          {open && pos && (
+            <motion.div ref={pop} className="hy-col-menu" style={{ top: pos.top, right: pos.right, transformOrigin: 'top right' }} role="menu" {...popMotion}>
+              <div className="hy-col-menu-head">
+                <span>{L.columns}</span>
+                {prefs.customized && (
+                  <button type="button" className="hy-col-menu-reset" onClick={prefs.reset}>{L.reset}</button>
+                )}
+              </div>
+              {prefs.menuItems.map((c) => (
+                <label
+                  key={c.key}
+                  className={clsx('hy-col-menu-item', drag === c.key && 'dragging')}
+                  draggable
+                  onDragStart={(e) => { setDrag(c.key); e.dataTransfer.effectAllowed = 'move'; }}
+                  onDragEnter={() => { if (drag && drag !== c.key) prefs.move(drag, c.key); }}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDragEnd={() => setDrag(null)}
+                >
+                  <span className="hy-col-menu-grip" aria-hidden="true"><IconGripVertical size={12} /></span>
+                  <input type="checkbox" checked={!prefs.hidden.has(c.key)} onChange={() => prefs.toggle(c.key)} />
+                  <span className="hy-col-menu-label">{label(c)}</span>
+                </label>
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>,
         document.body,
       )}
     </>
@@ -212,12 +219,11 @@ export function Pager({ total, size, onSize, pager }: {
   return (
     <div className="hy-pager">
       <span className="hy-pager-total">{L.total(total)}</span>
-      <label className="hy-pager-size">
+      <div className="hy-pager-size">
         <span>{L.perPage}</span>
-        <select value={size} onChange={(e) => onSize(Number(e.target.value))}>
-          {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
-        </select>
-      </label>
+        <Select className="hy-pager-select" value={String(size)} onChange={(e) => onSize(Number(e.target.value))}
+          options={PAGE_SIZES.map((n) => ({ value: String(n), label: String(n) }))} />
+      </div>
       <div className="hy-pager-pages">
         <button type="button" className="hy-pager-btn" disabled={page <= 1} aria-label={L.prev} onClick={() => setPage(page - 1)}><IconChevronLeft size={14} /></button>
         {nums.map((n, i) => n === '…'

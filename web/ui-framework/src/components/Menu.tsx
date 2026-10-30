@@ -12,6 +12,14 @@ export interface MenuProps {
   style?: CSSProperties;
 }
 
+/** Open / close motion shared by every dropdown panel (spread onto a motion element). */
+export const popMotion = {
+  initial: { opacity: 0, y: -6, scale: 0.98 },
+  animate: { opacity: 1, y: 0, scale: 1 },
+  exit: { opacity: 0, y: -6, scale: 0.98 },
+  transition: { duration: 0.15, ease: 'easeOut' },
+} as const;
+
 /** Animated dropdown panel. Place it inside a `position:relative` anchor. */
 export function Menu({ open, children, className, style }: MenuProps) {
   return (
@@ -21,10 +29,7 @@ export function Menu({ open, children, className, style }: MenuProps) {
           className={clsx('hy-dropdown hy-menu', className)}
           style={style}
           role="menu"
-          initial={{ opacity: 0, y: -8 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -8 }}
-          transition={{ duration: 0.15, ease: 'easeOut' }}
+          {...popMotion}
         >
           {children}
         </motion.div>
@@ -93,7 +98,15 @@ export function MenuSub({ icon: Icon, label, meta, open, onToggle, children, tes
         {meta !== undefined && <span className="hy-dd-meta">{meta}</span>}
         <IconChevronRight className="hy-dd-caret" size={14} />
       </button>
-      {open && <div className="hy-dd-sub" role="group">{children}</div>}
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div className="hy-dd-sub" role="group" style={{ overflow: 'hidden' }}
+            initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}>
+            {children}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </>
   );
 }
