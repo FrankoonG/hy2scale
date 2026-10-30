@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
-import { Modal, Button, Input, PasswordInput, Toggle, FormGroup, FormGrid, Tabs, TabPanel, useToast } from '@hy2scale/ui';
+import { Modal, Button, Input, PasswordInput, Toggle, Select, FormGroup, FormGrid, Tabs, TabPanel, useToast } from '@hy2scale/ui';
 import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from './ExitPathList';
 import * as api from '@/api';
 import type { UserConfig } from '@/api';
@@ -44,6 +44,7 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
   const [enabled, setEnabled] = useState(true);
   // node access by user; internal destinations (new users: denied)
   const [nodeAccess, setNodeAccess] = useState(false);
+  const [accessMode, setAccessMode] = useState<'restricted' | 'full'>('restricted');
   const [allowInternal, setAllowInternal] = useState(false);
 
   // Seed on open / on switching to another user only — the users list
@@ -55,7 +56,7 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
       setProxyDisabled(new Set());
       setExitPath({ paths: [''], mode: '' });
       setTrafficLimit(''); setExpiryDate(''); setEnabled(true);
-      setNodeAccess(false); setAllowInternal(false);
+      setNodeAccess(false); setAccessMode('restricted'); setAllowInternal(false);
       return;
     }
     setUsername(editing.username);
@@ -67,6 +68,7 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
     setExpiryDate(editing.expiry_date || '');
     setEnabled(editing.enabled);
     setNodeAccess(!!editing.node_access);
+    setAccessMode(editing.node_access_mode === 'full' ? 'full' : 'restricted');
     setAllowInternal(!editing.deny_internal);
   });
 
@@ -101,6 +103,7 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
       expiry_date: expiryDate || undefined,
       enabled,
       node_access: nodeAccess,
+      node_access_mode: (nodeAccess && accessMode === 'full' ? 'full' : undefined) as 'full' | undefined,
       deny_internal: !allowInternal,
     };
 
@@ -182,7 +185,21 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
 
               <FormGrid>
                 <FormGroup label={t('users.nodeAccess')} hint={t('users.nodeAccessHint')}>
-                  <Toggle checked={nodeAccess} onChange={(e) => setNodeAccess(e.target.checked)} data-testid="user-node-access" />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <Toggle checked={nodeAccess} onChange={(e) => setNodeAccess(e.target.checked)} data-testid="user-node-access" />
+                    {nodeAccess && (
+                      <div style={{ flex: 1, minWidth: 0 }} data-testid="user-access-mode">
+                        <Select
+                          value={accessMode}
+                          onChange={(e) => setAccessMode(e.target.value === 'full' ? 'full' : 'restricted')}
+                          options={[
+                            { value: 'restricted', label: t('users.accessRestricted') },
+                            { value: 'full', label: t('users.accessFull') },
+                          ]}
+                        />
+                      </div>
+                    )}
+                  </div>
                 </FormGroup>
                 <FormGroup label={t('users.allowInternal')} hint={t('users.allowInternalHint')}>
                   <Toggle checked={allowInternal} onChange={(e) => setAllowInternal(e.target.checked)} data-testid="user-allow-internal" />

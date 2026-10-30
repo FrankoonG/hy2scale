@@ -127,6 +127,7 @@ export default function NodeDetailModal({ open, onClose, qpath, animateFrom, ren
         title={outdated ? t('nodes.updateForLossless', { v: lossMin }) : undefined} />
     ) : '—']);
     if (n.native) items.push([t('nodes.detail.type'), <Badge variant="muted">{t('nodes.native')}</Badge>]);
+    if (n.invisible) items.push([t('nodes.detail.access'), <span title={t('nodes.invisibleTitle')}><Badge variant="muted">{t('nodes.invisible')}</Badge></span>]);
     if (n.restricted) items.push([t('nodes.detail.type'), <span title={t('nodes.restrictedTitle')}><Badge variant="muted" className="badge-restricted">{t('nodes.restricted')}</Badge></span>]);
     if (!isSelf && !n.native) items.push([t('nodes.nested'), n.nested ? t('app.yes') : t('app.no')]);
 

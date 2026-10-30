@@ -23,6 +23,8 @@ export interface GraphNode {
   incompatible: boolean;
   /** Reached only through node access by user (traffic only). */
   restricted: boolean;
+  /** Attached by node access by user (a gateway entry). */
+  invisible: boolean;
   /** Shortest hop count from self. */
   depth: number;
   degree: number;
@@ -106,6 +108,7 @@ export function buildGraph(topo: TopologyNode[], selfId: string, selfName?: stri
         native: !!n.native,
         incompatible: !!n.incompatible || !!n.conflict || !!n.unsupported,
         restricted: rs.r && !rs.u,
+        invisible: !!n.invisible,
         depth,
         degree: 0,
         qpath,
@@ -121,6 +124,7 @@ export function buildGraph(topo: TopologyNode[], selfId: string, selfName?: stri
     if (n.native) existing.native = true;
     if (n.incompatible || n.conflict || n.unsupported) existing.incompatible = true;
     existing.restricted = rs.r && !rs.u;
+    if (n.invisible) existing.invisible = true;
     if (depth === 1 && n.punched?.length) existing.punched = n.punched;
     existing.offline = existing.disabled || (r.un && !r.any);
     if (depth < existing.depth) {
