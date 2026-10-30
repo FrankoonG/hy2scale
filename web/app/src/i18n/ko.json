@@ -792,5 +792,6 @@
   "tls.fileTooLarge": "파일이 너무 큼",
   "tls.fileUnsupported": "지원하지 않는 파일 형식",
   "tls.fileReadError": "읽기 오류",
-  "wg.qrCode": "QR 코드"
+  "wg.qrCode": "QR 코드",
+  "nodes.graph.showGrid": "격자 표시"
 }

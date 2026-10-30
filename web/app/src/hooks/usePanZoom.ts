@@ -132,10 +132,15 @@ export function usePanZoom(opts: PanZoomOptions) {
       e.preventDefault();
       const now = performance.now();
       const p = local(e.clientX, e.clientY);
-      const fractional = !Number.isInteger(e.deltaY) || !Number.isInteger(e.deltaX);
-      const trackpadLike = e.deltaMode === 0 && (e.deltaX !== 0 || fractional || Math.abs(e.deltaY) < 50);
+      // Mouse wheel vs trackpad. A wheel notch is one large vertical step
+      // (≈100 px, more with display scaling, and often fractional then);
+      // trackpad scrolling starts with small steps and may move sideways.
+      // Large steps inside an ongoing trackpad scroll (momentum) stay
+      // trackpad. Firefox reports mouse wheels in lines (deltaMode 1).
+      const trackpadLike = e.deltaMode === 0
+        && (e.deltaX !== 0 || Math.abs(e.deltaY) < 40 || now - lastTrackpad.t <= TRACKPAD_STREAK_MS);
       if (trackpadLike) lastTrackpad.t = now;
-      const mouseLike = e.deltaMode !== 0 || (!trackpadLike && now - lastTrackpad.t > TRACKPAD_STREAK_MS);
+      const mouseLike = !trackpadLike;
       if (e.ctrlKey) {
         if (safariGesture) return;
         if (mouseLike && e.deltaMode !== 0) {

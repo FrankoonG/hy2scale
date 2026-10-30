@@ -792,5 +792,6 @@
   "tls.fileTooLarge": "File too large",
   "tls.fileUnsupported": "Unsupported file type",
   "tls.fileReadError": "Read error",
-  "wg.qrCode": "QR code"
+  "wg.qrCode": "QR code",
+  "nodes.graph.showGrid": "Show grid"
 }
