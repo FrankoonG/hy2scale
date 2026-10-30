@@ -3,8 +3,6 @@ package app
 import (
 	"context"
 	"errors"
-	"fmt"
-	"log"
 	"net"
 	"strings"
 	"sync"
@@ -14,7 +12,6 @@ import (
 	relay "github.com/FrankoonG/hy2scale/core/node"
 	"github.com/FrankoonG/hy2scale/core/server"
 	hyclient "github.com/apernet/hysteria/core/v2/client"
-	hyserver "github.com/apernet/hysteria/core/v2/server"
 )
 
 // Node access by user, gateway side (core/proto/access.go). A user with
@@ -124,199 +121,36 @@ func (a *App) accessMode(user string) string {
 	return proto.ModeRestricted
 }
 
-var errAccessRefused = errors.New("not permitted for node access")
+// accessGrants: node access of user credentials for the server
+// (core/server.Access).
+type accessGrants struct{ a *App }
 
-// accessTCP serves a reserved stream (or a bond stream) opened by a
-// node-access user.
-func (o *nodeOutbound) accessTCP(authID, peerAddr, addr string) (net.Conn, error) {
-	a := o.app
+func (g accessGrants) Grant(authID string) (server.Grant, bool, error) {
+	a := g.a
+	if !a.nodeAccessUser(authID) {
+		return server.Grant{}, false, nil
+	}
 	if err := a.hy2UserUsable(authID); err != nil {
-		return nil, err
+		return server.Grant{}, false, err
 	}
 	user := strings.TrimPrefix(authID, "user:")
-	a.touchAccess(user, peerAddr, nil)
-	r := a.userRestrict(user)
-	full := a.accessMode(user) == proto.ModeFull
-	switch {
-	case full && addr == proto.StreamAPI:
-		// management of this node: trusted like a full peer (the
-		// relay-trust setting applies), recorded as this user
-		return o.relayPipeAs(addr, peerAddr, "access:"+user), nil
-	case full && addr == proto.StreamPunch:
-		return o.relayPipe(addr, peerAddr), nil
-	case addr == proto.StreamHello:
-		c1, c2 := net.Pipe()
-		go a.serveHello(user, peerAddr, c1)
-		return c2, nil
-	case addr == proto.StreamListPeer || addr == proto.StreamPing ||
-		addr == proto.StreamEgress || addr == proto.StreamWhoami || addr == proto.StreamAttrs:
-		return o.relayPipe(addr, peerAddr), nil
-	case IsBondStream(addr):
-		base, cr := proto.ParseRestrict(addr)
-		c1, c2 := net.Pipe()
-		go func() {
-			if err := a.handleBondStream(proto.WithRestrict(base, cr|r), c1); err != nil {
-				c1.Close()
-			}
-		}()
-		return a.meterHy2As(authID, peerAddr, "hy2-node", c2), nil
-	case proto.IsMsessAddr(addr):
-		base, cr := proto.ParseRestrict(addr)
-		return a.meterHy2As(authID, peerAddr, "hy2-node", o.relayPipe(proto.WithRestrict(base, cr|r), peerAddr)), nil
-	}
-	chain, target, ok := proto.ParseVia(addr)
-	if !ok {
-		return nil, fmt.Errorf("%s: %w", addr, errAccessRefused)
-	}
-	fwd, err := a.accessVia(user, peerAddr, chain, target, r)
-	if err != nil {
-		log.Printf("[access] %s: refused %q: %v", user, addr, err)
-		return nil, err
-	}
-	if _, t, _ := proto.ParseVia(fwd); proto.IsRelayStream(t) && !proto.IsMsessAddr(t) {
-		return o.relayPipe(fwd, peerAddr), nil // control stream (full mode): not metered
-	}
-	return a.meterHy2As(authID, peerAddr, "hy2-node", o.relayPipe(fwd, peerAddr)), nil
+	return server.Grant{Mode: a.accessMode(user), Restrict: a.userRestrict(user)}, true, nil
 }
 
-// accessUDP serves a via-encoded UDP request of a node-access user.
-func (o *nodeOutbound) accessUDP(authID, peerAddr, chain, target string) (hyserver.UDPConn, error) {
-	a := o.app
-	if err := a.hy2UserUsable(authID); err != nil {
-		return nil, err
-	}
-	user := strings.TrimPrefix(authID, "user:")
-	a.touchAccess(user, peerAddr, nil)
-	fwd, err := a.accessVia(user, peerAddr, chain, target, a.userRestrict(user))
-	if err != nil {
-		log.Printf("[access] %s: refused UDP via %s: %v", user, chain, err)
-		return nil, err
-	}
-	nchain, ntarget, _ := proto.ParseVia(fwd)
-	c, err := o.node.DialUDPVia(o.ctx, strings.Split(nchain, "/"), ntarget)
-	if err != nil {
-		return nil, err
-	}
-	return &server.UDPAdapter{Conn: a.meterHy2As(authID, peerAddr, "hy2-node", c), Addr: target}, nil
+func (g accessGrants) Seen(authID, peerAddr string, h *proto.Hello) {
+	g.a.touchAccess(strings.TrimPrefix(authID, "user:"), peerAddr, h)
 }
 
-// relayPipe hands a stream to the relay dispatcher as if it had arrived
-// from a peer (the local end reports the client's address).
-func (o *nodeOutbound) relayPipe(addr, peerAddr string) net.Conn {
-	return o.relayPipeAs(addr, peerAddr, "")
+func (g accessGrants) Hello(peerAddr string) *proto.Hello {
+	if c := g.a.accessClient(peerAddr); c != nil {
+		h := c.Hello
+		return &h
+	}
+	return nil
 }
 
-// relayPipeAs: relayPipe whose API stream carries authID (see RelayAuthConn).
-func (o *nodeOutbound) relayPipeAs(addr, peerAddr, authID string) net.Conn {
-	c1, c2 := net.Pipe()
-	var local net.Conn = c1
-	if peerAddr != "" {
-		local = &server.PeerAddrConn{Conn: c1, Peer: peerAddr}
-	}
-	if authID != "" {
-		local = &RelayAuthConn{Conn: local, AuthID: authID}
-	}
-	go o.node.HandleStream(o.ctx, addr, local)
-	return c2
-}
-
-// serveHello answers an access client's hello.
-func (a *App) serveHello(user, peerAddr string, c net.Conn) {
-	defer c.Close()
-	c.SetDeadline(time.Now().Add(10 * time.Second))
-	var h proto.Hello
-	if err := proto.ReadJSON(c, &h); err != nil {
-		return
-	}
-	a.touchAccess(user, peerAddr, &h)
-	cfg := a.store.Get()
-	proto.WriteJSON(c, proto.HelloReply{Name: a.node.Name(), NodeID: a.node.NodeID(),
-		Version: relay.NodeVersion, PV: relay.ProtocolVersion, ExitNode: cfg.ExitNode,
-		Mode: a.accessMode(user)})
-}
-
-// accessVia validates an access client's via request and returns the
-// address to forward: the chain must be one this node shows (direct peer,
-// then nested-authorised children it caches, no node twice, neither this
-// node nor the client), the target a real address, a msess subflow or a
-// bond stream. The user's restrictions are added as a tag when every node
-// on the chain understands it.
-func (a *App) accessVia(user, peerAddr, chain, target string, r proto.Restrict) (string, error) {
-	cfg := a.store.Get()
-	full := a.accessMode(user) == proto.ModeFull
-	hops := strings.Split(chain, "/")
-	parts := make([]string, len(hops))
-	for i, h := range hops {
-		parts[i], _ = proto.SplitConnHint(h)
-	}
-	maxDepth := a.tree.Limits().MaxDepth
-	if len(parts) == 0 || len(parts) > maxDepth+1 {
-		return "", fmt.Errorf("chain length %d", len(parts))
-	}
-	seen := map[string]bool{a.node.Name(): true, cfg.NodeID: true}
-	if c := a.accessClient(peerAddr); c != nil {
-		if c.Hello.Name != "" {
-			seen[c.Hello.Name] = true
-		}
-		if c.Hello.NodeID != "" {
-			seen[c.Hello.NodeID] = true
-		}
-	}
-	for i, p := range parts {
-		if p == "" || seen[p] {
-			return "", fmt.Errorf("hop %q repeats or is not allowed", p)
-		}
-		seen[p] = true
-		if i == 0 {
-			if !a.node.HasPeer(p) {
-				return "", fmt.Errorf("%s is not a peer", p)
-			}
-			continue
-		}
-		prefix := strings.Join(parts[:i], "/")
-		if !a.exit.Authorised(parts[:i+1]) {
-			return "", fmt.Errorf("%s is not shown here", strings.Join(parts[:i+1], "/"))
-		}
-		kids, ok := a.node.PeersOfCached(prefix)
-		found := false
-		for _, k := range kids {
-			if ok && k.Name == p {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return "", fmt.Errorf("%s is not shown here", strings.Join(parts[:i+1], "/"))
-		}
-	}
-	if a.isExitPathDisabled(strings.Join(parts, "/")) {
-		return "", fmt.Errorf("%s is disabled", strings.Join(parts, "/"))
-	}
-	// a native (plain hysteria) node can only be the last hop
-	for i := 0; i < len(parts)-1; i++ {
-		if p, _ := a.nodeInfoAt(parts[:i+1]); p.Native {
-			return "", fmt.Errorf("%s cannot relay", parts[i])
-		}
-	}
-	base, cr := proto.ParseRestrict(target)
-	switch {
-	case proto.IsMsessAddr(base), IsBondStream(base):
-	case full && (base == proto.StreamAPI || base == proto.StreamPunch || base == proto.StreamListPeer):
-		// management / punching / nested lists further away (full mode):
-		// the node there sees this node as the caller
-		return proto.BuildViaAddr(chain, base), nil
-	case proto.IsRelayStream(base):
-		return "", fmt.Errorf("target %s: %w", base, errAccessRefused)
-	default:
-		if _, _, err := net.SplitHostPort(base); err != nil {
-			return "", fmt.Errorf("target %q: %v", base, err)
-		}
-	}
-	tagged := base
-	if r|cr != 0 && a.chainTags(parts) {
-		tagged = proto.WithRestrict(base, r|cr)
-	}
-	return proto.BuildViaAddr(chain, tagged), nil
+func (g accessGrants) Meter(authID, peerAddr string, c net.Conn) net.Conn {
+	return g.a.meterHy2As(authID, peerAddr, "hy2-node", c)
 }
 
 // ---------------------------------------------------------------- client side
