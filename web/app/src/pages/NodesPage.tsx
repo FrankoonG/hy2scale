@@ -17,7 +17,7 @@ import EditSelfModal from '@/components/EditSelfModal';
 import RemoteConnectModal from '@/components/RemoteConnectModal';
 import NodeDetailModal from '@/components/NodeDetailModal';
 import ResponsiveActions from '@/components/ResponsiveActions';
-import ImportExportButton from '@/components/ImportExportButton';
+import { useImportExport } from '@/components/ImportExport';
 import NodesGraphView from '@/components/NodesGraphView';
 import { useDeselectOnBlankClick } from '@/hooks/useDeselectOnBlankClick';
 import { versionAtLeast } from '@/utils/version';
@@ -28,6 +28,7 @@ import { boldMarkup } from '@/utils/richText';
 
 export default function NodesPage() {
   const { t } = useTranslation();
+  const ie = useImportExport('nodes');
   // Hole-punched routes this node works on (state per route address)
   const { data: punchStatus = [] } = useQuery({ queryKey: ['punchStatus'], queryFn: api.getPunchStatus, refetchInterval: 5000 });
   const fmtAddr = (a: string) => fmtPunchAddr(t, a);
@@ -514,7 +515,6 @@ export default function NodesPage() {
           {hasRoot && <Button size="sm" variant="danger" onClick={bulkDeleteNodes}>{t('app.bulkDelete')}</Button>}
         </>;
       })()}
-      <ImportExportButton target="nodes" />
       {(() => {
         // Edit is a single-select shortcut placed deliberately between
         // Import (group of catalog actions) and Add Node (the primary
@@ -566,6 +566,7 @@ export default function NodesPage() {
         onClick={openAddNode}
         actions={[
           { key: 'link', label: t('nodes.importTitle'), icon: IconLink, onClick: openImportLink, testId: 'add-node-link' },
+          ...ie.actions,
         ]}
       />
     </ResponsiveActions>
@@ -650,6 +651,7 @@ export default function NodesPage() {
         onClose={() => setImportOpen(false)}
         animateFrom={clickPos}
       />
+      {ie.modal}
 
       <EditSelfModal
         open={editSelfOpen}
