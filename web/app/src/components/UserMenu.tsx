@@ -10,6 +10,7 @@ import {
 import i18n from '@/i18n';
 import * as api from '@/api';
 import { useAuthStore } from '@/store/auth';
+import { signOut } from '@/hooks/authTransition';
 import { languages, currentLanguage } from '@/components/PrefSwitcher';
 import { useTheme, setThemePref, themePrefs, themeLabelKey } from '@/theme';
 
@@ -17,7 +18,6 @@ import { useTheme, setThemePref, themePrefs, themeLabelKey } from '@/theme';
 export default function UserMenu() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const logout = useAuthStore((s) => s.logout);
   const loginUser = useAuthStore((s) => s.username);
   const forcePasswordChange = useAuthStore((s) => s.forcePasswordChange);
   const { data: me } = useQuery({ queryKey: ['me'], queryFn: api.getMe, staleTime: 60000, retry: false });
@@ -65,7 +65,7 @@ export default function UserMenu() {
         </MenuSub>
         <MenuSeparator />
         <MenuItem icon={IconLogOut} disabled={forcePasswordChange} testId="user-menu-logout"
-          onClick={() => { close(); logout(); navigate('/login'); }}>
+          onClick={() => { close(); signOut(navigate); }}>
           {t('app.logout')}
         </MenuItem>
       </Menu>

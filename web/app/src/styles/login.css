@@ -27,6 +27,10 @@ html[data-darkreader-scheme="dark"] .lg-page{--lg-svg-surface:#202224}
 .lg-topo{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:6px 0}
 .lg-tsvg{width:100%;height:100%;max-height:720px;overflow:visible}
 .lg-foot{position:relative;display:flex;align-items:flex-end;justify-content:space-between;gap:18px}
+.lg-left{cursor:pointer}
+.lg-status{display:flex;align-items:center;gap:10px;margin-bottom:9px;flex:none}
+.lg-hint{font-size:12px;color:var(--text-muted);white-space:nowrap;opacity:0;transform:translateX(6px);transition:opacity .2s ease,transform .2s ease}
+.lg-hint.on{opacity:1;transform:none}
 /* features of the current topology: an unframed list drifting down through a window faded at both edges */
 .lg-tags{position:relative;flex:1;min-width:0;max-width:280px;height:120px;overflow:hidden;transition:opacity .3s ease;
   -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 30%,#000 70%,transparent 100%);mask-image:linear-gradient(to bottom,transparent 0,#000 30%,#000 70%,transparent 100%)}
@@ -35,7 +39,7 @@ html[data-darkreader-scheme="dark"] .lg-page{--lg-svg-surface:#202224}
 @keyframes lgTagDrift{from{transform:translateY(var(--from,-50%))}to{transform:translateY(0)}}
 .lg-tag{display:flex;align-items:center;gap:9px;height:24px;font-size:12.5px;color:var(--text-secondary);white-space:nowrap}
 .lg-tag::before{content:'';width:5px;height:5px;border-radius:50%;background:var(--primary);opacity:.55;flex:none}
-.lg-progress{position:relative;width:32px;height:5px;border-radius:3px;background:var(--lg-track);overflow:hidden;margin-bottom:9px;flex:none}
+.lg-progress{position:relative;width:32px;height:5px;border-radius:3px;background:var(--lg-track);overflow:hidden;flex:none}
 .lg-progress span{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--primary);border-radius:3px}
 .lg-progress.paused span{background:var(--text-muted)}
 
@@ -126,6 +130,7 @@ html[data-darkreader-scheme="dark"] .lg-page{--lg-svg-surface:#202224}
 .lg-formbox{width:340px;max-width:100%;animation:lgRise .55s cubic-bezier(.2,.7,.2,1) .12s both}
 .lg-brand,.lg-foot{animation:lgRise .55s cubic-bezier(.2,.7,.2,1) both}
 .lg-foot{animation-delay:.3s}
+.lg-page.still .lg-formbox,.lg-page.still .lg-brand,.lg-page.still .lg-foot{animation:none}
 @keyframes lgRise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
 .lg-mobile-brand{display:none;align-items:center;gap:10px;font-weight:700;font-size:15px;letter-spacing:.06em;margin-bottom:28px}
 .lg-title{font-size:24px;font-weight:700;margin:0 0 2px;line-height:1.35}
@@ -163,3 +168,17 @@ html[data-darkreader-scheme="dark"] .lg-page{--lg-svg-surface:#202224}
   .lg-tag-track,.lg-tsvg .s-pending .le,.lg-tsvg .tn .ring,.lg-tsvg .pst .pdot{animation:none}
   .lg-formbox,.lg-brand,.lg-foot{animation:none}
 }
+
+/* ---- login ⇄ app (hooks/authTransition.ts): the logo, brand text and the
+   topology panel / sidebar move between their places, the rest crossfades */
+html.vt-auth .lg-brand .lg-logo,html.vt-auth .hy-sidebar-logo img{view-transition-name:hy-auth-logo}
+html.vt-auth .lg-brand>span,html.vt-auth .hy-sidebar-logo .hy-brand{view-transition-name:hy-auth-brand}
+html.vt-auth .lg-left,html.vt-auth .hy-sidebar{view-transition-name:hy-auth-rail}
+html.vt-auth::view-transition-group(*){animation-duration:.7s;animation-timing-function:cubic-bezier(.2,.75,.15,1)}
+html.vt-auth::view-transition-old(hy-auth-rail),html.vt-auth::view-transition-new(hy-auth-rail){height:100%;object-fit:cover;object-position:left top}
+html.vt-auth::view-transition-old(hy-auth-rail){animation:lgVtOut .3s ease both}
+html.vt-auth::view-transition-new(hy-auth-rail){animation:lgVtIn .4s ease .3s both}
+html.vt-auth::view-transition-old(root){animation:lgVtOut .3s ease both}
+html.vt-auth::view-transition-new(root){animation:lgVtIn .45s ease .25s both}
+@keyframes lgVtOut{to{opacity:0}}
+@keyframes lgVtIn{from{opacity:0}}

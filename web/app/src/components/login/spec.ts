@@ -41,7 +41,8 @@ export interface SpecLink {
 }
 
 export interface Zone { x: number; y: number; w: number; h: number; label: string }
-export interface Note { x: number; y: number; text: string }
+/** A floating label; `key` is an i18n key (login.topo.chip.*), `text` literal. */
+export interface Note { x: number; y: number; text?: string; key?: string }
 export interface SpecEvent { at: number; link?: string; node?: string; state: LinkState | 'off' }
 
 /** Packets along node paths; `only` restricts parallel links by id. */

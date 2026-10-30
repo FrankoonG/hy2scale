@@ -7,7 +7,7 @@ import * as api from '@/api';
 import type { UISettings } from '@/api';
 import { getBasePath } from '@/api/client';
 import { useServerFormInit } from '@/hooks/useFormInit';
-import { useAuthStore } from '@/store/auth';
+import { signOut } from '@/hooks/authTransition';
 import { sha256 } from '@/hooks/useAuth';
 import { toListItems, fromListItems, type ListItem } from '@/components/OrderedList';
 import { isPublicIPServer } from '@/utils/ipaddr';
@@ -198,7 +198,6 @@ export function usePasswordForm() {
   const { t } = useTranslation();
   const toast = useToast();
   const navigate = useNavigate();
-  const logout = useAuthStore((s) => s.logout);
   const [curPw, setCurPw] = useState('');
   const [newUser, setNewUser] = useState('');
   const [newPw, setNewPw] = useState('');
@@ -215,7 +214,7 @@ export function usePasswordForm() {
       const newHash = newPw ? await sha256(newPw) : undefined;
       await api.changePassword({ current_password: curHash, new_username: newUser || undefined, new_password: newHash });
       toast.success(t('settings.passwordUpdated'));
-      setTimeout(() => { logout(); navigate('/login'); }, 2000);
+      setTimeout(() => signOut(navigate), 2000);
     } catch (e: any) { toast.error(String(e.message || e)); }
     finally { setSaving(false); }
   };

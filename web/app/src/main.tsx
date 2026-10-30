@@ -8,7 +8,8 @@ import './theme';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from './queryClient';
 import { ToastProvider, ConfirmProvider, setImperativeToast, useToast, UiLabelsProvider } from '@hy2scale/ui';
 import { useTranslation } from 'react-i18next';
 import '@hy2scale/ui/css';
@@ -53,16 +54,6 @@ setTokenGetter(getToken);
   // user comes back from switching apps while we deployed.
   window.addEventListener('focus', check);
 })();
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 1,
-      refetchOnWindowFocus: false,
-      staleTime: 2000,
-    },
-  },
-});
 
 // Translated words for framework components (tables, controls, dialogs)
 function UiLabels({ children }: { children: React.ReactNode }) {
