@@ -1,8 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import clsx from 'clsx';
+import { motion, AnimatePresence } from 'framer-motion';
 import type { IconComponent } from '../icons';
 import { IconChevronDown } from '../icons';
 import { useDismiss } from '../hooks/useDismiss';
+import { popMotion } from './Menu';
 
 /** Set by ActionBar while its children render inside the narrow overflow menu. */
 export const ActionBarMenuContext = createContext(false);
@@ -127,17 +129,19 @@ export function ExpandButton({
           <IconChevronDown size={12} strokeWidth={2.5} />
         </button>
       </span>
-      {open && (
-        <span className="hy-expand-panel" role="menu">
-          {actions.map((a) => (
-            <button key={a.key} type="button" role="menuitem" className="hy-expand-item" disabled={a.disabled}
-              data-testid={a.testId}
-              onClick={(e) => { setOpen(false); a.onClick(e); }}>
-              {a.icon && <a.icon size={14} />}<span>{a.label}</span>
-            </button>
-          ))}
-        </span>
-      )}
+      <AnimatePresence>
+        {open && (
+          <motion.span className="hy-expand-panel" role="menu" {...popMotion}>
+            {actions.map((a) => (
+              <button key={a.key} type="button" role="menuitem" className="hy-expand-item" disabled={a.disabled}
+                data-testid={a.testId}
+                onClick={(e) => { setOpen(false); a.onClick(e); }}>
+                {a.icon && <a.icon size={14} />}<span>{a.label}</span>
+              </button>
+            ))}
+          </motion.span>
+        )}
+      </AnimatePresence>
     </span>
   );
 }

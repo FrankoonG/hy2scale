@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useDismiss } from '../hooks/useDismiss';
 import { IconButton } from './Button';
 import { IconEllipsisVertical, IconSlidersHorizontal, IconX } from '../icons';
 import { ActionBarMenuContext } from './ExpandButton';
+import { popMotion } from './Menu';
 
 export interface ActionBarLabels {
   /** "N selected" (wide layout) and title of the narrow count pill. */
@@ -74,7 +76,7 @@ export function ActionBar({ selectedCount = 0, onClearSelection, labels = {}, ch
             <IconButton icon={IconSlidersHorizontal} label={labels.more ?? 'View options'} variant="outline"
               className="hy-actions-overflow" active={open} aria-expanded={open} data-testid="actions-more"
               onClick={() => setOpen((v) => !v)} />
-            {open && <div className="hy-actions-menu">{more}</div>}
+            <AnimatePresence>{open && <motion.div className="hy-actions-menu" {...popMotion}>{more}</motion.div>}</AnimatePresence>
           </span>
         )}
       </div>
@@ -90,15 +92,17 @@ export function ActionBar({ selectedCount = 0, onClearSelection, labels = {}, ch
       )}
       <IconButton icon={IconEllipsisVertical} label={labels.actions ?? 'Actions'} variant="outline" iconSize={18}
         className="hy-actions-overflow" active={open} aria-expanded={open} onClick={() => setOpen((v) => !v)} />
-      {open && (
-        <div className="hy-actions-menu">
-          <ActionBarMenuContext.Provider value>
-            {children}
-            {more && <div className="hy-actions-menu-sep" />}
-            {more}
-          </ActionBarMenuContext.Provider>
-        </div>
-      )}
+      <AnimatePresence>
+        {open && (
+          <motion.div className="hy-actions-menu" {...popMotion}>
+            <ActionBarMenuContext.Provider value>
+              {children}
+              {more && <div className="hy-actions-menu-sep" />}
+              {more}
+            </ActionBarMenuContext.Provider>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

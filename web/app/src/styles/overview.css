@@ -9,6 +9,20 @@
 /* Cards in one row share the tallest card's height. */
 .ov-grid>.hy-card{margin-bottom:0;min-width:0;display:flex;flex-direction:column}
 .ov-grid>.hy-card>.hy-card-body{flex:1;display:flex;flex-direction:column;min-height:0}
+/* Cards fade in one after another; the page itself does not slide. */
+.page-enter:has(>.ov-page){animation:none}
+.ov-grid>.hy-card{animation:ovCardIn .45s cubic-bezier(.16,1,.3,1) both}
+.ov-grid>.hy-card:nth-child(2){animation-delay:80ms}
+.ov-grid>.hy-card:nth-child(3){animation-delay:160ms}
+.ov-grid>.hy-card:nth-child(4){animation-delay:240ms}
+.ov-grid>.hy-card:nth-child(5){animation-delay:320ms}
+.ov-grid>.hy-card:nth-child(6){animation-delay:400ms}
+.ov-grid>.hy-card:nth-child(7){animation-delay:480ms}
+.ov-grid>.hy-card:nth-child(8){animation-delay:560ms}
+.ov-grid>.hy-card:nth-child(9){animation-delay:640ms}
+.ov-grid>.hy-card:nth-child(10){animation-delay:720ms}
+@keyframes ovCardIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){.ov-grid>.hy-card{animation:none}}
 .ov-span-4{grid-column:span 4}
 .ov-span-5{grid-column:span 5}
 .ov-span-7{grid-column:span 7}
