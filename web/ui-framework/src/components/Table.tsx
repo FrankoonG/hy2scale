@@ -1,7 +1,7 @@
 import { type ReactNode } from 'react';
 import * as React from 'react';
 import clsx from 'clsx';
-import { ColumnMenu, EmptyRow, IndeterminateCheckbox, Pager, SortTitle, isInteractiveDescendant, sortBy, tableId, useColumnPrefs, usePager } from './TableKit';
+import { ColumnMenu, EmptyRow, IndeterminateCheckbox, Pager, SortTitle, isInteractiveDescendant, rowOrigin, sortBy, tableId, useColumnPrefs, usePager } from './TableKit';
 
 export interface Column<T> {
   key: string;
@@ -40,7 +40,8 @@ export interface TableProps<T> {
   /** false = all rows on one page. */
   paginate?: boolean;
   /** The list's own action for a click on a row (outside its controls). */
-  onRowClick?: (row: T, index: number) => void;
+  /** `origin`: the row's first column, for a dialog's open animation. */
+  onRowClick?: (row: T, index: number, origin: { x: number; y: number }) => void;
 }
 
 export function Table<T>({ columns: allColumns, data: rawData, rowKey, rowClassName, emptyText, selection, id, paginate = true, onRowClick: rowAction }: TableProps<T>) {
@@ -96,7 +97,7 @@ export function Table<T>({ columns: allColumns, data: rawData, rowKey, rowClassN
             const onRowClick = rowAction
               ? (e: React.MouseEvent<HTMLTableRowElement>) => {
                   if (isInteractiveDescendant(e.target, e.currentTarget)) return;
-                  rowAction(row, i);
+                  rowAction(row, i, rowOrigin(e.currentTarget));
                 }
               : undefined;
             // Click anywhere in the col-check cell — including its padding —

@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode, type RefObject } from 'react';
-import { Reorder, useDragControls } from 'framer-motion';
+import { PresenceContext, Reorder, useDragControls } from 'framer-motion';
 import clsx from 'clsx';
 import { IconGripVertical, IconX } from '../icons';
 
@@ -34,14 +34,19 @@ export function SortableList<T extends { id: string | number }>({
   const removable = !!onRemove && items.length > minItems;
   return (
     <div className={clsx('hy-sortable', className)} data-testid={testId}>
-      <Reorder.Group ref={ref} axis="y" values={items} onReorder={onReorder} className="hy-sortable-list">
-        {items.map((item) => (
-          <Row key={item.id} item={item} draggable={many} constraintsRef={ref}
-            onRemove={removable ? () => onRemove!(item) : undefined} removeLabel={removeLabel}>
-            {renderItem(item)}
-          </Row>
-        ))}
-      </Reorder.Group>
+      {/* Rows stay out of an enclosing AnimatePresence: Reorder items joined
+          its exit and never finished it, so e.g. a sliding tab panel holding
+          this list was never removed. */}
+      <PresenceContext.Provider value={null}>
+        <Reorder.Group ref={ref} axis="y" values={items} onReorder={onReorder} className="hy-sortable-list">
+          {items.map((item) => (
+            <Row key={item.id} item={item} draggable={many} constraintsRef={ref}
+              onRemove={removable ? () => onRemove!(item) : undefined} removeLabel={removeLabel}>
+              {renderItem(item)}
+            </Row>
+          ))}
+        </Reorder.Group>
+      </PresenceContext.Provider>
       {onAdd && <div className="hy-sortable-add" role="button" tabIndex={0} onClick={onAdd}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onAdd(); } }}>{addLabel}</div>}
     </div>

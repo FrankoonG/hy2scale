@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -48,9 +48,6 @@ export default function UsersPage() {
   // The dialog follows the live user row (traffic etc. keep polling); the
   // snapshot taken on open covers the close animation after a delete.
   const detailUser = (detail.data && users.find((u) => u.id === detail.data!.id)) || detail.data || null;
-
-  // Where the last click in the user list landed (row-click dialog origin).
-  const lastClick = useRef<{ x: number; y: number } | undefined>(undefined);
 
   const handleKick = useCallback(async (s: Session) => {
     try {
@@ -157,7 +154,7 @@ export default function UsersPage() {
         }
         noPadding
       >
-        <ListScope selection={selection} lastClick={lastClick}>
+        <ListScope selection={selection}>
           <Table
             id="users"
             columns={userColumns}
@@ -166,7 +163,7 @@ export default function UsersPage() {
             rowClassName={(u) => !u.enabled ? 'disabled-row' : undefined}
             emptyText={boldMarkup(t('users.noUsers'))}
             selection={selection}
-            onRowClick={(u) => detail.show(u, lastClick.current)}
+            onRowClick={(u, _i, origin) => detail.show(u, origin)}
           />
         </ListScope>
       </Card>

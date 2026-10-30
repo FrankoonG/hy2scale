@@ -272,6 +272,20 @@ export function IndeterminateCheckbox({ checked, indeterminate, onChange }: { ch
 }
 
 /** A click inside a native control of the row (the control handles it, not the row). */
+/**
+ * Where a dialog opened by a row click animates from: the content of the
+ * row's first data column (usually the name), not the pointer, so every row
+ * of a list opens from the same column.
+ */
+export function rowOrigin(row: HTMLElement): { x: number; y: number } {
+  const cell = (Array.from(row.children) as HTMLElement[]).find((c) => !c.classList.contains('col-check')) ?? row;
+  const range = document.createRange();
+  range.selectNodeContents(cell);
+  let r: DOMRect = range.getBoundingClientRect();
+  if (!r.width && !r.height) r = cell.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}
+
 export function isInteractiveDescendant(target: EventTarget | null, row: HTMLElement): boolean {
   for (let el = target as HTMLElement | null; el && el !== row; el = el.parentElement) {
     const tag = el.tagName;

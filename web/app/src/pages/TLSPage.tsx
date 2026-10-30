@@ -69,6 +69,7 @@ export default function TLSPage() {
             rowClassName={(c) => isPast(c.not_after) ? 'disabled-row' : undefined}
             emptyText={boldMarkup(t('tls.noCerts'))}
             selection={selection}
+            onRowClick={(c, _i, origin) => edit.show(c, origin)}
           />
         </ListScope>
       </Card>

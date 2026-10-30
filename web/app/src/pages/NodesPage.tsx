@@ -58,7 +58,6 @@ export default function NodesPage() {
   // The key outlives `open` so the dialog keeps its content while closing.
   const [detailKey, setDetailKey] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
-  const rowPointer = useRef<{ x: number; y: number } | null>(null);
   const openDetails = (key: string, anchor?: { x: number; y: number }) => {
     setClickPos(anchor);
     setDetailKey(key);
@@ -608,7 +607,6 @@ export default function NodesPage() {
     <div
       ref={listScopeRef}
       style={{ display: 'contents' }}
-      onPointerDown={(e) => { rowPointer.current = { x: e.clientX, y: e.clientY }; }}
     >
       {children}
     </div>
@@ -633,7 +631,7 @@ export default function NodesPage() {
               selection={selection}
               isSelectable={() => true}
               paginate={false}
-              onRowClick={(tn) => openDetails(tn.key, rowPointer.current || undefined)}
+              onRowClick={(tn, _m, origin) => openDetails(tn.key, origin)}
             />,
           )}
         </Card>

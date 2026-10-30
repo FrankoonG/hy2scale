@@ -5,17 +5,24 @@ import { Tabs, TabPanel } from '@hy2scale/ui';
 import * as api from '@/api';
 import { useAuthStore } from '@/store/auth';
 import { useSystemForm, useWebForm, usePasswordForm } from './settings/forms';
-import SystemTab from './settings/SystemTab';
+import NetworkTab from './settings/NetworkTab';
+import DnsTab from './settings/DnsTab';
+import NestedTab from './settings/NestedTab';
 import WebTab from './settings/WebTab';
+import AccountTab from './settings/AccountTab';
 import UpgradeTab from './settings/UpgradeTab';
+import MaintenanceTab from './settings/MaintenanceTab';
+import AboutTab from './settings/AboutTab';
 
-type SettingsTab = 'system' | 'web' | 'upgrade';
+type SettingsTab = 'network' | 'dns' | 'nested' | 'web' | 'account' | 'upgrade' | 'maintenance' | 'about';
 
 export default function SettingsPage() {
   const { t } = useTranslation();
   const forcePasswordChange = useAuthStore((s) => s.forcePasswordChange);
   const settingsQ = useQuery({ queryKey: ['settings'], queryFn: api.getUISettings });
-  const [activeTab, setActiveTab] = useState<SettingsTab>('system');
+  const [tab, setTab] = useState<SettingsTab>('network');
+  // A forced password change leaves only the account page.
+  const activeTab: SettingsTab = forcePasswordChange ? 'account' : tab;
 
   // Form state stays here so switching tabs keeps unsaved edits.
   const sys = useSystemForm(settingsQ);
@@ -23,23 +30,40 @@ export default function SettingsPage() {
   const pw = usePasswordForm();
 
   // One list for the tab bar and the panel: the slide direction follows it.
-  const tabs = [
-    { key: 'system', label: t('settings.system') },
-    { key: 'web', label: t('settings.web'), disabled: forcePasswordChange },
-    { key: 'upgrade', label: t('settings.upgrade'), disabled: forcePasswordChange },
+  const pages: [SettingsTab, string][] = [
+    ['network', t('settings.network')],
+    ['dns', t('settings.dnsTab')],
+    ['nested', t('settings.nestedTab')],
+    ['web', t('settings.web')],
+    ['account', t('settings.account')],
+    ['upgrade', t('settings.upgrade')],
+    ['maintenance', t('settings.maintenance')],
+    ['about', t('settings.about')],
   ];
+  const tabs = pages.map(([key, label]) => ({ key, label, disabled: forcePasswordChange && key !== 'account' }));
+
+  const panel = () => {
+    switch (activeTab) {
+      case 'network': return <NetworkTab sys={sys} />;
+      case 'dns': return <DnsTab sys={sys} />;
+      case 'nested': return <NestedTab sys={sys} />;
+      case 'web': return <WebTab web={web} />;
+      case 'account': return <AccountTab pw={pw} forcePasswordChange={forcePasswordChange} />;
+      case 'upgrade': return <UpgradeTab />;
+      case 'maintenance': return <MaintenanceTab />;
+      case 'about': return <AboutTab />;
+    }
+  };
 
   return (
     <div className="hy-page">
       <Tabs
         items={tabs}
         activeKey={activeTab}
-        onChange={(key) => { if (!forcePasswordChange || key === 'system') setActiveTab(key as SettingsTab); }}
+        onChange={(key) => { if (!forcePasswordChange) setTab(key as SettingsTab); }}
       />
       <TabPanel fill activeKey={activeTab} keys={tabs.map((tb) => tb.key)}>
-        {activeTab === 'system' ? <SystemTab sys={sys} pw={pw} forcePasswordChange={forcePasswordChange} />
-          : activeTab === 'web' ? <WebTab web={web} />
-          : <UpgradeTab />}
+        {panel()}
       </TabPanel>
     </div>
   );

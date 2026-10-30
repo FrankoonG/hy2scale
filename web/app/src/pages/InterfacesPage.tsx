@@ -371,8 +371,8 @@ export default function InterfacesPage() {
     </>;
   };
 
-  const onRowClick = (node: TreeNode<Row>) => {
-    setDetailFrom(undefined);
+  const onRowClick = (node: TreeNode<Row>, _meta: unknown, origin: { x: number; y: number }) => {
+    setDetailFrom(origin);
     setDetail(node.data.iface.name);
   };
 

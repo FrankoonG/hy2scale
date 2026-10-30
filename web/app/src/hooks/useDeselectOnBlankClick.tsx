@@ -1,4 +1,4 @@
-import { useEffect, useRef, type MutableRefObject, type ReactNode, type RefObject } from 'react';
+import { useEffect, useRef, type ReactNode, type RefObject } from 'react';
 
 // Subset of useSelection's return shape that this hook needs. Kept local
 // (rather than importing SelectionState from ui-framework) because that
@@ -57,21 +57,12 @@ export function useDeselectOnBlankClick(
   }, [insideRef]);
 }
 
-/**
- * Wraps a list (layout-neutral, `display: contents`): clicks outside it clear
- * a single selection, and `lastClick` (optional) records where the last
- * click inside it landed, for row-click dialogs that animate from there.
- */
-export function ListScope({ selection, lastClick, children }: {
-  selection: SelectionLike;
-  lastClick?: MutableRefObject<{ x: number; y: number } | undefined>;
-  children: ReactNode;
-}) {
+/** Wraps a list (layout-neutral, `display: contents`): clicks outside it clear a single selection. */
+export function ListScope({ selection, children }: { selection: SelectionLike; children: ReactNode }) {
   const ref = useRef<HTMLDivElement | null>(null);
   useDeselectOnBlankClick(selection, ref);
   return (
-    <div ref={ref} className="list-scope"
-      onClickCapture={lastClick ? (e) => { lastClick.current = { x: e.clientX, y: e.clientY }; } : undefined}>
+    <div ref={ref} className="list-scope">
       {children}
     </div>
   );
