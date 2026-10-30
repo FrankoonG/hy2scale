@@ -27,6 +27,7 @@ import { latencyClass } from '@/utils/latency';
 import { fmtPunchAddr, punchesFor } from '@/utils/punch';
 import VersionBadge from '@/components/VersionBadge';
 import { boldMarkup } from '@/utils/richText';
+import { PublicIP } from '@/components/CountryFlag';
 
 export default function NodesPage() {
   const { t } = useTranslation();
@@ -357,7 +358,7 @@ export default function NodesPage() {
         // Only the families the node provides; "—" when it provides neither.
         const line = (f: api.NodeEgressFamily | null, fam: string) => f == null ? null : (
           <div className="iface-line" data-fam={fam} key={fam}>
-            {!f.ok ? <span className="iface-bad">{t('iface.unavailable')}</span> : <span>{f.ip || '—'}</span>}
+            {!f.ok ? <span className="iface-bad">{t('iface.unavailable')}</span> : f.ip ? <PublicIP ip={f.ip} country={f.country} /> : <span>—</span>}
           </div>
         );
         const lines = [line(e.ipv4, 'ipv4'), line(e.ipv6, 'ipv6')].filter(Boolean);

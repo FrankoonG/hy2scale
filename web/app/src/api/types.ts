@@ -64,7 +64,7 @@ export interface TopologyNode {
   egress?: NodeEgress | null;
 }
 
-export interface NodeEgressFamily { ip: string; ok: boolean }
+export interface NodeEgressFamily { ip: string; ok: boolean; country?: string }
 export interface NodeEgress { ipv4: NodeEgressFamily | null; ipv6: NodeEgressFamily | null }
 
 // Whether a configured exit path can be dialed now (GET /paths/status). The
@@ -364,6 +364,8 @@ export interface IfacePublic {
   error: string;
   checked: number;
   direct: boolean;
+  /** ISO 3166-1 alpha-2 code of ip, found by the node itself. */
+  country?: string;
 }
 export interface IfaceUsable {
   ok: boolean;

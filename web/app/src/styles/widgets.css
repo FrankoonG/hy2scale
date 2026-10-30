@@ -130,3 +130,7 @@
 .field-error{color:var(--red);font-size:13px;margin:6px 0}
 .field-error.above{margin:0 0 6px}
 .import-preview{background:var(--surface-hover);border-radius:6px;padding:6px 12px}
+
+/* ====== Country flag (left of a public address) ====== */
+.cflag{display:inline-block;width:1.35em;height:.9em;margin-right:.45em;vertical-align:-.1em;border-radius:2px;box-shadow:0 0 0 1px var(--border);object-fit:cover;flex:none;user-select:none}
+.cflag-wait{background:var(--border);opacity:.5;box-shadow:none}

@@ -372,6 +372,8 @@ type PublicView struct {
 	Error   string `json:"error"`
 	Checked int64  `json:"checked"`
 	Direct  bool   `json:"direct"`
+	// Country: ISO 3166-1 alpha-2 code of IP ("" = unknown yet).
+	Country string `json:"country,omitempty"`
 }
 
 // Usable says whether an interface can carry a family's direct flows.
