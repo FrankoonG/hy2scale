@@ -32,12 +32,14 @@ const TRACKPAD_STREAK_MS = 400;
  *
  * - Trackpad (macOS first): two-finger scroll = wheel without ctrlKey →
  *   pan; pinch = wheel with ctrlKey (Chrome / Firefox / Edge) or Safari
- *   gesture events → zoom around the cursor.
- * - Classic mouse wheel (line deltas, or large integer steps with no
- *   horizontal component and no trackpad activity just before) → zoom.
+ *   gesture events → zoom around the cursor. Both are applied as they
+ *   arrive, so a browser that interleaves them during one gesture gets
+ *   pan and zoom together.
+ * - Mouse wheel (a large vertical step outside a trackpad scroll, or line
+ *   deltas) → smooth zoom around the cursor.
  * - Touch: one finger on the canvas pans; two fingers pan by their
  *   midpoint and zoom by their distance at the same time.
- * - Toolbar zoom / fit glide (animateTo); gestures are immediate.
+ * - Toolbar zoom / fit glide (animateTo); trackpad and touch are immediate.
  */
 export function usePanZoom(opts: PanZoomOptions) {
   const minK = opts.minK ?? 0.3;
@@ -59,10 +61,12 @@ export function usePanZoom(opts: PanZoomOptions) {
     optsRef.current.onUserMove?.();
   }, [apply]);
 
-  // ---- animation (toolbar zoom / fit) ----
+  // ---- animation (toolbar zoom / fit, wheel glide) ----
   const anim = useRef(0);
+  const wheelTarget = useRef<{ v: View; px: number; py: number } | null>(null);
   const stopAnim = useCallback(() => {
     if (anim.current) { cancelAnimationFrame(anim.current); anim.current = 0; }
+    wheelTarget.current = null;
   }, []);
   useEffect(() => stopAnim, [stopAnim]);
   const animateTo = useCallback((to: View, dur = ANIM_MS) => {
@@ -79,6 +83,38 @@ export function usePanZoom(opts: PanZoomOptions) {
     };
     anim.current = requestAnimationFrame(step);
   }, [apply, stopAnim]);
+
+  // ---- smooth wheel zoom ----
+  // Each wheel notch moves a target; the view eases toward it every frame,
+  // keeping the world point under the cursor fixed. Notches that arrive
+  // mid-glide stack onto the target instead of restarting.
+  const zoomSmooth = useCallback((factor: number, cx: number, cy: number) => {
+    const base = anim.current && wheelTarget.current ? wheelTarget.current.v : viewRef.current;
+    const k = clampK(base.k * factor);
+    const s = k / base.k;
+    wheelTarget.current = { v: { k, x: cx - (cx - base.x) * s, y: cy - (cy - base.y) * s }, px: cx, py: cy };
+    optsRef.current.onUserMove?.();
+    if (anim.current) return;
+    let last = performance.now();
+    const step = (now: number) => {
+      const t = wheelTarget.current;
+      if (!t) { anim.current = 0; return; }
+      const dt = Math.min(64, now - last);
+      last = now;
+      const cur = viewRef.current;
+      const a = 1 - Math.exp(-dt / 70);
+      const kk = cur.k * Math.pow(t.v.k / cur.k, a);
+      // World point under the cursor in the target view stays under it.
+      const wx = (t.px - t.v.x) / t.v.k, wy = (t.py - t.v.y) / t.v.k;
+      const done = Math.abs(Math.log(t.v.k / kk)) < 0.002;
+      const next = done ? t.v : { k: kk, x: t.px - wx * kk, y: t.py - wy * kk };
+      const c = optsRef.current.clamp;
+      apply(c ? c(next) : next);
+      if (done) { wheelTarget.current = null; anim.current = 0; return; }
+      anim.current = requestAnimationFrame(step);
+    };
+    anim.current = requestAnimationFrame(step);
+  }, [apply, clampK]);
 
   /** Immediate set (stops any glide). */
   const setView = useCallback((v: View) => { stopAnim(); apply(v); }, [apply, stopAnim]);
@@ -144,9 +180,9 @@ export function usePanZoom(opts: PanZoomOptions) {
       if (e.ctrlKey) {
         if (safariGesture) return;
         if (mouseLike && e.deltaMode !== 0) {
-          zoomAtNow(Math.pow(1.15, -Math.max(-5, Math.min(5, e.deltaY / 3))), p.x, p.y);
+          zoomSmooth(Math.pow(1.15, -Math.max(-5, Math.min(5, e.deltaY / 3))), p.x, p.y);
         } else if (mouseLike) {
-          zoomAtNow(Math.pow(1.15, -Math.max(-5, Math.min(5, e.deltaY / 100))), p.x, p.y);
+          zoomSmooth(Math.pow(1.15, -Math.max(-5, Math.min(5, e.deltaY / 100))), p.x, p.y);
         } else {
           // Trackpad pinch: small continuous deltas.
           zoomAtNow(Math.exp(-Math.max(-30, Math.min(30, e.deltaY)) * 0.01), p.x, p.y);
@@ -155,7 +191,7 @@ export function usePanZoom(opts: PanZoomOptions) {
       }
       if (mouseLike) {
         const notches = e.deltaMode === 1 ? e.deltaY / 3 : e.deltaMode === 2 ? e.deltaY : e.deltaY / 100;
-        zoomAtNow(Math.pow(1.15, -Math.max(-5, Math.min(5, notches))), p.x, p.y);
+        zoomSmooth(Math.pow(1.2, -Math.max(-5, Math.min(5, notches))), p.x, p.y);
         return;
       }
       // Two-finger scroll → pan. Shift+wheel scrolls horizontally on some
@@ -305,7 +341,7 @@ export function usePanZoom(opts: PanZoomOptions) {
     };
     // The ref target is stable for the component's lifetime.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opts.ref, clampK, applyGesture, zoomAtNow, stopAnim]);
+  }, [opts.ref, clampK, applyGesture, zoomAtNow, zoomSmooth, stopAnim]);
 
   return { view, viewRef, setView, animateTo, zoomBy, stopAnim, consumeClick, clampK };
 }
