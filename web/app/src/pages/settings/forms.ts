@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient, type UseQueryResult } from '@tanstack/react-query';
@@ -59,58 +59,87 @@ function systemFrom(s?: UISettings): SystemValues {
   };
 }
 
-/** System card: DNS, DNS resolver, public IP, relay, punch, grace, nested limits. */
+/** System sub-pages, each saving only its own fields. */
+export type SystemSection = 'network' | 'dns' | 'nested';
+const SECTION_KEYS: Record<SystemSection, (keyof SystemValues)[]> = {
+  network: ['relay_admin_passthrough', 'accept_punch', 'path_loss_grace_s', 'public_method', 'public_interval', 'public_servers'],
+  dns: ['dns', 'dns_resolver_enabled', 'dns_resolver_cache_ttl', 'dns_resolver_negative_ttl', 'dns_resolver_cache_size', 'dns_resolver_query_timeout_ms'],
+  nested: NESTED_KEYS,
+};
+
+const intOr = (v: string, k: NumKey) => parseInt(v) || SYSTEM_DEFAULTS[k];
+
+/** Network, DNS and nested-discovery sub-pages: one state, per-section saves. */
 export function useSystemForm(settingsQ: UseQueryResult<UISettings>) {
   const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
   const [v, setV] = useState<SystemValues>(() => systemFrom());
-  const [saving, setSaving] = useState(false);
-  const [open, setOpen] = useState({ resolver: false, publicIp: false, nested: false });
-  const resync = useServerFormInit(settingsQ, (s) => setV(systemFrom(s)));
+  const [saving, setSaving] = useState<SystemSection | null>(null);
+  // After a section's save, the refetch re-seeds only that section.
+  const saved = useRef<SystemSection | null>(null);
+  const resync = useServerFormInit(settingsQ, (s) => {
+    const f = systemFrom(s);
+    const sec = saved.current;
+    saved.current = null;
+    setV((p) => (sec ? { ...p, ...Object.fromEntries(SECTION_KEYS[sec].map((k) => [k, f[k]])) } : f));
+  });
 
   const set = <K extends keyof SystemValues>(k: K, val: SystemValues[K]) => setV((p) => ({ ...p, [k]: val }));
-  const toggle = (k: keyof typeof open) => (o: boolean) => setOpen((p) => ({ ...p, [k]: o }));
 
-  const save = async () => {
-    const interval = Number(v.public_interval);
-    if (!/^\d+$/.test(v.public_interval.trim()) || interval < 60) {
-      setOpen((p) => ({ ...p, publicIp: true }));
-      toast.error(t('settings.publicIpIntervalInvalid'));
-      return;
-    }
-    const servers = fromListItems(v.public_servers);
-    const badServer = servers.find((x) => !isPublicIPServer(x));
-    if (badServer !== undefined) {
-      setOpen((p) => ({ ...p, publicIp: true }));
-      toast.error(t('settings.publicIpServerInvalid', { v: badServer }));
-      return;
-    }
-    const nums = Object.fromEntries((Object.keys(SYSTEM_DEFAULTS) as NumKey[])
-      .map((k) => [k, parseInt(v[k]) || SYSTEM_DEFAULTS[k]])) as Record<NumKey, number>;
-    setSaving(true);
-    try {
-      // All hot-reloadable: DNS (read at handshake time), nested limits,
-      // the DNS resolver (cache purged on save; upstreams = `dns`).
-      await api.updateUISettings({
-        ...nums,
-        dns: v.dns,
+  const payload = (sec: SystemSection): Partial<UISettings> | null => {
+    if (sec === 'network') {
+      const interval = Number(v.public_interval);
+      if (!/^\d+$/.test(v.public_interval.trim()) || interval < 60) {
+        toast.error(t('settings.publicIpIntervalInvalid'));
+        return null;
+      }
+      const servers = fromListItems(v.public_servers);
+      const badServer = servers.find((x) => !isPublicIPServer(x));
+      if (badServer !== undefined) {
+        toast.error(t('settings.publicIpServerInvalid', { v: badServer }));
+        return null;
+      }
+      return {
         relay_admin_passthrough: v.relay_admin_passthrough,
         accept_punch: v.accept_punch,
-        dns_resolver_enabled: v.dns_resolver_enabled,
+        path_loss_grace_s: intOr(v.path_loss_grace_s, 'path_loss_grace_s'),
         public_ip: { method: v.public_method, interval, servers },
-      });
+      };
+    }
+    if (sec === 'dns') {
+      return {
+        dns: v.dns,
+        dns_resolver_enabled: v.dns_resolver_enabled,
+        dns_resolver_cache_ttl: intOr(v.dns_resolver_cache_ttl, 'dns_resolver_cache_ttl'),
+        dns_resolver_negative_ttl: intOr(v.dns_resolver_negative_ttl, 'dns_resolver_negative_ttl'),
+        dns_resolver_cache_size: intOr(v.dns_resolver_cache_size, 'dns_resolver_cache_size'),
+        dns_resolver_query_timeout_ms: intOr(v.dns_resolver_query_timeout_ms, 'dns_resolver_query_timeout_ms'),
+      };
+    }
+    return Object.fromEntries(NESTED_KEYS.map((k) => [k, intOr(v[k], k)])) as Partial<UISettings>;
+  };
+
+  // All hot-reloadable: DNS (read at handshake time), nested limits, the DNS
+  // resolver (cache purged on save; upstreams = `dns`), public IP, punch.
+  const save = async (sec: SystemSection) => {
+    const body = payload(sec);
+    if (!body) return;
+    setSaving(sec);
+    try {
+      await api.updateUISettings(body);
       toast.success(t('settings.savedHot'));
+      saved.current = sec;
       resync();
       queryClient.invalidateQueries({ queryKey: ['settings'] });
     } catch (e: any) { toast.error(String(e.message || e)); }
-    finally { setSaving(false); }
+    finally { setSaving(null); }
   };
 
   const restoreNestedDefaults = () =>
     setV((p) => ({ ...p, ...Object.fromEntries(NESTED_KEYS.map((k) => [k, String(SYSTEM_DEFAULTS[k])])) }));
 
-  return { v, set, save, saving, restoreNestedDefaults, open, toggle };
+  return { v, set, save, saving, restoreNestedDefaults };
 }
 export type SystemForm = ReturnType<typeof useSystemForm>;
 

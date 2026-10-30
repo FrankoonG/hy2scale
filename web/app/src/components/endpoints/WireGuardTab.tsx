@@ -55,8 +55,6 @@ function WireGuardPanels({ wgQ }: { wgQ: UseQueryResult<api.WireGuardConfig> }) 
     label: t('app.bulkDelete'),
     confirm: { title: t('app.bulkDelete'), message: t('app.bulkDeleteConfirm', { count: selection.count }), confirmText: t('app.delete'), danger: true },
   });
-  // Where the last click in the list landed (row-click dialog origin).
-  const lastClick = useRef<{ x: number; y: number } | undefined>(undefined);
 
   const showConfig = useCallback(async (name: string, from?: MouseEvent | { x: number; y: number }) => {
     try {
@@ -104,7 +102,7 @@ function WireGuardPanels({ wgQ }: { wgQ: UseQueryResult<api.WireGuardConfig> }) 
         }
         noPadding
       >
-        <ListScope selection={selection} lastClick={lastClick}>
+        <ListScope selection={selection}>
           <Table
             id="wg.peers"
             columns={peerColumns}
@@ -112,7 +110,7 @@ function WireGuardPanels({ wgQ }: { wgQ: UseQueryResult<api.WireGuardConfig> }) 
             rowKey={(p) => p.name}
             emptyText={boldMarkup(t('wg.noPeers'))}
             selection={selection}
-            onRowClick={(p) => showConfig(p.name, lastClick.current)}
+            onRowClick={(p, _i, origin) => showConfig(p.name, origin)}
           />
         </ListScope>
       </Card>

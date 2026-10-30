@@ -1,12 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { Card, Button, Badge, FormStack, Hint, useConfirm, useModalState, useToast } from '@hy2scale/ui';
 import * as api from '@/api';
 import UpgradeUploadModal from '@/components/UpgradeUploadModal';
 import { versionGreater } from '@/utils/version';
-import { downloadBlob } from '@/utils/download';
-import LicensePanel from './LicensePanel';
 
 /**
  * Online-update job state (a server-side singleton). While mounted, SSE keeps
@@ -89,41 +87,17 @@ function UpdateButton({ status, checking, setChecking }: ReturnType<typeof useUp
   return <Button onClick={check} loading={checking || status.state === 'checking'}>{t('settings.checkForUpdate')}</Button>;
 }
 
-/** Settings → Upgrade: version, online update, package upload, licences, backup. */
+/** Settings → Upgrade: version, online update, package upload. */
 export default function UpgradeTab() {
   const { t } = useTranslation();
-  const toast = useToast();
-  const confirm = useConfirm();
   const { data: archInfo } = useQuery({ queryKey: ['systemArch'], queryFn: api.getSystemArch });
   const upgrade = useUpgradeStatus(!!archInfo?.in_docker);
   const upload = useModalState();
-  const restoreRef = useRef<HTMLInputElement>(null);
   const st = upgrade.status;
-
-  const handleBackup = async () => {
-    try {
-      downloadBlob(await api.downloadBackup(), 'hy2scale-backup.tar');
-    } catch (e: any) { toast.error(String(e.message || e)); }
-  };
-
-  const handleRestore = async (file: File) => {
-    const ok = await confirm({
-      title: t('settings.backup'), message: t('settings.restoreConfirm'),
-      danger: true, confirmText: t('app.confirm'), cancelText: t('app.cancel'),
-    });
-    if (!ok) return;
-    try {
-      toast.info(t('settings.restoreUploading'));
-      await api.uploadRestore(file);
-      toast.success(t('settings.restoreComplete'));
-      setTimeout(() => window.location.reload(), 3000);
-    } catch (e: any) { toast.error(t('settings.restoreFailed') + ': ' + String(e.message || e)); }
-  };
 
   return (
     <>
-      {/* 2:1 with Backup below so the licence list has room. */}
-      <Card fill={2} title={t('settings.upgradeTitle')}>
+      <Card fill={1} title={t('settings.upgradeTitle')}>
         <FormStack>
           {archInfo && (
             <div className="button-row wrap">
@@ -156,28 +130,6 @@ export default function UpgradeTab() {
           ) : (
             <Hint>{t('settings.upgradeNotAvailable')}</Hint>
           )}
-          <LicensePanel />
-        </FormStack>
-      </Card>
-
-      <Card fill={1} title={t('settings.backup')}>
-        <FormStack>
-          <Hint>{t('settings.backupDesc')}</Hint>
-          <div className="button-row wrap">
-            <Button onClick={handleBackup}>{t('settings.downloadBackup')}</Button>
-            <Button variant="danger" onClick={() => restoreRef.current?.click()}>{t('settings.restoreFromFile')}</Button>
-            <input
-              ref={restoreRef}
-              type="file"
-              accept=".tar"
-              hidden
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleRestore(file);
-                e.target.value = '';
-              }}
-            />
-          </div>
         </FormStack>
       </Card>
 

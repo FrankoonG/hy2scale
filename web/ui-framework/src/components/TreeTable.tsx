@@ -3,7 +3,7 @@ import * as React from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import clsx from 'clsx';
 import type { SelectionState } from './Table';
-import { ColumnMenu, EmptyRow, IndeterminateCheckbox, Pager, SortTitle, isInteractiveDescendant, sortBy, type SortState, tableId, useColumnPrefs, usePager } from './TableKit';
+import { ColumnMenu, EmptyRow, IndeterminateCheckbox, Pager, SortTitle, isInteractiveDescendant, rowOrigin, sortBy, type SortState, tableId, useColumnPrefs, usePager } from './TableKit';
 
 export interface TreeColumn<T> {
   key: string;
@@ -51,7 +51,8 @@ export interface TreeTableProps<T> {
    *  stay with their parent. */
   paginate?: boolean;
   /** The list's own action for a click on a row (outside its controls). */
-  onRowClick?: (node: TreeNode<T>, meta: TreeRowMeta) => void;
+  /** `origin`: the row's first column, for a dialog's open animation. */
+  onRowClick?: (node: TreeNode<T>, meta: TreeRowMeta, origin: { x: number; y: number }) => void;
 }
 
 function sortTree<T>(nodes: TreeNode<T>[], get: (r: T) => string | number | null | undefined, dir: SortState['dir']): TreeNode<T>[] {
@@ -132,7 +133,7 @@ export function TreeTable<T>({ columns: allColumns, nodes: rawNodes, emptyText, 
               const onRowClick = rowAction
                 ? (e: React.MouseEvent<HTMLTableRowElement>) => {
                     if (isInteractiveDescendant(e.target, e.currentTarget)) return;
-                    rowAction(node, meta);
+                    rowAction(node, meta, rowOrigin(e.currentTarget));
                   }
                 : undefined;
               // Mirror Table's enlarged-hit-area for the col-check cell:

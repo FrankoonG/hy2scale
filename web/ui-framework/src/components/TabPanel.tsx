@@ -37,7 +37,10 @@ export function TabPanel({ activeKey, children, keys, fill }: TabPanelProps) {
 
   return (
     <div style={rootStyle}>
-      <AnimatePresence initial={false} custom={dir}>
+      {/* popLayout takes the leaving panel out of the flow itself; animating
+          top/left from `auto` in the exit variant never completed, so leaving
+          panels piled up invisible in the DOM. */}
+      <AnimatePresence initial={false} custom={dir} mode="popLayout">
         <motion.div
           key={activeKey}
           custom={dir}
@@ -48,7 +51,7 @@ export function TabPanel({ activeKey, children, keys, fill }: TabPanelProps) {
           variants={{
             enter: (d: number) => ({ opacity: 0, x: 20 * d }),
             center: { opacity: 1, x: 0, transition: { duration: 0.35, ease: 'easeOut' } },
-            exit: (d: number) => ({ opacity: 0, x: -20 * d, position: 'absolute' as const, top: 0, left: 0, right: 0, transition: { duration: 0.2 } }),
+            exit: (d: number) => ({ opacity: 0, x: -20 * d, transition: { duration: 0.2 } }),
           }}
         >
           {children}
