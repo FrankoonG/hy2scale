@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -9,6 +10,7 @@ import {
 import type { TopologyNode } from '@/api';
 import * as api from '@/api';
 import { useNodeStore } from '@/store/node';
+import { SELF_KEY } from '@/utils/nodeKeys';
 import { usePageView } from '@/store/pageView';
 import { fmtRate } from '@/hooks/useFormat';
 import NodeModal from '@/components/NodeModal';
@@ -156,7 +158,7 @@ export default function NodesPage() {
         (c) => c.name !== selfId && c.name !== selfName && c.name !== n.name
       );
       return {
-        key: n.is_self ? '__self__' : n.name,
+        key: n.is_self ? SELF_KEY : n.name,
         data: n,
         expanded: true,
         // This node stays on top whatever the sort.
@@ -408,6 +410,18 @@ export default function NodesPage() {
   collectKeys(treeNodes);
   const selection = useSelection(selectableKeys);
 
+  // Opened with { select: key } (the top bar node badge): select that row
+  // alone once it exists.
+  const location = useLocation();
+  const pendingSelect = useRef<string | null>(null);
+  useEffect(() => { pendingSelect.current = (location.state as { select?: string } | null)?.select ?? null; }, [location.key]);
+  useEffect(() => {
+    const k = pendingSelect.current;
+    if (!k || !selectableKeys.includes(k)) return;
+    pendingSelect.current = null;
+    if (!(selection.count === 1 && selection.selected.has(k))) selection.selectOnly(k);
+  });
+
   // Clicking anywhere outside the list region clears a single-row
   // selection (multi-select stays sticky). The boundary is the Card —
   // graph view's blank-canvas clear is owned by the graph itself, so we
@@ -499,7 +513,7 @@ export default function NodesPage() {
         // path-keyed Peers entry exists for self, and self can't be
         // removed from its own config).
         const peerItems = items.filter((n) => !n.is_self);
-        const peerKeys = sel.filter((k) => k !== '__self__');
+        const peerKeys = sel.filter((k) => k !== SELF_KEY);
         const rootKeys = peerKeys.filter((k) => !k.includes('/'));
         const hasDisabled = items.some((n) => n.disabled);
         const hasEnabled = items.some((n) => !n.disabled);
@@ -525,7 +539,7 @@ export default function NodesPage() {
         const sel = [...selection.selected];
         if (sel.length !== 1) return null;
         const key = sel[0];
-        if (key === '__self__') {
+        if (key === SELF_KEY) {
           return (
             <Button
               size="sm"

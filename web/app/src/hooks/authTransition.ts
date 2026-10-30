@@ -81,7 +81,13 @@ export function playAppEnter(h: Handoff) {
     { duration: 320, delay: start + i * step, easing: 'ease-out', fill: 'backwards' }));
   appear(all('.hy-sidebar-logo .version-menu-btn'), 420, 0);
   appear(all('.hy-sidebar-section, .hy-sidebar-item, .hy-sidebar-divider'), 240, 35, -10);
-  appear(all('.hy-main'), 200, 0);
+  // the page behind the divider: top bar, then overview cards one by one
+  appear(all('.hy-topbar'), 220, 0);
+  const cards = all('.ov-grid > .hy-card');
+  if (cards.length) cards.forEach((el, i) => el.animate(
+    [{ opacity: 0, transform: 'translateY(12px)' }, { opacity: 1, transform: 'none' }],
+    { duration: 450, delay: 380 + i * 90, easing: EASE, fill: 'backwards' }));
+  else appear(all('.hy-content'), 260, 0);
 }
 
 // ------------------------------------------------------------------ sign-out

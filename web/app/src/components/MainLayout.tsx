@@ -13,6 +13,7 @@ import VersionMenu from '@/components/VersionMenu';
 import { usePageViewStore, isTopoPage } from '@/store/pageView';
 import BrandLogo from '@/components/login/BrandLogo';
 import { playAppEnter, takeHandoff } from '@/hooks/authTransition';
+import { SELF_KEY } from '@/utils/nodeKeys';
 
 // Sidebar icons: one per page, matching what the page manages.
 const icons: Record<string, IconComponent> = {
@@ -126,7 +127,10 @@ export default function MainLayout({ children }: { children: ReactNode }) {
           onMenuClick={isMobile ? () => setMobileOpen(true) : undefined}
         >
           <div className="spacer" />
-          {node?.name && <span className="node-badge">{node.name}</span>}
+          {node?.name && (
+            <button type="button" className="node-badge" title={t('app.selectSelfNode')} data-testid="node-badge"
+              onClick={() => navigate('/nodes', { state: { select: SELF_KEY } })}>{node.name}</button>
+          )}
           <UserMenu />
         </Topbar>
       }
