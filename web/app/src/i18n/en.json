@@ -793,5 +793,7 @@
   "tls.fileReadError": "Read error",
   "wg.qrCode": "QR code",
   "nodes.graph.showGrid": "Show grid",
-  "app.moreActions": "More actions"
+  "app.moreActions": "More actions",
+  "iface.renameHint": "References move to the new name.",
+  "iface.moveHint": "Moves to this interface; addresses are renegotiated."
 }

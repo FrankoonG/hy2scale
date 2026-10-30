@@ -793,5 +793,7 @@
   "tls.fileReadError": "读取失败",
   "wg.qrCode": "二维码",
   "nodes.graph.showGrid": "显示网格",
-  "app.moreActions": "更多操作"
+  "app.moreActions": "更多操作",
+  "iface.renameHint": "引用将一并改为新名称",
+  "iface.moveHint": "迁移到该网卡，地址将重新获取"
 }

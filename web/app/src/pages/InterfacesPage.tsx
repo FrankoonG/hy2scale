@@ -442,6 +442,7 @@ export default function InterfacesPage() {
         parent={modal?.parent ?? null}
         editing={modal?.editing ?? null}
         parentName={modal?.editing?.parent ?? modal?.parent?.name ?? ''}
+        parents={parents}
         existingNames={list.map((x) => x.name)}
         animateFrom={clickPos}
       />

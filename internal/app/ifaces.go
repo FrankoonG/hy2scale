@@ -85,19 +85,27 @@ func canParent(name string) bool {
 	return false
 }
 
+// nameFree: no kernel interface or configured child is called name.
+func nameFree(cfg *Config, name string) error {
+	if _, err := net.InterfaceByName(name); err == nil {
+		return fmt.Errorf("an interface named %q already exists", name)
+	}
+	for _, o := range cfg.Interfaces {
+		if o.Name == name {
+			return fmt.Errorf("an interface named %q already exists", name)
+		}
+	}
+	return nil
+}
+
 // validate checks a child interface against the configuration it joins.
 func (c *InterfaceConfig) validate(cfg *Config, creating bool) error {
 	if !ifaceNameRe.MatchString(c.Name) {
 		return fmt.Errorf("invalid name %q", c.Name)
 	}
 	if creating {
-		if _, err := net.InterfaceByName(c.Name); err == nil {
-			return fmt.Errorf("an interface named %q already exists", c.Name)
-		}
-		for _, o := range cfg.Interfaces {
-			if o.Name == c.Name {
-				return fmt.Errorf("an interface named %q already exists", c.Name)
-			}
+		if err := nameFree(cfg, c.Name); err != nil {
+			return err
 		}
 	}
 	if !canParent(c.Parent) {
@@ -721,17 +729,33 @@ func (a *App) CreateInterface(c InterfaceConfig) (InterfaceConfig, error) {
 	return c, nil
 }
 
-// UpdateInterface changes a child interface (name and parent are fixed).
+// UpdateInterface changes a child interface. A new parent moves it to that
+// NIC; a new name renames it, and everything that referred to the old name
+// (egress, node addresses, punch bindings) follows. Empty name / parent
+// keep the current ones.
 func (a *App) UpdateInterface(name string, c InterfaceConfig) (InterfaceConfig, error) {
+	if c.Name == "" {
+		c.Name = name
+	}
+	var refs []IfaceRef
 	err := fmt.Errorf("no interface %q", name)
 	a.store.Update(func(cfg *Config) {
 		for i := range cfg.Interfaces {
 			if cfg.Interfaces[i].Name != name {
 				continue
 			}
-			c.Name, c.Parent = name, cfg.Interfaces[i].Parent
+			if c.Parent == "" {
+				c.Parent = cfg.Interfaces[i].Parent
+			}
 			if err = c.validate(cfg, false); err != nil {
 				return
+			}
+			if c.Name != name {
+				if err = nameFree(cfg, c.Name); err != nil {
+					return
+				}
+				refs = refsTo(cfg, name)
+				moveIfaceRefs(cfg, name, c.Name)
 			}
 			cfg.Interfaces[i] = c
 			return
@@ -740,8 +764,56 @@ func (a *App) UpdateInterface(name string, c InterfaceConfig) (InterfaceConfig, 
 	if err != nil {
 		return c, err
 	}
+	if c.Name != name {
+		// Keep the DHCP lease and other saved state under the new name.
+		os.Rename(filepath.Join(a.ifaces.stateDir(), name+".json"), filepath.Join(a.ifaces.stateDir(), c.Name+".json"))
+	}
 	a.ifaces.apply(a.store.Get())
+	a.restartRefNodes(refs)
 	return c, nil
+}
+
+// moveIfaceRefs points everything that uses interface from at to.
+func moveIfaceRefs(cfg *Config, from, to string) {
+	if cfg.Egress != nil {
+		if cfg.Egress.IPv4 == from {
+			cfg.Egress.IPv4 = to
+		}
+		if cfg.Egress.IPv6 == from {
+			cfg.Egress.IPv6 = to
+		}
+	}
+	for ci := range cfg.Clients {
+		cl := &cfg.Clients[ci]
+		cl.Addr = rebind(cl.Addr, from, to)
+		for k := range cl.Addrs {
+			cl.Addrs[k] = rebind(cl.Addrs[k], from, to)
+		}
+		if cl.Punch != nil {
+			for k, bd := range cl.Punch.Binds {
+				if bindIface(bd) == from {
+					cl.Punch.Binds[k] = to + bd[len(from):]
+				}
+			}
+		}
+	}
+}
+
+// restartRefNodes reconnects the nodes whose addresses were rebound.
+func (a *App) restartRefNodes(refs []IfaceRef) {
+	restarted := map[string]bool{}
+	for _, r := range refs {
+		if r.Type != "node_address" || restarted[r.Node] {
+			continue
+		}
+		restarted[r.Node] = true
+		for _, cl := range a.store.Get().Clients {
+			if cl.Name == r.Node && !cl.Disabled {
+				a.StopClient(cl.Name)
+				a.StartClient(cl)
+			}
+		}
+	}
 }
 
 // DeleteInterface removes a child interface; everything that used it uses
@@ -768,45 +840,13 @@ func (a *App) DeleteInterface(name, replacement string) ([]IfaceRef, error) {
 		err = nil
 		refs = refsTo(cfg, name)
 		cfg.Interfaces = append(cfg.Interfaces[:idx], cfg.Interfaces[idx+1:]...)
-		if cfg.Egress != nil {
-			if cfg.Egress.IPv4 == name {
-				cfg.Egress.IPv4 = replacement
-			}
-			if cfg.Egress.IPv6 == name {
-				cfg.Egress.IPv6 = replacement
-			}
-		}
-		for ci := range cfg.Clients {
-			cl := &cfg.Clients[ci]
-			cl.Addr = rebind(cl.Addr, name, replacement)
-			for k := range cl.Addrs {
-				cl.Addrs[k] = rebind(cl.Addrs[k], name, replacement)
-			}
-			if cl.Punch != nil {
-				for k, bd := range cl.Punch.Binds {
-					if bindIface(bd) == name {
-						cl.Punch.Binds[k] = replacement + bd[len(name):]
-					}
-				}
-			}
-		}
+		moveIfaceRefs(cfg, name, replacement)
 	})
 	if err != nil {
 		return nil, err
 	}
 	a.ifaces.apply(a.store.Get())
-	restarted := map[string]bool{}
-	for _, r := range refs {
-		if r.Type == "node_address" && !restarted[r.Node] {
-			restarted[r.Node] = true
-			for _, cl := range a.store.Get().Clients {
-				if cl.Name == r.Node && !cl.Disabled {
-					a.StopClient(cl.Name)
-					a.StartClient(cl)
-				}
-			}
-		}
-	}
+	a.restartRefNodes(refs)
 	return refs, nil
 }
 
