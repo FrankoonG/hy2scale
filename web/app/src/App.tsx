@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '@/store/auth';
+import { signOut } from '@/hooks/authTransition';
 import { useQuery } from '@tanstack/react-query';
 import { getNode } from '@/api';
 import { useNodeStore } from '@/store/node';
@@ -68,8 +69,7 @@ function AuthenticatedRoutes() {
   // Listen for session expired events
   useEffect(() => {
     const handler = () => {
-      useAuthStore.getState().logout();
-      navigate('/login', { replace: true });
+      signOut(navigate);
     };
     window.addEventListener('hy2scale:session-expired', handler);
     return () => window.removeEventListener('hy2scale:session-expired', handler);

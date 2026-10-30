@@ -236,7 +236,7 @@ const MODS: Record<Kind, ModFn> = {
         { id: p + 'm2', a: 'self', b: ex.id, kind: 'peer', curve, chips: [{ t: 0.3, text: 'wan2' }, { t: 0.78, text: a2 }] },
         { id: p + 'eg', a: ex.id, b: p + 'net', kind: 'egress' },
       ],
-      notes: b.h >= 140 ? [{ x: r1((S.x + ex.x) / 2 + 10), y: ex.y, text: quality ? 'Quality' : 'Aggregate' }] : [],
+      notes: b.h >= 140 ? [{ x: r1((S.x + ex.x) / 2 + 10), y: ex.y, key: quality ? 'quality' : 'aggregate' }] : [],
       events: quality ? [{ at: +t.toFixed(2), link: p + 'm1', state: 'degraded' }, { at: +(t + 1.1).toFixed(2), link: p + 'm1', state: 'offline' }] : [],
       // quality: one link at a time; aggregate: the engine alternates parallel links
       exits: [quality

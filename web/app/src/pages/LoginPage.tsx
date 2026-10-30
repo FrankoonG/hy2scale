@@ -7,6 +7,7 @@ import { LanguageSwitcher } from '@/components/PrefSwitcher';
 import LoginTopology from '@/components/login/LoginTopology';
 import ThemeCycleButton from '@/components/login/ThemeCycleButton';
 import BrandLogo from '@/components/login/BrandLogo';
+import { enterApp } from '@/hooks/authTransition';
 
 export default function LoginPage() {
   const { t } = useTranslation();
@@ -34,6 +35,8 @@ export default function LoginPage() {
   const [remember, setRemember] = useState(false);
   const [hasSaved, setHasSaved] = useState(false);
   const [caps, setCaps] = useState(false);
+  // entered by the logout transition: that moves the brand into place, so skip the page's own entrance
+  const [still] = useState(() => document.documentElement.classList.contains('vt-auth'));
 
   // Local login: pre-fill from saved credentials (don't auto-submit).
   // Skip entirely in proxy mode — the plain-text screen rendered below
@@ -56,14 +59,14 @@ export default function LoginPage() {
       // Use saved hash — user didn't change the password field
       const cred = getSavedCredentials();
       if (cred) {
-        ok = await loginWithHash(cred.u, cred.h, remember);
+        ok = await loginWithHash(cred.u, cred.h, remember, enterApp);
       } else {
-        ok = await login(username, password, remember);
+        ok = await login(username, password, remember, enterApp);
       }
     } else {
       // User typed a new password
       setHasSaved(false);
-      ok = await login(username, password, remember);
+      ok = await login(username, password, remember, enterApp);
     }
     if (ok) navigate('/overview', { replace: true });
   };
@@ -77,7 +80,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="lg-page">
+    <div className={`lg-page${still ? ' still' : ''}`}>
       <LoginTopology />
       <div className="lg-right">
         <ThemeCycleButton />

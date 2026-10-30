@@ -6,6 +6,7 @@ import { VBH, VBW } from './spec';
 import BrandLogo from './BrandLogo';
 
 const ROTATE_S = 8;
+const SKIP_COOLDOWN_MS = 1500;   // a click-to-switch waits for the previous morph
 const TAG_ROW = 24;
 const TAG_ROWS = 5;
 
@@ -18,6 +19,7 @@ export default function LoginTopology() {
   const fillRef = useRef<HTMLSpanElement>(null);
   const engineRef = useRef<TopoEngine | null>(null);
   const hover = useRef(false);
+  const skip = useRef<() => void>(() => {});
   const tRef = useRef(t);
   tRef.current = t;
   const [tags, setTags] = useState<string[]>([]);
@@ -40,7 +42,12 @@ export default function LoginTopology() {
     };
     next(true);
 
-    let raf = 0, last = performance.now(), rot = 0;
+    let raf = 0, last = performance.now(), rot = 0, lastSkip = 0;
+    skip.current = () => {
+      const now = performance.now();
+      if (now - lastSkip < SKIP_COOLDOWN_MS) return;
+      lastSkip = now; rot = 0; next();
+    };
     const tick = (now: number) => {
       // animation steps are capped (a long frame must not jump), the rotation
       // clock is not: slow devices still rotate on time
@@ -69,6 +76,7 @@ export default function LoginTopology() {
       className="lg-left"
       onPointerEnter={() => { hover.current = true; setPaused(true); }}
       onPointerLeave={() => { hover.current = false; setPaused(false); }}
+      onClick={() => skip.current()}
     >
       <div className="lg-brand"><BrandLogo /><span>HY2 SCALE</span></div>
       <div className="lg-topo">
@@ -83,7 +91,10 @@ export default function LoginTopology() {
             ))}
           </ul>
         </div>
-        <div className={`lg-progress${paused ? ' paused' : ''}`} aria-hidden="true"><span ref={fillRef} /></div>
+        <div className="lg-status" aria-hidden="true">
+          <span className={`lg-hint${paused ? ' on' : ''}`}>{t('login.topo.pausedHint')}</span>
+          <div className={`lg-progress${paused ? ' paused' : ''}`}><span ref={fillRef} /></div>
+        </div>
       </div>
     </div>
   );

@@ -67,7 +67,7 @@ interface LinkE extends Fading {
   pill?: Pill; burst?: SVGCircleElement; probes?: SVGCircleElement[]; upAt?: number;
 }
 
-interface NoteE extends Fading { key: string; g: SVGGElement }
+interface NoteE extends Fading { key: string; g: SVGGElement; label?: { rect: SVGRectElement; text: SVGTextElement; key: string } }
 
 interface FlowE extends Flow { next: number; rr: number; lc: number; dc: number }
 
@@ -177,6 +177,7 @@ export class TopoEngine {
       e.chips.forEach((c) => { if (c.key) { c.text.textContent = this.opts.t('chip.' + c.key); this.chipSize(c); } });
       if (e.pill?.key) { const k = e.pill.key; e.pill.key = undefined; this.setPill(e, k, true); }
     });
+    this.notes.forEach((e) => { if (e.label) { e.label.text.textContent = this.opts.t('chip.' + e.label.key); this.chipSize(e.label); } });
   }
 
   // ---------------------------------------------------------------- elements
@@ -268,10 +269,11 @@ export class TopoEngine {
       se('rect', { x: z.x, y: z.y, width: z.w, height: z.h, rx: 10 }, g);
       se('text', { x: z.x + 10, y: z.y + z.h - 9 }, g).textContent = z.label;
     } else {
-      const rect = se('rect', null, g), text = se('text', null, g);
-      text.textContent = (n as Note).text;
+      const note = n as Note, rect = se('rect', null, g), text = se('text', null, g);
+      text.textContent = note.key ? this.opts.t('chip.' + note.key) : note.text || '';
       g.setAttribute('transform', `translate(${n.x} ${n.y})`);
       requestAnimationFrame(() => this.chipSize({ rect, text }));
+      if (note.key) return { key, g, alpha: 0, target: 1, showAt: 0, dying: false, label: { rect, text, key: note.key } };
     }
     return { key, g, alpha: 0, target: 1, showAt: 0, dying: false };
   }
