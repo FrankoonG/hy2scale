@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
-import { Modal, Button, Input, Toggle, Select, FormGroup, FormGrid, useToast } from '@hy2scale/ui';
+import { Modal, Button, Input, Toggle, Select, FormGroup, FormGrid, Hint, useToast } from '@hy2scale/ui';
 import * as api from '@/api';
 import type { IfaceEntry, ChildIfaceBody } from '@/api/types';
 import { useDialogInit } from '@/hooks/useFormInit';
@@ -51,6 +51,8 @@ interface Props {
   /** Child being edited; null = create under `parent`. */
   editing: IfaceEntry | null;
   parentName: string;
+  /** NICs a child can live on (edit: pick another one to move it). */
+  parents: IfaceEntry[];
   existingNames: string[];
   animateFrom?: { x: number; y: number };
 }
@@ -58,12 +60,13 @@ interface Props {
 const NAME_RE = /^[A-Za-z0-9-]{1,15}$/;
 const CLIENT_ID_RE = /^[\x21-\x7e]{1,128}$/;
 
-export default function InterfaceModal({ open, onClose, parent, editing, parentName, existingNames, animateFrom }: Props) {
+export default function InterfaceModal({ open, onClose, parent, editing, parentName, parents, existingNames, animateFrom }: Props) {
   const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
 
   const [name, setName] = useState('');
+  const [parentSel, setParentSel] = useState('');
   const [mode, setMode] = useState<'builtin' | 'system'>('builtin');
   const [mac, setMac] = useState('');
   const [vlanOn, setVlanOn] = useState(false);
@@ -84,6 +87,7 @@ export default function InterfaceModal({ open, onClose, parent, editing, parentN
   const [saving, setSaving] = useState(false);
 
   useDialogInit(open, editing?.name ?? `new:${parentName}`, () => {
+    setParentSel(parentName);
     setSubmitted(false);
     if (!editing) {
       setName(''); setMode('builtin'); setMac(randomMAC());
@@ -103,12 +107,15 @@ export default function InterfaceModal({ open, onClose, parent, editing, parentN
     setV6Dns(toListItems(b.ipv6.dns));
   });
 
-  const parentMtu = parent?.mtu || 0;
+  const parentEntry = editing ? parents.find((p) => p.name === parentSel) || parent : parent;
+  const parentMtu = parentEntry?.mtu || 0;
+  const renamed = !!editing && name.trim() !== editing.name;
+  const moved = !!editing && parentSel !== editing.parent;
 
   const validate = (): Record<string, string> => {
     const e: Record<string, string> = {};
     if (!NAME_RE.test(name)) e.name = t('iface.err.name');
-    else if (!editing && existingNames.includes(name)) e.name = t('iface.err.nameTaken');
+    else if (name !== editing?.name && existingNames.includes(name)) e.name = t('iface.err.nameTaken');
     if (!isUnicastMAC(mac.trim())) e.mac = t('iface.err.mac');
     if (vlanOn) {
       const id = Number(vlanId);
@@ -164,7 +171,7 @@ export default function InterfaceModal({ open, onClose, parent, editing, parentN
     if (Object.keys(validate()).length) return;
     const body: ChildIfaceBody = {
       name: name.trim(),
-      parent: parentName,
+      parent: editing ? parentSel : parentName,
       mode,
       mac: mac.trim().toLowerCase(),
       vlan: { enabled: vlanOn, id: vlanOn ? Number(vlanId) : 0 },
@@ -220,11 +227,21 @@ export default function InterfaceModal({ open, onClose, parent, editing, parentN
         {wireless && <div className="hy-alert-warn">{t('iface.wirelessHint')}</div>}
         <FormGrid>
           <FormGroup label={t('iface.name')} required error={errors.name}>
-            <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={15} disabled={!!editing}
+            <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={15}
               placeholder="wan-b" data-testid="iface-name" />
+            {renamed && <Hint>{t('iface.renameHint')}</Hint>}
           </FormGroup>
           <FormGroup label={t('iface.parent')}>
-            <Input value={parentName} disabled />
+            {editing ? (
+              <div data-testid="iface-parent">
+                <Select
+                  value={parentSel}
+                  onChange={(e) => setParentSel(e.target.value)}
+                  options={parents.map((p) => ({ value: p.name, label: p.name }))}
+                />
+              </div>
+            ) : <Input value={parentName} disabled />}
+            {moved && <Hint>{t('iface.moveHint')}</Hint>}
           </FormGroup>
           <FormGroup label={t('iface.mode')}>
             <Select

@@ -793,5 +793,7 @@
   "tls.fileReadError": "읽기 오류",
   "wg.qrCode": "QR 코드",
   "nodes.graph.showGrid": "격자 표시",
-  "app.moreActions": "추가 작업"
+  "app.moreActions": "추가 작업",
+  "iface.renameHint": "참조도 새 이름으로 변경됩니다",
+  "iface.moveHint": "이 인터페이스로 이동하며 주소를 다시 받습니다"
 }
