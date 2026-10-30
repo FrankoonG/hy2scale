@@ -9,39 +9,56 @@ import (
 	"strings"
 	"time"
 
+	netif "github.com/FrankoonG/hy2scale/core/iface"
+	"github.com/FrankoonG/hy2scale/core/proto"
 	"github.com/FrankoonG/hy2scale/internal/pubip"
 )
 
-// egressPeersLoop fetches every capable direct peer's egress so the node
-// list can show where each node's direct traffic leaves from; the peer
-// lists we serve carry it on to nodes further away.
-func (a *App) egressPeersLoop(ctx context.Context) {
-	t := time.NewTicker(30 * time.Second)
-	defer t.Stop()
-	for {
+// attrsLoop keeps this node's attributes current (its egress: public
+// address and country per family) and fetches every capable direct peer's,
+// so the node list can show where each node's direct traffic leaves from;
+// the peer lists we serve carry them on to nodes further away.
+func (a *App) attrsLoop(ctx context.Context) {
+	pub := time.NewTicker(5 * time.Second)
+	fetch := time.NewTicker(30 * time.Second)
+	defer pub.Stop()
+	defer fetch.Stop()
+	var last string
+	publish := func() {
+		if b := a.selfEgressJSON(); string(b) != last {
+			last = string(b)
+			a.node.SetAttr(proto.AttrEgress, json.RawMessage(b))
+		}
+	}
+	peers := func() {
 		live := map[string]bool{}
 		for _, p := range append(a.node.Peers(), a.node.PeersAlt()...) {
 			live[p.Name] = true
-			if !p.EgressCapable {
+			if !p.AttrsCapable && !p.EgressCapable {
 				continue
 			}
 			go func(name string) {
-				b, err := a.node.EgressOf(name)
-				if err != nil || !json.Valid(b) {
-					return
+				if at, err := a.node.AttrsOf(name); err == nil && at != nil {
+					a.node.SetPeerAttrs(name, at)
 				}
-				a.node.SetPeerEgress(name, json.RawMessage(b))
 			}(p.Name)
 		}
 		for _, cl := range a.store.Get().Clients {
 			if !live[cl.Name] {
-				a.node.SetPeerEgress(cl.Name, nil)
+				a.node.SetPeerAttrs(cl.Name, nil)
 			}
 		}
+	}
+	publish()
+	peers()
+	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-t.C:
+		case <-pub.C:
+			publish()
+		case <-fetch.C:
+			peers()
 		}
 	}
 }
@@ -57,7 +74,7 @@ func (a *App) peerReportedAddr(ctx context.Context, iface string, fam int) pubip
 			capable[p.Name] = true
 		}
 	}
-	defIface := defaultRouteIface(fam)
+	defIface := netif.DefaultRouteIface(fam)
 	for _, cl := range a.store.Get().Clients {
 		if cl.Disabled || !capable[cl.Name] {
 			continue

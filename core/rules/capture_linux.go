@@ -1,15 +1,17 @@
-package app
+package rules
 
 import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
 	"syscall"
+
+	"github.com/FrankoonG/hy2scale/core/netfilter"
 )
 
 // Capture layer of the rule engine: hands this host's matching traffic to
@@ -41,58 +43,45 @@ const (
 	ruleProxyIP6   = "::1"
 )
 
-type captureMode int
-
-const (
-	captureNone captureMode = iota
-	captureDNAT
-	captureTProxy
-)
-
-func (m captureMode) String() string {
-	switch m {
-	case captureTProxy:
-		return "tproxy"
-	case captureDNAT:
-		return "dnat"
+// startCapture opens the loopback listeners and installs each family's
+// capture whose listeners are up.
+func (e *Engine) startCapture(ctx context.Context) {
+	captureTeardown()
+	exec.Command("ip", "addr", "add", ruleProxyIP+"/32", "dev", "lo").Run()
+	for _, v6 := range []bool{false, true} {
+		ip := ruleProxyIP
+		if v6 {
+			ip = "[" + ruleProxyIP6 + "]"
+		}
+		ln, err := listenTCPTransparent(fmt.Sprintf("%s:%d", ip, ruleProxyPort))
+		if err != nil {
+			log.Printf("[rules] capture listen %s: %v", ip, err)
+			continue
+		}
+		uln, err := listenUDPTransparent(fmt.Sprintf("%s:%d", ip, ruleUDPProxyPort))
+		if err != nil {
+			ln.Close()
+			log.Printf("[rules] capture UDP listen %s: %v", ip, err)
+			continue
+		}
+		mode := captureSetup(v6, e.host)
+		if mode == captureNone {
+			ln.Close()
+			uln.Close()
+			continue
+		}
+		if v6 {
+			e.mode6 = mode
+		} else {
+			e.mode = mode
+		}
+		go e.serveProxy(ctx, ln)
+		go e.serveUDPProxy(ctx, uln)
+		go func() { <-ctx.Done(); ln.Close(); uln.Close() }()
 	}
-	return "none"
-}
-
-func (m captureMode) table() string {
-	if m == captureTProxy {
-		return "mangle"
+	if e.mode == captureDNAT {
+		log.Printf("[rules] capture=dnat: only this node's own traffic is captured (no TPROXY)")
 	}
-	return "nat"
-}
-
-// ip6Variant picks the ip6tables binary the same way iptVariant does.
-var ip6Variant = sync.OnceValue(func() string {
-	if out, err := exec.Command("ip6tables", "-V").CombinedOutput(); err == nil && strings.Contains(string(out), "nf_tables") {
-		return "ip6tables"
-	}
-	if exec.Command("ip6tables-legacy", "-L", "-n").Run() == nil {
-		return "ip6tables-legacy"
-	}
-	return "ip6tables"
-})
-
-func iptProg(v6 bool) string {
-	if v6 {
-		return ip6Variant()
-	}
-	return iptVariant()
-}
-
-func iptOK(v6 bool, args ...string) bool {
-	return iptExec(iptProg(v6), args...).Run() == nil
-}
-
-func ipCmd(v6 bool, args ...string) error {
-	if v6 {
-		args = append([]string{"-6"}, args...)
-	}
-	return exec.Command("ip", args...).Run()
 }
 
 // captureTeardown removes everything the capture layer installs, in both
@@ -102,21 +91,21 @@ func captureTeardown() {
 	for _, v6 := range []bool{false, true} {
 		for _, tbl := range []string{"mangle", "nat"} {
 			for _, pair := range [][2]string{{"PREROUTING", ruleChainPre}, {"OUTPUT", ruleChainOut}} {
-				for iptOK(v6, "-t", tbl, "-D", pair[0], "-j", pair[1]) {
+				for netfilter.OK(v6, "-t", tbl, "-D", pair[0], "-j", pair[1]) {
 				}
-				iptOK(v6, "-t", tbl, "-F", pair[1])
-				iptOK(v6, "-t", tbl, "-X", pair[1])
+				netfilter.OK(v6, "-t", tbl, "-F", pair[1])
+				netfilter.OK(v6, "-t", tbl, "-X", pair[1])
 			}
 		}
-		for ipCmd(v6, "rule", "del", "fwmark", mark, "lookup", ruleTProxyTab) == nil {
+		for netfilter.IP(v6, "rule", "del", "fwmark", mark, "lookup", ruleTProxyTab) == nil {
 		}
-		ipCmd(v6, "route", "flush", "table", ruleTProxyTab)
+		netfilter.IP(v6, "route", "flush", "table", ruleTProxyTab)
 	}
 }
 
 // captureSetup creates one family's chains with their fixed head
 // (exclusions) and returns the mode it runs in.
-func captureSetup(v6 bool, cfg Config) captureMode {
+func captureSetup(v6 bool, host Host) captureMode {
 	mode := captureNone
 	switch {
 	case os.Getenv("HY2SCALE_RULES_NO_TPROXY") == "" && tproxySupported(v6):
@@ -128,11 +117,11 @@ func captureSetup(v6 bool, cfg Config) captureMode {
 		return mode
 	}
 	tbl := mode.table()
-	prog := iptProg(v6)
-	iptOK(v6, "-t", tbl, "-N", ruleChainPre)
-	iptOK(v6, "-t", tbl, "-N", ruleChainOut)
+	prog := netfilter.Prog(v6)
+	netfilter.OK(v6, "-t", tbl, "-N", ruleChainPre)
+	netfilter.OK(v6, "-t", tbl, "-N", ruleChainOut)
 	head := func(chain string, args ...string) {
-		iptRun(prog, append([]string{"-t", tbl, "-A", chain}, args...)...)
+		netfilter.Run(prog, append([]string{"-t", tbl, "-A", chain}, args...)...)
 	}
 	head(ruleChainOut, "-m", "mark", "--mark", fmt.Sprintf("0x%x", ruleBypassMark), "-j", "RETURN")
 	// traffic to this node itself is never captured
@@ -141,37 +130,33 @@ func captureSetup(v6 bool, cfg Config) captureMode {
 		loop = "::1/128"
 	}
 	for _, ch := range []string{ruleChainPre, ruleChainOut} {
-		if !iptOK(v6, "-t", tbl, "-A", ch, "-m", "addrtype", "--dst-type", "LOCAL", "-j", "RETURN") {
+		if !netfilter.OK(v6, "-t", tbl, "-A", ch, "-m", "addrtype", "--dst-type", "LOCAL", "-j", "RETURN") {
 			head(ch, "-d", loop, "-j", "RETURN")
 		}
 	}
 	// the mesh's own sockets: our server port (replies to inbound peers) and
 	// every address of every outbound peer
-	if cfg.Server != nil {
-		if _, ports, ok := splitHostPorts(stripAddrBind(cfg.Server.Listen)); ok {
+	listen, peers := host.MeshAddrs()
+	if listen != "" {
+		if _, ports, ok := splitHostPorts(listen); ok {
 			for _, proto := range []string{"udp", "tcp"} {
 				head(ruleChainOut, "-p", proto, "-m", "multiport", "--sports", ports, "-j", "RETURN")
 			}
 		}
 	}
-	for _, cl := range cfg.Clients {
-		for _, a := range cl.AllAddrs() {
-			if IsPunchAddr(a) {
+	for _, a := range peers {
+		h, ports, ok := splitHostPorts(a)
+		if !ok {
+			continue
+		}
+		ips, _ := net.LookupHost(h)
+		for _, ip := range ips {
+			if strings.Contains(ip, ":") != v6 {
 				continue
 			}
-			host, ports, ok := splitHostPorts(stripAddrBind(a))
-			if !ok {
-				continue
-			}
-			ips, _ := net.LookupHost(host)
-			for _, ip := range ips {
-				if strings.Contains(ip, ":") != v6 {
-					continue
-				}
-				for _, ch := range []string{ruleChainPre, ruleChainOut} {
-					for _, proto := range []string{"udp", "tcp"} {
-						head(ch, "-d", ip, "-p", proto, "-m", "multiport", "--dports", ports, "-j", "RETURN")
-					}
+			for _, ch := range []string{ruleChainPre, ruleChainOut} {
+				for _, proto := range []string{"udp", "tcp"} {
+					head(ch, "-d", ip, "-p", proto, "-m", "multiport", "--dports", ports, "-j", "RETURN")
 				}
 			}
 		}
@@ -182,11 +167,11 @@ func captureSetup(v6 bool, cfg Config) captureMode {
 		if v6 {
 			def = "::/0"
 		}
-		ipCmd(v6, "rule", "add", "fwmark", mark, "lookup", ruleTProxyTab, "priority", ruleTProxyPrio)
-		ipCmd(v6, "route", "replace", "local", def, "dev", "lo", "table", ruleTProxyTab)
+		netfilter.IP(v6, "rule", "add", "fwmark", mark, "lookup", ruleTProxyTab, "priority", ruleTProxyPrio)
+		netfilter.IP(v6, "route", "replace", "local", def, "dev", "lo", "table", ruleTProxyTab)
 	}
-	iptOK(v6, "-t", tbl, "-I", "PREROUTING", "-j", ruleChainPre)
-	iptOK(v6, "-t", tbl, "-I", "OUTPUT", "-j", ruleChainOut)
+	netfilter.OK(v6, "-t", tbl, "-I", "PREROUTING", "-j", ruleChainPre)
+	netfilter.OK(v6, "-t", tbl, "-I", "OUTPUT", "-j", ruleChainOut)
 	return mode
 }
 
@@ -194,15 +179,15 @@ func captureSetup(v6 bool, cfg Config) captureMode {
 func tproxySupported(v6 bool) bool {
 	const probe = "H2S_RULES_PROBE"
 	defer func() {
-		iptOK(v6, "-t", "mangle", "-F", probe)
-		iptOK(v6, "-t", "mangle", "-X", probe)
+		netfilter.OK(v6, "-t", "mangle", "-F", probe)
+		netfilter.OK(v6, "-t", "mangle", "-X", probe)
 	}()
-	iptOK(v6, "-t", "mangle", "-N", probe)
+	netfilter.OK(v6, "-t", "mangle", "-N", probe)
 	dst, on := "127.255.255.254/32", ruleProxyIP
 	if v6 {
 		dst, on = "fd00::fffe/128", ruleProxyIP6
 	}
-	return iptOK(v6, "-t", "mangle", "-A", probe, "-d", dst, "-p", "udp",
+	return netfilter.OK(v6, "-t", "mangle", "-A", probe, "-d", dst, "-p", "udp",
 		"-j", "TPROXY", "--on-ip", on, "--on-port", fmt.Sprint(ruleUDPProxyPort),
 		"--tproxy-mark", fmt.Sprintf("0x%x/0xffffffff", ruleTProxyMark))
 }
@@ -210,7 +195,7 @@ func tproxySupported(v6 bool) bool {
 // captureLines returns the lines that capture one target (IP, CIDR or a-b
 // range, either family), each prefixed "4 " or "6 " for its iptables, or
 // nil when that family is not captured.
-func (e *ruleEngine) captureLines(target string) []string {
+func (e *Engine) captureLines(target string) []string {
 	v6 := strings.Contains(target, ":")
 	mode, on := e.mode, ruleProxyIP
 	if v6 {
@@ -263,10 +248,10 @@ func runCaptureLine(line string, del bool) {
 				break
 			}
 		}
-		iptExec(iptProg(v6), parts...).Run()
+		netfilter.Exec(netfilter.Prog(v6), parts...).Run()
 		return
 	}
-	iptRun(iptProg(v6), parts...)
+	netfilter.Run(netfilter.Prog(v6), parts...)
 }
 
 // splitHostPorts parses "host:portspec" (portspec "443", "443,8443",

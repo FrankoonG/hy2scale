@@ -85,22 +85,6 @@ type ProxyConfig struct {
 	ExitMode  string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"`
 }
 
-// RoutingRule defines a traffic routing rule (IP or domain based).
-type RoutingRule struct {
-	ID       string   `yaml:"id" json:"id"`
-	Name     string   `yaml:"name" json:"name"`
-	Type     string   `yaml:"type" json:"type"`                           // "ip" or "domain"
-	Targets  []string `yaml:"targets" json:"targets"`                     // IPs/CIDRs/ranges or domains
-	ExitVia   string   `yaml:"exit_via" json:"exit_via"`
-	ExitPaths []string `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
-	ExitMode  string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"` // ""|"quality"|"aggregate"
-	Enabled   bool     `yaml:"enabled" json:"enabled"`
-	// Priority resolves overlaps between rules: the higher Priority wins,
-	// then the more specific target. Default 0. (The pre-1.4.0 use_tun field
-	// is ignored: every rule is carried per flow.)
-	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
-}
-
 // ConfigStore manages dynamic configuration with persistence.
 type ConfigStore struct {
 	mu   sync.RWMutex

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/iface"
 	"github.com/FrankoonG/hy2scale/internal/ipcountry"
 	"github.com/FrankoonG/hy2scale/internal/pubip"
 )
@@ -102,8 +103,8 @@ func (p *pubState) targets() []pubKey {
 	sel := a.egressSelection()
 	add(sel.IPv4, 4)
 	add(sel.IPv6, 6)
-	add(defaultRouteIface(4), 4)
-	add(defaultRouteIface(6), 6)
+	add(iface.DefaultRouteIface(4), 4)
+	add(iface.DefaultRouteIface(6), 6)
 	for _, c := range a.store.Get().Interfaces {
 		if !c.Enabled {
 			continue
@@ -194,7 +195,7 @@ func (p *pubState) localAddrs(name string) string {
 }
 
 func (p *pubState) local(name string) []netip.Addr {
-	if i := p.m.child(name); i != nil {
+	if i := p.m.Child(name); i != nil {
 		st := i.Status()
 		var out []netip.Addr
 		for _, a := range append(st.IPv4.Addrs, st.IPv6.Addrs...) {
@@ -323,13 +324,13 @@ func (p *pubState) funcs(k pubKey) (pubip.DialFunc, pubip.ResolveFunc) {
 	name := k.iface
 	if p.m.a.isChildIface(name) {
 		return func(ctx context.Context, network, addr string) (net.Conn, error) {
-				i := p.m.child(name)
+				i := p.m.Child(name)
 				if i == nil {
 					return nil, errNotRunning(name)
 				}
 				return i.DialContext(ctx, network, addr)
 			}, func(ctx context.Context, network, host string) ([]netip.Addr, error) {
-				i := p.m.child(name)
+				i := p.m.Child(name)
 				if i == nil {
 					return nil, errNotRunning(name)
 				}
@@ -337,7 +338,7 @@ func (p *pubState) funcs(k pubKey) (pubip.DialFunc, pubip.ResolveFunc) {
 			}
 	}
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return kernelDial(ctx, name, k.fam, network, addr, true)
+			return iface.KernelDial(ctx, name, k.fam, network, addr, true)
 		}, func(ctx context.Context, network, host string) ([]netip.Addr, error) {
 			return net.DefaultResolver.LookupNetIP(ctx, network, host)
 		}
@@ -415,4 +416,18 @@ func (a *App) SelfEgress() SelfEgress {
 func (a *App) selfEgressJSON() []byte {
 	b, _ := json.Marshal(a.SelfEgress())
 	return b
+}
+
+// addrs: the detected public addresses (this node's own, for the
+// internal-destination check).
+func (p *pubState) addrs() []netip.Addr {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []netip.Addr
+	for _, r := range p.results {
+		if r.IP.IsValid() {
+			out = append(out, r.IP)
+		}
+	}
+	return out
 }

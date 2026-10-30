@@ -51,7 +51,7 @@ import (
 
 	hyclient "github.com/apernet/hysteria/core/v2/client"
 
-	"github.com/FrankoonG/hy2scale/internal/relay"
+	relay "github.com/FrankoonG/hy2scale/core/node"
 )
 
 // PunchConfig is the punch side of a node entry.

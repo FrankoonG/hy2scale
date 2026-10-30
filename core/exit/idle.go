@@ -1,4 +1,4 @@
-package app
+package exit
 
 import (
 	"context"
@@ -47,10 +47,6 @@ func (c *idleTimeoutConn) Read(b []byte) (int, error) {
 }
 
 const defaultIdleTimeout = 10 * time.Minute
-
-func wrapIdleTimeout(conn net.Conn) net.Conn {
-	return wrapIdleTimeoutCtx(context.Background(), conn)
-}
 
 // NoHalfClose passes the wrapped conn's half-close capability through.
 func (c *idleTimeoutConn) NoHalfClose() bool {

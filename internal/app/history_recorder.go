@@ -222,7 +222,7 @@ func (a *App) collectPaths(cfg Config) []string {
 		// the displayable paths get rings. Checking only the root enrolled
 		// every path the cache could derive (production AUB: 10,600 paths
 		// and a 50 MB history.json for a 92-path topology).
-		if !isPathAuthorised(append(parts, ""), cfg) {
+		if !a.exit.Authorised(append(parts, "")) {
 			continue
 		}
 		if len(parts) >= maxLeafDepth {

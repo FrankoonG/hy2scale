@@ -1,4 +1,4 @@
-// Package relay provides decentralized peer-to-peer traffic forwarding
+// Package node provides decentralized peer-to-peer traffic forwarding
 // through Hysteria 2 tunnels.
 //
 // Every node is equal — each can run both an hy2 server (accepting peers)
@@ -7,7 +7,7 @@
 //
 // Peer discovery is local by default (only directly connected peers).
 // Nested discovery (seeing a peer's peers) is opt-in per peer.
-package relay
+package node
 
 import (
 	"context"
@@ -223,11 +223,13 @@ type peerMeta struct {
 	Eg bool `json:"eg,omitempty"`
 	// Rt: this node applies restriction tags on targets (core/proto).
 	Rt bool `json:"rt,omitempty"`
+	// At: this node serves StreamAttrs.
+	At bool `json:"at,omitempty"`
 }
 
 // localMeta is what this node advertises in the register handshake.
 func (n *Node) localMeta() peerMeta {
-	return peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable, PV: ProtocolVersion, NodeID: n.nodeID, DialNak: true, Eg: true, Rt: true}
+	return peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable, PV: ProtocolVersion, NodeID: n.nodeID, DialNak: true, Eg: true, Rt: true, At: true}
 }
 
 // writeMeta sends a length-prefixed JSON metadata blob.
@@ -592,8 +594,7 @@ type Node struct {
 	// Injected handler: returns rich peer list JSON (with children) for nested discovery.
 	// If nil, falls back to flat n.Peers() JSON.
 	listPeersFunc func() []byte
-	egressFunc    func() []byte
-	peerEgress    sync.Map // peer name → json.RawMessage (its SelfEgress)
+	attrs         attrStore // node attributes (attrs.go)
 	msessHandler  func(stream net.Conn)
 	// instance id for node access by user (access.go)
 	instOnce sync.Once
@@ -975,9 +976,7 @@ func (n *Node) PeersAlt() []PeerInfo {
 		if c := p.ConnCount(); c > 1 {
 			info.Conns = c
 		}
-		if e, ok := n.peerEgress.Load(name); ok {
-			info.Egress = e.(json.RawMessage)
-		}
+		n.withAttrs(name, &info)
 		result = append(result, info)
 	}
 	return result
@@ -1209,7 +1208,7 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	}
 	childCtx, childCancel := context.WithCancel(ctx)
 	p := &peer{
-		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version, NodeID: remoteMeta.NodeID, Incompatible: !compat, TunCapable: remoteMeta.TunCapable, PV: remoteMeta.PV, Unsupported: unsupported, EgressCapable: remoteMeta.Eg, RestrictTags: remoteMeta.Rt},
+		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version, NodeID: remoteMeta.NodeID, Incompatible: !compat, TunCapable: remoteMeta.TunCapable, PV: remoteMeta.PV, Unsupported: unsupported, EgressCapable: remoteMeta.Eg, RestrictTags: remoteMeta.Rt, AttrsCapable: remoteMeta.At},
 		client:  client,
 		waiting: make(map[string]chan net.Conn),
 		ctx:     childCtx,
@@ -1462,9 +1461,14 @@ func (n *Node) HandleStream(ctx context.Context, reqAddr string, stream net.Conn
 		}
 
 	case streamEgress:
-		if f := n.egressFunc; f != nil {
-			stream.Write(f())
+		// nodes that predate StreamAttrs ask for the egress attribute alone
+		if e, ok := n.Attrs()[proto.AttrEgress]; ok {
+			stream.Write(e)
 		}
+		stream.Close()
+
+	case proto.StreamAttrs:
+		stream.Write(n.attrsJSON())
 		stream.Close()
 
 	case streamWhoami:
@@ -1632,6 +1636,7 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 			Unsupported:  unsupported,
 			EgressCapable: remoteMeta.Eg,
 			RestrictTags:  remoteMeta.Rt,
+			AttrsCapable:  remoteMeta.At,
 		},
 		waiting: make(map[string]chan net.Conn),
 		dialNak: remoteMeta.DialNak,
@@ -2118,9 +2123,7 @@ func (n *Node) Peers() []PeerInfo {
 		if c := p.ConnCount(); c > 1 {
 			info.Conns = c
 		}
-		if e, ok := n.peerEgress.Load(name); ok {
-			info.Egress = e.(json.RawMessage)
-		}
+		n.withAttrs(name, &info)
 		result = append(result, info)
 	}
 	return result
@@ -3080,22 +3083,6 @@ func (n *Node) SetMsessHandler(h func(stream net.Conn)) {
 
 // SetListPeersFunc registers a function that returns rich peer list JSON (with children).
 // Used by handleListPeers so both outbound and inbound nested discovery return identical data.
-// SetEgressFunc sets what streamEgress returns (this node's SelfEgress).
-func (n *Node) SetEgressFunc(fn func() []byte) { n.egressFunc = fn }
-
-// SetPeerEgress records a peer's egress (nil clears it).
-func (n *Node) SetPeerEgress(peerName string, raw json.RawMessage) {
-	if raw == nil {
-		n.peerEgress.Delete(peerName)
-		return
-	}
-	n.peerEgress.Store(peerName, raw)
-}
-
-// EgressOf fetches a direct peer's egress.
-func (n *Node) EgressOf(peerName string) ([]byte, error) {
-	return n.queryStream(peerName, streamEgress, 4096)
-}
 
 // WhoAmI asks a direct peer which address our connection comes from.
 func (n *Node) WhoAmI(peerName string) (string, error) {

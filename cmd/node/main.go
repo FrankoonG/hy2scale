@@ -17,7 +17,7 @@ import (
 
 	"github.com/FrankoonG/hy2scale/internal/api"
 	"github.com/FrankoonG/hy2scale/internal/app"
-	"github.com/FrankoonG/hy2scale/internal/logbuf"
+	"github.com/FrankoonG/hy2scale/core/logbuf"
 	"github.com/FrankoonG/hy2scale/internal/selfupdate"
 )
 
@@ -139,8 +139,6 @@ func main() {
 		case <-ctx.Done():
 		}
 	}()
-
-	go srv.StartSubPeersUpdater(ctx)
 
 	if err := a.Run(ctx); err != nil && ctx.Err() == nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

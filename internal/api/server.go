@@ -26,68 +26,19 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/proto"
 	"github.com/FrankoonG/hy2scale/internal/app"
-	"github.com/FrankoonG/hy2scale/internal/logbuf"
-	"github.com/FrankoonG/hy2scale/internal/relay"
+	"github.com/FrankoonG/hy2scale/core/logbuf"
+	relay "github.com/FrankoonG/hy2scale/core/node"
 	"github.com/FrankoonG/hy2scale/internal/selfupdate"
 	"github.com/FrankoonG/hy2scale/internal/web"
 	qrcode "github.com/skip2/go-qrcode"
 )
 
-type topoSubPeer struct {
-	Name       string         `json:"name"`
-	ExitNode   bool           `json:"exit_node"`
-	Direction  string         `json:"direction"`
-	Via        string         `json:"via"`
-	LatencyMs  int            `json:"latency_ms"`
-	Nested     bool           `json:"nested"`
-	Disabled   bool           `json:"disabled,omitempty"`
-	Native     bool           `json:"native,omitempty"`
-	Version    string         `json:"version,omitempty"`
-	TunCapable bool           `json:"tun_capable,omitempty"`
-	// Conns: connections the parent holds to this node (several addresses)
-	Conns      int            `json:"conns,omitempty"`
-	// Punched (inbound children of self): who set up a live hole-punched
-	// connection with this peer.
-	Punched    []string       `json:"punched,omitempty"`
-	TxRate     uint64         `json:"tx_rate"`
-	RxRate     uint64         `json:"rx_rate"`
-	// MaxRate is the configured peak the link can sustain (bytes/sec),
-	// derived from `max(ClientEntry.MaxTx, ClientEntry.MaxRx)` of the
-	// dialer side. The graph uses it as the reference for edge
-	// thickness — a known-bandwidth link draws at its calibrated width
-	// immediately on first load instead of having to observe traffic
-	// to populate a peak. 0 = unknown → falls back to observed peak
-	// on the frontend.
-	MaxRate    uint64         `json:"max_rate,omitempty"`
-	// Egress: the node's egress (public address per family, null family =
-	// not provided); null = unknown (older node).
-	Egress     json.RawMessage `json:"egress"`
-	// Connected mirrors the direct-peer Connected flag for nested
-	// sub-peers. A sub-peer that the parent has configured but is
-	// currently offline is propagated with Connected=false so the
-	// graph stays visually complete (red edge, but the node is still
-	// drawn). Old peers that don't send this field default to
-	// Connected=true on the consumer side for backward compat.
-	Connected  bool           `json:"connected"`
-	// Restricted: reached through node access by user (traffic only: no
-	// management or punching), with everything below it.
-	Restricted bool          `json:"restricted,omitempty"`
-	// RestrictTags: the node applies restriction tags (core/proto).
-	RestrictTags bool          `json:"rt,omitempty"`
-	Children     []topoSubPeer `json:"children,omitempty"`
-}
-
-// markRestricted marks a subtree as reached through node access by user.
-func markRestricted(children []topoSubPeer) {
-	for i := range children {
-		children[i].Restricted = true
-		markRestricted(children[i].Children)
-	}
-}
+// topoSubPeer: a node of the nested peer tree (core/node).
+type topoSubPeer = relay.TreePeer
 
 type Server struct {
 	app      *app.App
@@ -99,11 +50,6 @@ type Server struct {
 	passHash   string // SHA-256 hex of password
 	sessions   map[string]time.Time
 	oldNodeIDs map[string]string
-
-	// Cached nested sub-peers (updated asynchronously)
-	subPeersMu    sync.RWMutex
-	subPeersCache map[string][]topoSubPeer
-	subPeersKick  chan struct{} // signal immediate refresh
 
 	// Graph-canvas SSE subscribers. Each entry is a buffered channel
 	// receiving full-snapshot updates; slow consumers drop messages
@@ -291,9 +237,6 @@ func NewServer(a *app.App, addr, basePath string) *Server {
 	if passHash == "" {
 		passHash = sha256Hex("admin")
 	}
-	// Install runtime nested limits from cfg + env override; subsequent
-	// updateUISettings calls re-apply on every change for hot-reload.
-	applyNestedLimits(cfg)
 	// Same pattern for the DNS resolver — install at startup so the
 	// next ResolveViaExit call sees the operator-configured snapshot.
 	app.ApplyDNSResolver(cfg.DNSResolver)
@@ -304,8 +247,6 @@ func NewServer(a *app.App, addr, basePath string) *Server {
 		username:   username,
 		passHash:   passHash,
 		oldNodeIDs:    make(map[string]string),
-		subPeersCache: make(map[string][]topoSubPeer),
-		subPeersKick:  make(chan struct{}, 1),
 		layoutSubs:    make(map[uint64]chan []app.GraphCanvas),
 		sessions: make(map[string]time.Time),
 		upgrade:  newUpgradeJob(),
@@ -892,7 +833,7 @@ func (s *Server) getUISettings(w http.ResponseWriter, r *http.Request) {
 	if dns == "" { dns = "8.8.8.8,1.1.1.1" }
 	sessionH := cfg.SessionTimeoutH
 	if sessionH == 0 { sessionH = 12 }
-	lim := getNestedLimits() // current runtime values (post-clamp + env override)
+	lim := s.app.Tree().Limits() // current runtime values (post-clamp + env override)
 	// DNS resolver: surface raw stored values so the UI's "unset = inherit
 	// default" semantic survives a save (an operator who never touched the
 	// section keeps zeros in config, sees defaults rendered as placeholder).
@@ -1042,11 +983,9 @@ func (s *Server) updateUISettings(w http.ResponseWriter, r *http.Request) {
 	if resolverTouched {
 		app.ApplyDNSResolver(s.app.Store().Get().DNSResolver)
 	}
-	// Hot-reload the runtime atomic pointer if any nested limit changed —
-	// next walkAndCache / assembleDeepTree / fetchSubPeersViaStream call
-	// picks up the new clamped values without a restart.
+	// Nested limits apply from the next refresh, without a restart.
 	if nestedTouched {
-		applyNestedLimits(s.app.Store().Get())
+		s.app.Tree().SetLimits(app.NestedLimits(s.app.Store().Get()))
 	}
 	// Only listen/base_path actually need a restart — they're consumed at
 	// http.ListenAndServe binding time. DNS is read on every ikev2/l2tp
@@ -1338,7 +1277,7 @@ func (s *Server) internalPeers(w http.ResponseWriter, r *http.Request) {
 	result := make([]peerWithChildren, 0, len(peers))
 	for _, p := range peers {
 		pc := peerWithChildren{PeerInfo: p}
-		pc.Children = s.getCachedSubPeers(p.Name)
+		pc.Children = s.app.Tree().Cached(p.Name)
 		result = append(result, pc)
 	}
 	writeJSON(w, result)
@@ -1553,6 +1492,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		IsSelf       bool              `json:"is_self,omitempty"`
 		Restricted   bool              `json:"restricted,omitempty"`
 		Invisible    bool              `json:"invisible,omitempty"`
+		Attrs        proto.Attrs       `json:"attrs,omitempty"`
 		Egress       json.RawMessage   `json:"egress"`
 		// Punched: who set up the hole-punched connection(s) to this peer
 		// (this node's name and/or the peer's).
@@ -1653,7 +1593,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		}
 		if c.Nested {
 			ancestors := selfAncestors(cfg, c.Name)
-			children := filterAncestorPaths(s.getCachedSubPeers(c.Name), ancestors)
+			children := filterAncestorPaths(s.app.Tree().Cached(c.Name), ancestors)
 			// parentCumLat=latencyCache[c.Name] is self→c. The cache
 			// holds the cumulative self→c→child for direct children, so
 			// the depth=0 branch in filterChildrenByNestedConfig leaves
@@ -1740,6 +1680,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				tn.Egress = p.Egress
 				tn.Restricted = p.Restricted
 				tn.Invisible = p.Invisible
+				tn.Attrs = p.Attrs
 				if p.Direction == "outbound" {
 					// Found the matching outbound entry — prefer this and
 					// stop. (Continuing would overwrite with inbound
@@ -1782,10 +1723,10 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		// surface them in the UI as if they were reachable.
 		if tn.Nested && tn.Connected && !tn.Native && !tn.Incompatible && !tn.Conflict && !tn.Unsupported {
 			ancestors := selfAncestors(cfg, name)
-			children := filterAncestorPaths(s.getCachedSubPeers(name), ancestors)
+			children := filterAncestorPaths(s.app.Tree().Cached(name), ancestors)
 			tn.Children = s.filterChildrenByNestedConfig(children, name, cfg, ancestors, pathRates, latencyCache[name], 0)
 			if tn.Restricted {
-				markRestricted(tn.Children)
+				relay.MarkRestricted(tn.Children)
 			}
 		}
 		// Also load children for inbound peers nested under self
@@ -1796,661 +1737,10 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 }
 
 
-// nestedAuthorised: every hop down to and including path is nested-enabled
-// in cfg.Peers (iron rule 2) — the paths whose children the topology shows.
-func nestedAuthorised(cfg app.Config, path string) bool {
-	parts := strings.Split(path, "/")
-	for i := 1; i <= len(parts); i++ {
-		if pc, ok := cfg.Peers[strings.Join(parts[:i], "/")]; !ok || !pc.Nested {
-			return false
-		}
-	}
-	return true
-}
-
-func (s *Server) getCachedSubPeers(name string) []topoSubPeer {
-	s.subPeersMu.RLock()
-	defer s.subPeersMu.RUnlock()
-	return s.subPeersCache[name]
-}
-
-// nestedLimits holds the runtime values of the 5 nested-discovery hard
-// caps. Sourced from cfg fields (with built-in defaults as fallback) and
-// clamped to sane ranges by clampNestedLimits. The atomic pointer makes
-// the limits hot-reloadable: updateUISettings calls applyNestedLimits to
-// install a new snapshot, and every read site (walkAndCache,
-// assembleDeepTree, fetchSubPeersViaStream, SubPeersUpdater) picks it up
-// on the next tick without a restart.
-type nestedLimits struct {
-	MaxDepth         int
-	MaxResponseNodes int
-	MaxCacheEntries  int
-	MaxResponseBytes int
-	MaxFetchFanOut   int
-}
-
-var currentNestedLimits atomic.Pointer[nestedLimits]
-
-// clampNestedLimits applies built-in defaults for any zero / unset field
-// and clamps each value to a sane range. Defaults match the original
-// v1.3.2 constants so behaviour is identical when cfg has the fields
-// blank.
-func clampNestedLimits(in nestedLimits) nestedLimits {
-	if in.MaxDepth <= 0 {
-		in.MaxDepth = 5
-	}
-	if in.MaxDepth > 10 {
-		in.MaxDepth = 10
-	}
-	if in.MaxResponseNodes <= 0 {
-		in.MaxResponseNodes = 1024
-	}
-	if in.MaxResponseNodes > 65536 {
-		in.MaxResponseNodes = 65536
-	}
-	if in.MaxCacheEntries <= 0 {
-		in.MaxCacheEntries = 5000
-	}
-	if in.MaxCacheEntries > 100000 {
-		in.MaxCacheEntries = 100000
-	}
-	if in.MaxResponseBytes <= 0 {
-		in.MaxResponseBytes = 1 << 20 // 1 MiB
-	}
-	if in.MaxResponseBytes > 16<<20 {
-		in.MaxResponseBytes = 16 << 20
-	}
-	if in.MaxFetchFanOut <= 0 {
-		in.MaxFetchFanOut = 8
-	}
-	if in.MaxFetchFanOut > 64 {
-		in.MaxFetchFanOut = 64
-	}
-	return in
-}
-
-// applyNestedLimits reads the cfg fields, clamps, and atomically installs
-// the resulting snapshot. Called once at server start and again on every
-// successful updateUISettings PUT. Reads on hot paths use getNestedLimits.
-func applyNestedLimits(cfg app.Config) {
-	limits := clampNestedLimits(nestedLimits{
-		MaxDepth:         cfg.MaxNestedDepth,
-		MaxResponseNodes: cfg.MaxResponseNodes,
-		MaxCacheEntries:  cfg.MaxCacheEntries,
-		MaxResponseBytes: cfg.MaxResponseBytes,
-		MaxFetchFanOut:   cfg.MaxFetchFanOut,
-	})
-	// Env override on max-depth kept as a startup-only escape hatch — if
-	// the operator deliberately set HY2SCALE_MAX_NESTED_DEPTH the env
-	// value wins over the cfg field. Reads on every applyNestedLimits
-	// call so re-setting via env+restart keeps working.
-	if e := strings.TrimSpace(os.Getenv("HY2SCALE_MAX_NESTED_DEPTH")); e != "" {
-		if n, err := strconv.Atoi(e); err == nil && n >= 1 && n <= 10 {
-			limits.MaxDepth = n
-		}
-	}
-	currentNestedLimits.Store(&limits)
-}
-
-// getNestedLimits returns the current snapshot. Cheap: one atomic load,
-// no allocation. Always non-nil after applyNestedLimits has run at least
-// once at server start.
-func getNestedLimits() nestedLimits {
-	if p := currentNestedLimits.Load(); p != nil {
-		return *p
-	}
-	return clampNestedLimits(nestedLimits{}) // pure-defaults fallback
-}
-
-// (limits live in nestedLimits / currentNestedLimits / getNestedLimits above)
-
-// assembleDeepTree walks the local subPeersCache to build a multi-depth
-// tree rooted at `prefix`. The result is suitable for embedding into a
-// peerWithChildren.Children field — Children at every level reflect
-// what we have cached for that qualified path, gated by rule 2.
-//
-// Recursion stops at any of:
-//   - depth >= maxNestedDepth (defensive cap)
-//   - cache miss at the qualified key (we have nothing to publish)
-//   - cfg.Peers[qkey].Nested == false (rule 2 — caller didn't authorise
-//     us to propagate descendants of qkey)
-//   - cfg.Peers[qkey].Disabled == true (caller explicitly disabled this
-//     peer — don't propagate at all)
-//   - emitted node count >= maxResponseNodes (defensive payload cap)
-//
-// Rule 1 (cycle drop) is already enforced when the cache was populated
-// (walkAndCache pre-seeds ancestors); we don't repeat the check here.
-//
-// Counter is passed by pointer so siblings share quota — preventing one
-// fan-out branch from pre-empting all the budget.
-func (s *Server) assembleDeepTree(cfg app.Config, prefix string, depth int, count *int) []topoSubPeer {
-	lim := getNestedLimits()
-	if depth >= lim.MaxDepth || *count >= lim.MaxResponseNodes {
-		return nil
-	}
-	s.subPeersMu.RLock()
-	base, ok := s.subPeersCache[prefix]
-	s.subPeersMu.RUnlock()
-	if !ok || len(base) == 0 {
-		return nil
-	}
-	result := make([]topoSubPeer, 0, len(base))
-	for _, c := range base {
-		if *count >= lim.MaxResponseNodes {
-			break
-		}
-		qkey := prefix + "/" + c.Name
-		if pc, hasPC := cfg.Peers[qkey]; hasPC && pc.Disabled {
-			continue // user disabled — drop entirely
-		}
-		out := c // value copy; mutate the local
-		// Latency stays as-is here: this function feeds the
-		// `_relay_list_peers_` response sent to other nodes, and the
-		// inter-node convention is that LatencyMs is one-hop measured
-		// by THIS node toward each child — fetchSubPeersViaStream on
-		// the receiving side adds its own self→prefix to convert.
-		// Mutating to cumulative here would double-count for downstream
-		// consumers. Cumulative-from-self adjustment for OUR own UI is
-		// done in filterChildrenByNestedConfig.
-		*count++
-		if pc, hasPC := cfg.Peers[qkey]; hasPC && pc.Nested {
-			out.Children = s.assembleDeepTree(cfg, qkey, depth+1, count)
-		} else {
-			out.Children = nil
-		}
-		result = append(result, out)
-	}
-	return result
-}
-
-// walkAndCache populates newCache at every qualified-path key discovered
-// in the response tree. It applies rule 1 (drop any descendant whose
-// name is already an ancestor — self-id, self-name, and any peer name
-// already on the path are seeded into the ancestors set by the caller)
-// at every level, and stops recursing at maxNestedDepth.
-//
-// Each map entry is stored flat: the slice elements have Children=nil.
-// Depth comes from chained qualified keys (cache[A], cache[A/B],
-// cache[A/B/C], …) — the storage shape mirrors the qualified-key
-// addressing the topology API and adaptive routing already use.
-func walkAndCache(prefix string, children []topoSubPeer, ancestors map[string]bool, depth int, newCache map[string][]topoSubPeer) {
-	lim := getNestedLimits()
-	if depth >= lim.MaxDepth || len(children) == 0 {
-		return
-	}
-	if len(newCache) >= lim.MaxCacheEntries {
-		// Defensive cache-size cap — refuse to add more keys this
-		// round. Already-populated entries stay valid; we just stop
-		// expanding deeper. Rule 1 + maxNestedDepth + rule 2 should
-		// keep this from binding under sane configs; if it ever does
-		// the operator is the one paying with truncation visibility.
-		return
-	}
-	flat := make([]topoSubPeer, 0, len(children))
-	for _, c := range children {
-		if ancestors[c.Name] {
-			continue
-		}
-		cflat := c
-		cflat.Children = nil
-		flat = append(flat, cflat)
-	}
-	if len(flat) == 0 {
-		return
-	}
-	newCache[prefix] = flat
-	for _, c := range children {
-		if ancestors[c.Name] || len(c.Children) == 0 {
-			continue
-		}
-		ancestors[c.Name] = true
-		walkAndCache(prefix+"/"+c.Name, c.Children, ancestors, depth+1, newCache)
-		delete(ancestors, c.Name)
-	}
-}
-
-// StartSubPeersUpdater runs in background, periodically refreshes nested peer data.
-// Uses relay streamListPeers for both outbound and inbound peers (same mechanism).
-func (s *Server) StartSubPeersUpdater(ctx context.Context) {
-	// Register the rich listPeers handler used by remote nodes' SubPeersUpdater.
-	//
-	// Per docs/nested-rules.md, the response:
-	//   - Rule 2: for each direct peer P, only embed sub-peers if we have
-	//     explicitly authorised P as nested on OUR side. Non-nested peers
-	//     ship with no Children.
-	//   - Rule 3: what we embed is OUR flat cache of P's direct peers,
-	//     strictly one level deep. We never walk into grandchildren — the
-	//     caller learns deeper paths by chaining their own fetches through
-	//     their direct peer, never by bypassing a hop.
-	// Together these prevent the exponential feedback loop that made
-	// AUB↔CN peers saturate the link (docs/nested-discovery-explosion.md):
-	// the payload never exceeds O(direct peers × one-hop descendants),
-	// and cycles like A → B → A collapse the second A via rule 1 at the
-	// decoder side.
-	s.app.Node().SetListPeersFunc(func() []byte {
-		peers := s.app.Node().Peers()
-		cfg := s.app.Store().Get()
-		type peerWithChildren struct {
-			relay.PeerInfo
-			// Connected lets a remote consumer distinguish "configured
-			// here but currently offline" from "fully alive". Disabled
-			// peers are NOT propagated at all — see filter below — so
-			// the consumer never sees `Disabled=true` for our sub-peers.
-			Connected bool          `json:"connected"`
-			// MaxRate (bytes/sec) — see topoSubPeer.MaxRate comment.
-			// Surfaced so a remote graph (drawing US over a multi-hop
-			// chain) can size the edge by our local configured cap
-			// before any traffic actually flows.
-			MaxRate   uint64        `json:"max_rate,omitempty"`
-			Children  []topoSubPeer `json:"children,omitempty"`
-		}
-
-		// Per-direct-peer configured bandwidth lookup, identical to
-		// the topology-API map but local to this closure. Keyed by
-		// peer name (= cfg.Clients[i].Name).
-		maxRateByName := make(map[string]uint64)
-		for _, cl := range cfg.Clients {
-			var m int
-			if cl.MaxTx > m {
-				m = cl.MaxTx
-			}
-			if cl.MaxRx > m {
-				m = cl.MaxRx
-			}
-			if m > 0 {
-				maxRateByName[cl.Name] = uint64(m)
-			}
-		}
-
-		// Live (currently-connected) direct peers. Skip any that we
-		// have explicitly disabled in our peers config — the user's
-		// preference is that disabled peers should NOT propagate.
-		liveByName := make(map[string]bool, len(peers))
-		result := make([]peerWithChildren, 0, len(peers))
-		for _, p := range peers {
-			liveByName[p.Name] = true
-			if pcfg, ok := cfg.Peers[p.Name]; ok && pcfg.Disabled {
-				continue
-			}
-			pc := peerWithChildren{PeerInfo: p, Connected: true, MaxRate: maxRateByName[p.Name]}
-			if pcfg, ok := cfg.Peers[p.Name]; ok && pcfg.Nested {
-				// v1.3.2: walk own cache for qualified paths prefixed
-				// with p.Name, building a multi-depth tree per the
-				// rule-2 authorisation chain. Stops at maxNestedDepth
-				// or maxResponseNodes (both defensive backstops; rule 1
-				// + rule 2 already shape the tree under sane config).
-				count := 0
-				pc.Children = s.assembleDeepTree(cfg, p.Name, 0, &count)
-			}
-			result = append(result, pc)
-		}
-
-		// Configured-but-offline outbound peers. These appear in
-		// cfg.Clients but are missing from the live `peers` slice
-		// because Node.peers gets the entry deleted on disconnect.
-		// Propagate them with Connected=false so the consumer's
-		// graph stays visually complete (red edge to offline node,
-		// node still drawn). Skip disabled.
-		for _, cl := range cfg.Clients {
-			if liveByName[cl.Name] {
-				continue
-			}
-			if pcfg, ok := cfg.Peers[cl.Name]; ok && pcfg.Disabled {
-				continue
-			}
-			result = append(result, peerWithChildren{
-				PeerInfo:  relay.PeerInfo{Name: cl.Name, Direction: "outbound"},
-				Connected: false,
-				MaxRate:   maxRateByName[cl.Name],
-			})
-		}
-
-		data, _ := json.Marshal(result)
-		return data
-	})
-
-	time.Sleep(2 * time.Second) // offset from prober
-	t := time.NewTicker(7 * time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		case <-s.subPeersKick:
-		}
-
-		newCache := make(map[string][]topoSubPeer)
-		connectedPeers := s.app.Node().ConnectedPeerNames()
-		nativeMap := s.app.Node().NativeMap()
-		cfg := s.app.Store().Get()
-
-		// Per docs/nested-rules.md rule 3, we only query DIRECT peers.
-		// The response already carries one level of flat cached grandchildren
-		// per direct peer that the remote has authorised — that's our source
-		// of qualified-path data. Deeper paths extend through chained hops:
-		// the remote's own SubPeersUpdater populated its cache from its own
-		// direct peers the same way, so what it embeds is exactly "B's
-		// current view of its B/C level", never an arbitrarily-deep tree.
-		var fetchNames []string
-		for _, name := range connectedPeers {
-			if nativeMap[name] {
-				continue
-			}
-			pc, ok := cfg.Peers[name]
-			if !ok || !pc.Nested {
-				continue
-			}
-			// Only direct (unqualified) peer names here.
-			if strings.Contains(name, "/") {
-				continue
-			}
-			fetchNames = append(fetchNames, name)
-		}
-
-		type fetchResult struct {
-			name     string
-			children []topoSubPeer
-		}
-		resultCh := make(chan fetchResult, len(fetchNames))
-		// Bounded fan-out: at most cfg-driven concurrent stream
-		// fetches, regardless of how many direct peers are
-		// nested-authorised. Keeps goroutine + socket pressure
-		// predictable on a heavy cluster.
-		sem := make(chan struct{}, getNestedLimits().MaxFetchFanOut)
-		for _, n := range fetchNames {
-			sem <- struct{}{}
-			go func(name string) {
-				defer func() { <-sem }()
-				resultCh <- fetchResult{name, s.fetchSubPeersViaStream(name)}
-			}(n)
-		}
-		for range fetchNames {
-			select {
-			case r := <-resultCh:
-				if r.children == nil {
-					break
-				}
-				// v1.3.2: walk the response tree to whatever depth the
-				// remote sent (clamped by maxNestedDepth). Each visited
-				// path becomes a flat cache entry keyed by the qualified
-				// path string — the same addressing topology /
-				// findPathsTo / etc. already use. Rule 1 (cycle drop)
-				// is applied at every level via the ancestors set
-				// pre-seeded with self identity and the direct-peer
-				// prefix. Rule 3 is preserved: every grandchild we
-				// learn about is one whose direct parent (the peer
-				// queried) chose to publish it in their listPeers
-				// response — we never bypass to query the target.
-				ancestors := map[string]bool{
-					cfg.NodeID: true,
-					r.name:     true,
-				}
-				walkAndCache(r.name, r.children, ancestors, 0, newCache)
-			case <-time.After(6 * time.Second):
-			}
-		}
-
-		// Sub-peer rename heuristic removed (see docs/peer-identity-sync-bugs.md
-		// Bug A). The previous block here used set-difference of sub-peer name
-		// lists between cache cycles to infer "peer X renamed to Y" and then
-		// strings.ReplaceAll-rewrote cfg.Peers keys, cfg.Proxies.ExitVia, and
-		// cfg.Users.ExitVia. The trigger fires constantly on transient blips
-		// (one sub-peer momentarily disappears while an unrelated one appears),
-		// silently corrupting operator-configured config. Authoritative NodeID
-		// renames are handled at the direct-peer layer (outbound: app.go's
-		// AttachTo callback; inbound: handleRegister's onInboundIdentity, Bug B
-		// fix); they propagate to all upstream nodes on the next poll via the
-		// natural newCache replacement below.
-		s.subPeersMu.Lock()
-		s.subPeersCache = newCache
-		s.subPeersMu.Unlock()
-
-		// Feed sub-peer data into relay's peersOfCache for path discovery.
-		// Cache at BOTH qualified path (e.g. "cn-xinchang/2400" — unambiguous
-		// for multi-hop TUN capability lookup) AND at bare last-segment name
-		// (backward-compat for adaptive BFS).
-		//
-		// Cycle-safety: `visitedBare` tracks bare peer NAMES we've already
-		// expanded. A cyclic reference (e.g. A→B→A) would otherwise generate
-		// unbounded qualified paths because the fallback lookup via newCache
-		// keeps finding more children under the same node name — previously
-		// this caused demo-au to run away to 7.5GB RSS in ~30s.
-		visitedBare := make(map[string]bool)
-		var walkAndCache func(qualifiedPath string, children []topoSubPeer)
-		walkAndCache = func(qualifiedPath string, children []topoSubPeer) {
-			// Rule 2: only paths whose children the topology shows (every
-			// hop nested-enabled here) are cached. Routing and the history
-			// recorder use nothing else, and caching every path the remote
-			// caches describe grew without bound in a dense mesh
-			// (production AUB: 9,000+ keys for a 92-path topology).
-			if !nestedAuthorised(cfg, qualifiedPath) {
-				return
-			}
-			parts := strings.Split(qualifiedPath, "/")
-			bare := parts[len(parts)-1]
-			if visitedBare[bare] {
-				return
-			}
-			visitedBare[bare] = true
-
-			var infos []relay.PeerInfo
-			for _, c := range children {
-				// Carry LatencyMs and Connected forward — pathLatencyAndOnline
-				// in the history recorder checks LatencyMs < 0 to detect an
-				// offline hop on a multi-hop chain. Pre-fix, this loop
-				// dropped both fields: LatencyMs defaulted to 0, so an
-				// offline end-hop got recorded as "the path is online with
-				// the previous hop's latency", which is exactly the
-				// PathInfoExpand multihop offline mis-attribution symptom.
-				// !c.Connected pins the sentinel to -1 so the offline check
-				// fires even when c.LatencyMs happens to be 0 (the offline
-				// topology shape — connected=false latency=0).
-				lat := c.LatencyMs
-				if !c.Connected {
-					lat = -1
-				}
-				infos = append(infos, relay.PeerInfo{
-					Name:       c.Name,
-					ExitNode:   c.ExitNode,
-					Native:     c.Native,
-					Version:    c.Version,
-					TunCapable: c.TunCapable,
-					LatencyMs:  lat,
-					Conns:      c.Conns,
-					Egress:     c.Egress,
-					Restricted: c.Restricted,
-					RestrictTags: c.RestrictTags,
-				})
-			}
-			if len(infos) > 0 {
-				s.app.Node().SetPeersOfCache(qualifiedPath, infos)
-				if strings.Contains(qualifiedPath, "/") {
-					// Direct peers get their `peersOfCache[bare]` entry
-					// refreshed every 5s by StartLatencyProber with live
-					// latency from the peer's own listPeers reply; we
-					// must not overwrite that. Indirect peers (e.g.
-					// "au-r1" two hops away) have walkAndCache as the
-					// ONLY writer, so the previous "only if not exists"
-					// guard pinned them to the first observation — when
-					// the indirect peer's grandchild later went offline,
-					// the stale online-with-latency entry never got
-					// updated, and the history recorder kept producing
-					// online=true latency=<sum-to-prev-hop> for paths
-					// whose end was actually offline. Always refresh
-					// indirect entries; only skip when bare is a direct
-					// peer so prober ownership is preserved.
-					if !s.app.Node().HasPeer(bare) {
-						s.app.Node().SetPeersOfCache(bare, infos)
-					}
-				}
-			}
-			for _, c := range children {
-				if visitedBare[c.Name] {
-					continue
-				}
-				if len(c.Children) > 0 {
-					walkAndCache(qualifiedPath+"/"+c.Name, c.Children)
-				} else if cached, ok := newCache[c.Name]; ok && len(cached) > 0 {
-					walkAndCache(qualifiedPath+"/"+c.Name, cached)
-				}
-			}
-		}
-		for peerName, children := range newCache {
-			walkAndCache(peerName, children)
-		}
-		// visitedBare expands each node under one path per round and the
-		// map order picks which, so a node reached through several parents
-		// is written under each of them over time. Paths not written for an
-		// hour have left the topology.
-		s.app.Node().ExpirePeersOfCache(time.Hour)
-	}
-}
-
-// fetchSubPeersViaStream queries a peer's topology via relay streamListPeers.
-// Preserves the one-level-of-grandchildren structure the remote embeds per
-// rule 3 in docs/nested-rules.md. The caller (StartSubPeersUpdater) walks
-// the result once to populate subPeersCache flat at every qualified key it
-// observes, and hands the tree to walkAndCache for the relay-side
-// peersOfCache population.
-//
-// No multi-hop query variant exists. Per rule 3 we never bypass a direct
-// peer with PeersOfVia to inspect a descendant — the descendant's info
-// must come from the direct peer's own cache as embedded in its listPeers
-// reply, or not at all.
-func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
-	data, err := s.app.Node().PeersOfRaw(peerName)
-	if err != nil {
-		return nil
-	}
-	if cap := getNestedLimits().MaxResponseBytes; len(data) > cap {
-		log.Printf("[topology] %s listPeers payload %d B > %d cap — dropping", peerName, len(data), cap)
-		return nil
-	}
-	type peerWithChildren struct {
-		Name       string        `json:"name"`
-		ExitNode   bool          `json:"exit_node"`
-		Direction  string        `json:"direction"`
-		Native     bool          `json:"native"`
-		LatencyMs  int           `json:"latency_ms"`
-		Version    string        `json:"version,omitempty"`
-		TunCapable bool          `json:"tun_capable,omitempty"`
-		// Pointer so we can detect "field absent" vs "field=false".
-		// Older peers (1.3.0/early 1.3.1) don't send `connected` at
-		// all — we treat absent as live (true) so the legacy
-		// behavior is preserved unchanged. New peers send true/false
-		// explicitly per the offline-propagation contract.
-		Connected *bool         `json:"connected,omitempty"`
-		// MaxRate, bytes/sec; absent on old peers. Used by the graph
-		// to size the edge thickness directly from configured
-		// bandwidth, even before any traffic flows.
-		MaxRate   uint64        `json:"max_rate,omitempty"`
-		Conns     int           `json:"conns,omitempty"`
-		Egress    json.RawMessage `json:"egress,omitempty"`
-		Restricted bool         `json:"restricted,omitempty"`
-		RestrictTags bool       `json:"rt,omitempty"`
-		Children  []topoSubPeer `json:"children,omitempty"`
-	}
-	var remotePeers []peerWithChildren
-	if err := json.Unmarshal(data, &remotePeers); err != nil {
-		return nil
-	}
-	parentLatency := s.app.Node().GetLatency(peerName)
-	cfg := s.app.Store().Get()
-	selfNames := map[string]bool{cfg.NodeID: true, peerName: true}
-	// Everything a gateway reached by node access shows is restricted too.
-	viaAccess := s.app.Node().IsRestricted(peerName)
-	children := make([]topoSubPeer, 0, len(remotePeers))
-	for _, rp := range remotePeers {
-		childLatency := rp.LatencyMs
-		if childLatency > 0 && parentLatency > 0 {
-			childLatency += parentLatency
-		}
-		// Rule 1 at the FIRST grandchild level: drop any grandchild whose
-		// name already appears in {local self, direct peer}. Guards
-		// against paths like AUB/cn-xinchang/au-kbv looping back to us.
-		// v1.3.2: deeper levels of the response tree are kept intact —
-		// the consumer (walkAndCache in StartSubPeersUpdater) walks them
-		// and applies rule 1 / depth-cap at every level via the
-		// ancestors set. We no longer strip beyond the first grandchild
-		// here; depth comes back through chained hops naturally and the
-		// per-walk cycle check inside walkAndCache prevents the
-		// pathological self-amplification rc14 was guarding against.
-		var embedded []topoSubPeer
-		if len(rp.Children) > 0 {
-			embedded = make([]topoSubPeer, 0, len(rp.Children))
-			for _, gc := range rp.Children {
-				if selfNames[gc.Name] || gc.Name == rp.Name {
-					continue
-				}
-				embedded = append(embedded, gc) // keep gc.Children intact
-			}
-		}
-		// Connected: absent → treat as connected (legacy peers).
-		// Present → use the explicit value.
-		connected := true
-		if rp.Connected != nil {
-			connected = *rp.Connected
-		}
-		child := topoSubPeer{
-			Name:       rp.Name,
-			ExitNode:   rp.ExitNode,
-			Direction:  rp.Direction,
-			Via:        peerName,
-			LatencyMs:  childLatency,
-			Native:     rp.Native,
-			Version:    rp.Version,
-			TunCapable: rp.TunCapable,
-			Conns:      rp.Conns,
-			Egress:     rp.Egress,
-			Connected:  connected,
-			MaxRate:    rp.MaxRate,
-			Restricted: rp.Restricted || viaAccess,
-			RestrictTags: rp.RestrictTags,
-			Children:   embedded,
-		}
-		if child.Restricted {
-			markRestricted(child.Children)
-		}
-		children = append(children, child)
-	}
-	return children
-}
-
-// truncateAndFilter limits tree depth, removes self-ID, and detects cycles.
-func truncateAndFilter(children []topoSubPeer, parentLatency int, selfID string, maxDepth int) []topoSubPeer {
-	if maxDepth <= 0 || len(children) == 0 {
-		return nil
-	}
-	seen := make(map[string]bool)
-	return doTruncate(children, parentLatency, selfID, maxDepth, seen)
-}
-
-func doTruncate(children []topoSubPeer, parentLatency int, selfID string, depth int, seen map[string]bool) []topoSubPeer {
-	if depth <= 0 || len(children) == 0 {
-		return nil
-	}
-	var result []topoSubPeer
-	for _, c := range children {
-		if c.Name == selfID || seen[c.Name] {
-			continue
-		}
-		seen[c.Name] = true
-		if c.LatencyMs > 0 && parentLatency > 0 {
-			c.LatencyMs += parentLatency
-		}
-		c.Children = doTruncate(c.Children, parentLatency, selfID, depth-1, seen)
-		result = append(result, c)
-		delete(seen, c.Name) // allow same name in different branches
-	}
-	return result
-}
-
 // filterChildrenByNestedConfig strips deeper children unless local nested config allows them.
 // Uses path-qualified keys (parent/child) so same-name peers have independent nested state.
 // When c.Nested is enabled but c.Children is empty, pulls the flat child list
-// from subPeersCache[qualifiedKey] — StartSubPeersUpdater populates one cache
-// entry per user-declared qualified path via explicit PeersOfVia queries.
+// cached for the qualified path by the node's nested-discovery tree.
 //
 // Rule 1 (including self identity): a descendant whose name matches any
 // ancestor on the path — OR matches our local node_id / name — is dropped.
@@ -2464,13 +1754,9 @@ func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName
 	if len(children) == 0 {
 		return children
 	}
-	// Defensive depth cap mirroring the cache-fill side (walkAndCache).
-	// Under normal operation this never binds — walkAndCache already
-	// stops populating qkeys past maxNestedDepth, so the cache lookups
-	// below come up empty and the recursion ends naturally. This branch
-	// only fires if cache state contradicts maxNestedDepth (e.g., env
-	// var was lowered after cache was filled, or in-memory drift).
-	if depth >= getNestedLimits().MaxDepth {
+	// Depth cap of the tree cache; binds only if the cap was lowered after
+	// the cache was filled.
+	if depth >= s.app.Tree().Limits().MaxDepth {
 		stripped := make([]topoSubPeer, len(children))
 		for i, c := range children {
 			c.Children = nil
@@ -2491,32 +1777,15 @@ func (s *Server) filterChildrenByNestedConfig(children []topoSubPeer, parentName
 			c.TxRate = pr.TxRate
 			c.RxRate = pr.RxRate
 		}
-		// Latency cumulative-from-self adjustment.
-		//
-		// At depth=0 the input slice came from getCachedSubPeers(parent)
-		// which is subPeersCache[parent] — fetchSubPeersViaStream already
-		// pre-added self→parent to each direct child's LatencyMs there,
-		// so values are already cumulative. Don't double-add.
-		//
-		// At depth>=1 the input slice was either pulled from
-		// subPeersCache[parent/grandparent/...] inside the previous
-		// recursion's `c.Children = s.getCachedSubPeers(qualifiedKey)`
-		// branch — which holds RAW one-hop values — or it survived in
-		// c.Children from a remote response that walkAndCache flattened
-		// without adjustment. Either way we have to fold parentCumLat in
-		// here so the list view (and graph segment math) sees a true
-		// cumulative figure for every depth, not just the second hop.
+		// Latencies cumulative from self: the tree caches direct children
+		// cumulative already, deeper levels one-hop.
 		if depth >= 1 && c.LatencyMs > 0 && parentCumLat > 0 {
 			c.LatencyMs += parentCumLat
 		}
 		childCumLat := c.LatencyMs
 		if c.Nested {
 			if len(c.Children) == 0 {
-				// Pull from the per-qualified-path cache populated by
-				// StartSubPeersUpdater + walkAndCache. v1.3.2 fills
-				// every depth ≤ maxNestedDepth, so this lookup may
-				// return data even at qualified keys ≥3 deep.
-				c.Children = s.getCachedSubPeers(qualifiedKey)
+				c.Children = s.app.Tree().Cached(qualifiedKey)
 			}
 			if len(c.Children) > 0 {
 				ancestors[c.Name] = true
@@ -2568,96 +1837,6 @@ func filterAncestorPaths(children []topoSubPeer, ancestors map[string]bool) []to
 	return filtered
 }
 
-// addLatencyOffset recursively adds an offset to all latency values in a sub-peer tree.
-func addLatencyOffset(children []topoSubPeer, offset int) []topoSubPeer {
-	if offset <= 0 || len(children) == 0 {
-		return children
-	}
-	result := make([]topoSubPeer, len(children))
-	copy(result, children)
-	for i := range result {
-		if result[i].LatencyMs > 0 {
-			result[i].LatencyMs += offset
-		}
-		result[i].Children = addLatencyOffset(result[i].Children, offset)
-	}
-	return result
-}
-
-// loadSubPeers loads nested peers. path is the chain from local to the peer being queried.
-func (s *Server) loadSubPeers(path []string, parentLatency int, latencyCache map[string]int, cfg app.Config, depth int) []topoSubPeer {
-	if depth > 8 {
-		return nil
-	}
-	target := path[len(path)-1]
-	var subPeers []relay.PeerInfo
-	var err error
-	if len(path) == 1 {
-		// Direct peer: query directly
-		subPeers, err = s.app.Node().PeersOf(target)
-	} else {
-		// Multi-hop: query via chain
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		subPeers, err = s.app.Node().PeersOfVia(ctx, path)
-	}
-	if err != nil {
-		return nil
-	}
-	cfg2 := s.app.Store().Get()
-	myID := cfg2.NodeID
-	myName := cfg2.Name
-	peerName := path[len(path)-1]
-	children := make([]topoSubPeer, 0, len(subPeers))
-	for _, sp := range subPeers {
-		// Cycle detection: skip self (by ID or display name)
-		if sp.Name == myID || sp.Name == myName {
-			continue
-		}
-		inPath := false
-		for _, p := range path {
-			if p == sp.Name {
-				inPath = true
-				break
-			}
-		}
-		if inPath {
-			continue
-		}
-		// Cumulative latency: parent's latency + remote-reported latency to this child
-		childLatency := sp.LatencyMs
-		if childLatency > 0 && parentLatency > 0 {
-			childLatency += parentLatency
-		}
-		child := topoSubPeer{
-			Name:      sp.Name,
-			ExitNode:  sp.ExitNode,
-			Direction: sp.Direction,
-			Via:       peerName,
-			LatencyMs: childLatency,
-			Egress:    sp.Egress,
-			// Default to connected=true — this code path is for peers
-			// the source actively reported (relay PeerInfo from PeersOf).
-			// Offline propagation flows through fetchSubPeersViaStream's
-			// dedicated handling above, not this branch.
-			Connected: true,
-		}
-		qualifiedKey := peerName + "/" + sp.Name
-		if sp.Native {
-			child.Native = true
-		} else if pc, ok := cfg.Peers[qualifiedKey]; ok && pc.Nested {
-			child.Nested = true // explicitly enabled
-		}
-		if child.Nested && !child.Native {
-			childPath := append(append([]string{}, path...), sp.Name)
-			child.Children = s.loadSubPeers(childPath, childLatency, latencyCache, cfg, depth+1)
-		}
-		children = append(children, child)
-	}
-	sort.Slice(children, func(i, j int) bool { return children[i].Name < children[j].Name })
-	return children
-}
-
 func (s *Server) getNestedPeers(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	peers, err := s.app.Node().PeersOf(name)
@@ -2697,11 +1876,7 @@ func (s *Server) setNested(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	// Signal immediate cache refresh (non-blocking)
-	select {
-	case s.subPeersKick <- struct{}{}:
-	default:
-	}
+	s.app.Tree().Kick()
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
@@ -3469,8 +2644,8 @@ func (s *Server) getRules(w http.ResponseWriter, r *http.Request) {
 		rules = []app.RoutingRule{}
 	}
 	writeJSON(w, map[string]any{
-		"available": app.RuleEngineAvailable(),
-		"capture":   app.RuleCaptureMode(),
+		"available": true,
+		"capture":   s.app.RuleCaptureMode(),
 		"rules":     rules,
 	})
 }

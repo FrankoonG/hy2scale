@@ -1,4 +1,4 @@
-package relay
+package node
 
 import (
 	"context"
@@ -78,7 +78,7 @@ func (n *Node) AttachAccess(ctx context.Context, peerName string, client hyclien
 	childCtx, childCancel := context.WithCancel(ctx)
 	p := &peer{
 		info: PeerInfo{Name: name, Direction: "outbound", Version: rep.Version, NodeID: rep.NodeID,
-			PV: rep.PV, ExitNode: rep.ExitNode, EgressCapable: true, RestrictTags: true,
+			PV: rep.PV, ExitNode: rep.ExitNode, EgressCapable: true, RestrictTags: true, AttrsCapable: true,
 			Restricted: rep.Mode != proto.ModeFull, Invisible: true,
 			Incompatible: !isCompatible(rep.Version), Unsupported: rep.PV > ProtocolVersion},
 		client:  client,

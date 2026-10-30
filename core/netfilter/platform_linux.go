@@ -1,4 +1,4 @@
-package app
+package netfilter
 
 import (
 	"log"

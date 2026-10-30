@@ -1,6 +1,7 @@
 package proto
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"strconv"
@@ -110,4 +111,21 @@ func ParseRestrict(addr string) (string, Restrict) {
 		return addr, 0
 	}
 	return addr[:i], Restrict(v)
+}
+
+type restrictKey struct{}
+
+// ContextRestrict adds r to the restrictions carried by ctx: a flow's
+// restrictions ride on its dial context on the node that dials it.
+func ContextRestrict(ctx context.Context, r Restrict) context.Context {
+	if r == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, restrictKey{}, RestrictFrom(ctx)|r)
+}
+
+// RestrictFrom: the restrictions carried by ctx.
+func RestrictFrom(ctx context.Context) Restrict {
+	r, _ := ctx.Value(restrictKey{}).(Restrict)
+	return r
 }

@@ -37,6 +37,8 @@ const (
 	// StreamHello and StreamTree serve node access by user (see access.go).
 	StreamHello = "_relay_hello_:0"
 	StreamTree  = "_relay_tree_:0"
+	// StreamAttrs returns the node's attributes (Attrs, JSON).
+	StreamAttrs = "_relay_attrs_:0"
 
 	ViaPrefix    = "_relay_via_"
 	DataPrefix   = "_relay_data_"
@@ -56,7 +58,7 @@ const (
 func IsRelayStream(addr string) bool {
 	switch addr {
 	case StreamRegister, StreamCtrlS2C, StreamListPeer, StreamPing, StreamLatency,
-		StreamAPI, StreamPunch, StreamEgress, StreamWhoami, StreamHello, StreamTree:
+		StreamAPI, StreamPunch, StreamEgress, StreamWhoami, StreamHello, StreamTree, StreamAttrs:
 		return true
 	}
 	return strings.HasPrefix(addr, ViaPrefix) ||

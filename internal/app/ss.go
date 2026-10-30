@@ -15,7 +15,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/FrankoonG/hy2scale/internal/sniff"
+	"github.com/FrankoonG/hy2scale/core/exit"
+	"github.com/FrankoonG/hy2scale/core/sniff"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
 )
@@ -196,7 +197,7 @@ func (a *App) handleSS(conn net.Conn, method string) {
 		// send the address alone in the first frame.
 		var remote net.Conn
 		if wantSniff(addr) {
-			deadline := time.Now().Add(sniffWindow)
+			deadline := time.Now().Add(exit.SniffWindow)
 			waited := false
 			for !sniff.Complete(remaining) {
 				extra, started, ferr := readSSFrame(conn, sessionAEAD, nonce, overhead, deadline)

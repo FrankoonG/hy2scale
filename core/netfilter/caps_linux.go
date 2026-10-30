@@ -1,8 +1,6 @@
-package app
-
-// Runtime capability detection and iptables helpers. They serve the rule
-// engine (TUN / transparent proxy); the VPN servers are userspace and need
-// none of them.
+// Package netfilter runs the system's iptables (whatever the variant or
+// the platform needs) and detects what the runtime may do with it.
+package netfilter
 
 import (
 	"encoding/binary"
@@ -17,15 +15,15 @@ import (
 	"unsafe"
 )
 
-// iptRun runs an iptables command, checking for duplicates first.
+// Run runs an iptables command, checking for duplicates first.
 // For -I (insert) and -A (append), it checks with -C first.
 // iptCmd resolves the iptables command. If the container's iptables doesn't work
 // but host root is mounted at /host, use chroot to run the host's iptables.
 // This handles iKuai routers where container iptables is incompatible with the kernel.
-// iptVariant detects the correct iptables command at startup.
+// IptVariant detects the correct iptables command at startup.
 // On standard Linux with nftables: "iptables" (maps to iptables-nft)
 // On iKuai or legacy systems: "iptables-legacy"
-var iptVariant = sync.OnceValue(func() string {
+var IptVariant = sync.OnceValue(func() string {
 	// Check if iptables (nftables backend) works — preferred on modern systems
 	if out, err := exec.Command("iptables", "-V").CombinedOutput(); err == nil {
 		v := string(out)
@@ -46,7 +44,7 @@ var iptVariant = sync.OnceValue(func() string {
 
 var iptUseChroot = sync.OnceValue(func() bool {
 	// Test if native iptables works
-	variant := iptVariant()
+	variant := IptVariant()
 	if out, err := exec.Command(variant, "-L", "-n").CombinedOutput(); err == nil {
 		debugLog("[iptables] native %s works", variant)
 		return false
@@ -67,7 +65,7 @@ var iptUseChroot = sync.OnceValue(func() bool {
 	return false
 })
 
-func iptExec(prog string, args ...string) *exec.Cmd {
+func Exec(prog string, args ...string) *exec.Cmd {
 	// Platform adapter: iKuai, OpenWrt, etc. may provide custom iptables binary
 	if cmd := platformIPTExec(prog, args); cmd != nil {
 		return cmd
@@ -85,7 +83,7 @@ func iptExec(prog string, args ...string) *exec.Cmd {
 	return exec.Command(prog, args...)
 }
 
-func iptRun(prog string, args ...string) {
+func Run(prog string, args ...string) {
 	// Try -C (check) first to detect duplicates
 	for i, a := range args {
 		if a == "-I" || a == "-A" {
@@ -97,13 +95,13 @@ func iptRun(prog string, args ...string) {
 					checkArgs = append(checkArgs[:i+2], checkArgs[i+3:]...)
 				}
 			}
-			if iptExec(prog, checkArgs...).Run() == nil {
+			if Exec(prog, checkArgs...).Run() == nil {
 				return // rule already exists
 			}
 			break
 		}
 	}
-	cmd := iptExec(prog, args...)
+	cmd := Exec(prog, args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("[iptables] %s %v: %s", prog, args, string(out))
 	}
@@ -111,7 +109,7 @@ func iptRun(prog string, args ...string) {
 
 // testIptablesAvailable checks if iptables-legacy DNAT works (native or chroot).
 func testIptablesAvailable() bool {
-	cmd := iptExec(iptVariant(), "-t", "nat", "-L", "-n")
+	cmd := Exec(IptVariant(), "-t", "nat", "-L", "-n")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		debugLog("[iptables] NAT table test failed: %v: %s", err, string(out))
 		return false
@@ -120,9 +118,9 @@ func testIptablesAvailable() bool {
 	return true
 }
 
-// cachedIptablesAvail caches iptables detection at startup.
+// Available caches iptables detection at startup.
 // If standard iptables fails, tries platform-specific fix before falling back to gvisor.
-var cachedIptablesAvail = sync.OnceValue(func() bool {
+var Available = sync.OnceValue(func() bool {
 	if testIptablesAvailable() {
 		return true
 	}
@@ -142,14 +140,14 @@ var cachedIptablesAvail = sync.OnceValue(func() bool {
 // This is now a last-resort fallback — iKuai with bundled host iptables runs normal mode.
 func IsCompatMode() bool {
 	capOK, _ := CheckCapability()
-	return capOK && !cachedIptablesAvail()
+	return capOK && !Available()
 }
 
 // DetectRuntimeMode runs early detection and logs the result.
 func DetectRuntimeMode() {
 	capOK, _ := CheckCapability()
 	hostNet := CheckHostNetwork()
-	iptOK := cachedIptablesAvail()
+	iptOK := Available()
 	platform := DetectPlatform()
 
 	if platform != PlatformLinux {
@@ -177,7 +175,7 @@ var cachedCapability = sync.OnceValues(func() (bool, string) {
 		return true, ""
 	}
 	debugLog("[cap] bridge creation failed, trying iptables")
-	if exec.Command(iptVariant(), "-L", "-n").Run() == nil {
+	if exec.Command(IptVariant(), "-L", "-n").Run() == nil {
 		debugLog("[cap] NET_ADMIN confirmed via iptables-legacy")
 		return true, ""
 	}
@@ -196,9 +194,9 @@ func CheckCapability() (bool, string) {
 	return cachedCapability()
 }
 
-// getOriginalDst retrieves the original destination from a DNAT'd connection.
+// OriginalDst retrieves the original destination from a DNAT'd connection.
 // Uses SyscallConn to avoid File() which puts the conn into blocking mode.
-func getOriginalDst(conn net.Conn) (string, error) {
+func OriginalDst(conn net.Conn) (string, error) {
 	tcpConn, ok := conn.(*net.TCPConn)
 	if !ok {
 		return "", fmt.Errorf("not a TCP connection")
@@ -260,4 +258,47 @@ func CheckHostNetwork() bool {
 		}
 	}
 	return false
+}
+
+// ip6Variant picks the ip6tables binary the same way iptVariant does.
+var ip6Variant = sync.OnceValue(func() string {
+	if out, err := exec.Command("ip6tables", "-V").CombinedOutput(); err == nil && strings.Contains(string(out), "nf_tables") {
+		return "ip6tables"
+	}
+	if exec.Command("ip6tables-legacy", "-L", "-n").Run() == nil {
+		return "ip6tables-legacy"
+	}
+	return "ip6tables"
+})
+
+// Prog: the iptables (v6: ip6tables) binary.
+func Prog(v6 bool) string {
+	if v6 {
+		return ip6Variant()
+	}
+	return IptVariant()
+}
+
+// OK runs one iptables command and reports whether it succeeded.
+func OK(v6 bool, args ...string) bool {
+	return Exec(Prog(v6), args...).Run() == nil
+}
+
+// IP runs one ip(8) command (v6: ip -6).
+func IP(v6 bool, args ...string) error {
+	if v6 {
+		args = append([]string{"-6"}, args...)
+	}
+	return exec.Command("ip", args...).Run()
+}
+
+var debugMode = func() bool {
+	v := strings.ToLower(os.Getenv("DEBUG"))
+	return v == "true" || v == "1" || v == "yes"
+}()
+
+func debugLog(format string, args ...any) {
+	if debugMode {
+		log.Printf(format, args...)
+	}
 }

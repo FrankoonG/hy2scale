@@ -1,4 +1,6 @@
-package app
+// Package tlsstore keeps the node's certificates (and CAs) in its data
+// directory.
+package tlsstore
 
 import (
 	"crypto/ecdsa"
@@ -31,19 +33,19 @@ type CertInfo struct {
 	CAParentID string `json:"ca_parent_id,omitempty"`
 }
 
-// TLSStore manages certificates in the data directory.
-type TLSStore struct {
+// Store manages certificates in the data directory.
+type Store struct {
 	dir string // e.g. /data/tls
 }
 
-func NewTLSStore(dataDir string) *TLSStore {
+func New(dataDir string) *Store {
 	dir := filepath.Join(dataDir, "tls")
 	os.MkdirAll(dir, 0755)
-	return &TLSStore{dir: dir}
+	return &Store{dir: dir}
 }
 
 // List returns all certificates.
-func (s *TLSStore) List() ([]CertInfo, error) {
+func (s *Store) List() ([]CertInfo, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return nil, err
@@ -64,12 +66,12 @@ func (s *TLSStore) List() ([]CertInfo, error) {
 }
 
 // Get returns a single certificate's info.
-func (s *TLSStore) Get(id string) (CertInfo, error) {
+func (s *Store) Get(id string) (CertInfo, error) {
 	return s.parseCert(id)
 }
 
 // GetPEM returns the certificate PEM content.
-func (s *TLSStore) GetPEM(id string) (string, error) {
+func (s *Store) GetPEM(id string) (string, error) {
 	data, err := os.ReadFile(filepath.Join(s.dir, id+".crt"))
 	if err != nil {
 		return "", err
@@ -78,7 +80,7 @@ func (s *TLSStore) GetPEM(id string) (string, error) {
 }
 
 // Import saves a certificate (and optional key) from PEM content.
-func (s *TLSStore) Import(id, name, certPEM, keyPEM string) error {
+func (s *Store) Import(id, name, certPEM, keyPEM string) error {
 	// Validate cert PEM
 	block, _ := pem.Decode([]byte(certPEM))
 	if block == nil {
@@ -101,7 +103,7 @@ func (s *TLSStore) Import(id, name, certPEM, keyPEM string) error {
 }
 
 // Generate creates a self-signed certificate.
-func (s *TLSStore) Generate(id, name string, domains []string, days int) error {
+func (s *Store) Generate(id, name string, domains []string, days int) error {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return err
@@ -138,7 +140,7 @@ func (s *TLSStore) Generate(id, name string, domains []string, days int) error {
 }
 
 // SignWithCA uses a CA certificate to sign a new server certificate.
-func (s *TLSStore) SignWithCA(caID, newID, name, cn string, days int) error {
+func (s *Store) SignWithCA(caID, newID, name, cn string, days int) error {
 	// Load CA cert
 	caCertData, err := os.ReadFile(filepath.Join(s.dir, caID+".crt"))
 	if err != nil {
@@ -227,7 +229,7 @@ func (s *TLSStore) SignWithCA(caID, newID, name, cn string, days int) error {
 }
 
 // CAParent returns the CA ID that signed this cert, or empty string.
-func (s *TLSStore) CAParent(id string) string {
+func (s *Store) CAParent(id string) string {
 	data, err := os.ReadFile(filepath.Join(s.dir, id+".ca"))
 	if err != nil {
 		return ""
@@ -236,7 +238,7 @@ func (s *TLSStore) CAParent(id string) string {
 }
 
 // Delete removes a certificate.
-func (s *TLSStore) Delete(id string) error {
+func (s *Store) Delete(id string) error {
 	os.Remove(filepath.Join(s.dir, id+".crt"))
 	os.Remove(filepath.Join(s.dir, id+".key"))
 	os.Remove(filepath.Join(s.dir, id+".name"))
@@ -245,7 +247,7 @@ func (s *TLSStore) Delete(id string) error {
 }
 
 // TLSConfig returns a *tls.Config for the given cert ID.
-func (s *TLSStore) TLSConfig(id string) (*tls.Config, error) {
+func (s *Store) TLSConfig(id string) (*tls.Config, error) {
 	certFile := filepath.Join(s.dir, id+".crt")
 	keyFile := filepath.Join(s.dir, id+".key")
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
@@ -256,16 +258,16 @@ func (s *TLSStore) TLSConfig(id string) (*tls.Config, error) {
 }
 
 // CertPath returns the file path for a cert (for hy2 server config).
-func (s *TLSStore) CertPath(id string) string {
+func (s *Store) CertPath(id string) string {
 	return filepath.Join(s.dir, id+".crt")
 }
 
 // KeyPath returns the file path for a key.
-func (s *TLSStore) KeyPath(id string) string {
+func (s *Store) KeyPath(id string) string {
 	return filepath.Join(s.dir, id+".key")
 }
 
-func (s *TLSStore) parseCert(id string) (CertInfo, error) {
+func (s *Store) parseCert(id string) (CertInfo, error) {
 	data, err := os.ReadFile(filepath.Join(s.dir, id+".crt"))
 	if err != nil {
 		return CertInfo{}, err

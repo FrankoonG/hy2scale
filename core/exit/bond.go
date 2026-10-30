@@ -1,4 +1,4 @@
-package app
+package exit
 
 import (
 	"context"
@@ -37,7 +37,7 @@ import (
 //   seq=0xFFFFFFFF: bond teardown
 
 const (
-	bondFrameHeaderSize = 10 // 4 + 4 + 2
+	bondFrameHeaderSize = 10    // 4 + 4 + 2
 	bondChunkSize       = 32768 // 32KB default chunk
 	bondMinChunkSize    = 4096
 	bondMaxChunkSize    = 65535
@@ -56,9 +56,9 @@ const (
 
 // bondSession is the sender-side state for a multi-path bond.
 type bondSession struct {
-	id       uint32
-	target   string // exit node name
-	addr     string // destination address (e.g. 1.1.1.1:443)
+	id     uint32
+	target string // exit node name
+	addr   string // destination address (e.g. 1.1.1.1:443)
 
 	mu       sync.Mutex
 	paths    []*bondPath
@@ -69,7 +69,7 @@ type bondSession struct {
 	reorderMu   sync.Mutex
 	reorderBuf  map[uint32][]byte // seq → data
 	reorderNext uint32            // next expected seq
-	reorderCh   chan struct{}      // signal when new data arrives
+	reorderCh   chan struct{}     // signal when new data arrives
 	seqPath     map[uint32]int    // seq → which path index sent it (for skip on death)
 
 	// Dynamic buffer limit
@@ -85,8 +85,8 @@ type bondPath struct {
 	name     string   // path string (e.g. "au" or "jp/au")
 	conn     net.Conn // relay stream
 	index    int
-	weight   float64  // 0.0–1.0, proportional send allocation
-	rttMs    float64  // estimated RTT
+	weight   float64 // 0.0–1.0, proportional send allocation
+	rttMs    float64 // estimated RTT
 	healthy  bool
 	tornDown bool // true after receiving teardown — don't reopen
 	txBytes  int64
@@ -96,14 +96,14 @@ type bondPath struct {
 var bondIDCounter atomic.Uint32
 
 // dialBond creates a bonded multi-path connection to the target exit node.
-func (a *App) dialBond(ctx context.Context, target, addr string) (net.Conn, error) {
-	paths := a.findPathsTo(target)
+func (e *Engine) dialBond(ctx context.Context, target, addr string) (net.Conn, error) {
+	paths := e.findPathsTo(target)
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("bond: no paths to %s", target)
 	}
 	if len(paths) == 1 {
-		log.Printf("[bond] %s: only 1 path (%d conn), using direct", target, a.node.PeerConnCount(target))
-		return a.dialPath(ctx, paths[0], addr)
+		log.Printf("[bond] %s: only 1 path (%d conn), using direct", target, e.node.PeerConnCount(target))
+		return e.dialPath(ctx, paths[0], addr)
 	}
 
 	// Filter paths: exclude those with RTT > 3x the best path's RTT
@@ -153,7 +153,7 @@ func (a *App) dialBond(ctx context.Context, target, addr string) (net.Conn, erro
 	for i, p := range paths {
 		// Pin each path to a specific QUIC client index to ensure
 		// duplicate peer paths (multi-IP) use different connections.
-		conn, err := a.dialPathIdx(ctx, p, bondAddr, i)
+		conn, err := e.dialPathIdx(ctx, p, bondAddr, i)
 		if err != nil {
 			log.Printf("[bond] %s: path %s failed to open: %v", target, p, err)
 			// Add as unhealthy — health monitor will retry later
@@ -218,7 +218,7 @@ func (a *App) dialBond(ctx context.Context, target, addr string) (net.Conn, erro
 	go sess.runDeliverer(bondConn)
 
 	// Start health monitor
-	go sess.runHealthMonitor(a)
+	go sess.runHealthMonitor(e)
 
 	return userConn, nil
 }
@@ -741,7 +741,7 @@ func (sess *bondSession) updateWeights() {
 }
 
 // runHealthMonitor periodically checks path health and updates weights.
-func (sess *bondSession) runHealthMonitor(a *App) {
+func (sess *bondSession) runHealthMonitor(e *Engine) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
@@ -757,7 +757,7 @@ func (sess *bondSession) runHealthMonitor(a *App) {
 				parts := splitPath(bp.name)
 				if len(parts) > 0 {
 					firstHop := parts[0]
-					latMs := a.node.GetLatency(firstHop)
+					latMs := e.node.GetLatency(firstHop)
 					bp.mu.Lock()
 					if latMs > 0 {
 						bp.rttMs = float64(latMs)
@@ -785,7 +785,7 @@ func (sess *bondSession) runHealthMonitor(a *App) {
 				td := bp.tornDown
 				bp.mu.Unlock()
 				if dead && !td {
-					sess.tryReopenPath(a, bp)
+					sess.tryReopenPath(e, bp)
 				}
 			}
 
@@ -796,7 +796,7 @@ func (sess *bondSession) runHealthMonitor(a *App) {
 }
 
 // tryReopenPath attempts to reconnect a failed path.
-func (sess *bondSession) tryReopenPath(a *App, bp *bondPath) {
+func (sess *bondSession) tryReopenPath(e *Engine, bp *bondPath) {
 	if sess.closed.Load() {
 		return
 	}
@@ -804,7 +804,7 @@ func (sess *bondSession) tryReopenPath(a *App, bp *bondPath) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	conn, err := a.dialPathIdx(ctx, bp.name, bondAddr, bp.index)
+	conn, err := e.dialPathIdx(ctx, bp.name, bondAddr, bp.index)
 	if err != nil {
 		return
 	}
