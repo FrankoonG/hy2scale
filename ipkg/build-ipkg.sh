@@ -35,7 +35,7 @@ IMAGE_SIZE=$(du -h "$SCRIPT_DIR/hy2scale/docker_image.tar.gz" | cut -f1)
 echo "    Image size: ${IMAGE_SIZE}"
 
 # Step 4: Convert SVG logo to PNG (if outdated or missing)
-if [ "$PROJECT_DIR/hy2scale-v3.svg" -nt "$SCRIPT_DIR/hy2scale/ui/ico/app.png" ] || \
+if [ "$PROJECT_DIR/web/app/public/logo.svg" -nt "$SCRIPT_DIR/hy2scale/ui/ico/app.png" ] || \
    [ ! -f "$SCRIPT_DIR/hy2scale/ui/ico/app.png" ]; then
   echo "[4/5] Converting logo SVG → PNG..."
   docker run --rm -v "$PROJECT_DIR:/work" python:3.12-alpine sh -c '
@@ -43,7 +43,7 @@ if [ "$PROJECT_DIR/hy2scale-v3.svg" -nt "$SCRIPT_DIR/hy2scale/ui/ico/app.png" ] 
     pip install -q cairosvg >/dev/null 2>&1
     python3 -c "
 import cairosvg
-cairosvg.svg2png(url=\"/work/hy2scale-v3.svg\", write_to=\"/work/ipkg/hy2scale/ui/ico/app.png\", output_width=256, output_height=256)
+cairosvg.svg2png(url=\"/work/web/app/public/logo.svg\", write_to=\"/work/ipkg/hy2scale/ui/ico/app.png\", output_width=256, output_height=256)
 print(\"    Logo converted\")
 "'
 else

@@ -12,13 +12,16 @@
 /* Dark Reader lightens every SVG fill it sees, but leaves var() fills alone:
    surface-coloured fills (node discs, chips, pills) switch through this var. */
 html[data-darkreader-scheme="dark"] .lg-page{--lg-svg-surface:#202224}
-/* logo (login and sidebar); its parts are <use> clones, so no ancestor selector */
-:root{--logo-ring:#4D6EA3;--logo-hub:#102545;--logo-ink:#000;--logo-arrow:#FEBD02}
-:root[data-theme="dark"]{--logo-ring:#6f8fc7;--logo-hub:#96b0e2;--logo-ink:#e3e6ed}
-.lg-ring{fill:var(--logo-ring);fill-opacity:.5}
-.lg-hub{fill:var(--logo-hub)}
-.lg-ink{fill:var(--logo-ink)}
-.lg-arrow{fill:var(--logo-arrow)}
+/* logo (login and sidebar): literal colour + currentColor so Dark Reader
+   transforms it (docs/dark-reader-testing.md); the native dark theme below */
+.lg-ring{color:#4D6EA3;fill:currentColor;fill-opacity:.5}
+.lg-hub,.lg-ink{color:#102545;fill:currentColor}
+.lg-arrow{color:#FEBD02;fill:none;stroke:currentColor}
+.lg-chain{color:#9ca3af;fill:none;stroke:currentColor}
+:root[data-theme="dark"] .lg-ring{color:#6f8fc7}
+:root[data-theme="dark"] .lg-hub{color:#96b0e2}
+:root[data-theme="dark"] .lg-ink{color:#e3e6ed}
+:root[data-theme="dark"] .lg-chain{color:#6b7488}
 
 /* ---- left panel */
 .lg-left{position:sticky;top:0;height:100vh;overflow:hidden;background:linear-gradient(155deg,var(--lg-l1),var(--lg-l2));border-right:1px solid var(--border);padding:34px 40px 30px;display:flex;flex-direction:column;min-width:0}

@@ -1,11 +1,27 @@
-import { useId, useMemo } from 'react';
-
-// HY2 SCALE logo, inline so its colours follow the theme (.lg-* classes in login.css).
-const MARKUP = "<defs><g id=\"hl-Layer1_0_FILL\"> <path class=\"lg-ring\" stroke=\"none\" d=\" M 6.6 0 Q 3.85 0 1.95 1.95 0 3.9 0 6.65 0 9.4 1.95 11.3 3.85 13.25 6.6 13.25 9.35 13.25 11.3 11.3 13.25 9.4 13.25 6.65 13.25 3.9 11.3 1.95 9.35 0 6.6 0 Z\"/> </g> <g id=\"hl-Layer1_1_FILL\"> <path class=\"lg-ring\" stroke=\"none\" d=\" M 6.65 0 Q 3.9 0 1.95 1.95 0 3.9 0 6.65 0 9.4 1.95 11.3 3.9 13.25 6.65 13.25 9.4 13.25 11.3 11.3 13.25 9.4 13.25 6.65 13.25 3.9 11.3 1.95 9.4 0 6.65 0 Z\"/> </g> <g id=\"hl-Layer1_2_FILL\"> <path class=\"lg-ring\" stroke=\"none\" d=\" M 6.65 0 Q 3.9 0 1.95 1.95 0 3.85 0 6.6 0 9.35 1.95 11.3 3.9 13.25 6.65 13.25 9.4 13.25 11.3 11.3 13.25 9.35 13.25 6.6 13.25 3.85 11.3 1.95 9.4 0 6.65 0 Z\"/> </g> <g id=\"hl-Symbol_3_0_Layer0_0_FILL\"> <path class=\"lg-ring\" stroke=\"none\" d=\" M 60 -0.25 Q 60 -25.15 42.35 -42.35 24.7 -60 -0.25 -60 -25.15 -60 -42.35 -42.35 -60 -25.15 -60 -0.25 -60 24.7 -42.35 42.35 -25.15 60 -0.25 60 24.7 60 42.35 42.35 60 24.7 60 -0.25 M 5.7 -37.1 Q 17.55 -35.4 26.45 -26.45 37.5 -15.45 37.5 0.15 37.5 15.7 26.45 26.45 15.45 37.5 -0.1 37.5 -15.65 37.5 -26.45 26.45 -35.4 17.75 -37.1 5.95 -37.3 4.6 -37.4 3.25 L -37.5 0.4 Q -37.5 0.3 -37.5 0.2 L -37.4 -2.4 Q -36.6 -16.35 -26.45 -26.45 -15.65 -37.5 -0.1 -37.5 2.85 -37.5 5.7 -37.1 Z\"/> <path class=\"lg-hub\" stroke=\"none\" d=\" M 26.45 -26.45 Q 17.55 -35.4 5.7 -37.1 2.85 -37.5 -0.1 -37.5 -15.65 -37.5 -26.45 -26.45 -36.6 -16.35 -37.4 -2.4 L -37.5 0.2 Q -37.5 0.3 -37.5 0.4 L -37.4 3.25 Q -37.3 4.6 -37.1 5.95 -35.4 17.75 -26.45 26.45 -15.65 37.5 -0.1 37.5 15.45 37.5 26.45 26.45 37.5 15.7 37.5 0.15 37.5 -15.45 26.45 -26.45 Z\"/> </g> <g id=\"hl-Layer1_7_MEMBER_0_FILL\"> <path class=\"lg-ink\" stroke=\"none\" d=\" M 115.2 140.45 L 72.8 140.45 60.05 285.55 102.5 285.55 115.2 140.45 Z\"/> </g> <g id=\"hl-Layer1_7_MEMBER_1_FILL\"> <path class=\"lg-ink\" stroke=\"none\" d=\" M 124.15 37.75 L 81.75 37.75 76.15 101.4 118.55 101.4 124.15 37.75 Z\"/> </g> <g id=\"hl-Layer1_7_MEMBER_2_FILL\"> <path class=\"lg-ink\" stroke=\"none\" d=\" M 115.2 140.45 L 72.8 140.45 60.05 285.55 102.5 285.55 115.2 140.45 Z\"/> </g> <g id=\"hl-Layer1_7_MEMBER_3_FILL\"> <path class=\"lg-ink\" stroke=\"none\" d=\" M 124.15 37.75 L 81.75 37.75 76.15 101.4 118.55 101.4 124.15 37.75 Z\"/> </g> <g id=\"hl-Layer0_0_FILL\"> <path class=\"lg-arrow\" stroke=\"none\" d=\" M 496 26.6 Q 495.85859375 20.743359375 492.45 18.1 489.893359375 16.10859375 485.4 16 L 414.55 16.05 Q 404.95 16.85 398.75 23.05 387.35 34.45 395.3 42.4 L 416.95 64 416.4 63.5 266.85 228.25 147.4 228.25 145 256 297.8 256 447.1 94.2 Q 458.8125 105.909765625 467.5 114.6 L 469.6 116.7 Q 477.55 124.65 488.95 113.25 495.2 107 495.95 97.45 L 496 26.6 Z\"/> </g> </defs><g transform=\"matrix( 9.056640625, 0, 0, 9.056640625, 16,376) \"> <use href=\"#hl-Layer1_0_FILL\"/> </g> <g transform=\"matrix( 9.056640625, 0, 0, 9.056640625, 376,376) \"> <use href=\"#hl-Layer1_1_FILL\"/> </g> <g transform=\"matrix( 9.056640625, 0, 0, 9.056640625, 195.75,16) \"> <use href=\"#hl-Layer1_2_FILL\"/> </g> <g transform=\"matrix( 1, 0, 0, 1, 76,76) \"> <g transform=\"matrix( 1, 0, 0, 1, 0,0) \"> <use href=\"#hl-Symbol_3_0_Layer0_0_FILL\"/> </g> </g> <g transform=\"matrix( 1, 0, 0, 1, 76,255.8) \"> <g transform=\"matrix( 1, 0, 0, 1, 0,0) \"> <use href=\"#hl-Symbol_3_0_Layer0_0_FILL\"/> </g> </g> <g transform=\"matrix( 1, 0, 0, 1, 255.75,436.05) \"> <g transform=\"matrix( 1, 0, 0, 1, 0,0) \"> <use href=\"#hl-Symbol_3_0_Layer0_0_FILL\"/> </g> </g> <g transform=\"matrix( 1, 0, 0, 1, 436,255.8) \"> <g transform=\"matrix( 1, 0, 0, 1, 0,0) \"> <use href=\"#hl-Symbol_3_0_Layer0_0_FILL\"/> </g> </g> <g transform=\"matrix( 0.691162109375, 0, 0, 0.691192626953125, 145.15,144.3) \"> <use href=\"#hl-Layer1_7_MEMBER_0_FILL\"/> </g> <g transform=\"matrix( 0.691162109375, 0, 0, 0.691192626953125, 145.15,144.3) \"> <use href=\"#hl-Layer1_7_MEMBER_1_FILL\"/> </g> <g transform=\"matrix( -0.691162109375, 0, 0, -0.691192626953125, 376,367.75) \"> <use href=\"#hl-Layer1_7_MEMBER_2_FILL\"/> </g> <g transform=\"matrix( -0.691162109375, 0, 0, -0.691192626953125, 376,367.75) \"> <use href=\"#hl-Layer1_7_MEMBER_3_FILL\"/> </g> <g transform=\"matrix( 1, 0, 0, 1, 0,0) \"> <use href=\"#hl-Layer0_0_FILL\"/> </g>";
+// HY2 SCALE logo, inline so its colours follow the theme (.lg-* classes in
+// login.css). Below 40 px the grey link between the corner dots is dropped:
+// it turns into noise at that size (same as the small logo / favicon).
+const CHAIN = 'M128,128 L173.42,139.47 L167.92,201.86 L230.3,196.36 L224.81,258.75 L287.19,253.25 L281.7,315.64 L344.08,310.14 L338.58,372.53 L384,384';
+const NODES: [number, number][] = [[256, 104], [408, 256], [256, 408], [104, 256]];
 
 export default function BrandLogo({ size = 28 }: { size?: number }) {
-  // ids prefixed per instance: two logos on a page must not share <use> targets
-  const id = useId().replace(/[^a-zA-Z0-9]/g, '');
-  const html = useMemo(() => MARKUP.replace(/hl-/g, `hl${id}-`), [id]);
-  return <svg className="lg-logo" width={size} height={size} viewBox="0 0 512 512" role="img" aria-label="HY2 SCALE" dangerouslySetInnerHTML={{ __html: html }} />;
+  return (
+    <svg className="lg-logo" width={size} height={size} viewBox="0 0 512 512" role="img" aria-label="HY2 SCALE">
+      {size >= 40 && (
+        <path className="lg-chain" d={CHAIN} strokeWidth={10} strokeLinejoin="miter" strokeMiterlimit={8} strokeLinecap="round" />
+      )}
+      <circle className="lg-ring" cx={128} cy={128} r={20} />
+      <circle className="lg-ring" cx={384} cy={384} r={20} />
+      {NODES.map(([x, y]) => (
+        <g key={`${x},${y}`}>
+          <circle className="lg-ring" cx={x} cy={y} r={56} />
+          <circle className="lg-hub" cx={x} cy={y} r={36} />
+        </g>
+      ))}
+      <path className="lg-ink" d="M213.24,183 L247.24,183 L218.76,329 L184.76,329Z" />
+      <path className="lg-ink" d="M293.24,183 L327.24,183 L298.76,329 L264.76,329Z" />
+      <path className="lg-arrow" d="M64,448 L254,230 L258,282 L448,64 M384,64 L448,64 L448,128 M128,448 L64,448 L64,384"
+        strokeWidth={32} strokeLinejoin="miter" strokeMiterlimit={10} strokeLinecap="butt" />
+    </svg>
+  );
 }

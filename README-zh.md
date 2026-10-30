@@ -94,6 +94,10 @@ cd hy2scale
 docker build -t hy2scale .
 ```
 
+## 说明
+
+HY2 SCALE 使用 Hysteria 2 协议，与 Hysteria 项目以及 Tailscale 都没有隶属关系。
+
 ## Star 历史
 
 <a href="https://www.star-history.com/?repos=FrankoonG%2Fhy2scale&type=date&legend=top-left">
