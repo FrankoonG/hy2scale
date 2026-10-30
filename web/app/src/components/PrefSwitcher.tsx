@@ -1,7 +1,6 @@
 import { useTranslation } from 'react-i18next';
-import { DropdownMenu, IconChevronDown, IconLanguages, IconSunMoon, type IconComponent } from '@hy2scale/ui';
+import { DropdownMenu, IconChevronDown, IconLanguages, type IconComponent } from '@hy2scale/ui';
 import i18n from '@/i18n';
-import { useTheme, setThemePref, themePrefs, themeLabelKey } from '@/theme';
 
 export const languages = [
   { code: 'en', name: 'English' },
@@ -37,21 +36,12 @@ function Switcher({ icon: Icon, value, label, testId, items }: {
   );
 }
 
-/** Login page: language and theme pickers (same look). */
+/** Login page: language picker. */
 export function LanguageSwitcher() {
   const { t } = useTranslation();
   const cur = currentLanguage();
   return (
     <Switcher icon={IconLanguages} value={cur.name} label={t('app.language')} testId="login-language"
       items={languages.map((l) => ({ key: l.code, label: l.name, checked: l.code === cur.code, onClick: () => i18n.changeLanguage(l.code) }))} />
-  );
-}
-
-export function ThemeSwitcher() {
-  const { t } = useTranslation();
-  const { pref } = useTheme();
-  return (
-    <Switcher icon={IconSunMoon} value={t(themeLabelKey[pref])} label={t('app.theme')} testId="login-theme"
-      items={themePrefs.map((p) => ({ key: p, label: t(themeLabelKey[p]), checked: p === pref, onClick: () => setThemePref(p) }))} />
   );
 }
