@@ -9,7 +9,7 @@ import {
 import { useAuthStore } from '@/store/auth';
 import { useNodeStore } from '@/store/node';
 import UserMenu from '@/components/UserMenu';
-import VersionBadge from '@/components/VersionBadge';
+import VersionMenu from '@/components/VersionMenu';
 import { usePageViewStore, isTopoPage } from '@/store/pageView';
 
 // Sidebar icons: one per page, matching what the page manages.
@@ -87,7 +87,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
   }));
 
   const versionBadge = node?.version
-    ? <VersionBadge version={node.version} limited={node.limited} compat={node.compat} />
+    ? <VersionMenu version={node.version} limited={node.limited} />
     : null;
 
   return (

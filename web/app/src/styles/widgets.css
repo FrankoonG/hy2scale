@@ -4,6 +4,21 @@
 .version-badge.limited{color:var(--ver-bad);background:rgba(231,76,60,0.08);border-color:rgba(231,76,60,0.35)}
 .version-badge.compat{color:var(--ver-warn);background:rgba(243,156,18,0.08);border-color:rgba(243,156,18,0.35)}
 .version-badge.incompatible{color:var(--ver-bad);background:rgba(231,76,60,0.08);border-color:rgba(231,76,60,0.35)}
+.version-badge.update{color:var(--ver-new);background:rgba(234,179,8,0.1);border-color:rgba(234,179,8,0.5)}
+/* Sidebar version pill → version / online-update panel. */
+.version-menu-btn{padding:0;border:none;background:none;font:inherit;cursor:pointer;border-radius:10px;line-height:0}
+.version-menu-btn:hover .version-badge{filter:brightness(.95);box-shadow:0 0 0 2px var(--focus-ring)}
+.version-menu-btn:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.version-menu{min-width:250px;padding:12px 0 4px;z-index:1100;display:flex;flex-direction:column;gap:10px}
+.version-menu-rows{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:0;padding:0 14px;font-size:12px}
+.version-menu-rows dt{color:var(--text-muted)}
+.version-menu-rows dd{margin:0;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.version-menu-arch,.version-menu-ok{font-weight:400;color:var(--text-muted);font-size:11px}
+.version-menu-new{color:var(--ver-new)!important}
+.version-menu-error{padding:0 14px;font-size:12px;color:var(--ver-bad)}
+.version-menu-note{padding:0 14px;font-size:12px;color:var(--text-muted)}
+.version-menu-actions{display:flex;gap:6px;flex-wrap:wrap;padding:0 14px}
+.version-menu-link{border-top:1px solid var(--border-light);font-size:13px}
 
 /* ====== Exit Mode ====== */
 .exit-mode-options{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px}

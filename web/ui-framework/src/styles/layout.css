@@ -42,6 +42,8 @@
 .hy-sidebar-label{overflow:hidden;text-overflow:clip;transition:opacity .15s}
 .hy-sidebar-bottom{display:flex;flex-direction:column;gap:2px;padding:8px;border-top:1px solid var(--border-light)}
 .hy-sidebar-toggle{justify-content:center}
+/* The collapse toggle sits apart from the pinned pages above it. */
+.hy-sidebar-divider{height:1px;margin:6px -8px;background:var(--text-muted);opacity:.35}
 .hy-sidebar.collapsed .hy-sidebar-logo{padding-left:18px}
 .hy-sidebar.collapsed .hy-sidebar-logo>*:not(:first-child){opacity:0}
 .hy-sidebar.collapsed .hy-sidebar-section{color:transparent}
