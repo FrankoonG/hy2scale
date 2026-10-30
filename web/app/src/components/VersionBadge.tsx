@@ -5,8 +5,10 @@ interface Props {
   version: string;
   /** This node: runs without the privileges some features need (red, "Limited"). */
   limited?: boolean;
-  /** Compatibility mode (orange). This node: adds "Compat"; a peer: colour only. */
+  /** A peer in compatibility mode (orange). */
   compat?: boolean;
+  /** This node: a newer release is available (yellow). */
+  update?: boolean;
   /** A peer this node cannot talk to (red, ✗). */
   incompatible?: boolean;
   /** A peer older than the lossless minimum (↑). */
@@ -17,12 +19,12 @@ interface Props {
   title?: string;
 }
 
-/** "v1.4.0" pill, green / orange (compat) / red (limited, incompatible). */
-export default function VersionBadge({ version, limited, compat, incompatible, outdated, peer, className, title }: Props) {
+/** "v1.4.0" pill, green / yellow (update) / orange (compat peer) / red (limited, incompatible). */
+export default function VersionBadge({ version, limited, compat, update, incompatible, outdated, peer, className, title }: Props) {
   const { t } = useTranslation();
   const suffix = peer
     ? (incompatible ? ' ✗' : outdated ? ' ↑' : '')
-    : (limited ? ` ${t('version.limited')}` : compat ? ` ${t('version.compat')}` : '');
-  const tone = limited ? 'limited' : incompatible ? 'incompatible' : compat ? 'compat' : undefined;
+    : (limited ? ` ${t('version.limited')}` : '');
+  const tone = limited ? 'limited' : incompatible ? 'incompatible' : update ? 'update' : (peer && compat) ? 'compat' : undefined;
   return <span className={clsx('version-badge', tone, className)} title={title}>v{version}{suffix}</span>;
 }

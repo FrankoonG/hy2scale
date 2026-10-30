@@ -11,6 +11,7 @@ import { useNodeStore } from '@/store/node';
 import { fmtBytes, fmtRate, fmtDuration } from '@/hooks/useFormat';
 import { useTheme } from '@/theme';
 import VersionBadge from '@/components/VersionBadge';
+import { hasUpdate, useUpgradeStore } from '@/components/upgrade';
 
 // ---------------------------------------------------------------------------
 // Live samples. Kept at module level so the chart and sparklines survive a
@@ -420,6 +421,7 @@ export default function OverviewPage() {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const node = useNodeStore((s) => s.node);
+  const update = hasUpdate(useUpgradeStore((s) => s.status));
   const topology = useNodeStore((s) => s.topology);
   const [range, setRange] = useState<Range>('live');
   const dark = useTheme().theme === 'dark';
@@ -600,7 +602,7 @@ export default function OverviewPage() {
         <Card className="ov-span-4" title={t('overview.thisNode')}>
           <div className="ov-node-head">
             <span className="ov-node-name">{node?.node_id || '—'}</span>
-            {node?.version && <VersionBadge version={node.version} limited={node.limited} compat={node.compat} />}
+            {node?.version && <VersionBadge version={node.version} limited={node.limited} update={update} />}
             {node?.exit_node && <Badge variant="blue">{t('overview.exitNode')}</Badge>}
             <span className="ov-health">
               {issues.length === 0

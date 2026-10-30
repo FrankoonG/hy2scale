@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { Tabs, TabPanel } from '@hy2scale/ui';
@@ -20,7 +21,11 @@ export default function SettingsPage() {
   const { t } = useTranslation();
   const forcePasswordChange = useAuthStore((s) => s.forcePasswordChange);
   const settingsQ = useQuery({ queryKey: ['settings'], queryFn: api.getUISettings });
-  const [tab, setTab] = useState<SettingsTab>('network');
+  // Other pages may open a given sub-page (state: { settingsTab }).
+  const location = useLocation();
+  const wanted = (location.state as { settingsTab?: SettingsTab } | null)?.settingsTab;
+  const [tab, setTab] = useState<SettingsTab>(wanted ?? 'network');
+  useEffect(() => { if (wanted) setTab(wanted); }, [location.key, wanted]);
   // A forced password change leaves only the account page.
   const activeTab: SettingsTab = forcePasswordChange ? 'account' : tab;
 

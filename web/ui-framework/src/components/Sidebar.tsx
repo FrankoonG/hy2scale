@@ -76,6 +76,7 @@ export function Sidebar({
         {hasBottom && (
           <div className="hy-sidebar-bottom">
             {bottomItems?.map(renderItem)}
+            {onToggleCollapse && bottomItems && bottomItems.length > 0 && <div className="hy-sidebar-divider" role="separator" />}
             {onToggleCollapse && (
               <button
                 type="button"

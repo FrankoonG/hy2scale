@@ -34,7 +34,7 @@
   --dot-off:#c4cad6;
   --c-green:#16a34a;--c-orange:#d97706;--c-red-strong:#dc2626;
   --c-yellow:#ca8a04;--c-yellow-bg:rgba(234,179,8,0.12);
-  --ver-ok:#2ecc71;--ver-bad:#e74c3c;--ver-warn:#f39c12;
+  --ver-ok:#2ecc71;--ver-bad:#e74c3c;--ver-warn:#f39c12;--ver-new:#c79100;
   --type-bg:rgba(144,152,168,.14);
   --type-ethernet:#2563eb;--type-ethernet-bg:rgba(59,130,246,.12);
   --type-wlan:#0891b2;--type-wlan-bg:rgba(6,182,212,.12);
@@ -80,7 +80,7 @@
   --dot-off:#4b5262;
   --c-green:#4ade80;--c-orange:#fbbf24;--c-red-strong:#f87171;
   --c-yellow:#facc15;--c-yellow-bg:rgba(234,179,8,.16);
-  --ver-ok:#4ade80;--ver-bad:#f87171;--ver-warn:#fbbf24;
+  --ver-ok:#4ade80;--ver-bad:#f87171;--ver-warn:#fbbf24;--ver-new:#facc15;
   --type-bg:rgba(144,152,168,.16);
   --type-ethernet:#60a5fa;--type-ethernet-bg:rgba(59,130,246,.16);
   --type-wlan:#22d3ee;--type-wlan-bg:rgba(6,182,212,.16);
