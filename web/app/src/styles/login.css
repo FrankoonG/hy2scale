@@ -3,18 +3,18 @@
 .lg-page{
   min-height:100vh;display:grid;grid-template-columns:56fr 44fr;background:var(--surface);
   --lg-l1:#eef1fd;--lg-l2:#f7f8fc;--lg-grid:rgba(67,97,238,.07);--lg-type-bg:rgba(144,152,168,.14);--lg-track:rgba(90,96,112,.22);
-  --logo-ring:#4D6EA3;--logo-hub:#102545;--logo-ink:#000;--logo-arrow:#FEBD02;
   --lg-svg-surface:#fff;
 }
 :root[data-theme="dark"] .lg-page{
   --lg-l1:#1a2036;--lg-l2:#12151b;--lg-grid:rgba(143,162,251,.06);--lg-type-bg:rgba(144,152,168,.16);--lg-track:rgba(169,176,190,.25);
-  --logo-ring:#6f8fc7;--logo-hub:#96b0e2;--logo-ink:#e3e6ed;
   --lg-svg-surface:#181b22;
 }
 /* Dark Reader lightens every SVG fill it sees, but leaves var() fills alone:
    surface-coloured fills (node discs, chips, pills) switch through this var. */
 html[data-darkreader-scheme="dark"] .lg-page{--lg-svg-surface:#202224}
-/* logo parts are <use> clones: an ancestor selector would not reach them */
+/* logo (login and sidebar); its parts are <use> clones, so no ancestor selector */
+:root{--logo-ring:#4D6EA3;--logo-hub:#102545;--logo-ink:#000;--logo-arrow:#FEBD02}
+:root[data-theme="dark"]{--logo-ring:#6f8fc7;--logo-hub:#96b0e2;--logo-ink:#e3e6ed}
 .lg-ring{fill:var(--logo-ring);fill-opacity:.5}
 .lg-hub{fill:var(--logo-hub)}
 .lg-ink{fill:var(--logo-ink)}
@@ -130,7 +130,6 @@ html[data-darkreader-scheme="dark"] .lg-page{--lg-svg-surface:#202224}
 .lg-formbox{width:340px;max-width:100%;animation:lgRise .55s cubic-bezier(.2,.7,.2,1) .12s both}
 .lg-brand,.lg-foot{animation:lgRise .55s cubic-bezier(.2,.7,.2,1) both}
 .lg-foot{animation-delay:.3s}
-.lg-page.still .lg-formbox,.lg-page.still .lg-brand,.lg-page.still .lg-foot{animation:none}
 @keyframes lgRise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
 .lg-mobile-brand{display:none;align-items:center;gap:10px;font-weight:700;font-size:15px;letter-spacing:.06em;margin-bottom:28px}
 .lg-title{font-size:24px;font-weight:700;margin:0 0 2px;line-height:1.35}
@@ -169,16 +168,21 @@ html[data-darkreader-scheme="dark"] .lg-page{--lg-svg-surface:#202224}
   .lg-formbox,.lg-brand,.lg-foot{animation:none}
 }
 
-/* ---- login ⇄ app (hooks/authTransition.ts): the logo, brand text and the
-   topology panel / sidebar move between their places, the rest crossfades */
-html.vt-auth .lg-brand .lg-logo,html.vt-auth .hy-sidebar-logo img{view-transition-name:hy-auth-logo}
-html.vt-auth .lg-brand>span,html.vt-auth .hy-sidebar-logo .hy-brand{view-transition-name:hy-auth-brand}
-html.vt-auth .lg-left,html.vt-auth .hy-sidebar{view-transition-name:hy-auth-rail}
-html.vt-auth::view-transition-group(*){animation-duration:.7s;animation-timing-function:cubic-bezier(.2,.75,.15,1)}
-html.vt-auth::view-transition-old(hy-auth-rail),html.vt-auth::view-transition-new(hy-auth-rail){height:100%;object-fit:cover;object-position:left top}
-html.vt-auth::view-transition-old(hy-auth-rail){animation:lgVtOut .3s ease both}
-html.vt-auth::view-transition-new(hy-auth-rail){animation:lgVtIn .4s ease .3s both}
-html.vt-auth::view-transition-old(root){animation:lgVtOut .3s ease both}
-html.vt-auth::view-transition-new(root){animation:lgVtIn .45s ease .25s both}
-@keyframes lgVtOut{to{opacity:0}}
-@keyframes lgVtIn{from{opacity:0}}
+/* ---- login ⇄ app (hooks/authTransition.ts): around the shared divider.
+   leaving: the left panel turns to the sidebar surface and the right side to
+   the app background before the app takes over; arriving: the reverse while
+   the divider slides out, then the panel content rises in. */
+.lg-brand{z-index:2}
+.lg-left::after{content:'';position:absolute;inset:0;background:var(--surface);opacity:0;pointer-events:none;z-index:1}
+.lg-page.leaving{background:var(--bg);transition:background-color .3s ease}
+.lg-page.leaving .lg-left::after{animation:lgVeilIn .3s ease forwards}
+.lg-page.arriving{animation:lgPageIn .5s ease .25s backwards}
+.lg-page.arriving .lg-left::after{animation:lgVeilOut .5s ease .3s backwards}
+.lg-page.arriving .lg-brand{animation:none}
+.lg-page.arriving .lg-topo{animation:lgRise .55s cubic-bezier(.2,.7,.2,1) .5s both}
+.lg-page.arriving .lg-foot{animation-delay:.6s}
+.lg-page.arriving .lg-formbox{animation-delay:.45s}
+.lg-page.arriving .lg-theme-btn{animation:lgRise .45s cubic-bezier(.2,.7,.2,1) .55s both}
+@keyframes lgVeilIn{to{opacity:1}}
+@keyframes lgVeilOut{from{opacity:1}to{opacity:0}}
+@keyframes lgPageIn{from{background-color:var(--bg)}}

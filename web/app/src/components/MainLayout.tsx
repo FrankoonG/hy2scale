@@ -1,4 +1,4 @@
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useLayoutEffect, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -11,6 +11,8 @@ import { useNodeStore } from '@/store/node';
 import UserMenu from '@/components/UserMenu';
 import VersionMenu from '@/components/VersionMenu';
 import { usePageViewStore, isTopoPage } from '@/store/pageView';
+import BrandLogo from '@/components/login/BrandLogo';
+import { playAppEnter, takeHandoff } from '@/hooks/authTransition';
 
 // Sidebar icons: one per page, matching what the page manages.
 const icons: Record<string, IconComponent> = {
@@ -43,6 +45,8 @@ const COLLAPSE_KEY = 'hy-sidebar-collapsed';
 
 export default function MainLayout({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
+  // arriving from the login page: its divider slides in to the sidebar edge
+  useLayoutEffect(() => { const h = takeHandoff('login'); if (h) playAppEnter(h); }, []);
   const navigate = useNavigate();
   const location = useLocation();
   const node = useNodeStore((s) => s.node);
@@ -107,7 +111,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
           toggleLabel={t(collapsed ? 'app.expandNav' : 'app.collapseNav')}
           logo={
             <>
-              <img src="./logo.svg" alt="" />
+              <BrandLogo />
               <div>
                 <div className="hy-brand">HY2 SCALE</div>
                 {versionBadge}

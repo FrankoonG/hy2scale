@@ -1,4 +1,4 @@
-import { useState, useEffect, type KeyboardEvent } from 'react';
+import { useState, useEffect, useLayoutEffect, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button, Input, PasswordInput, IconServer, IconCircleAlert } from '@hy2scale/ui';
@@ -7,7 +7,7 @@ import { LanguageSwitcher } from '@/components/PrefSwitcher';
 import LoginTopology from '@/components/login/LoginTopology';
 import ThemeCycleButton from '@/components/login/ThemeCycleButton';
 import BrandLogo from '@/components/login/BrandLogo';
-import { enterApp } from '@/hooks/authTransition';
+import { enterApp, playLoginEnter, takeHandoff } from '@/hooks/authTransition';
 
 export default function LoginPage() {
   const { t } = useTranslation();
@@ -35,8 +35,9 @@ export default function LoginPage() {
   const [remember, setRemember] = useState(false);
   const [hasSaved, setHasSaved] = useState(false);
   const [caps, setCaps] = useState(false);
-  // entered by the logout transition: that moves the brand into place, so skip the page's own entrance
-  const [still] = useState(() => document.documentElement.classList.contains('vt-auth'));
+  // arriving from the app: the sidebar edge slides out to this page's divider
+  const [handoff] = useState(() => takeHandoff('app'));
+  useLayoutEffect(() => { if (handoff) playLoginEnter(handoff); }, [handoff]);
 
   // Local login: pre-fill from saved credentials (don't auto-submit).
   // Skip entirely in proxy mode — the plain-text screen rendered below
@@ -80,7 +81,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className={`lg-page${still ? ' still' : ''}`}>
+    <div className={`lg-page${handoff ? ' arriving' : ''}`}>
       <LoginTopology />
       <div className="lg-right">
         <ThemeCycleButton />
