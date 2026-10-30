@@ -163,12 +163,18 @@ func (a *App) relayUser(conn, remote net.Conn, username, remoteIP, protocol stri
 // server reads the target from it (download) and writes the user's bytes
 // into it (upload). The device row lives as long as the stream.
 func (a *App) meterHy2(authID, peerAddr string, c net.Conn) net.Conn {
+	return a.meterHy2As(authID, peerAddr, "hy2", c)
+}
+
+// meterHy2As: meterHy2 with the device row's protocol ("hy2-node" for node
+// access by user).
+func (a *App) meterHy2As(authID, peerAddr, proto string, c net.Conn) net.Conn {
 	name := strings.TrimPrefix(authID, "user:")
 	ip := peerAddr
 	if h, _, err := net.SplitHostPort(peerAddr); err == nil {
 		ip = h
 	}
-	sid := a.Sessions.Connect(name, ip, "hy2", func() { c.Close() })
+	sid := a.Sessions.Connect(name, ip, proto, func() { c.Close() })
 	m := a.newUserMeter(name, sid, func() { c.Close() })
 	mc := m.remoteSide(c).(*meteredConn)
 	mc.onClose = func() {

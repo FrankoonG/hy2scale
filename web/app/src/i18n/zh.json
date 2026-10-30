@@ -847,5 +847,16 @@
   "login.topo.tag.compat": "兼容接入",
   "login.topo.tag.remoteAdmin": "中继远程管理",
   "login.topo.tag.noPw": "免密直达",
-  "login.caps": "大写锁定已开启"
+  "login.caps": "大写锁定已开启",
+  "users.nodeAccess": "节点接入",
+  "users.nodeAccessHint": "可使用本节点可见的节点作为出口。",
+  "users.allowInternal": "允许访问内部地址",
+  "users.allowInternalHint": "回环、内网及出口所在网络。",
+  "nodes.access": "接入方式",
+  "nodes.accessFull": "完整节点",
+  "nodes.accessUser": "节点接入（用户）",
+  "nodes.userPassword": "用户密码",
+  "nodes.restricted": "受限",
+  "nodes.restrictedTitle": "经节点接入（用户）：仅可走流量",
+  "devices.hy2Node": "hy2（节点接入）"
 }

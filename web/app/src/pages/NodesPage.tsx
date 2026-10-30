@@ -281,6 +281,9 @@ export default function NodesPage() {
         ) : null;
 
         const nativeBadge = n.native ? <Badge variant="muted">{t('nodes.native')}</Badge> : null;
+        const restrictedBadge = n.restricted
+          ? <span title={t('nodes.restrictedTitle')} data-testid="restricted-badge"><Badge variant="muted" className="badge-restricted">{t('nodes.restricted')}</Badge></span>
+          : null;
 
         // Tree expand/collapse triangle: shown for non-self, non-native nodes
         // ▶ = nested false (collapsed), ▼ = nested true (expanded)
@@ -314,6 +317,7 @@ export default function NodesPage() {
               {nameEl}
               {versionBadge}
               {nativeBadge && <> {nativeBadge}</>}
+              {restrictedBadge && <> {restrictedBadge}</>}
               {n.via ? (
                 <span className="peer-addr-sub">{t('nodes.via', { name: n.via })}</span>
               ) : n.addr ? (

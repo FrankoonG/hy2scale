@@ -8,8 +8,10 @@ RUN cd app && npm ci && npm run build
 FROM golang:1.27-alpine AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
-# go.mod replaces veepin with the patched in-tree copy
+# go.mod replaces veepin with the patched in-tree copy, and the shared core
+# module with ./core
 COPY third_party/ third_party/
+COPY core/go.* core/
 RUN go mod download
 ARG CACHEBUST=0
 COPY . .

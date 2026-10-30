@@ -73,7 +73,20 @@ type topoSubPeer struct {
 	// drawn). Old peers that don't send this field default to
 	// Connected=true on the consumer side for backward compat.
 	Connected  bool           `json:"connected"`
-	Children   []topoSubPeer  `json:"children,omitempty"`
+	// Restricted: reached through node access by user (traffic only: no
+	// management or punching), with everything below it.
+	Restricted bool          `json:"restricted,omitempty"`
+	// RestrictTags: the node applies restriction tags (core/proto).
+	RestrictTags bool          `json:"rt,omitempty"`
+	Children     []topoSubPeer `json:"children,omitempty"`
+}
+
+// markRestricted marks a subtree as reached through node access by user.
+func markRestricted(children []topoSubPeer) {
+	for i := range children {
+		children[i].Restricted = true
+		markRestricted(children[i].Children)
+	}
 }
 
 type Server struct {
@@ -1531,6 +1544,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		// entry's max(MaxTx, MaxRx).
 		MaxRate      uint64            `json:"max_rate,omitempty"`
 		IsSelf       bool              `json:"is_self,omitempty"`
+		Restricted   bool              `json:"restricted,omitempty"`
 		Egress       json.RawMessage   `json:"egress"`
 		// Punched: who set up the hole-punched connection(s) to this peer
 		// (this node's name and/or the peer's).
@@ -1716,6 +1730,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				tn.TunCapable = p.TunCapable
 				tn.Conns = p.Conns
 				tn.Egress = p.Egress
+				tn.Restricted = p.Restricted
 				if p.Direction == "outbound" {
 					// Found the matching outbound entry — prefer this and
 					// stop. (Continuing would overwrite with inbound
@@ -1760,6 +1775,9 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			ancestors := selfAncestors(cfg, name)
 			children := filterAncestorPaths(s.getCachedSubPeers(name), ancestors)
 			tn.Children = s.filterChildrenByNestedConfig(children, name, cfg, ancestors, pathRates, latencyCache[name], 0)
+			if tn.Restricted {
+				markRestricted(tn.Children)
+			}
 		}
 		// Also load children for inbound peers nested under self
 		// (they can have outbound connections visible if nested is enabled)
@@ -2232,6 +2250,8 @@ func (s *Server) StartSubPeersUpdater(ctx context.Context) {
 					LatencyMs:  lat,
 					Conns:      c.Conns,
 					Egress:     c.Egress,
+					Restricted: c.Restricted,
+					RestrictTags: c.RestrictTags,
 				})
 			}
 			if len(infos) > 0 {
@@ -2318,6 +2338,8 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 		MaxRate   uint64        `json:"max_rate,omitempty"`
 		Conns     int           `json:"conns,omitempty"`
 		Egress    json.RawMessage `json:"egress,omitempty"`
+		Restricted bool         `json:"restricted,omitempty"`
+		RestrictTags bool       `json:"rt,omitempty"`
 		Children  []topoSubPeer `json:"children,omitempty"`
 	}
 	var remotePeers []peerWithChildren
@@ -2327,6 +2349,8 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 	parentLatency := s.app.Node().GetLatency(peerName)
 	cfg := s.app.Store().Get()
 	selfNames := map[string]bool{cfg.NodeID: true, peerName: true}
+	// Everything a gateway reached by node access shows is restricted too.
+	viaAccess := s.app.Node().IsRestricted(peerName)
 	children := make([]topoSubPeer, 0, len(remotePeers))
 	for _, rp := range remotePeers {
 		childLatency := rp.LatencyMs
@@ -2372,7 +2396,12 @@ func (s *Server) fetchSubPeersViaStream(peerName string) []topoSubPeer {
 			Egress:     rp.Egress,
 			Connected:  connected,
 			MaxRate:    rp.MaxRate,
+			Restricted: rp.Restricted || viaAccess,
+			RestrictTags: rp.RestrictTags,
 			Children:   embedded,
+		}
+		if child.Restricted {
+			markRestricted(child.Children)
 		}
 		children = append(children, child)
 	}
@@ -3761,6 +3790,12 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w,
 			"Remote UI is not available for native peers. The selected node is a vanilla hysteria2 server and does not host the hy2scale management API. To route traffic through it, add a user with this peer set as Exit instead of opening it as a remote node.",
 			409)
+		return
+	}
+
+	// Nodes reached by node access by user are traffic-only.
+	if s.app.Node().IsRestricted(chain[0]) {
+		http.Error(w, "Remote UI is not available through node access by user.", 409)
 		return
 	}
 

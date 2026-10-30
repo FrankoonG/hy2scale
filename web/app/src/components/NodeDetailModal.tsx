@@ -127,6 +127,7 @@ export default function NodeDetailModal({ open, onClose, qpath, animateFrom, ren
         title={outdated ? t('nodes.updateForLossless', { v: lossMin }) : undefined} />
     ) : '—']);
     if (n.native) items.push([t('nodes.detail.type'), <Badge variant="muted">{t('nodes.native')}</Badge>]);
+    if (n.restricted) items.push([t('nodes.detail.type'), <span title={t('nodes.restrictedTitle')}><Badge variant="muted" className="badge-restricted">{t('nodes.restricted')}</Badge></span>]);
     if (!isSelf && !n.native) items.push([t('nodes.nested'), n.nested ? t('app.yes') : t('app.no')]);
 
     const addrs = n.ip_statuses && n.ip_statuses.length > 0
@@ -214,7 +215,7 @@ export default function NodeDetailModal({ open, onClose, qpath, animateFrom, ren
     return s.split('/').filter(Boolean);
   })();
   const showRemote = !!n && !isSelf && !!onRemoteConnect && chain.length > 0;
-  const remoteOk = !!n && !n.native && n.connected !== false && !n.disabled;
+  const remoteOk = !!n && !n.native && !n.restricted && n.connected !== false && !n.disabled;
 
   return (
     <Modal

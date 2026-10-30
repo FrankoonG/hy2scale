@@ -26,7 +26,8 @@ import (
 	hyclient "github.com/apernet/hysteria/core/v2/client"
 	hyserver "github.com/apernet/hysteria/core/v2/server"
 	"github.com/FrankoonG/hy2scale/internal/history"
-	"github.com/FrankoonG/hy2scale/internal/msess"
+	"github.com/FrankoonG/hy2scale/core/msess"
+	"github.com/FrankoonG/hy2scale/core/proto"
 	"github.com/FrankoonG/hy2scale/internal/relay"
 	"github.com/FrankoonG/hy2scale/internal/vpnmux"
 	"github.com/FrankoonG/hy2scale/internal/udphop"
@@ -61,6 +62,10 @@ type ClientEntry struct {
 	// Punch: routes set up by hole punching (see punch.go); Advanced: tuning.
 	Punch    *PunchConfig  `yaml:"punch,omitempty" json:"punch,omitempty"`
 	Advanced *PeerAdvanced `yaml:"advanced,omitempty" json:"advanced,omitempty"`
+
+	// Access: "" = a full peer (system password); "user" = node access by
+	// user, Password being a user's hy2 password on that node (access.go).
+	Access string `yaml:"access,omitempty" json:"access,omitempty"`
 }
 
 // AllAddrs returns the effective address list. If Addrs is populated, returns it.
@@ -267,6 +272,9 @@ type App struct {
 
 	hist *history.Store
 
+	lnets localNets // own addresses / networks for internal-destination checks
+	acc   *accessState
+
 	// Track last successful exit path per primary exit_via (for UI display)
 	activePathMu sync.RWMutex
 	activePaths  map[string]string // exitVia → last winning path
@@ -330,6 +338,8 @@ func New(dataDir string) (*App, error) {
 	a.refreshEgress()
 	a.installChildListen()
 	a.initMsess()
+	a.acc = newAccessState()
+	a.node.SetRestrictedDial(a.restrictedDial)
 	return a, nil
 }
 
@@ -642,6 +652,16 @@ func (a *App) AddClient(cl ClientEntry) error {
 			}
 		}
 		c.Clients = append(c.Clients, cl)
+		// node access is for using the gateway's tree: show it
+		if cl.Access == AccessUser {
+			if _, ok := c.Peers[cl.Name]; !ok {
+				if c.Peers == nil {
+					c.Peers = map[string]PeerConfig{}
+				}
+				c.Peers[cl.Name] = PeerConfig{Nested: true}
+				a.node.SetNestedDiscovery(cl.Name, true)
+			}
+		}
 	})
 }
 
@@ -1624,7 +1644,12 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 		}
 
 		// Verify this IP reaches the same node by attempting a lightweight handshake
-		status := a.verifyExtraConn(c, peerName)
+		var status string
+		if cl.Access == AccessUser {
+			status = a.verifyAccessConn(ctx, c, peerName)
+		} else {
+			status = a.verifyExtraConn(c, peerName)
+		}
 		a.node.AddPeerConn(peerName, c, extraAddr, status)
 		log.Printf("[%s] extra IP %s for %s: %s", a.node.Name(), extraAddr, peerName, status)
 
@@ -1801,8 +1826,7 @@ func (a *App) connectAt(ctx context.Context, cl ClientEntry, dialAddr string) er
 	}
 	log.Printf("[%s] connected to %s (%s)", a.node.Name(), cl.Name, dialAddr)
 
-	// Try hy2scale relay protocol first
-	err = a.node.AttachTo(ctx, cl.Name, c, func(remoteID string) {
+	onID := func(remoteID string) {
 		// Check for name conflict: another client with different addr has the same ID
 		if remoteID != "" {
 			isConflict := false
@@ -1867,7 +1891,23 @@ func (a *App) connectAt(ctx context.Context, cl ClientEntry, dialAddr string) er
 			// Clear old latency so topology doesn't show stale entry
 			a.node.SetLatency(oldName, 0)
 		}
-	})
+	}
+	if cl.Access == AccessUser {
+		// Node access by user: hello instead of register; refused (an
+		// older node, or the user may not) → used as a plain hy2 server.
+		err = a.node.AttachAccess(ctx, cl.Name, c, func(remoteID string) bool {
+			onID(remoteID)
+			return remoteID != a.node.Name() && remoteID != a.store.Get().NodeID
+		})
+		a.noteAccess(cl.Addr, err)
+		if errors.Is(err, relay.ErrAccessRefused) && ctx.Err() == nil {
+			log.Printf("[%s] %s refused node access: using it as a plain hy2 server", a.node.Name(), cl.Addr)
+			err = relay.ErrNotHy2scale
+		}
+	} else {
+		// Try hy2scale relay protocol first
+		err = a.node.AttachTo(ctx, cl.Name, c, onID)
+	}
 	if err == relay.ErrNotHy2scale && ctx.Err() == nil {
 		// Relay protocol not supported — native hy2 server
 		log.Printf("[%s] %s is not hy2scale, attaching as native hy2", a.node.Name(), cl.Addr)
@@ -2020,7 +2060,7 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 	if wantSniff(addr) {
 		conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		peeked, waited := peekHello(conn, nil)
-		remote, err = a.dialSniffedTCP(context.Background(), a.exitRoute(exitVia, exitPaths, exitMode), nil,
+		remote, err = a.dialSniffedTCP(withRestrict(context.Background(), a.userRestrict(username)), a.exitRoute(exitVia, exitPaths, exitMode), nil,
 			addr, peeked, waited, isLoopbackAddr(conn.RemoteAddr()))
 		if err != nil {
 			return
@@ -2032,7 +2072,7 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 			}
 		}
 	} else {
-		remote, err = a.dialRoutedTCP(context.Background(), exitVia, exitPaths, exitMode, addr)
+		remote, err = a.dialRoutedTCP(withRestrict(context.Background(), a.userRestrict(username)), exitVia, exitPaths, exitMode, addr)
 		if err != nil {
 			conn.Write([]byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 			return
@@ -2242,10 +2282,10 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 	// Dial remote
 	var remote net.Conn
 	if connectSniff {
-		remote, err = a.dialSniffedTCP(context.Background(), a.exitRoute(exitVia, exitPaths, exitMode), nil,
+		remote, err = a.dialSniffedTCP(withRestrict(context.Background(), a.userRestrict(username)), a.exitRoute(exitVia, exitPaths, exitMode), nil,
 			addr, connectPeeked, connectWaited, isLoopbackAddr(conn.RemoteAddr()))
 	} else {
-		remote, err = a.dialRoutedTCP(context.Background(), exitVia, exitPaths, exitMode, addr)
+		remote, err = a.dialRoutedTCP(withRestrict(context.Background(), a.userRestrict(username)), exitVia, exitPaths, exitMode, addr)
 	}
 	if err != nil {
 		// After the early 200 a 502 can no longer be sent; just close.
@@ -2652,6 +2692,7 @@ func (a *App) dialExitChain(ctx context.Context, parts []string, addr string) (n
 	}
 	var conn net.Conn
 	var err error
+	addr = a.tagTarget(ctx, parts, addr)
 	if len(parts) == 1 {
 		conn, err = a.node.DialTCP(ctx, parts[0], addr)
 	} else {
@@ -2693,7 +2734,7 @@ func (a *App) dialExitUDP(ctx context.Context, exitVia, addr string) (net.Conn, 
 	deadline := time.Now().Add(30 * time.Second)
 	var lastErr error
 	for {
-		conn, err := a.node.DialUDPVia(ctx, parts, addr)
+		conn, err := a.node.DialUDPVia(ctx, parts, a.tagTarget(ctx, parts, addr))
 		if err == nil {
 			return conn, nil
 		}
@@ -2835,8 +2876,28 @@ func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
 	if isUser && (relay.IsRelayStream(actualAddr) || IsBondStream(actualAddr)) {
 		// A user credential must never reach mesh-internal streams: via
 		// streams would route an hy2 user through the mesh past the exit
-		// assigned to them, and register would join them as a peer.
+		// assigned to them, and register would join them as a peer. A user
+		// with node access may open the few listed in access.go, checked
+		// there.
+		if o.app.nodeAccessUser(authID) {
+			return o.accessTCP(authID, peerAddr, actualAddr)
+		}
 		return nil, fmt.Errorf("relay stream not permitted for %s", authID)
+	}
+	// A target that arrived with restrictions (an access client's or a
+	// restricted user's flow, tagged by the node that admitted it).
+	// Users never: a tag must not take them past their own route.
+	if base, r := proto.ParseRestrict(actualAddr); r != 0 && !isUser && !relay.IsRelayStream(actualAddr) {
+		if IsBondStream(base) {
+			c1, c2 := net.Pipe()
+			go func() {
+				if err := o.app.handleBondStream(actualAddr, c1); err != nil {
+					c1.Close()
+				}
+			}()
+			return c2, nil
+		}
+		return o.localTCPCtx(withRestrict(o.ctx, r), base, isBridged)
 	}
 	if relay.IsRelayStream(actualAddr) {
 		// For `_relay_api_:0` we wrap the local pipe end in *RelayAuthConn
@@ -2893,6 +2954,7 @@ func (o *nodeOutbound) TCP(reqAddr string) (net.Conn, error) {
 
 // hy2UserTCP dials an hy2 user's stream: its exit route, or here.
 func (o *nodeOutbound) hy2UserTCP(authID, actualAddr string, isBridged bool) (net.Conn, error) {
+	ctx := withRestrict(o.ctx, o.app.userRestrict(strings.TrimPrefix(authID, "user:")))
 	via, paths, mode, viaUser := o.app.hy2UserRoute(authID)
 	route := func(addr string) (string, []string, string, error) {
 		if viaUser {
@@ -2901,33 +2963,38 @@ func (o *nodeOutbound) hy2UserTCP(authID, actualAddr string, isBridged bool) (ne
 		return o.app.routeFor("", nil, "", addr)
 	}
 	if !isBridged && wantSniff(actualAddr) {
-		return o.sniffedTCP(route, actualAddr), nil
+		return o.sniffedTCP(ctx, route, actualAddr), nil
 	}
 	if v, p, m, err := route(actualAddr); err == nil && v != "" {
-		return o.app.dialExitWithPaths(o.ctx, v, p, m, actualAddr)
+		return o.app.dialExitWithPaths(ctx, v, p, m, actualAddr)
 	}
-	return o.localTCP(actualAddr, isBridged)
+	return o.localTCPCtx(ctx, actualAddr, isBridged)
 }
 
 // sniffedTCP returns the connection for a stream to an IP: dialled once the
 // client's first bytes are in, with the host name they carry (the client is
 // on another host). See sniff_override.go.
-func (o *nodeOutbound) sniffedTCP(route flowRoute, actualAddr string) net.Conn {
+func (o *nodeOutbound) sniffedTCP(ctx context.Context, route flowRoute, actualAddr string) net.Conn {
 	here := func(ctx context.Context, addr string) (net.Conn, error) {
 		return o.app.dialDirect(ctx, "tcp", rewriteLocalAddr(addr))
 	}
 	return newDeferredDialConn(func(peeked []byte, waited bool) (net.Conn, error) {
-		return o.app.dialSniffedTCP(o.ctx, route, here, actualAddr, peeked, waited, false)
+		return o.app.dialSniffedTCP(ctx, route, here, actualAddr, peeked, waited, false)
 	})
 }
 
 // localTCP dials a stream's target from this node.
 func (o *nodeOutbound) localTCP(actualAddr string, isBridged bool) (net.Conn, error) {
+	return o.localTCPCtx(o.ctx, actualAddr, isBridged)
+}
+
+// localTCPCtx: localTCP under ctx (which may carry restrictions).
+func (o *nodeOutbound) localTCPCtx(ctx context.Context, actualAddr string, isBridged bool) (net.Conn, error) {
 	// A peer's stream to an IP: the client behind it resolved elsewhere.
 	if !isBridged && wantSniff(actualAddr) {
-		return o.sniffedTCP(func(string) (string, []string, string, error) { return "", nil, "", nil }, actualAddr), nil
+		return o.sniffedTCP(ctx, func(string) (string, []string, string, error) { return "", nil, "", nil }, actualAddr), nil
 	}
-	return o.app.dialDirect(o.ctx, "tcp", rewriteLocalAddr(actualAddr))
+	return o.app.dialDirect(ctx, "tcp", rewriteLocalAddr(actualAddr))
 }
 
 func (o *nodeOutbound) UDP(reqAddr string) (hyserver.UDPConn, error) {
@@ -2942,6 +3009,9 @@ func (o *nodeOutbound) UDP(reqAddr string) (hyserver.UDPConn, error) {
 	// one level here.
 	if chain, targetAddr, isVia := relay.ParseVia(reqAddr); isVia {
 		if isUser {
+			if o.app.nodeAccessUser(authID) {
+				return o.accessUDP(authID, peerAddr, chain, targetAddr)
+			}
 			return nil, fmt.Errorf("relay stream not permitted for %s", authID)
 		}
 		path := strings.Split(chain, "/")
@@ -2957,19 +3027,22 @@ func (o *nodeOutbound) UDP(reqAddr string) (hyserver.UDPConn, error) {
 		}
 		var c net.Conn
 		var err error
+		ctx := withRestrict(o.ctx, o.app.userRestrict(strings.TrimPrefix(authID, "user:")))
 		if via, paths, mode, ok := o.app.hy2UserRoute(authID); ok {
-			c, err = o.app.dialExitUDPPaths(o.ctx, via, paths, mode, reqAddr)
+			c, err = o.app.dialExitUDPPaths(ctx, via, paths, mode, reqAddr)
 		} else if via, paths, mode, rerr := o.app.routeFor("", nil, "", reqAddr); rerr == nil && via != "" {
-			c, err = o.app.dialExitUDPPaths(o.ctx, via, paths, mode, reqAddr)
+			c, err = o.app.dialExitUDPPaths(ctx, via, paths, mode, reqAddr)
 		} else {
-			c, err = o.app.dialDirect(o.ctx, "udp", rewriteLocalAddr(reqAddr))
+			c, err = o.app.dialDirect(ctx, "udp", rewriteLocalAddr(reqAddr))
 		}
 		if err != nil {
 			return nil, err
 		}
 		return &netConnUDPAdapter{nc: o.app.meterHy2(authID, peerAddr, c), addr: reqAddr}, nil
 	}
-	conn, err := o.app.dialDirect(o.ctx, "udp", rewriteLocalAddr(reqAddr))
+	// a target that arrived with restrictions (see TCP)
+	base, r := proto.ParseRestrict(reqAddr)
+	conn, err := o.app.dialDirect(withRestrict(o.ctx, r), "udp", rewriteLocalAddr(base))
 	if err != nil {
 		return nil, err
 	}

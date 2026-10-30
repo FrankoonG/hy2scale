@@ -53,7 +53,7 @@ export default function UserDetailModal({ open, onClose, user, animateFrom, sess
 
   // A short fixed list: sortable, no column menu.
   const deviceColumns: Column<Session>[] = ([
-    { key: 'proxy', title: t('devices.proxy'), sortValue: (s) => s.protocol, render: (s) => s.protocol },
+    { key: 'proxy', title: t('devices.proxy'), sortValue: (s) => s.protocol, render: (s) => (s.protocol === 'hy2-node' ? t('devices.hy2Node') : s.protocol) },
     { key: 'ip', title: t('devices.ip'), sortValue: (s) => s.remote_ip, render: (s) => <span className="mono">{s.remote_ip}</span> },
     { key: 'conn', title: t('devices.conn'), sortValue: (s) => s.conn_count, render: (s) => s.conn_count },
     {

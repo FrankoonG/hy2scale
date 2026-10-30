@@ -10,7 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/FrankoonG/hy2scale/internal/msess"
+	"github.com/FrankoonG/hy2scale/core/msess"
+	"github.com/FrankoonG/hy2scale/core/proto"
 	"github.com/FrankoonG/hy2scale/internal/relay"
 )
 
@@ -27,7 +28,10 @@ const msessLegacyTTL = 5 * time.Minute
 
 type msessState struct {
 	server *msess.Server
-	prober *msess.Prober
+	// restricted: sessions whose subflows arrived with restrictions (an
+	// access client's or a restricted user's); its targets are checked.
+	restricted *msess.Server
+	prober     *msess.Prober
 	mu     sync.Mutex
 	legacy map[string]time.Time // exit → don't try msess before
 	noted  map[string]time.Time // exit → last "needs update" log
@@ -37,17 +41,27 @@ type msessState struct {
 // and the shared path prober used by this node's ingress sessions.
 func (a *App) initMsess() {
 	a.ms = &msessState{legacy: map[string]time.Time{}, noted: map[string]time.Time{}}
-	a.ms.server = msess.NewServer(msess.ServerConfig{
-		DialTarget: func(ctx context.Context, addr string) (net.Conn, error) {
-			return a.dialDirect(ctx, "tcp", rewriteLocalAddr(addr))
-		},
-		DialPacketTarget: func(ctx context.Context, addr string) (net.Conn, error) {
-			return a.dialDirect(ctx, "udp", rewriteLocalAddr(addr))
-		},
-		Logf: log.Printf,
-	})
+	server := func(r proto.Restrict) *msess.Server {
+		return msess.NewServer(msess.ServerConfig{
+			DialTarget: func(ctx context.Context, addr string) (net.Conn, error) {
+				return a.dialDirect(withRestrict(ctx, r), "tcp", rewriteLocalAddr(addr))
+			},
+			DialPacketTarget: func(ctx context.Context, addr string) (net.Conn, error) {
+				return a.dialDirect(withRestrict(ctx, r), "udp", rewriteLocalAddr(addr))
+			},
+			Logf: log.Printf,
+		})
+	}
+	a.ms.server = server(0)
+	a.ms.restricted = server(proto.DenyInternal)
 	a.ms.prober = msess.NewProber(nil)
-	a.node.SetMsessHandler(a.ms.server.Handle)
+	a.node.SetMsessHandler(func(c net.Conn) {
+		if relay.RestrictOf(c)&proto.DenyInternal != 0 {
+			a.ms.restricted.Handle(c)
+			return
+		}
+		a.ms.server.Handle(c)
+	})
 }
 
 func (m *msessState) isLegacy(exit string) bool {
@@ -108,7 +122,7 @@ func (a *App) dialMsessKind(ctx context.Context, exitVia string, exitPaths []str
 	default:
 		return nil, false, nil
 	}
-	paths := a.msessPaths(exitVia, exitPaths)
+	paths := a.msessPaths(exitVia, exitPaths, restrictOf(ctx))
 	if len(paths) == 0 {
 		return nil, false, nil
 	}
@@ -154,7 +168,7 @@ func (a *App) dialMsessKind(ctx context.Context, exitVia string, exitPaths []str
 // (or exit_via), auto-expanded with one-intermediate alternatives when no
 // explicit list was given, split per QUIC connection for multi-address
 // first hops, minus exits known not to speak msess.
-func (a *App) msessPaths(exitVia string, exitPaths []string) []msess.Path {
+func (a *App) msessPaths(exitVia string, exitPaths []string, r proto.Restrict) []msess.Path {
 	specs := exitPaths
 	if len(specs) == 0 {
 		specs = []string{exitVia}
@@ -194,7 +208,7 @@ func (a *App) msessPaths(exitVia string, exitPaths []string) []msess.Path {
 	var out []msess.Path
 	for _, parts := range chains {
 		if !a.msessLegacy(parts) {
-			out = append(out, a.msessCarriers(parts)...)
+			out = append(out, a.msessCarriers(parts, r)...)
 		}
 	}
 	return out
@@ -218,12 +232,18 @@ func (a *App) msessLegacy(parts []string) bool {
 // connection of every hop reached over several addresses. Subflow i takes
 // connection i (modulo their number) at each such hop: the first hop
 // locally, a later hop through a relay.ConnHint read by the node dialing it.
-func (a *App) msessCarriers(parts []string) []msess.Path {
+func (a *App) msessCarriers(parts []string, r proto.Restrict) []msess.Path {
 	exit := parts[len(parts)-1]
 	name := strings.Join(parts, "/")
 	hop := parts[0]
 	v, _ := a.nodeVersionAt(parts)
 	capable := v != "" && relay.VersionAtLeast(v, MsessMinVersion)
+	// The flow's restrictions ride on every subflow address, when every
+	// node on the chain understands the tag (access.go).
+	if r != 0 && !a.chainTags(parts) {
+		r = 0
+	}
+	subflow := func(hello []byte) string { return proto.WithRestrict(relay.MsessAddr(hello), r) }
 	if len(parts) > 1 {
 		first := a.node.PeerConnCount(hop)
 		conns := a.hopConns(parts)
@@ -243,7 +263,7 @@ func (a *App) msessCarriers(parts []string) []msess.Path {
 					return a.node.DialVia(ctx, chain, relay.StreamMsess)
 				},
 				Open: func(ctx context.Context, hello []byte) (net.Conn, error) {
-					c, err := a.node.DialVia(ctx, chain, relay.MsessAddr(hello))
+					c, err := a.node.DialVia(ctx, chain, subflow(hello))
 					return c, msessOpenErr(err)
 				}}}
 		}
@@ -264,7 +284,7 @@ func (a *App) msessCarriers(parts []string) []msess.Path {
 					return a.node.DialViaIdx(ctx, chain, relay.StreamMsess, idx)
 				},
 				Open: func(ctx context.Context, hello []byte) (net.Conn, error) {
-					c, err := a.node.DialViaIdx(ctx, chain, relay.MsessAddr(hello), idx)
+					c, err := a.node.DialViaIdx(ctx, chain, subflow(hello), idx)
 					return c, msessOpenErr(err)
 				}})
 		}
@@ -279,7 +299,7 @@ func (a *App) msessCarriers(parts []string) []msess.Path {
 					return a.node.DialTCPIdx(ctx, hop, relay.StreamMsess, idx)
 				},
 				Open: func(ctx context.Context, hello []byte) (net.Conn, error) {
-					c, err := a.node.DialTCPIdx(ctx, hop, relay.MsessAddr(hello), idx)
+					c, err := a.node.DialTCPIdx(ctx, hop, subflow(hello), idx)
 					return c, msessOpenErr(err)
 				}})
 		}
@@ -290,7 +310,7 @@ func (a *App) msessCarriers(parts []string) []msess.Path {
 			return a.node.DialTCP(ctx, hop, relay.StreamMsess)
 		},
 		Open: func(ctx context.Context, hello []byte) (net.Conn, error) {
-			c, err := a.node.DialTCP(ctx, hop, relay.MsessAddr(hello))
+			c, err := a.node.DialTCP(ctx, hop, subflow(hello))
 			return c, msessOpenErr(err)
 		}}}
 }
@@ -350,7 +370,7 @@ func (a *App) dialMsessDirect(ctx context.Context, parts []string, addr string) 
 	}
 	exit := parts[len(parts)-1]
 	c, err := msess.Dial(ctx, msess.DialConfig{Mode: msess.ModeSelector, Target: addr,
-		Paths: a.msessCarriers(parts), Prober: a.ms.prober, Grace: a.PathLossGrace(),
+		Paths: a.msessCarriers(parts, restrictOf(ctx)), Prober: a.ms.prober, Grace: a.PathLossGrace(),
 		NoProbeWait: true, Logf: log.Printf})
 	if errors.Is(err, msess.ErrUnsupported) {
 		a.markLegacyIf(err, []string{exit})
@@ -396,6 +416,13 @@ func (a *App) msessAltPaths(target string) [][]string {
 // nodeVersionAt: advertised version of the last hop of parts ("" = unknown)
 // and whether it is a native hysteria server.
 func (a *App) nodeVersionAt(parts []string) (string, bool) {
+	p, _ := a.nodeInfoAt(parts)
+	return p.Version, p.Native
+}
+
+// nodeInfoAt: what this node knows of the last hop of parts (a direct
+// peer's own report, or the parent's cached peer list).
+func (a *App) nodeInfoAt(parts []string) (relay.PeerInfo, bool) {
 	last := parts[len(parts)-1]
 	var infos []relay.PeerInfo
 	if len(parts) == 1 {
@@ -405,10 +432,10 @@ func (a *App) nodeVersionAt(parts []string) (string, bool) {
 	}
 	for _, p := range infos {
 		if p.Name == last {
-			return p.Version, p.Native
+			return p, true
 		}
 	}
-	return "", false
+	return relay.PeerInfo{}, false
 }
 
 // PathLossGrace is the effective no-path grace for new sessions.
@@ -421,7 +448,7 @@ func (a *App) MsessPaths() []msess.PathScore { return a.ms.prober.Snapshot() }
 
 // MsessStats reports session-layer counters for /api/diag/runtime.
 func (a *App) MsessStats() map[string]int {
-	st := a.ms.server.Stats()
-	return map[string]int{"exit_sessions": st.Sessions, "exit_subflows": st.Subflows,
-		"exit_pending": st.Pending, "probed_paths": a.ms.prober.Count()}
+	st, rs := a.ms.server.Stats(), a.ms.restricted.Stats()
+	return map[string]int{"exit_sessions": st.Sessions + rs.Sessions, "exit_subflows": st.Subflows + rs.Subflows,
+		"exit_pending": st.Pending + rs.Pending, "probed_paths": a.ms.prober.Count()}
 }

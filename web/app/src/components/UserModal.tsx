@@ -42,6 +42,9 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
   const [trafficLimit, setTrafficLimit] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
   const [enabled, setEnabled] = useState(true);
+  // node access by user; internal destinations (new users: denied)
+  const [nodeAccess, setNodeAccess] = useState(false);
+  const [allowInternal, setAllowInternal] = useState(false);
 
   // Seed on open / on switching to another user only — the users list
   // refetches every 5 s and a user with traffic is a new object each flush.
@@ -52,6 +55,7 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
       setProxyDisabled(new Set());
       setExitPath({ paths: [''], mode: '' });
       setTrafficLimit(''); setExpiryDate(''); setEnabled(true);
+      setNodeAccess(false); setAllowInternal(false);
       return;
     }
     setUsername(editing.username);
@@ -62,6 +66,8 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
     setTrafficLimit(editing.traffic_limit > 0 ? String(editing.traffic_limit / 1073741824) : '');
     setExpiryDate(editing.expiry_date || '');
     setEnabled(editing.enabled);
+    setNodeAccess(!!editing.node_access);
+    setAllowInternal(!editing.deny_internal);
   });
 
   const handleSubmit = async () => {
@@ -94,6 +100,8 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
       traffic_limit: trafficLimit ? parseFloat(trafficLimit) * 1073741824 : 0,
       expiry_date: expiryDate || undefined,
       enabled,
+      node_access: nodeAccess,
+      deny_internal: !allowInternal,
     };
 
     try {
@@ -169,6 +177,15 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
                 </FormGroup>
                 <FormGroup label={t('users.expiryDate')}>
                   <Input type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} />
+                </FormGroup>
+              </FormGrid>
+
+              <FormGrid>
+                <FormGroup label={t('users.nodeAccess')} hint={t('users.nodeAccessHint')}>
+                  <Toggle checked={nodeAccess} onChange={(e) => setNodeAccess(e.target.checked)} data-testid="user-node-access" />
+                </FormGroup>
+                <FormGroup label={t('users.allowInternal')} hint={t('users.allowInternalHint')}>
+                  <Toggle checked={allowInternal} onChange={(e) => setAllowInternal(e.target.checked)} data-testid="user-allow-internal" />
                 </FormGroup>
               </FormGrid>
 

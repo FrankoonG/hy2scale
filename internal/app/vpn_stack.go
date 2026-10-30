@@ -307,7 +307,7 @@ func (a *App) installVPNForwarders(n *vpnNet, resolve func(srcIP string) (vpnRou
 			if conn == nil {
 				return
 			}
-			remote, ok := a.dialAccepted(n.ctx, conn, ep, a.exitRoute(route.exitVia, route.exitPaths, route.exitMode), dst)
+			remote, ok := a.dialAccepted(withRestrict(n.ctx, a.userRestrict(route.user)), conn, ep, a.exitRoute(route.exitVia, route.exitPaths, route.exitMode), dst)
 			if !ok {
 				return
 			}
@@ -370,7 +370,7 @@ func (a *App) installVPNForwarders(n *vpnNet, resolve func(srcIP string) (vpnRou
 // dialVPNTCP dials dst for a client: through its own exit, or (a direct
 // client) through the routing rule matching dst, else directly.
 func (a *App) dialVPNTCP(ctx context.Context, route vpnRoute, dst string) (net.Conn, error) {
-	return a.dialRoutedTCP(ctx, route.exitVia, route.exitPaths, route.exitMode, dst)
+	return a.dialRoutedTCP(withRestrict(ctx, a.userRestrict(route.user)), route.exitVia, route.exitPaths, route.exitMode, dst)
 }
 
 // relayVPNUDP carries one client UDP flow. The netstack has no conntrack, so
@@ -378,7 +378,7 @@ func (a *App) dialVPNTCP(ctx context.Context, route vpnRoute, dst string) (net.C
 func (a *App) relayVPNUDP(n *vpnNet, conn *gonet.UDPConn, route vpnRoute, srcIP, dst string) {
 	defer conn.Close()
 	ctx, cancel := context.WithTimeout(n.ctx, 15*time.Second)
-	remote, err := a.dialRoutedUDP(ctx, route.exitVia, route.exitPaths, route.exitMode, dst)
+	remote, err := a.dialRoutedUDP(withRestrict(ctx, a.userRestrict(route.user)), route.exitVia, route.exitPaths, route.exitMode, dst)
 	cancel()
 	if err != nil {
 		debugLog("[%s] udp %s → %s via %q: %v", n.proto, srcIP, dst, route.exitVia, err)

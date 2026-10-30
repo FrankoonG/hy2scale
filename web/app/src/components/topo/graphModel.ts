@@ -21,6 +21,8 @@ export interface GraphNode {
   nested: boolean;
   native: boolean;
   incompatible: boolean;
+  /** Reached only through node access by user (traffic only). */
+  restricted: boolean;
   /** Shortest hop count from self. */
   depth: number;
   degree: number;
@@ -75,6 +77,8 @@ export function buildGraph(topo: TopologyNode[], selfId: string, selfName?: stri
   const edges = new Map<string, GraphEdge>();
   const selfSet = new Set<string>([selfId, selfName || ''].filter(Boolean));
   const reach = new Map<string, { any: boolean; un: boolean }>();
+  // restricted only when every observation of the node is
+  const restrictedSeen = new Map<string, { r: boolean; u: boolean }>();
   // Cumulative latency at the child for the observation each edge's
   // segment latency was taken from (lower = on a shorter path).
   const edgeBest = new Map<string, number>();
@@ -87,6 +91,9 @@ export function buildGraph(topo: TopologyNode[], selfId: string, selfName?: stri
     const r = reach.get(k) || { any: false, un: false };
     if (unreachable) r.un = true; else r.any = true;
     reach.set(k, r);
+    const rs = restrictedSeen.get(k) || { r: false, u: false };
+    if (n.restricted) rs.r = true; else rs.u = true;
+    restrictedSeen.set(k, rs);
     const existing = nodes.get(k);
     if (!existing) {
       nodes.set(k, {
@@ -98,6 +105,7 @@ export function buildGraph(topo: TopologyNode[], selfId: string, selfName?: stri
         nested: !!n.nested,
         native: !!n.native,
         incompatible: !!n.incompatible || !!n.conflict || !!n.unsupported,
+        restricted: rs.r && !rs.u,
         depth,
         degree: 0,
         qpath,
@@ -112,6 +120,7 @@ export function buildGraph(topo: TopologyNode[], selfId: string, selfName?: stri
     if (n.nested) existing.nested = true;
     if (n.native) existing.native = true;
     if (n.incompatible || n.conflict || n.unsupported) existing.incompatible = true;
+    existing.restricted = rs.r && !rs.u;
     if (depth === 1 && n.punched?.length) existing.punched = n.punched;
     existing.offline = existing.disabled || (r.un && !r.any);
     if (depth < existing.depth) {

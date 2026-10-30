@@ -12,7 +12,6 @@ package relay
 import (
 	"context"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,12 +19,12 @@ import (
 	"log"
 	"net"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/proto"
 	hyclient "github.com/apernet/hysteria/core/v2/client"
 	coreErrs "github.com/apernet/hysteria/core/v2/errors"
 )
@@ -68,83 +67,42 @@ var ErrRemoteDial = errors.New("relay: remote dial failed")
 // ErrNotHy2scale indicates the remote is a plain hy2 server without relay protocol.
 var ErrNotHy2scale = fmt.Errorf("relay: remote is not hy2scale")
 
+// Stream addresses: see core/proto.
 const (
-	streamRegister      = "_relay_register_:0"
-	streamCtrlS2C       = "_relay_s2c_ctrl_:0"
-	streamListPeers     = "_relay_list_peers_:0"
-	streamPing          = "_relay_ping_:0"
-	streamLatencyReport = "_relay_latency_:0"
-	streamViaPrefix     = "_relay_via_"
-	streamDataPrefix    = "_relay_data_"
-	streamDataSuffix    = ":0"
-	streamIPTunPrefix   = "_relay_iptun_"
-	// streamNakPrefix: reverse-dial failure notice (requester side resolves
-	// the waiter for <id> with an error instead of waiting forever). Only
-	// sent to peers that advertised peerMeta.DialNak.
-	streamNakPrefix = "_relay_nak_"
-	// StreamMsess is the subflow address of the multi-path session layer
-	// (internal/msess). The exit hands it to the handler registered with
-	// SetMsessHandler.
-	StreamMsess = "_relay_msess_:0"
-	// msessHelloTag: a subflow request may carry its HELLO (hex) after this
-	// tag; the exit reads it as if it had been sent on the stream, which
-	// saves the round trip of a separate write.
-	msessHelloTag = "#h="
-	// StreamAPI is the well-known relay address the web UI's remote proxy
-	// uses to reach a peer's own API server. It bypasses the normal
-	// loopback-rewrite logic (which would redirect 127.0.0.1 to the Docker
-	// gateway and break this case).
-	StreamAPI = "_relay_api_:0"
-	// StreamPunch carries hole-punch signalling (probe tokens, punch
-	// requests) to the node at the end of a path; see SetPunchHandler.
-	// Nodes on the way only forward it.
-	StreamPunch = "_relay_punch_:0"
-	// streamEgress returns the node's egress (public address per family,
-	// JSON); streamWhoami returns the address the stream's connection
-	// comes from. Only sent to peers that advertised them (peerMeta.Eg).
-	streamEgress = "_relay_egress_:0"
-	streamWhoami = "_relay_whoami_:0"
+	streamRegister      = proto.StreamRegister
+	streamCtrlS2C       = proto.StreamCtrlS2C
+	streamListPeers     = proto.StreamListPeer
+	streamPing          = proto.StreamPing
+	streamLatencyReport = proto.StreamLatency
+	streamViaPrefix     = proto.ViaPrefix
+	streamDataPrefix    = proto.DataPrefix
+	streamDataSuffix    = proto.DataSuffix
+	streamIPTunPrefix   = proto.IPTunPrefix
+	streamNakPrefix     = proto.NakPrefix
+	StreamMsess         = proto.StreamMsess
+	msessHelloTag       = proto.MsessHelloTag
+	StreamAPI           = proto.StreamAPI
+	StreamPunch         = proto.StreamPunch
+	streamEgress        = proto.StreamEgress
+	streamWhoami        = proto.StreamWhoami
+	StreamHello         = proto.StreamHello
 )
 
 // IsRelayStream returns true if addr is a relay internal stream.
-func IsRelayStream(addr string) bool {
-	return addr == streamRegister ||
-		addr == streamCtrlS2C ||
-		addr == streamListPeers ||
-		addr == streamPing ||
-		addr == streamLatencyReport ||
-		addr == StreamAPI ||
-		addr == StreamPunch ||
-		addr == streamEgress ||
-		addr == streamWhoami ||
-		strings.HasPrefix(addr, streamViaPrefix) ||
-		strings.HasPrefix(addr, streamDataPrefix) ||
-		strings.HasPrefix(addr, streamIPTunPrefix) ||
-		strings.HasPrefix(addr, streamNakPrefix) ||
-		IsMsessAddr(addr) ||
-		strings.HasPrefix(addr, bridgeRebindAddr)
-}
+func IsRelayStream(addr string) bool { return proto.IsRelayStream(addr) }
 
 // MsessAddr is the subflow address carrying hello.
-func MsessAddr(hello []byte) string {
-	return StreamMsess + msessHelloTag + hex.EncodeToString(hello)
-}
+func MsessAddr(hello []byte) string { return proto.MsessAddr(hello) }
 
 // IsMsessAddr: addr opens a msess subflow (with or without a HELLO).
-func IsMsessAddr(addr string) bool {
-	return addr == StreamMsess || strings.HasPrefix(addr, StreamMsess+msessHelloTag)
-}
+func IsMsessAddr(addr string) bool { return proto.IsMsessAddr(addr) }
 
 // msessStream hands a subflow to the msess handler with the address-carried
 // HELLO (if any) in front of the stream data.
 func msessStream(addr string, stream net.Conn) net.Conn {
-	h, ok := strings.CutPrefix(addr, StreamMsess+msessHelloTag)
-	if !ok {
-		return stream
-	}
-	b, err := hex.DecodeString(h)
-	if err != nil {
-		return stream // the handler rejects the missing HELLO
+	b := proto.MsessHello(addr)
+	if b == nil {
+		return stream // none, or malformed: the handler rejects a missing HELLO
 	}
 	return &prefixedConn{Conn: stream, head: b}
 }
@@ -177,40 +135,8 @@ func isLocalRelayStream(addr string) bool {
 	return IsRelayStream(addr)
 }
 
-// PeerInfo describes a connected peer.
-type PeerInfo struct {
-	Name         string `json:"name"`
-	ExitNode     bool   `json:"exit_node"`
-	Direction    string `json:"direction"`
-	Native       bool   `json:"native"`
-	LatencyMs    int    `json:"latency_ms"`
-	Version      string `json:"version,omitempty"`
-	// NodeID is the remote's reported stable identifier (from peerMeta).
-	// Used by the bidirectional-slot logic to prove "this incoming
-	// register is from the same logical instance as the existing primary,
-	// not an impostor". Empty for old peers — that case falls back to
-	// legacy single-slot replace behavior.
-	NodeID       string `json:"node_id,omitempty"`
-	Incompatible bool   `json:"incompatible,omitempty"`
-	Conflict     bool   `json:"conflict,omitempty"`
-	TunCapable   bool   `json:"tun_capable,omitempty"`
-	// PV is the remote's wire-protocol generation. Higher than ours
-	// means the remote may speak frames we can't parse — see
-	// ProtocolVersion comment. Forwarded to the topology API so the
-	// frontend can hide nested sub-peers from such links and render
-	// the direct connection itself as `unsupported`.
-	PV          int  `json:"pv,omitempty"`
-	Unsupported bool `json:"unsupported,omitempty"`
-	// Conns: QUIC connections the reporting node holds to this peer (one
-	// per configured address); omitted for one. A chain through that node
-	// can then be carried over each of them (see ConnHint).
-	Conns int `json:"conns,omitempty"`
-	// EgressCapable: the peer answers egress / whoami streams (1.4.0+).
-	EgressCapable bool `json:"egress_capable,omitempty"`
-	// Egress: the peer's egress as last fetched (SelfEgress JSON); absent
-	// = unknown. Carried in peer lists so nested nodes show it too.
-	Egress json.RawMessage `json:"egress,omitempty"`
-}
+// PeerInfo describes a connected peer (see core/proto).
+type PeerInfo = proto.PeerInfo
 
 // NodeVersion is the version string sent during peer registration.
 // Set by the app package at init time.
@@ -295,11 +221,13 @@ type peerMeta struct {
 	DialNak bool `json:"dn,omitempty"`
 	// Eg: this node serves streamEgress / streamWhoami.
 	Eg bool `json:"eg,omitempty"`
+	// Rt: this node applies restriction tags on targets (core/proto).
+	Rt bool `json:"rt,omitempty"`
 }
 
 // localMeta is what this node advertises in the register handshake.
 func (n *Node) localMeta() peerMeta {
-	return peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable, PV: ProtocolVersion, NodeID: n.nodeID, DialNak: true, Eg: true}
+	return peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable, PV: ProtocolVersion, NodeID: n.nodeID, DialNak: true, Eg: true, Rt: true}
 }
 
 // writeMeta sends a length-prefixed JSON metadata blob.
@@ -667,6 +595,11 @@ type Node struct {
 	egressFunc    func() []byte
 	peerEgress    sync.Map // peer name → json.RawMessage (its SelfEgress)
 	msessHandler  func(stream net.Conn)
+	// instance id for node access by user (access.go)
+	instOnce sync.Once
+	inst     string
+	// restrictedDial dials a target under restrictions (access.go)
+	restrictedDial func(ctx context.Context, network, addr string, r proto.Restrict) (net.Conn, error)
 
 	// IP tunnel handler for TUN-based raw packet forwarding
 
@@ -1276,7 +1209,7 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 	}
 	childCtx, childCancel := context.WithCancel(ctx)
 	p := &peer{
-		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version, NodeID: remoteMeta.NodeID, Incompatible: !compat, TunCapable: remoteMeta.TunCapable, PV: remoteMeta.PV, Unsupported: unsupported, EgressCapable: remoteMeta.Eg},
+		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version, NodeID: remoteMeta.NodeID, Incompatible: !compat, TunCapable: remoteMeta.TunCapable, PV: remoteMeta.PV, Unsupported: unsupported, EgressCapable: remoteMeta.Eg, RestrictTags: remoteMeta.Rt},
 		client:  client,
 		waiting: make(map[string]chan net.Conn),
 		ctx:     childCtx,
@@ -1538,6 +1471,10 @@ func (n *Node) HandleStream(ctx context.Context, reqAddr string, stream net.Conn
 		stream.Write([]byte(stream.RemoteAddr().String()))
 		stream.Close()
 
+	case StreamHello:
+		// node access by user: answered by the app for user connections
+		stream.Close()
+
 	case StreamPunch:
 		if h := n.punchHandler; h != nil {
 			h(stream)
@@ -1568,8 +1505,9 @@ func (n *Node) HandleStream(ctx context.Context, reqAddr string, stream net.Conn
 			return
 		}
 		if msAddr, _, _ := ParseBridgeAddr(reqAddr); IsMsessAddr(msAddr) {
+			msAddr, r := proto.ParseRestrict(msAddr)
 			if h := n.msessHandler; h != nil {
-				h(msessStream(msAddr, stream))
+				h(restrictConn(msessStream(msAddr, stream), r))
 			} else {
 				stream.Close()
 			}
@@ -1693,6 +1631,7 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 			PV:           remoteMeta.PV,
 			Unsupported:  unsupported,
 			EgressCapable: remoteMeta.Eg,
+			RestrictTags:  remoteMeta.Rt,
 		},
 		waiting: make(map[string]chan net.Conn),
 		dialNak: remoteMeta.DialNak,
@@ -2041,6 +1980,8 @@ func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclie
 	// Check if addr is a via request (multi-hop forwarding)
 	if viaPeer, targetAddr, ok := parseVia(addr); ok {
 		target, err = n.dialChain(ctx, viaPeer, targetAddr)
+	} else if base, r := proto.ParseRestrict(addr); r != 0 {
+		target, err = n.dialRestricted(ctx, "tcp", base, r)
 	} else {
 		target, err = net.DialTimeout("tcp", addr, 10*time.Second)
 	}
@@ -2095,6 +2036,8 @@ func (n *Node) dialUDPAndStream(ctx context.Context, peerName string, client hyc
 		// the chain like nodeOutbound.UDP does for outbound hops. Dialing
 		// the via string literally made every such chain drop all UDP.
 		udpConn, err = n.DialUDPVia(ctx, strings.Split(chain, "/"), target)
+	} else if base, r := proto.ParseRestrict(addr); r != 0 {
+		udpConn, err = n.dialRestricted(ctx, "udp", base, r)
 	} else {
 		udpConn, err = net.DialTimeout("udp", addr, 5*time.Second)
 	}
@@ -2819,7 +2762,7 @@ func (n *Node) wrapConnPath(peerName, pathKey string, conn net.Conn) net.Conn {
 // outbound callback (nodeOutbound.UDP in internal/app/app.go) can
 // implement multi-hop UDP routing, mirroring TCP's handleVia.
 func ParseVia(reqAddr string) (chain, targetAddr string, ok bool) {
-	return parseVia(reqAddr)
+	return proto.ParseVia(reqAddr)
 }
 
 // BuildViaAddr constructs a via-encoded relay address used as the
@@ -2827,9 +2770,7 @@ func ParseVia(reqAddr string) (chain, targetAddr string, ok bool) {
 // slash-joined chain of hops AFTER the immediate first hop; `addr` is
 // the final target ("host:port"). The first hop's handler parses with
 // ParseVia and forwards down the chain.
-func BuildViaAddr(remaining, addr string) string {
-	return streamViaPrefix + remaining + "_" + addr + ":0"
-}
+func BuildViaAddr(remaining, addr string) string { return proto.BuildViaAddr(remaining, addr) }
 
 // DialUDPVia opens a multi-hop UDP relay connection. `path` is the
 // chain of peer names [hop1, hop2, ..., exit]; `addr` is the final
@@ -3320,32 +3261,13 @@ func (n *Node) copyCount(dst io.Writer, src io.Reader, counter *atomic.Uint64, p
 // number). A chain through a multi-address hop can so be spread over every
 // connection of that hop. Only nodes from 1.3.12 read hints; the ingress
 // never sends one to an older node.
-func ConnHint(name string, idx int) string { return name + "@" + strconv.Itoa(idx) }
+func ConnHint(name string, idx int) string { return proto.ConnHint(name, idx) }
 
 // SplitConnHint: "x@1" → ("x", 1); "x" → ("x", -1).
-func SplitConnHint(seg string) (string, int) {
-	i := strings.LastIndexByte(seg, '@')
-	if i <= 0 {
-		return seg, -1
-	}
-	k, err := strconv.Atoi(seg[i+1:])
-	if err != nil || k < 0 {
-		return seg, -1
-	}
-	return seg[:i], k
-}
+func SplitConnHint(seg string) (string, int) { return proto.SplitConnHint(seg) }
 
 // StripConnHints: "a/x@1" → "a/x".
-func StripConnHints(chain string) string {
-	if !strings.Contains(chain, "@") {
-		return chain
-	}
-	parts := strings.Split(chain, "/")
-	for i, p := range parts {
-		parts[i], _ = SplitConnHint(p)
-	}
-	return strings.Join(parts, "/")
-}
+func StripConnHints(chain string) string { return proto.StripConnHints(chain) }
 
 // dialChain dials the next hop of a via chain ("x" or "x/y/z"; hops may
 // carry a ConnHint) toward addr.
@@ -3360,41 +3282,12 @@ func (n *Node) dialChain(ctx context.Context, chain, addr string) (net.Conn, err
 }
 
 func parseVia(reqAddr string) (nodeName, targetAddr string, ok bool) {
-	if !strings.HasPrefix(reqAddr, streamViaPrefix) {
-		return "", "", false
-	}
-	rest := reqAddr[len(streamViaPrefix):]
-	idx := strings.Index(rest, "_")
-	if idx <= 0 {
-		return "", "", false
-	}
-	nodeName = rest[:idx]
-	targetAddr = strings.TrimSuffix(rest[idx+1:], ":0")
-	return nodeName, targetAddr, true
+	return proto.ParseVia(reqAddr)
 }
 
-func writeString(w io.Writer, s string) error {
-	b := []byte(s)
-	var lb [2]byte
-	binary.BigEndian.PutUint16(lb[:], uint16(len(b)))
-	if _, err := w.Write(lb[:]); err != nil {
-		return err
-	}
-	_, err := w.Write(b)
-	return err
-}
+func writeString(w io.Writer, s string) error { return proto.WriteString(w, s) }
 
-func readString(r io.Reader) (string, error) {
-	var lb [2]byte
-	if _, err := io.ReadFull(r, lb[:]); err != nil {
-		return "", err
-	}
-	buf := make([]byte, binary.BigEndian.Uint16(lb[:]))
-	if _, err := io.ReadFull(r, buf); err != nil {
-		return "", err
-	}
-	return string(buf), nil
-}
+func readString(r io.Reader) (string, error) { return proto.ReadString(r) }
 
 func writeRequest(w io.Writer, id, addr string) error {
 	if err := writeString(w, id); err != nil {

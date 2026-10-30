@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/FrankoonG/hy2scale/core/proto"
 )
 
 // Bond receiver — runs on the exit node.
@@ -80,6 +82,8 @@ var (
 // handleBondStream is called by nodeOutbound.TCP when it receives a _bond_ address.
 // Each path stream calls this; the first one creates the receiver and target connection.
 func (a *App) handleBondStream(bondAddr string, pathConn net.Conn) error {
+	// a restriction tag (access.go) applies to the target dial
+	bondAddr, restrict := proto.ParseRestrict(bondAddr)
 	bondID, realAddr, err := parseBondAddr(bondAddr)
 	if err != nil {
 		return err
@@ -151,7 +155,7 @@ func (a *App) handleBondStream(bondAddr string, pathConn net.Conn) error {
 	}
 
 	if needsInit {
-		targetConn, err := a.dialDirect(a.appCtx, "tcp", realAddr)
+		targetConn, err := a.dialDirect(withRestrict(a.appCtx, restrict), "tcp", realAddr)
 		if err != nil {
 			bondReceivers.Delete(bondID)
 			return fmt.Errorf("bond receiver: dial target %s failed: %w", realAddr, err)

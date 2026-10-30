@@ -847,5 +847,16 @@
   "login.topo.tag.compat": "Compatible peering",
   "login.topo.tag.remoteAdmin": "Remote admin via relay",
   "login.topo.tag.noPw": "Password-free hop-in",
-  "login.caps": "Caps Lock is on"
+  "login.caps": "Caps Lock is on",
+  "users.nodeAccess": "Node access",
+  "users.nodeAccessHint": "May use the nodes this node sees as exits.",
+  "users.allowInternal": "Internal addresses",
+  "users.allowInternalHint": "Loopback, private and the exit's own networks.",
+  "nodes.access": "Access",
+  "nodes.accessFull": "Full node",
+  "nodes.accessUser": "Node access (user)",
+  "nodes.userPassword": "User password",
+  "nodes.restricted": "restricted",
+  "nodes.restrictedTitle": "Reached by node access (user): traffic only",
+  "devices.hy2Node": "hy2 (node access)"
 }
