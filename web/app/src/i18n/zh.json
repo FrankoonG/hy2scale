@@ -792,5 +792,6 @@
   "tls.fileTooLarge": "文件过大",
   "tls.fileUnsupported": "不支持的文件类型",
   "tls.fileReadError": "读取失败",
-  "wg.qrCode": "二维码"
+  "wg.qrCode": "二维码",
+  "nodes.graph.showGrid": "显示网格"
 }

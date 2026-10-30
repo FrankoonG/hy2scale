@@ -68,6 +68,7 @@ type Drag =
 
 const ACTIVE_STORE = () => 'hy2.topo.canvas:' + getBasePath();
 const SNAP_STORE = 'scale:topology-graph-snap';
+const GRID_STORE = 'scale:topology-graph-grid';
 const ALT_STORE = 'hy2.topo.altPaths';
 
 const lsGet = readStored;
@@ -659,6 +660,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
   // ---------------------------------------------------------------- editing (custom canvases)
   const [snap, setSnap] = useState(() => lsGet(SNAP_STORE) === '1');
+  // Background grid: on unless turned off (any canvas).
+  const [showGrid, setShowGrid] = useState(() => lsGet(GRID_STORE) !== '0');
   const snapRef = useRef(snap);
   snapRef.current = snap;
 
@@ -1106,7 +1109,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   }
 
   const grid = (() => {
-    if (!isCustom || !snap) return null;
+    if (!showGrid) return null;
     const vw = size.w || 1000, vh = size.h || 600;
     const pad = 2 * GRID_STEP;
     const x0 = Math.floor((-view.x / k - pad) / GRID_STEP) * GRID_STEP;
@@ -1363,6 +1366,12 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   })();
 
   // ---------------------------------------------------------------- chrome
+  const gridBox = (
+    <MenuCheck checked={showGrid} onChange={(on) => { setShowGrid(on); lsSet(GRID_STORE, on ? '1' : '0'); }} testId="canvas-grid">
+      {t('nodes.graph.showGrid')}
+    </MenuCheck>
+  );
+  // Snapping only applies where nodes can be moved.
   const snapBox = isCustom ? (
     <MenuCheck checked={snap} onChange={(on) => { setSnap(on); lsSet(SNAP_STORE, on ? '1' : '0'); }} testId="canvas-snap">
       {t('nodes.graph.snap')}
@@ -1370,12 +1379,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   ) : null;
   // ResponsiveActions closes its ⋯ menu on Escape.
   const closeMore = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-  const more: ReactNode = narrow || snapBox ? (
+  const more: ReactNode = (
     <>
       {narrow && <CanvasSubmenu {...menuProps} onDone={closeMore} />}
+      {gridBox}
       {snapBox}
     </>
-  ) : null;
+  );
   const actionsEl = typeof actions === 'function' ? actions(more) : actions;
 
   return (
