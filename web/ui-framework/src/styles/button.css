@@ -35,3 +35,23 @@
 /* outline: square bordered toolbar button */
 .hy-icon-btn.outline{width:32px;height:32px;padding:0;border:1px solid var(--border);background:var(--surface);color:var(--text-secondary);transition:background .12s,color .12s}
 .hy-icon-btn.outline:hover,.hy-icon-btn.outline.active{background:var(--primary-light);color:var(--primary);border-color:var(--primary)}
+/* Button with secondary actions (ExpandButton): main part + caret; the
+   actions drop down on hover, long press or the caret. */
+.hy-expand{position:relative;display:inline-flex}
+.hy-expand-btn{padding:0!important;gap:0!important;overflow:hidden}
+.hy-expand-btn.disabled{opacity:.45;pointer-events:none}
+.hy-expand-main,.hy-expand-caret{align-self:stretch;display:inline-flex;align-items:center;gap:6px;border:none;background:none;color:inherit;font:inherit;cursor:pointer;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none}
+.hy-expand-main{padding:5px 8px 5px 10px}
+.hy-expand-caret{padding:5px 7px;border-left:1px solid currentColor;border-left-color:color-mix(in srgb,currentColor 28%,transparent)}
+.hy-expand-caret svg{transition:transform .15s}
+.hy-expand.open .hy-expand-caret svg{transform:rotate(180deg)}
+.hy-expand-panel{position:absolute;top:calc(100% + 4px);right:0;z-index:60;min-width:100%;display:flex;flex-direction:column;gap:2px;padding:4px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-md);animation:bulkFadeIn .12s ease}
+/* Hover bridge: the 4px gap above the panel still counts as the button. */
+.hy-expand-panel::before{content:'';position:absolute;left:0;right:0;top:-6px;height:6px}
+.hy-expand-item{display:flex;align-items:center;gap:8px;padding:6px 10px;border:none;border-radius:var(--radius-sm);background:none;color:var(--text);font:inherit;font-size:12.5px;text-align:left;white-space:nowrap;cursor:pointer}
+.hy-expand-item:hover,.hy-expand-item:focus-visible{background:var(--primary-light);color:var(--primary);outline:none}
+.hy-expand-item:disabled{opacity:.45;cursor:not-allowed}
+.hy-expand-item svg{flex-shrink:0;opacity:.75}
+/* Flat form inside an overflow menu: main action, then its sub-actions. */
+.hy-expand-flat{display:flex;flex-direction:column;gap:4px;width:100%}
+.hy-expand-flat .hy-expand-sub{padding-left:22px}

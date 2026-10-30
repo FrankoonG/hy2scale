@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Card, Button, Badge, Tooltip, IconChevronRight,
+  Card, Button, Badge, Tooltip, IconChevronRight, ExpandButton, IconLink,
   TreeTable, TreeCell, useToast, useConfirm, useSelection,
   type TreeNode, type TreeColumn,
 } from '@hy2scale/ui';
@@ -19,7 +19,6 @@ import NodeDetailModal from '@/components/NodeDetailModal';
 import ResponsiveActions from '@/components/ResponsiveActions';
 import ImportExportButton from '@/components/ImportExportButton';
 import NodesGraphView from '@/components/NodesGraphView';
-import { useLongPress } from '@/hooks/useLongPress';
 import { useDeselectOnBlankClick } from '@/hooks/useDeselectOnBlankClick';
 import { versionAtLeast } from '@/utils/version';
 import { latencyClass } from '@/utils/latency';
@@ -54,7 +53,6 @@ export default function NodesPage() {
   // the local page, then a fresh tab is opened with a token already in
   // sessionStorage so the remote SPA never has to render its own LoginPage.
   const [remoteConnect, setRemoteConnect] = useState<{ chain: string[]; label: string } | null>(null);
-  const lastPointer = useRef<{ x: number; y: number } | null>(null);
   // Node details dialog (row click in the list, overlay button in the graph).
   // The key outlives `open` so the dialog keeps its content while closing.
   const [detailKey, setDetailKey] = useState<string | null>(null);
@@ -84,27 +82,18 @@ export default function NodesPage() {
     refetchInterval: 2000,
   });
 
-  // Short click on the Add Node button → manual form. The pointer position
-  // for the modal animation comes from lastPointer (captured on mousedown
-  // by useLongPress' handlers, since onClick's MouseEvent reflects the
-  // release point — usually identical, but we want the press anchor).
-  const addNodeShortClick = useCallback(() => {
-    setClickPos(lastPointer.current || undefined);
+  // Add Node: the button opens the manual form; its secondary action
+  // imports a hysteria2:// link. Both animate from the click.
+  const at = (e: { clientX: number; clientY: number }) => ({ x: e.clientX, y: e.clientY });
+  const openAddNode = (e: { clientX: number; clientY: number }) => {
+    setClickPos(at(e));
     setEditingName(null);
     setModalOpen(true);
-  }, []);
-
-  // Long press → import-from-URL submenu.
-  const addNodeLongPress = useCallback(() => {
-    setClickPos(lastPointer.current || undefined);
+  };
+  const openImportLink = (e: { clientX: number; clientY: number }) => {
+    setClickPos(at(e));
     setImportOpen(true);
-  }, []);
-
-  const addNodeHandlers = useLongPress({
-    delayMs: 600,
-    onLongPress: addNodeLongPress,
-    onShortClick: addNodeShortClick,
-  });
+  };
 
   // The single source of truth for opening the edit modal is the
   // top-right Edit button (see `openEditFromBar`/`openEditSelfFromBar`).
@@ -569,26 +558,16 @@ export default function NodesPage() {
           >{t('app.edit')}</Button>
         );
       })()}
-      <Button
-        size="sm"
+      <ExpandButton
         variant="primary"
-        title={t('nodes.addNodeHint')}
-        data-testid="add-node-btn"
-        onMouseDown={(e) => { lastPointer.current = { x: e.clientX, y: e.clientY }; addNodeHandlers.onMouseDown(e); }}
-        onMouseUp={addNodeHandlers.onMouseUp}
-        onMouseLeave={addNodeHandlers.onMouseLeave}
-        onTouchStart={(e) => {
-          const t0 = e.touches[0];
-          if (t0) lastPointer.current = { x: t0.clientX, y: t0.clientY };
-          addNodeHandlers.onTouchStart(e);
-        }}
-        onTouchEnd={addNodeHandlers.onTouchEnd}
-        onTouchCancel={addNodeHandlers.onTouchCancel}
-        onContextMenu={addNodeHandlers.onContextMenu}
-        onClick={addNodeHandlers.onClick}
-      >
-        {t('nodes.addNode')}
-      </Button>
+        label={t('nodes.addNode')}
+        testId="add-node-btn"
+        moreLabel={t('app.moreActions')}
+        onClick={openAddNode}
+        actions={[
+          { key: 'link', label: t('nodes.importTitle'), icon: IconLink, onClick: openImportLink, testId: 'add-node-link' },
+        ]}
+      />
     </ResponsiveActions>
   );
   const actionsEl = actionsFor();

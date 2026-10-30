@@ -44,6 +44,8 @@ export type { TooltipProps } from './components/Tooltip';
 export { Menu, MenuItem, MenuRadioItem, MenuSub, MenuSeparator, MenuCheck, DropdownMenu } from './components/Menu';
 export type { MenuProps, MenuItemProps, MenuSubProps, MenuCheckProps, DropdownMenuProps, DropdownItem } from './components/Menu';
 export { ActionBar } from './components/ActionBar';
+export { ExpandButton, ActionBarMenuContext } from './components/ExpandButton';
+export type { ExpandButtonProps, ExpandAction } from './components/ExpandButton';
 export type { ActionBarProps, ActionBarLabels } from './components/ActionBar';
 
 // Data

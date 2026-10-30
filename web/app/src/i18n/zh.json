@@ -41,7 +41,6 @@
   "app.themeLight": "浅色",
   "nodes.title": "网络拓扑",
   "nodes.addNode": "+ 添加节点",
-  "nodes.addNodeHint": "点击手动添加 · 长按以从 hysteria2:// 链接导入",
   "nodes.importTitle": "从 hysteria2:// 链接导入",
   "nodes.importHint": "粘贴一条 hysteria2:// 或 hy2:// 链接",
   "nodes.importPlaceholder": "hysteria2://密码@主机:端口/?sni=...&insecure=1#名称",
@@ -793,5 +792,6 @@
   "tls.fileUnsupported": "不支持的文件类型",
   "tls.fileReadError": "读取失败",
   "wg.qrCode": "二维码",
-  "nodes.graph.showGrid": "显示网格"
+  "nodes.graph.showGrid": "显示网格",
+  "app.moreActions": "更多操作"
 }

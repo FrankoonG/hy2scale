@@ -41,7 +41,6 @@
   "app.themeLight": "Light",
   "nodes.title": "Network Topology",
   "nodes.addNode": "+ Add Node",
-  "nodes.addNodeHint": "Click to add manually · long-press to import a hysteria2:// URL",
   "nodes.importTitle": "Import from hysteria2:// URL",
   "nodes.importHint": "Paste a hysteria2:// or hy2:// URL",
   "nodes.importPlaceholder": "hysteria2://password@host:port/?sni=...&insecure=1#name",
@@ -793,5 +792,6 @@
   "tls.fileUnsupported": "Unsupported file type",
   "tls.fileReadError": "Read error",
   "wg.qrCode": "QR code",
-  "nodes.graph.showGrid": "Show grid"
+  "nodes.graph.showGrid": "Show grid",
+  "app.moreActions": "More actions"
 }
