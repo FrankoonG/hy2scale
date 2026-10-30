@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useDismiss } from '../hooks/useDismiss';
 import { IconButton } from './Button';
 import { IconEllipsisVertical, IconSlidersHorizontal, IconX } from '../icons';
+import { ActionBarMenuContext } from './ExpandButton';
 
 export interface ActionBarLabels {
   /** "N selected" (wide layout) and title of the narrow count pill. */
@@ -91,9 +92,11 @@ export function ActionBar({ selectedCount = 0, onClearSelection, labels = {}, ch
         className="hy-actions-overflow" active={open} aria-expanded={open} onClick={() => setOpen((v) => !v)} />
       {open && (
         <div className="hy-actions-menu">
-          {children}
-          {more && <div className="hy-actions-menu-sep" />}
-          {more}
+          <ActionBarMenuContext.Provider value>
+            {children}
+            {more && <div className="hy-actions-menu-sep" />}
+            {more}
+          </ActionBarMenuContext.Provider>
         </div>
       )}
     </div>

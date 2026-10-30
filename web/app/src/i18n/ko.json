@@ -41,7 +41,6 @@
   "app.themeLight": "라이트",
   "nodes.title": "네트워크 토폴로지",
   "nodes.addNode": "+ 노드 추가",
-  "nodes.addNodeHint": "클릭하여 수동으로 추가 · 길게 눌러 hysteria2:// URL에서 가져오기",
   "nodes.importTitle": "hysteria2:// URL에서 가져오기",
   "nodes.importHint": "hysteria2:// 또는 hy2:// URL 붙여넣기",
   "nodes.importPlaceholder": "hysteria2://비밀번호@호스트:포트/?sni=...&insecure=1#이름",
@@ -793,5 +792,6 @@
   "tls.fileUnsupported": "지원하지 않는 파일 형식",
   "tls.fileReadError": "읽기 오류",
   "wg.qrCode": "QR 코드",
-  "nodes.graph.showGrid": "격자 표시"
+  "nodes.graph.showGrid": "격자 표시",
+  "app.moreActions": "추가 작업"
 }
