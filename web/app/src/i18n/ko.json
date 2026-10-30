@@ -4,6 +4,7 @@
   "app.title": "HY2 SCALE",
   "app.subtitle": "메시 네트워크를 관리하려면 로그인하세요",
   "app.signin": "로그인",
+  "app.selectSelfNode": "노드에서 선택",
   "app.remember": "로그인 기억",
   "app.username": "사용자 이름",
   "app.password": "비밀번호",

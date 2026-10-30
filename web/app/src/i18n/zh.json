@@ -4,6 +4,7 @@
   "app.title": "HY2 SCALE",
   "app.subtitle": "登录以管理您的网格网络",
   "app.signin": "登录",
+  "app.selectSelfNode": "在节点页中选中",
   "app.remember": "记住我",
   "app.username": "用户名",
   "app.password": "密码",

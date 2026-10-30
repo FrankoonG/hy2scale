@@ -4,6 +4,7 @@
   "app.title": "HY2 SCALE",
   "app.subtitle": "Sign in to manage your mesh network",
   "app.signin": "Sign in",
+  "app.selectSelfNode": "Select in Nodes",
   "app.remember": "Remember me",
   "app.username": "Username",
   "app.password": "Password",
