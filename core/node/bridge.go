@@ -1,4 +1,4 @@
-package relay
+package node
 
 import (
 	"sync"

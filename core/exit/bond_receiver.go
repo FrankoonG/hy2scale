@@ -1,4 +1,4 @@
-package app
+package exit
 
 import (
 	"encoding/binary"
@@ -48,21 +48,21 @@ type bondReceiver struct {
 	realAddr string
 	target   net.Conn // TCP connection to real destination
 
-	mu             sync.Mutex
-	paths          map[int]net.Conn    // pathIndex → relay stream
-	pathWriteMu    map[int]*sync.Mutex // per-path write serializer (return frames + keepalives)
-	teardownsRcvd  map[int]bool        // per-path teardown received from sender
+	mu            sync.Mutex
+	paths         map[int]net.Conn    // pathIndex → relay stream
+	pathWriteMu   map[int]*sync.Mutex // per-path write serializer (return frames + keepalives)
+	teardownsRcvd map[int]bool        // per-path teardown received from sender
 	// Session completion, read by the reaper (close() had no caller at all:
 	// every legacy bond session leaked its target socket + goroutines).
-	upDone  atomic.Bool // deliverer drained and half-closed the target
-	retDone atomic.Bool // target EOF, teardown broadcast to the sender
-	broken  atomic.Bool // target write failed
-	writerDoneCh   chan struct{}       // closed when all sender paths have torn down
-	pathTxBytes    map[int]int64       // bytes written per path
-	pathWriteNs    map[int]int64       // cumulative write time in ns per path
-	pathWriteCount map[int]int64       // write count per path
-	pathWeights    map[int]int64       // sender-provided weight hints (0-100)
-	writeSeq       uint32              // for return traffic
+	upDone         atomic.Bool   // deliverer drained and half-closed the target
+	retDone        atomic.Bool   // target EOF, teardown broadcast to the sender
+	broken         atomic.Bool   // target write failed
+	writerDoneCh   chan struct{} // closed when all sender paths have torn down
+	pathTxBytes    map[int]int64 // bytes written per path
+	pathWriteNs    map[int]int64 // cumulative write time in ns per path
+	pathWriteCount map[int]int64 // write count per path
+	pathWeights    map[int]int64 // sender-provided weight hints (0-100)
+	writeSeq       uint32        // for return traffic
 
 	// Reorder buffer for incoming (sender→exit) traffic
 	reorderMu   sync.Mutex
@@ -76,12 +76,12 @@ type bondReceiver struct {
 
 // Global registry of active bond receivers on this node.
 var (
-	bondReceivers   sync.Map // bondID → *bondReceiver
+	bondReceivers sync.Map // bondID → *bondReceiver
 )
 
 // handleBondStream is called by nodeOutbound.TCP when it receives a _bond_ address.
 // Each path stream calls this; the first one creates the receiver and target connection.
-func (a *App) handleBondStream(bondAddr string, pathConn net.Conn) error {
+func (e *Engine) handleBondStream(bondAddr string, pathConn net.Conn) error {
 	// a restriction tag (access.go) applies to the target dial
 	bondAddr, restrict := proto.ParseRestrict(bondAddr)
 	bondID, realAddr, err := parseBondAddr(bondAddr)
@@ -155,7 +155,7 @@ func (a *App) handleBondStream(bondAddr string, pathConn net.Conn) error {
 	}
 
 	if needsInit {
-		targetConn, err := a.dialDirect(withRestrict(a.appCtx, restrict), "tcp", realAddr)
+		targetConn, err := e.dialLocal(WithRestrict(e.ctx, restrict), "tcp", realAddr)
 		if err != nil {
 			bondReceivers.Delete(bondID)
 			return fmt.Errorf("bond receiver: dial target %s failed: %w", realAddr, err)

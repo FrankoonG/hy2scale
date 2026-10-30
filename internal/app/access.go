@@ -11,7 +11,8 @@ import (
 	"time"
 
 	"github.com/FrankoonG/hy2scale/core/proto"
-	"github.com/FrankoonG/hy2scale/internal/relay"
+	relay "github.com/FrankoonG/hy2scale/core/node"
+	"github.com/FrankoonG/hy2scale/core/server"
 	hyclient "github.com/apernet/hysteria/core/v2/client"
 	hyserver "github.com/apernet/hysteria/core/v2/server"
 )
@@ -148,7 +149,7 @@ func (o *nodeOutbound) accessTCP(authID, peerAddr, addr string) (net.Conn, error
 		go a.serveHello(user, peerAddr, c1)
 		return c2, nil
 	case addr == proto.StreamListPeer || addr == proto.StreamPing ||
-		addr == proto.StreamEgress || addr == proto.StreamWhoami:
+		addr == proto.StreamEgress || addr == proto.StreamWhoami || addr == proto.StreamAttrs:
 		return o.relayPipe(addr, peerAddr), nil
 	case IsBondStream(addr):
 		base, cr := proto.ParseRestrict(addr)
@@ -196,7 +197,7 @@ func (o *nodeOutbound) accessUDP(authID, peerAddr, chain, target string) (hyserv
 	if err != nil {
 		return nil, err
 	}
-	return &netConnUDPAdapter{nc: a.meterHy2As(authID, peerAddr, "hy2-node", c), addr: target}, nil
+	return &server.UDPAdapter{Conn: a.meterHy2As(authID, peerAddr, "hy2-node", c), Addr: target}, nil
 }
 
 // relayPipe hands a stream to the relay dispatcher as if it had arrived
@@ -210,7 +211,7 @@ func (o *nodeOutbound) relayPipeAs(addr, peerAddr, authID string) net.Conn {
 	c1, c2 := net.Pipe()
 	var local net.Conn = c1
 	if peerAddr != "" {
-		local = &peerAddrConn{Conn: c1, peerAddr: peerAddr}
+		local = &server.PeerAddrConn{Conn: c1, Peer: peerAddr}
 	}
 	if authID != "" {
 		local = &RelayAuthConn{Conn: local, AuthID: authID}
@@ -248,10 +249,7 @@ func (a *App) accessVia(user, peerAddr, chain, target string, r proto.Restrict) 
 	for i, h := range hops {
 		parts[i], _ = proto.SplitConnHint(h)
 	}
-	maxDepth := cfg.MaxNestedDepth
-	if maxDepth <= 0 {
-		maxDepth = 5
-	}
+	maxDepth := a.tree.Limits().MaxDepth
 	if len(parts) == 0 || len(parts) > maxDepth+1 {
 		return "", fmt.Errorf("chain length %d", len(parts))
 	}
@@ -276,7 +274,7 @@ func (a *App) accessVia(user, peerAddr, chain, target string, r proto.Restrict) 
 			continue
 		}
 		prefix := strings.Join(parts[:i], "/")
-		if !isPathAuthorised(parts[:i+1], cfg) {
+		if !a.exit.Authorised(parts[:i+1]) {
 			return "", fmt.Errorf("%s is not shown here", strings.Join(parts[:i+1], "/"))
 		}
 		kids, ok := a.node.PeersOfCached(prefix)
@@ -296,7 +294,7 @@ func (a *App) accessVia(user, peerAddr, chain, target string, r proto.Restrict) 
 	}
 	// a native (plain hysteria) node can only be the last hop
 	for i := 0; i < len(parts)-1; i++ {
-		if _, native := a.nodeVersionAt(parts[:i+1]); native {
+		if p, _ := a.nodeInfoAt(parts[:i+1]); p.Native {
 			return "", fmt.Errorf("%s cannot relay", parts[i])
 		}
 	}
@@ -319,26 +317,6 @@ func (a *App) accessVia(user, peerAddr, chain, target string, r proto.Restrict) 
 		tagged = proto.WithRestrict(base, r|cr)
 	}
 	return proto.BuildViaAddr(chain, tagged), nil
-}
-
-// chainTags: every node of parts applies restriction tags.
-func (a *App) chainTags(parts []string) bool {
-	for i := range parts {
-		if p, ok := a.nodeInfoAt(parts[:i+1]); !ok || p.Native || !p.RestrictTags {
-			return false
-		}
-	}
-	return true
-}
-
-// tagTarget adds the restrictions carried by ctx to a target dialled
-// through parts, when every node on it understands the tag.
-func (a *App) tagTarget(ctx context.Context, parts []string, addr string) string {
-	r := restrictOf(ctx)
-	if r == 0 || len(parts) == 0 || !a.chainTags(parts) {
-		return addr
-	}
-	return proto.WithRestrict(addr, r)
 }
 
 // ---------------------------------------------------------------- client side

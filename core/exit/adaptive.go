@@ -1,4 +1,4 @@
-package app
+package exit
 
 import (
 	"context"
@@ -18,13 +18,13 @@ import (
 // pathScore tracks quality metrics using exponential moving average.
 // Recent results have much higher weight than old ones.
 type pathScore struct {
-	mu        sync.Mutex
-	path      string
-	emaRTT    float64 // EMA of successful dial RTT in ms (lower = better)
-	emaOK     float64 // EMA of success rate (0.0-1.0, higher = better)
-	samples   int     // total samples seen
-	lastOK    int64   // unix ms of last success
-	lastFail  int64   // unix ms of last failure
+	mu       sync.Mutex
+	path     string
+	emaRTT   float64 // EMA of successful dial RTT in ms (lower = better)
+	emaOK    float64 // EMA of success rate (0.0-1.0, higher = better)
+	samples  int     // total samples seen
+	lastOK   int64   // unix ms of last success
+	lastFail int64   // unix ms of last failure
 }
 
 const emaAlpha = 0.4 // Higher = more weight on recent samples (0.4 = last ~3 samples dominate)
@@ -95,8 +95,8 @@ func getPathScore(target, path string) *pathScore {
 }
 
 // dialAdaptive finds all paths to the target node and races them.
-func (a *App) dialAdaptive(ctx context.Context, target, addr string) (net.Conn, error) {
-	paths := a.findPathsTo(target)
+func (e *Engine) dialAdaptive(ctx context.Context, target, addr string) (net.Conn, error) {
+	paths := e.findPathsTo(target)
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("adaptive: no paths to %s", target)
 	}
@@ -149,7 +149,7 @@ func (a *App) dialAdaptive(ctx context.Context, target, addr string) (net.Conn, 
 			}
 
 			start := time.Now()
-			conn, err := a.dialPath(ctx, p, addr)
+			conn, err := e.dialPath(ctx, p, addr)
 			dur := time.Since(start)
 
 			ps := getPathScore(target, p)
@@ -205,34 +205,28 @@ func (a *App) dialAdaptive(ctx context.Context, target, addr string) (net.Conn, 
 }
 
 // dialPath dials through a specific path string.
-func (a *App) dialPath(ctx context.Context, path, addr string) (net.Conn, error) {
-	return a.dialPathIdx(ctx, path, addr, -1)
+func (e *Engine) dialPath(ctx context.Context, path, addr string) (net.Conn, error) {
+	return e.dialPathIdx(ctx, path, addr, -1)
 }
 
 // dialPathIdx dials with a specific QUIC client index (for bond path pinning).
-func (a *App) dialPathIdx(ctx context.Context, path, addr string, clientIdx int) (net.Conn, error) {
+func (e *Engine) dialPathIdx(ctx context.Context, path, addr string, clientIdx int) (net.Conn, error) {
 	parts := splitPath(path)
 	if len(parts) == 0 {
-		return a.dialDirect(ctx, "tcp", addr)
+		return e.dialLocal(ctx, "tcp", addr)
 	}
 	if len(parts) == 1 {
-		return a.node.DialTCPIdx(ctx, parts[0], addr, clientIdx)
+		return e.node.DialTCPIdx(ctx, parts[0], addr, clientIdx)
 	}
-	return a.node.DialVia(ctx, parts, addr)
+	return e.node.DialVia(ctx, parts, addr)
 }
 
-// isPathAuthorised returns true when every qualified prefix along `parts`,
-// from the direct peer up to but NOT including the final segment (which is
-// the exit itself), has `nested=true` in cfg.Peers. This is the iron-rule-2
-// predicate: a single nested=false at any intermediate hop makes the path
-// unusable, mirroring the UI's filterChildrenByNestedConfig recursion.
-// A single-segment path (direct peer target) is always authorised — nested
-// gates sub-exits, not the direct peer itself.
-func isPathAuthorised(parts []string, cfg Config) bool {
+// authorised: every qualified prefix of parts before the last segment (the
+// exit itself) is nested-enabled here — iron rule 2: one nested=false hop
+// makes the path unusable, as in the UI. A direct peer is always authorised.
+func (e *Engine) authorised(parts []string) bool {
 	for i := 1; i < len(parts); i++ {
-		prefix := strings.Join(parts[:i], "/")
-		pc, ok := cfg.Peers[prefix]
-		if !ok || !pc.Nested {
+		if !e.host.Nested(strings.Join(parts[:i], "/")) {
 			return false
 		}
 	}
@@ -242,7 +236,7 @@ func isPathAuthorised(parts []string, cfg Config) bool {
 // findPathsTo discovers all available paths to a target node.
 var findPathsLogged sync.Map // target → last logged path set
 
-func (a *App) findPathsTo(target string) []string {
+func (e *Engine) findPathsTo(target string) []string {
 	// Cache path discovery for 5 seconds
 	if ts, ok := adaptivePathsAge.Load(target); ok {
 		if time.Now().UnixMilli()-ts.(int64) < 5000 {
@@ -264,14 +258,13 @@ func (a *App) findPathsTo(target string) []string {
 	defer adaptivePathsMu.Unlock()
 
 	var paths []string
-	peers := a.node.Peers()
-	cfg := a.store.Get()
+	peers := e.node.Peers()
 	seen := make(map[string]bool) // avoid duplicate paths
 
 	// Direct path — multiply by number of QUIC connections to target
 	for _, p := range peers {
 		if p.Name == target {
-			k := a.node.PeerConnCount(target)
+			k := e.node.PeerConnCount(target)
 			if k < 1 {
 				k = 1
 			}
@@ -289,10 +282,10 @@ func (a *App) findPathsTo(target string) []string {
 		if p.Name == target || p.Native {
 			continue
 		}
-		if !isPathAuthorised([]string{p.Name, target}, cfg) {
+		if !e.authorised([]string{p.Name, target}) {
 			continue
 		}
-		subPeers, err := a.node.PeersOf(p.Name)
+		subPeers, err := e.node.PeersOf(p.Name)
 		if err != nil {
 			continue
 		}
@@ -301,7 +294,7 @@ func (a *App) findPathsTo(target string) []string {
 				pathStr := p.Name + "/" + target
 				if !seen[pathStr] {
 					seen[pathStr] = true
-					k := a.node.PeerConnCount(p.Name)
+					k := e.node.PeerConnCount(p.Name)
 					if k < 1 {
 						k = 1
 					}
@@ -327,7 +320,7 @@ func (a *App) findPathsTo(target string) []string {
 		if p.Name == target || p.Native {
 			continue
 		}
-		if pc, ok := cfg.Peers[p.Name]; !ok || !pc.Nested {
+		if !e.host.Nested(p.Name) {
 			continue
 		}
 		bfsQueue = append(bfsQueue, bfsItem{chain: []string{p.Name}})
@@ -339,7 +332,7 @@ func (a *App) findPathsTo(target string) []string {
 			continue
 		}
 		lastPeer := item.chain[len(item.chain)-1]
-		subPeers, ok := a.node.PeersOfCached(lastPeer)
+		subPeers, ok := e.node.PeersOfCached(lastPeer)
 		if !ok {
 			continue
 		}
@@ -349,13 +342,13 @@ func (a *App) findPathsTo(target string) []string {
 				// full path must be nested-authorised on our side.
 				fullPath := append([]string{}, item.chain...)
 				fullPath = append(fullPath, target)
-				if !isPathAuthorised(fullPath, cfg) {
+				if !e.authorised(fullPath) {
 					continue
 				}
 				pathStr := strings.Join(fullPath, "/")
 				if !seen[pathStr] {
 					seen[pathStr] = true
-					k := a.node.PeerConnCount(item.chain[0])
+					k := e.node.PeerConnCount(item.chain[0])
 					if k < 1 {
 						k = 1
 					}
@@ -374,7 +367,7 @@ func (a *App) findPathsTo(target string) []string {
 				// node.Name() is now the same string as cfg.NodeID (the
 				// schema merge unified them); the duplicate compare was
 				// kept as a belt-and-braces guard pre-merge.
-				cycle := sp.Name == cfg.NodeID
+				cycle := sp.Name == e.host.SelfID()
 				for _, c := range item.chain {
 					if c == sp.Name {
 						cycle = true
@@ -387,8 +380,8 @@ func (a *App) findPathsTo(target string) []string {
 				newChain := make([]string, len(item.chain)+1)
 				copy(newChain, item.chain)
 				newChain[len(item.chain)] = sp.Name
-				if !isPathAuthorised(append(append([]string{}, newChain...), "_sentinel"), cfg) {
-					// isPathAuthorised checks every prefix up to but not
+				if !e.authorised(append(append([]string{}, newChain...), "_sentinel")) {
+					// authorised checks every prefix up to but not
 					// including the last segment. Using a sentinel final
 					// token makes it check every prefix of newChain itself.
 					continue
@@ -408,7 +401,7 @@ func (a *App) findPathsTo(target string) []string {
 		log.Printf("[findPathsTo] %s: found %d paths: %v (cache keys: %v)", target, len(paths), paths, func() []string {
 			var keys []string
 			for _, p := range peers {
-				if _, ok := a.node.PeersOfCached(p.Name); ok {
+				if _, ok := e.node.PeersOfCached(p.Name); ok {
 					keys = append(keys, p.Name)
 				}
 			}
@@ -437,8 +430,8 @@ func sortPathsByScore(target string, paths []string) {
 
 // dialLoadBalance distributes connections across all healthy paths (round-robin).
 // Each new TCP connection goes to the next healthy path, maximizing aggregate throughput.
-func (a *App) dialLoadBalance(ctx context.Context, target, addr string) (net.Conn, error) {
-	paths := a.findPathsTo(target)
+func (e *Engine) dialLoadBalance(ctx context.Context, target, addr string) (net.Conn, error) {
+	paths := e.findPathsTo(target)
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("loadbalance: no paths to %s", target)
 	}
@@ -461,13 +454,13 @@ func (a *App) dialLoadBalance(ctx context.Context, target, addr string) (net.Con
 
 	debugLog("[loadbalance] %s: %d healthy paths, selected %s (rr #%d)", target, len(healthy), selected, idx)
 
-	conn, err := a.dialPath(ctx, selected, addr)
+	conn, err := e.dialPath(ctx, selected, addr)
 	if err != nil {
 		ps := getPathScore(target, selected)
 		ps.recordFailure()
 		// Fallback: try adaptive (race all paths)
 		debugLog("[loadbalance] %s path %s failed, falling back to adaptive", target, selected)
-		return a.dialAdaptive(ctx, target, addr)
+		return e.dialAdaptive(ctx, target, addr)
 	}
 
 	ps := getPathScore(target, selected)
@@ -476,10 +469,3 @@ func (a *App) dialLoadBalance(ctx context.Context, target, addr string) (net.Con
 }
 
 var lbCounter atomic.Int64
-
-func min(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
-}

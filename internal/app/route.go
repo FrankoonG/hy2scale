@@ -53,7 +53,7 @@ func (a *App) routeFor(exitVia string, exitPaths []string, exitMode, addr string
 	if err != nil {
 		return "", nil, "", fmt.Errorf("bad address %q: %w", addr, err)
 	}
-	if via, mode, paths, ok := RuleExitFor(host); ok {
+	if via, mode, paths, ok := a.rules.ExitFor(host); ok {
 		return via, paths, mode, nil
 	}
 	return "", nil, "", nil

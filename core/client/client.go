@@ -144,6 +144,7 @@ type Node struct {
 	Connected    *bool           `json:"connected,omitempty"`
 	Egress       json.RawMessage `json:"egress,omitempty"`
 	RestrictTags bool            `json:"rt,omitempty"`
+	Attrs        proto.Attrs     `json:"attrs,omitempty"`
 	Children     []Node          `json:"children,omitempty"`
 }
 
@@ -186,6 +187,21 @@ func (s *Session) Ping(ctx context.Context) (time.Duration, error) {
 		return 0, err
 	}
 	return time.Since(t0), nil
+}
+
+// Attrs returns the gateway's attributes (core/proto.Attrs).
+func (s *Session) Attrs(ctx context.Context) (proto.Attrs, error) {
+	st, err := s.c.TCP(proto.StreamAttrs)
+	if err != nil {
+		return nil, err
+	}
+	defer st.Close()
+	b, err := io.ReadAll(io.LimitReader(st, 64<<10))
+	if err != nil {
+		return nil, err
+	}
+	var a proto.Attrs
+	return a, json.Unmarshal(b, &a)
 }
 
 // Egress returns the gateway's egress (public address and country per

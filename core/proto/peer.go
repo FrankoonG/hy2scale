@@ -2,6 +2,18 @@ package proto
 
 import "encoding/json"
 
+// Attrs are a node's attributes: data points the application sets (by key)
+// and nodes carry to each other unchanged — in peer lists at every nested
+// level and on StreamAttrs. The node layer gives them no meaning.
+type Attrs map[string]json.RawMessage
+
+// Well-known attribute keys (conventions between applications).
+const (
+	// AttrEgress: the node's egress — per address family the public address
+	// and its country ({"ipv4":{"ip","ok","country"},"ipv6":…}).
+	AttrEgress = "egress"
+)
+
 // PeerInfo describes a peer as reported in peer lists.
 type PeerInfo struct {
 	Name      string `json:"name"`
@@ -26,8 +38,13 @@ type PeerInfo struct {
 	Conns int `json:"conns,omitempty"`
 	// EgressCapable: the peer answers egress / whoami streams (1.4.0+).
 	EgressCapable bool `json:"egress_capable,omitempty"`
-	// Egress: the peer's egress as last fetched; absent = unknown.
+	// Egress: the peer's egress as last fetched; absent = unknown. Kept
+	// for consumers that predate Attrs; equals Attrs[AttrEgress].
 	Egress json.RawMessage `json:"egress,omitempty"`
+	// AttrsCapable: the peer answers StreamAttrs.
+	AttrsCapable bool `json:"attrs_capable,omitempty"`
+	// Attrs: the node's attributes as last fetched.
+	Attrs Attrs `json:"attrs,omitempty"`
 	// RestrictTags: the node applies restriction tags on targets
 	// (access.go); only such chains get one.
 	RestrictTags bool `json:"rt,omitempty"`
