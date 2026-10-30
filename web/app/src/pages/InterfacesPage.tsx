@@ -20,6 +20,7 @@ import IfaceTypeBadge, { isHiddenIface } from '@/components/IfaceTypeBadge';
 import InterfacesTopoView from '@/components/InterfacesTopoView';
 import { usePageView, useIfaceOpts } from '@/store/pageView';
 import { useNodeStore } from '@/store/node';
+import { PublicIP } from '@/components/CountryFlag';
 
 type Row = { type: 'iface'; iface: IfaceEntry };
 
@@ -208,8 +209,8 @@ export default function InterfacesPage() {
     if (!p.ok) c = <span className="iface-bad" title={p.error || undefined} data-testid={`pub-${fam}-bad`}>{t('iface.unavailable')}</span>;
     else c = (
       <>
-        <span className="iface-pub-ip" data-testid={`pub-${fam}`}
-          title={p.checked ? t('iface.checkedAt', { time: new Date(p.checked * 1000).toLocaleString() }) : undefined}>{p.ip}</span>
+        <PublicIP className="iface-pub-ip" testId={`pub-${fam}`} ip={p.ip} country={p.country}
+          title={p.checked ? t('iface.checkedAt', { time: new Date(p.checked * 1000).toLocaleString() }) : undefined} />
         {p.direct && <span className="iface-tag faint" data-testid="tag-direct">{t('iface.direct')}</span>}
       </>
     );

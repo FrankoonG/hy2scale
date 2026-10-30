@@ -12,6 +12,7 @@ import { fmtBytes, fmtRate, fmtDuration } from '@/hooks/useFormat';
 import { useTheme } from '@/theme';
 import VersionBadge from '@/components/VersionBadge';
 import { hasUpdate, useUpgradeStore } from '@/components/upgrade';
+import { PublicIP } from '@/components/CountryFlag';
 
 // ---------------------------------------------------------------------------
 // Live samples. Kept at module level so the chart and sparklines survive a
@@ -571,7 +572,7 @@ export default function OverviewPage() {
     return (
       <>
         <span className={clsx(!e.ok && 'ov-warn-text')}>{e.name}</span>
-        {pub?.ok && pub.ip ? <span className="ov-muted"> · {pub.ip}</span> : null}
+        {pub?.ok && pub.ip ? <span className="ov-muted"> · <PublicIP ip={pub.ip} country={pub.country} /></span> : null}
       </>
     );
   };

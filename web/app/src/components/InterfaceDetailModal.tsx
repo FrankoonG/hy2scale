@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Modal, Button, DetailGrid } from '@hy2scale/ui';
 import type { IfaceEntry, IfaceFamilyKey } from '@/api/types';
 import { fmtBytes, fmtDuration } from '@/hooks/useFormat';
+import { PublicIP } from '@/components/CountryFlag';
 
 const FAMS: IfaceFamilyKey[] = ['ipv4', 'ipv6'];
 const FAM_LABEL: Record<IfaceFamilyKey, string> = { ipv4: 'IPv4', ipv6: 'IPv6' };
@@ -51,7 +52,7 @@ export default function InterfaceDetailModal({
     if (!shown) items.push([t('iface.address'), '—']);
     for (const fam of FAMS) {
       const p = x.public?.[fam];
-      if (p) items.push([t('iface.publicFam', { fam: FAM_LABEL[fam] }), p.ok ? p.ip : <span className="iface-bad">{t('iface.unavailable')}</span>]);
+      if (p) items.push([t('iface.publicFam', { fam: FAM_LABEL[fam] }), p.ok ? <PublicIP ip={p.ip} country={p.country} /> : <span className="iface-bad">{t('iface.unavailable')}</span>]);
     }
     items.push([t('iface.mac'), x.mac || '—']);
     items.push([t('iface.mtu'), x.kind === 'child' && !x.mtu
