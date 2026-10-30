@@ -14,7 +14,7 @@
 .hy-btn.danger:hover{background:var(--red-bg)}
 .hy-btn.ghost{border:none;background:none;color:var(--text-secondary)}
 .hy-btn.ghost:hover{color:var(--primary);background:var(--primary-light)}
-.hy-btn.full-width{width:100%}
+.hy-btn.full-width{width:100%;justify-content:center}
 .hy-btn>svg{flex-shrink:0}
 
 /* ====== Icon button ====== */

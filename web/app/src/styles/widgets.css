@@ -28,22 +28,7 @@
 .exit-mode-opt:has(input:disabled){opacity:0.4;cursor:not-allowed;pointer-events:none}
 .exit-mode-opt:has(input:disabled):has(input:checked){opacity:1}
 
-/* ====== Login ====== */
-.hy-login-wrap{display:flex;align-items:center;justify-content:center;min-height:100vh;background:var(--bg)}
-.hy-login-box{position:relative;z-index:1;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:40px 32px;width:360px;box-shadow:var(--shadow-md);text-align:center}
-.hy-login-logo{margin-bottom:16px}
-.hy-login-logo img{width:48px;height:48px;border-radius:12px}
-.hy-login-title{font-size:20px;font-weight:700;margin-bottom:4px}
-.hy-login-sub{font-size:13px;color:var(--text-muted);margin-bottom:24px}
-.hy-login-form{display:flex;flex-direction:column;gap:12px;text-align:left}
-.hy-login-form .hy-input{width:100%;box-sizing:border-box}
-.hy-login-form .hy-pw-wrap{width:100%}
-.hy-login-form .hy-btn{margin-top:4px}
-.hy-login-remember{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary);cursor:pointer}
-.hy-login-remember input{width:auto;margin:0;accent-color:var(--primary)}
-.hy-login-error{color:var(--red);font-size:13px}
-.hy-login-switchers{position:absolute;top:16px;right:16px;z-index:1;display:flex;align-items:center;gap:16px}
-/* Login page pickers: icon, current value, caret */
+/* Login language picker: icon, current value, caret */
 .hy-pref-btn{border:none;background:none;cursor:pointer;display:flex;align-items:center;gap:4px;color:var(--text-secondary);font-size:13px;font-weight:500;font-family:var(--font);padding:4px 0}
 .hy-pref-btn:hover,.hy-pref-btn.open{color:var(--text)}
 .hy-pref-btn .hy-pref-caret{opacity:.7;transition:transform .15s}
