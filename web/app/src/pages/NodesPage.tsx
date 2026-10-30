@@ -281,6 +281,9 @@ export default function NodesPage() {
         ) : null;
 
         const nativeBadge = n.native ? <Badge variant="muted">{t('nodes.native')}</Badge> : null;
+        const invisibleBadge = n.invisible
+          ? <span title={t('nodes.invisibleTitle')} data-testid="invisible-badge"><Badge variant="muted">{t('nodes.invisible')}</Badge></span>
+          : null;
         const restrictedBadge = n.restricted
           ? <span title={t('nodes.restrictedTitle')} data-testid="restricted-badge"><Badge variant="muted" className="badge-restricted">{t('nodes.restricted')}</Badge></span>
           : null;
@@ -317,6 +320,7 @@ export default function NodesPage() {
               {nameEl}
               {versionBadge}
               {nativeBadge && <> {nativeBadge}</>}
+              {invisibleBadge && <> {invisibleBadge}</>}
               {restrictedBadge && <> {restrictedBadge}</>}
               {n.via ? (
                 <span className="peer-addr-sub">{t('nodes.via', { name: n.via })}</span>

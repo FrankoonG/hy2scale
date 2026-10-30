@@ -307,7 +307,7 @@
 .hy-topo-edge.to-native .hy-topo-edge-flow{color:#fde68a;stroke-opacity:.95}
 .hy-topo-edge.restricted .hy-topo-edge-base,.hy-topo-edge.restricted-entry .hy-topo-edge-base{color:#14b8a6;stroke-opacity:.5}
 .hy-topo-edge.restricted .hy-topo-edge-flow,.hy-topo-edge.restricted-entry .hy-topo-edge-flow{color:#14b8a6}
-.hy-topo-edge.restricted-entry:not(.offline) .hy-topo-edge-base{stroke-dasharray:6 4}
+.hy-topo-edge.restricted-entry:not(.offline) .hy-topo-edge-base,.hy-topo-edge.invisible-entry:not(.offline) .hy-topo-edge-base{stroke-dasharray:6 4}
 .hy-topo-edge.restricted .hy-topo-edge-draw,.hy-topo-edge.restricted-entry .hy-topo-edge-draw{color:#0d9488}
 @keyframes hy-topo-path-draw{to{stroke-dashoffset:0}}
 

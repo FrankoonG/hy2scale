@@ -109,6 +109,20 @@ func (a *App) nodeAccessUser(authID string) bool {
 	return found && u.NodeAccess
 }
 
+// accessMode: the node-access mode of a user ("" = no node access).
+func (a *App) accessMode(user string) string {
+	a.usersMu.RLock()
+	u, found := a.userIndex[user]
+	a.usersMu.RUnlock()
+	switch {
+	case !found || !u.NodeAccess:
+		return ""
+	case u.NodeAccessMode == proto.ModeFull:
+		return proto.ModeFull
+	}
+	return proto.ModeRestricted
+}
+
 var errAccessRefused = errors.New("not permitted for node access")
 
 // accessTCP serves a reserved stream (or a bond stream) opened by a
@@ -121,7 +135,14 @@ func (o *nodeOutbound) accessTCP(authID, peerAddr, addr string) (net.Conn, error
 	user := strings.TrimPrefix(authID, "user:")
 	a.touchAccess(user, peerAddr, nil)
 	r := a.userRestrict(user)
+	full := a.accessMode(user) == proto.ModeFull
 	switch {
+	case full && addr == proto.StreamAPI:
+		// management of this node: trusted like a full peer (the
+		// relay-trust setting applies), recorded as this user
+		return o.relayPipeAs(addr, peerAddr, "access:"+user), nil
+	case full && addr == proto.StreamPunch:
+		return o.relayPipe(addr, peerAddr), nil
 	case addr == proto.StreamHello:
 		c1, c2 := net.Pipe()
 		go a.serveHello(user, peerAddr, c1)
@@ -151,6 +172,9 @@ func (o *nodeOutbound) accessTCP(authID, peerAddr, addr string) (net.Conn, error
 		log.Printf("[access] %s: refused %q: %v", user, addr, err)
 		return nil, err
 	}
+	if _, t, _ := proto.ParseVia(fwd); proto.IsRelayStream(t) && !proto.IsMsessAddr(t) {
+		return o.relayPipe(fwd, peerAddr), nil // control stream (full mode): not metered
+	}
 	return a.meterHy2As(authID, peerAddr, "hy2-node", o.relayPipe(fwd, peerAddr)), nil
 }
 
@@ -178,10 +202,18 @@ func (o *nodeOutbound) accessUDP(authID, peerAddr, chain, target string) (hyserv
 // relayPipe hands a stream to the relay dispatcher as if it had arrived
 // from a peer (the local end reports the client's address).
 func (o *nodeOutbound) relayPipe(addr, peerAddr string) net.Conn {
+	return o.relayPipeAs(addr, peerAddr, "")
+}
+
+// relayPipeAs: relayPipe whose API stream carries authID (see RelayAuthConn).
+func (o *nodeOutbound) relayPipeAs(addr, peerAddr, authID string) net.Conn {
 	c1, c2 := net.Pipe()
 	var local net.Conn = c1
 	if peerAddr != "" {
 		local = &peerAddrConn{Conn: c1, peerAddr: peerAddr}
+	}
+	if authID != "" {
+		local = &RelayAuthConn{Conn: local, AuthID: authID}
 	}
 	go o.node.HandleStream(o.ctx, addr, local)
 	return c2
@@ -198,7 +230,8 @@ func (a *App) serveHello(user, peerAddr string, c net.Conn) {
 	a.touchAccess(user, peerAddr, &h)
 	cfg := a.store.Get()
 	proto.WriteJSON(c, proto.HelloReply{Name: a.node.Name(), NodeID: a.node.NodeID(),
-		Version: relay.NodeVersion, PV: relay.ProtocolVersion, ExitNode: cfg.ExitNode})
+		Version: relay.NodeVersion, PV: relay.ProtocolVersion, ExitNode: cfg.ExitNode,
+		Mode: a.accessMode(user)})
 }
 
 // accessVia validates an access client's via request and returns the
@@ -209,6 +242,7 @@ func (a *App) serveHello(user, peerAddr string, c net.Conn) {
 // on the chain understands it.
 func (a *App) accessVia(user, peerAddr, chain, target string, r proto.Restrict) (string, error) {
 	cfg := a.store.Get()
+	full := a.accessMode(user) == proto.ModeFull
 	hops := strings.Split(chain, "/")
 	parts := make([]string, len(hops))
 	for i, h := range hops {
@@ -269,6 +303,10 @@ func (a *App) accessVia(user, peerAddr, chain, target string, r proto.Restrict) 
 	base, cr := proto.ParseRestrict(target)
 	switch {
 	case proto.IsMsessAddr(base), IsBondStream(base):
+	case full && (base == proto.StreamAPI || base == proto.StreamPunch || base == proto.StreamListPeer):
+		// management / punching / nested lists further away (full mode):
+		// the node there sees this node as the caller
+		return proto.BuildViaAddr(chain, base), nil
 	case proto.IsRelayStream(base):
 		return "", fmt.Errorf("target %s: %w", base, errAccessRefused)
 	default:
@@ -305,7 +343,9 @@ func (a *App) tagTarget(ctx context.Context, parts []string, addr string) string
 
 // ---------------------------------------------------------------- client side
 
-// AccessUser is ClientEntry.Access for node access by user.
+// AccessUser is ClientEntry.Access for node access by user. Not needed:
+// connecting is adaptive (register, then hello, then plain hy2); an entry
+// with it only skips the register attempt.
 const AccessUser = "user"
 
 // accessNote: the last outcome of node access per entry (client Addr):
@@ -326,6 +366,23 @@ func (a *App) noteAccess(addr string, err error) {
 func (a *App) AccessRefused(addr string) bool {
 	v, _ := accessNotes.Load(addr)
 	return v == "refused"
+}
+
+// showAccessTree enables nested discovery for a gateway reached by node
+// access the first time it is seen (its tree is what it is used for).
+func (a *App) showAccessTree(name string) {
+	if _, ok := a.store.Get().Peers[name]; ok {
+		return
+	}
+	a.store.Update(func(c *Config) {
+		if c.Peers == nil {
+			c.Peers = map[string]PeerConfig{}
+		}
+		if _, ok := c.Peers[name]; !ok {
+			c.Peers[name] = PeerConfig{Nested: true}
+		}
+	})
+	a.node.SetNestedDiscovery(name, true)
 }
 
 // verifyAccessConn checks that an extra connection of an access entry

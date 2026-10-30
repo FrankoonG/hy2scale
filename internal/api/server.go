@@ -639,6 +639,13 @@ func relayConnContext(ctx context.Context, c net.Conn) context.Context {
 // if the request didn't arrive via apiBridge (or arrived without an
 // auth-tagged conn). authMiddleware uses this to decide whether to apply
 // RelayAdminPassthrough.
+// trustedRelay: a relay-delivered API request whose connection is trusted
+// for management — a peer node (system password) or a node-access user in
+// full mode (the gateway tags its streams "access:<user>").
+func trustedRelay(authID string) bool {
+	return authID == "system" || strings.HasPrefix(authID, "access:")
+}
+
 func relayAuthID(ctx context.Context) string {
 	v, _ := ctx.Value(relayCtxKey{}).(string)
 	return v
@@ -759,7 +766,7 @@ func (s *Server) relayPassthroughToken(w http.ResponseWriter, r *http.Request) {
 	// password). User-level relay traffic doesn't grant admin even
 	// with passthrough on.
 	authID, _ := rawCtx.(string)
-	if authID != "system" {
+	if !trustedRelay(authID) {
 		http.Error(w, "forbidden", 403)
 		return
 	}
@@ -793,7 +800,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		// auth path, which 401s the API or SPA-redirects to /login —
 		// so a regular VPN user can never escalate to admin via
 		// `_relay_api_:0` even with the toggle on.
-		if relayAuthID(r.Context()) == "system" && s.app.Store().Get().RelayAdminPassthrough {
+		if trustedRelay(relayAuthID(r.Context())) && s.app.Store().Get().RelayAdminPassthrough {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1545,6 +1552,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		MaxRate      uint64            `json:"max_rate,omitempty"`
 		IsSelf       bool              `json:"is_self,omitempty"`
 		Restricted   bool              `json:"restricted,omitempty"`
+		Invisible    bool              `json:"invisible,omitempty"`
 		Egress       json.RawMessage   `json:"egress"`
 		// Punched: who set up the hole-punched connection(s) to this peer
 		// (this node's name and/or the peer's).
@@ -1731,6 +1739,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				tn.Conns = p.Conns
 				tn.Egress = p.Egress
 				tn.Restricted = p.Restricted
+				tn.Invisible = p.Invisible
 				if p.Direction == "outbound" {
 					// Found the matching outbound entry — prefer this and
 					// stop. (Continuing would overwrite with inbound

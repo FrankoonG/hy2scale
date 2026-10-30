@@ -219,6 +219,10 @@ type punchReply struct {
 	Reason string `json:"reason,omitempty"`
 	Token  string `json:"token,omitempty"`
 	Addr   string `json:"addr,omitempty"`
+	// Creds: the punched listener also takes the initiator's own
+	// credentials (system or a user's password) instead of the token
+	// (1.4.0+), so the punched link can be a full peer or node access.
+	Creds bool `json:"creds,omitempty"`
 }
 
 // call sends one request along path (the last element is the node that
@@ -531,7 +535,7 @@ func (m *punchManager) handlePunch(req punchMsg) punchReply {
 	// open our NAT towards the initiator's mapping while it dials
 	go punchPackets(sock, to, window, stop)
 	log.Printf("[punch] %q → us: our mapping %s, theirs %v", req.From, mapped[0], req.Mappings)
-	return punchReply{OK: true, Addr: mapped[0], Token: token}
+	return punchReply{OK: true, Addr: mapped[0], Token: token, Creds: true}
 }
 
 // punchListener is the target-side hy2 server of one punched connection: it
@@ -560,6 +564,14 @@ func (p *punchListener) Authenticate(addr net.Addr, auth string, tx uint64) (boo
 		p.m.mu.Unlock()
 		return true, "system"
 	}
+	// the initiator's own credentials: a full peer, or a user (node access)
+	if ok, id := p.hy2Auth.Authenticate(addr, auth, tx); ok && p.used.CompareAndSwap(false, true) {
+		log.Printf("[punch] %q connected directly from %s as %s", p.from, addr, id)
+		p.m.mu.Lock()
+		p.m.inbound[p.from]++
+		p.m.mu.Unlock()
+		return true, id
+	}
 	return false, ""
 }
 
@@ -587,7 +599,11 @@ func (p *punchListener) close() {
 
 func (m *punchManager) startPunchServer(sock *net.UDPConn, cert tls.Certificate, token, from string, window time.Duration) (<-chan struct{}, error) {
 	ctx, cancel := context.WithCancel(m.a.appCtx)
-	pl := &punchListener{hy2Auth: &hy2Auth{app: m.a}, m: m, token: token, from: from, stop: make(chan struct{})}
+	sysPw := ""
+	if sc := m.a.store.Get().Server; sc != nil {
+		sysPw = sc.Password
+	}
+	pl := &punchListener{hy2Auth: &hy2Auth{app: m.a, sysPassword: sysPw}, m: m, token: token, from: from, stop: make(chan struct{})}
 	srv, err := m.a.newHy2Server(ctx, sock, cert, pl, pl)
 	if err != nil {
 		cancel()
@@ -820,7 +836,14 @@ func (m *punchManager) prepare(ctx context.Context, cl ClientEntry, addr string)
 		time.Sleep(300 * time.Millisecond) // let the crossing packets open both filters
 		m.setStatus(addr, "punching", "", rep.Addr)
 		log.Printf("[punch] %s via %s: ours %v, theirs %s", addr, path, mine, rep.Addr)
-		return &punchDial{addr: theirs, factory: stopOnUse{oneConn{sock}, stop}, password: rep.Token, sock: sock}, nil
+		// log in with this entry's credentials when the target takes them
+		// (the link is then a full peer or node access, adaptively); else
+		// with the one-time token (a full peer)
+		pw := rep.Token
+		if rep.Creds && cl.Password != "" {
+			pw = cl.Password
+		}
+		return &punchDial{addr: theirs, factory: stopOnUse{oneConn{sock}, stop}, password: pw, sock: sock}, nil
 	}
 	return nil, m.fail(addr, cl.Advanced, lastErr)
 }

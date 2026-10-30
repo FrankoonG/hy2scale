@@ -31,7 +31,10 @@ type PeerInfo struct {
 	// RestrictTags: the node applies restriction tags on targets
 	// (access.go); only such chains get one.
 	RestrictTags bool `json:"rt,omitempty"`
-	// Restricted: reached through node access by user — traffic only, no
-	// management, punching or registration (see access.go).
+	// Restricted: reached through node access by user in restricted mode —
+	// traffic only, no management, punching or registration (access.go).
 	Restricted bool `json:"restricted,omitempty"`
+	// Invisible: this node is attached by node access by user (not
+	// registered there); set on the gateway entry only.
+	Invisible bool `json:"invisible,omitempty"`
 }

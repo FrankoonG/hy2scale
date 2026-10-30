@@ -40,6 +40,8 @@ export interface TopologyNode {
   punched?: string[];
   // reached through node access by user (traffic only: no management)
   restricted?: boolean;
+  // attached by node access by user (not registered there): gateway entry
+  invisible?: boolean;
   exit_node: boolean;
   direction: 'inbound' | 'outbound' | 'local' | '';
   connected: boolean;
@@ -155,6 +157,8 @@ export interface UserConfig {
   enabled: boolean;
   /** may use this node's visible nodes as exits (node access by user) */
   node_access?: boolean;
+  /** 'restricted' (default) | 'full' */
+  node_access_mode?: 'restricted' | 'full';
   /** flows may not reach internal destinations */
   deny_internal?: boolean;
 }

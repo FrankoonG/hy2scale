@@ -852,11 +852,12 @@
   "users.nodeAccessHint": "可使用本节点可见的节点作为出口。",
   "users.allowInternal": "允许访问内部地址",
   "users.allowInternalHint": "回环、内网及出口所在网络。",
-  "nodes.access": "接入方式",
-  "nodes.accessFull": "完整节点",
-  "nodes.accessUser": "节点接入（用户）",
-  "nodes.userPassword": "用户密码",
   "nodes.restricted": "受限",
-  "nodes.restrictedTitle": "经节点接入（用户）：仅可走流量",
-  "devices.hy2Node": "hy2（节点接入）"
+  "nodes.restrictedTitle": "隐形接入（限制使用）：仅可走流量",
+  "devices.hy2Node": "hy2（节点接入）",
+  "users.accessRestricted": "限制使用",
+  "users.accessFull": "完整使用",
+  "nodes.invisible": "隐形接入",
+  "nodes.invisibleTitle": "以用户身份接入，不在对方的节点列表中",
+  "nodes.detail.access": "接入方式"
 }

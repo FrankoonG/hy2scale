@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import {
   Modal, Button, Input, PasswordInput, Toggle, Textarea, Select, Tabs,
-  FormGroup, FormGrid, SortableList, SegmentedControl, useToast,
+  FormGroup, FormGrid, SortableList, useToast,
 } from '@hy2scale/ui';
 import * as api from '@/api';
 import type { ClientEntry, CertInfo, TopologyNode } from '@/api';
@@ -129,8 +129,6 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   const nameLocked = !!editingName && editingConnected && !editingNative;
 
   const [password, setPassword] = useState('');
-  // '' = full node (system password); 'user' = node access by user
-  const [access, setAccess] = useState<'' | 'user'>('');
   const [fastOpen, setFastOpen] = useState(false);
   // Brutal congestion control: ON = client honours an explicit
   // upload/download ceiling (max_tx / max_rx). OFF = let the server
@@ -185,7 +183,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
     // also showed up in UserModal's exit_via column.
     setName(editingName || '');
     setAddrItems([{ id: addrNextId++, host: '', port: '', bind: '' }]);
-    setPassword(''); setAccess(''); setFastOpen(false); setBrutal(false); setBbrProfile('');
+    setPassword(''); setFastOpen(false); setBrutal(false); setBbrProfile('');
     setMaxTx(''); setMaxRx('');
     setSni(''); setInsecure(true);
     setCaSource(''); setCaManual('');
@@ -224,7 +222,6 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       const hasAdv = !!(adv.punch_retry_min || adv.punch_retry_max || adv.probe_timeout || adv.punch_window);
       setAddrItems(addrs.map(a => { const p = parseAddr(a); return { id: addrNextId++, host: p.host, port: p.port, bind: p.bind }; }));
       setPassword(c.password || '');
-      setAccess(c.access === 'user' ? 'user' : '');
       setFastOpen(c.fast_open || false);
       setBrutal(!!(c.max_tx || c.max_rx));
       setBbrProfile((c.bbr_profile as any) || '');
@@ -417,7 +414,6 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       addr: addrs[0] || '',
       addrs: addrs.length > 1 ? addrs : undefined,
       password: password.trim(),
-      access: access || undefined,
       punch: signal.length ? {
         signal, reflectors,
         binds: punchBinds.filter((b, i, a) => a.indexOf(b) === i && bindFits(b, punchFamily === 'ipv6' ? 6 : 4)),
@@ -611,18 +607,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
           </>
         </FormGroup>
 
-        <FormGroup label={t('nodes.access')}>
-          <SegmentedControl
-            items={[
-              { key: 'full', label: t('nodes.accessFull'), testId: 'node-access-full' },
-              { key: 'user', label: t('nodes.accessUser'), testId: 'node-access-user' },
-            ]}
-            value={access === 'user' ? 'user' : 'full'}
-            onChange={(k) => setAccess(k === 'user' ? 'user' : '')}
-          />
-        </FormGroup>
-
-        <FormGroup label={access === 'user' ? t('nodes.userPassword') : t('nodes.password')} required={!manualBlank || !punchSet}>
+        <FormGroup label={t('nodes.password')} required={!manualBlank || !punchSet}>
           <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} />
         </FormGroup>
 

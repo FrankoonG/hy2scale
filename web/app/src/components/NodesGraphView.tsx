@@ -1128,12 +1128,14 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     const touchesNative = !!fromN?.native || !!toN?.native;
     // into a tree reached by node access by user: dashed entry, tinted inside
     const restrictedEntry = !!toN?.restricted && !fromN?.restricted;
+    // into a gateway reached by node access (full use): dashed, untinted
+    const invisibleEntry = !!toN?.invisible && !toN?.restricted && !!fromN?.isSelf;
     const restrictedIn = !!toN?.restricted && !!fromN?.restricted;
     const flip = onPath && curPath ? curPath.keys[idx!] === e.to : false;
     const mid = pointAt(g, g.len / 2);
     const peer = fromN?.isSelf ? toN : toN?.isSelf ? fromN : undefined;
     edgeEls.push(
-      <g key={e.key} className={clsx('hy-topo-edge', offline && 'offline', onPath && !offline && 'on-path', touchesNative && 'to-native', restrictedEntry && 'restricted-entry', restrictedIn && 'restricted', g.custom && 'custom', altEdges.has(e.key) && 'alt')}>
+      <g key={e.key} className={clsx('hy-topo-edge', offline && 'offline', onPath && !offline && 'on-path', touchesNative && 'to-native', restrictedEntry && 'restricted-entry', invisibleEntry && 'invisible-entry', restrictedIn && 'restricted', g.custom && 'custom', altEdges.has(e.key) && 'alt')}>
         <path d={g.d} className="hy-topo-edge-base" strokeWidth={edgeWidth(e)} strokeDasharray={offline ? '4 3' : undefined} />
         {altEdges.has(e.key) && <path d={g.d} className="hy-topo-edge-alt" />}
         {onPath && (

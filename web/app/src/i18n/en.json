@@ -852,11 +852,12 @@
   "users.nodeAccessHint": "May use the nodes this node sees as exits.",
   "users.allowInternal": "Internal addresses",
   "users.allowInternalHint": "Loopback, private and the exit's own networks.",
-  "nodes.access": "Access",
-  "nodes.accessFull": "Full node",
-  "nodes.accessUser": "Node access (user)",
-  "nodes.userPassword": "User password",
   "nodes.restricted": "restricted",
-  "nodes.restrictedTitle": "Reached by node access (user): traffic only",
-  "devices.hy2Node": "hy2 (node access)"
+  "nodes.restrictedTitle": "Invisible access, restricted use: traffic only",
+  "devices.hy2Node": "hy2 (node access)",
+  "users.accessRestricted": "Restricted use",
+  "users.accessFull": "Full use",
+  "nodes.invisible": "invisible",
+  "nodes.invisibleTitle": "Connected as a user: not listed by that node",
+  "nodes.detail.access": "Access"
 }

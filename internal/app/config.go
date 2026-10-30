@@ -40,6 +40,9 @@ type UserConfig struct {
 	// access client may use the nodes this node sees as exits (node access
 	// by user, core/proto/access.go).
 	NodeAccess bool `yaml:"node_access,omitempty" json:"node_access"`
+	// NodeAccessMode: "restricted" (traffic only; "" = restricted) or
+	// "full" (also management, nested lists and punching through it).
+	NodeAccessMode string `yaml:"node_access_mode,omitempty" json:"node_access_mode,omitempty"`
 	// DenyInternal: this user's flows may not reach internal destinations
 	// (loopback, private, link-local, the exit's own networks) — here, and
 	// at 1.4.0+ exits further away.

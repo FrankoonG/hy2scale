@@ -9,14 +9,18 @@ import (
 
 // Node access by user ("节点接入（用户）"): a client logs in to a node (the
 // gateway) with a user's hy2 credentials and, when the user may, uses the
-// nodes the gateway sees as exits. It never registers as a peer: the
-// gateway does not list it, and it may open only
+// nodes the gateway sees. It never registers as a peer (invisible access):
+// the gateway does not list it and cannot open streams toward it. In mode
+// restricted it may open only
 //
 //	StreamHello, StreamListPeer, StreamPing, StreamEgress, StreamWhoami
 //	  directly at the gateway;
 //	a via chain the gateway can see, to a real target, a msess subflow or a
 //	  legacy bond stream;
-//	a real target, a msess subflow or a bond stream at the gateway itself.
+//	a real target, a msess subflow or a bond stream at the gateway itself;
+//
+// in mode full also StreamAPI (management) and StreamPunch, directly and as
+// the target of a via chain, and StreamListPeer through a chain.
 //
 // The gateway validates every chain before forwarding: nodes further away
 // see the gateway's own identity and cannot tell such traffic apart. What
@@ -38,6 +42,12 @@ type Hello struct {
 	Version  string `json:"version"`
 }
 
+// Access modes.
+const (
+	ModeRestricted = "restricted"
+	ModeFull       = "full"
+)
+
 // HelloReply is the gateway's answer.
 type HelloReply struct {
 	Name     string `json:"name"`
@@ -45,6 +55,8 @@ type HelloReply struct {
 	Version  string `json:"version"`
 	PV       int    `json:"pv"`
 	ExitNode bool   `json:"exit_node"`
+	// Mode granted to these credentials (ModeRestricted / ModeFull).
+	Mode string `json:"mode,omitempty"`
 }
 
 // WriteJSON writes v as one length-prefixed JSON message.

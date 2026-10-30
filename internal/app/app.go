@@ -652,16 +652,6 @@ func (a *App) AddClient(cl ClientEntry) error {
 			}
 		}
 		c.Clients = append(c.Clients, cl)
-		// node access is for using the gateway's tree: show it
-		if cl.Access == AccessUser {
-			if _, ok := c.Peers[cl.Name]; !ok {
-				if c.Peers == nil {
-					c.Peers = map[string]PeerConfig{}
-				}
-				c.Peers[cl.Name] = PeerConfig{Nested: true}
-				a.node.SetNestedDiscovery(cl.Name, true)
-			}
-		}
 	})
 }
 
@@ -1645,7 +1635,7 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 
 		// Verify this IP reaches the same node by attempting a lightweight handshake
 		var status string
-		if cl.Access == AccessUser {
+		if a.node.IsInvisible(peerName) {
 			status = a.verifyAccessConn(ctx, c, peerName)
 		} else {
 			status = a.verifyExtraConn(c, peerName)
@@ -1665,7 +1655,12 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 				// (A connected extra stays even if the primary has moved onto
 				// the same address: it may be carrying the live streams.)
 				// Probe: try opening a lightweight stream
-				probe, err := c.TCP("_relay_latency_:0")
+				// (a gateway reached by node access answers only ping)
+				probeAddr := "_relay_latency_:0"
+				if a.node.IsInvisible(peerName) {
+					probeAddr = proto.StreamPing
+				}
+				probe, err := c.TCP(probeAddr)
 				if err != nil {
 					log.Printf("[%s] extra IP %s for %s: connection lost, reconnecting", a.node.Name(), extraAddr, peerName)
 					a.node.RemovePeerConn(peerName, extraAddr)
@@ -1892,21 +1887,28 @@ func (a *App) connectAt(ctx context.Context, cl ClientEntry, dialAddr string) er
 			a.node.SetLatency(oldName, 0)
 		}
 	}
-	if cl.Access == AccessUser {
-		// Node access by user: hello instead of register; refused (an
-		// older node, or the user may not) → used as a plain hy2 server.
-		err = a.node.AttachAccess(ctx, cl.Name, c, func(remoteID string) bool {
+	// Adaptive: a full peer (register), else node access by user (hello:
+	// these are a user's credentials there), else a plain hy2 server.
+	attachAccess := func() error {
+		err := a.node.AttachAccess(ctx, cl.Name, c, func(remoteID string) bool {
 			onID(remoteID)
+			a.showAccessTree(remoteID)
 			return remoteID != a.node.Name() && remoteID != a.store.Get().NodeID
 		})
 		a.noteAccess(cl.Addr, err)
-		if errors.Is(err, relay.ErrAccessRefused) && ctx.Err() == nil {
-			log.Printf("[%s] %s refused node access: using it as a plain hy2 server", a.node.Name(), cl.Addr)
-			err = relay.ErrNotHy2scale
-		}
+		return err
+	}
+	if cl.Access == AccessUser {
+		err = attachAccess()
 	} else {
-		// Try hy2scale relay protocol first
 		err = a.node.AttachTo(ctx, cl.Name, c, onID)
+		if err == relay.ErrNotHy2scale && ctx.Err() == nil {
+			err = attachAccess()
+		}
+	}
+	if errors.Is(err, relay.ErrAccessRefused) && ctx.Err() == nil {
+		log.Printf("[%s] %s: no node access with these credentials: using it as a plain hy2 server", a.node.Name(), cl.Addr)
+		err = relay.ErrNotHy2scale
 	}
 	if err == relay.ErrNotHy2scale && ctx.Err() == nil {
 		// Relay protocol not supported — native hy2 server
