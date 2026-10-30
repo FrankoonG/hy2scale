@@ -20,8 +20,8 @@ function initial(page: TopoPage): PageView {
     if (old === 'list') return 'list';
     if (old === 'graph') return 'topo';
   }
-  // Nodes has always opened on its topology.
-  return page === 'nodes' ? 'topo' : 'list';
+  // Both pages open on their topology the first time.
+  return 'topo';
 }
 
 interface PageViewState {

@@ -651,17 +651,10 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   };
   useEffect(() => { if (!isCustom) { setHoverEdge(null); setSelectedEdge(null); } }, [isCustom]);
 
-  const detailKeyFor = useCallback((key: string) => {
-    if (key === selfId) return '__self__';
-    if (selectedKey === key && curPath) return curPath.segs.join('/');
-    const ps = findPaths(topology, key, selfId, selfName);
-    return ps[0] ? ps[0].segs.join('/') : key;
-  }, [selfId, selectedKey, curPath, topology, selfName]);
-
   // ---------------------------------------------------------------- editing (custom canvases)
   const [snap, setSnap] = useState(() => lsGet(SNAP_STORE) === '1');
-  // Background grid: on unless turned off (any canvas).
-  const [showGrid, setShowGrid] = useState(() => lsGet(GRID_STORE) !== '0');
+  // Background grid: off until chosen; creating a custom canvas turns it on.
+  const [showGrid, setShowGrid] = useState(() => lsGet(GRID_STORE) === '1');
   const snapRef = useRef(snap);
   snapRef.current = snap;
 
@@ -882,12 +875,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     if (wp && isCustom) { deleteWaypoint(wp.getAttribute('data-edge') || '', Number(wp.getAttribute('data-wp'))); return; }
     const lb = target.closest('[data-label-key]');
     if (lb && isCustom) { resetLabel(lb.getAttribute('data-label-key') || ''); return; }
-    const nd = target.closest('[data-node-key]');
-    if (nd && onOpenDetails) {
-      const key = nd.getAttribute('data-node-key') || '';
-      const r = nd.getBoundingClientRect();
-      onOpenDetails(detailKeyFor(key), { x: r.left + r.width / 2, y: r.top + r.height / 2 });
-    }
+    // A node double-click stays a selection gesture; details open from the
+    // path panel's button.
   };
 
   // ---------------------------------------------------------------- canvas actions
@@ -917,6 +906,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       await api.putGraphCanvas(c);
       setCanvases((l) => (l && !l.some((x) => x.id === c.id) ? [...l, c] : l));
       selectCanvas('c:' + c.id);
+      setShowGrid(true);
+      lsSet(GRID_STORE, '1');
     } catch (err: any) {
       toast.error(`${t('nodes.canvas.saveFailed')}: ${String(err?.message || err)}`);
     }
