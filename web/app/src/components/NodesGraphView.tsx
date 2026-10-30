@@ -1126,11 +1126,14 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     const onPath = idx !== undefined;
     const sched = pathEdgeSchedule.get(e.key);
     const touchesNative = !!fromN?.native || !!toN?.native;
+    // into a tree reached by node access by user: dashed entry, tinted inside
+    const restrictedEntry = !!toN?.restricted && !fromN?.restricted;
+    const restrictedIn = !!toN?.restricted && !!fromN?.restricted;
     const flip = onPath && curPath ? curPath.keys[idx!] === e.to : false;
     const mid = pointAt(g, g.len / 2);
     const peer = fromN?.isSelf ? toN : toN?.isSelf ? fromN : undefined;
     edgeEls.push(
-      <g key={e.key} className={clsx('hy-topo-edge', offline && 'offline', onPath && !offline && 'on-path', touchesNative && 'to-native', g.custom && 'custom', altEdges.has(e.key) && 'alt')}>
+      <g key={e.key} className={clsx('hy-topo-edge', offline && 'offline', onPath && !offline && 'on-path', touchesNative && 'to-native', restrictedEntry && 'restricted-entry', restrictedIn && 'restricted', g.custom && 'custom', altEdges.has(e.key) && 'alt')}>
         <path d={g.d} className="hy-topo-edge-base" strokeWidth={edgeWidth(e)} strokeDasharray={offline ? '4 3' : undefined} />
         {altEdges.has(e.key) && <path d={g.d} className="hy-topo-edge-alt" />}
         {onPath && (
@@ -1235,12 +1238,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         transform={`translate(${p.x},${p.y})`}
         className={clsx(
           'hy-topo-dot', n.isSelf && 'self', n.disabled && 'disabled', n.offline && !n.disabled && 'offline',
-          n.nested && 'nested', n.native && 'native', n.incompatible && 'bad', selectedKey === n.key && 'selected',
+          n.nested && 'nested', n.native && 'native', n.restricted && 'restricted', n.incompatible && 'bad', selectedKey === n.key && 'selected',
         )}
       >
         <circle r={rOuter} className="hy-topo-dot-outer" />
         {transit && <circle r={R_HUB_INNER} className="hy-topo-dot-inner" />}
         <text y={rOuter + 14} textAnchor="middle" className="hy-topo-dot-name">{n.name}</text>
+        {n.restricted && <title>{t('nodes.restrictedTitle')}</title>}
       </g>
     );
   });
@@ -1250,7 +1254,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     if (!curPath) return null;
     const p = curPath;
     const selNode = nodes.get(p.keys[p.keys.length - 1]);
-    const hops = p.segs.map((key) => ({ key, name: nodes.get(key)?.name || key, native: !!nodes.get(key)?.native }));
+    const hops = p.segs.map((key) => ({ key, name: nodes.get(key)?.name || key, native: !!nodes.get(key)?.native, restricted: !!nodes.get(key)?.restricted }));
     const offline = !!selNode?.offline || p.offline;
     const total = p.total;
     const latClass = (ms: number, off: boolean) => (ms <= 0 && !off ? 'lat-na' : pathLatencyClass(ms, off));
@@ -1269,7 +1273,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
               const isSelfHop = hop.key === selfId;
               const reach = isSelfHop || isReachableAt(qpForReach);
               const color = reach ? 'var(--green)' : 'var(--red)';
-              const hopEl = isSelfHop || hop.native || !onOpenRemote || !reach ? (
+              const hopEl = isSelfHop || hop.native || hop.restricted || !onOpenRemote || !reach ? (
                 <span className="hy-topo-pathinfo-hop" style={{ color }}>{hop.name}</span>
               ) : (
                 <a

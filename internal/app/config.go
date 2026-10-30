@@ -36,6 +36,14 @@ type UserConfig struct {
 	TrafficUsed   int64    `yaml:"traffic_used" json:"traffic_used"`
 	ExpiryDate    string   `yaml:"expiry_date,omitempty" json:"expiry_date"`
 	Enabled       bool     `yaml:"enabled" json:"enabled"`
+	// NodeAccess: with this user's hy2 credentials, a hy2scale node or an
+	// access client may use the nodes this node sees as exits (node access
+	// by user, core/proto/access.go).
+	NodeAccess bool `yaml:"node_access,omitempty" json:"node_access"`
+	// DenyInternal: this user's flows may not reach internal destinations
+	// (loopback, private, link-local, the exit's own networks) — here, and
+	// at 1.4.0+ exits further away.
+	DenyInternal bool `yaml:"deny_internal,omitempty" json:"deny_internal"`
 }
 
 // EffectivePassword returns the proxy-specific password if set, else the main password.

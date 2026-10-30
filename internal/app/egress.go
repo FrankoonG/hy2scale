@@ -152,8 +152,15 @@ func (a *App) dialDirect(ctx context.Context, network, addr string) (net.Conn, e
 	if err != nil {
 		return nil, err
 	}
+	// A restricted flow (access_guard.go): an address is checked here, a
+	// name once resolved, before any socket is opened.
+	if ip, err := netip.ParseAddr(strings.Trim(host, "[]")); err == nil {
+		if err := a.checkTarget(ctx, ip); err != nil {
+			return nil, err
+		}
+	}
 	if set == nil || set.legacy {
-		return plainDial(ctx, network, addr)
+		return plainDialCtl(ctx, network, addr, a.targetControl(ctx))
 	}
 	if ip, err := netip.ParseAddr(strings.Trim(host, "[]")); err == nil {
 		ip = ip.Unmap()
@@ -224,6 +231,9 @@ func (a *App) dialDirect(ctx context.Context, network, addr string) (net.Conn, e
 		return nil, fmt.Errorf("lookup %s: no address", host)
 	}
 	dialOne := func(ctx context.Context, t target) (net.Conn, error) {
+		if err := a.checkTarget(ctx, t.ip); err != nil {
+			return nil, err
+		}
 		hp := net.JoinHostPort(t.ip.String(), port)
 		if systemRoutes(t.ip) {
 			return plainDial(ctx, network, hp)
@@ -297,7 +307,12 @@ func raceDial[T any](ctx context.Context, order []T, dial func(context.Context, 
 }
 
 func plainDial(ctx context.Context, network, addr string) (net.Conn, error) {
-	d := net.Dialer{Timeout: 10 * time.Second}
+	return plainDialCtl(ctx, network, addr, nil)
+}
+
+// plainDialCtl: plainDial with a socket Control hook (nil = none).
+func plainDialCtl(ctx context.Context, network, addr string, ctl func(string, string, syscall.RawConn) error) (net.Conn, error) {
+	d := net.Dialer{Timeout: 10 * time.Second, Control: ctl}
 	if strings.HasPrefix(network, "udp") {
 		d.Timeout = 5 * time.Second
 	}

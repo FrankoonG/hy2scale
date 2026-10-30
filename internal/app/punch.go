@@ -224,6 +224,9 @@ type punchReply struct {
 // call sends one request along path (the last element is the node that
 // answers) and returns its reply.
 func (m *punchManager) call(ctx context.Context, path []string, req punchMsg, timeout time.Duration) (punchReply, error) {
+	if len(path) > 0 && m.a.node.IsRestricted(path[0]) {
+		return punchReply{}, errors.New("punch: not available through node access by user")
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var conn net.Conn

@@ -1,9 +1,10 @@
 package relay
 
 import (
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/FrankoonG/hy2scale/core/proto"
 )
 
 // Pre-1.3.10 nodes tagged exit streams with "#bridge=<id>" and, after losing
@@ -11,21 +12,15 @@ import (
 // the old target connection ("rebind"). The bytes in flight on the dead
 // stream were lost, so a rebound stream carried a silently damaged byte
 // stream, and both ends held connections for up to 90 s waiting for it.
-// 1.3.10 recovers end-to-end instead (internal/msess): tags from old peers
+// 1.3.10 recovers end-to-end instead (core/msess): tags from old peers
 // are stripped and every rebind is refused, so the old peer closes the
 // connection rather than continuing it with a gap.
 
-const bridgeRebindAddr = "_relay_rebind_"
+const bridgeRebindAddr = proto.RebindPrefix
 
 // ParseBridgeAddr strips an old peer's bridge tag.
 // Returns (targetAddr, bridgeID, isBridged).
-func ParseBridgeAddr(addr string) (string, string, bool) {
-	idx := strings.Index(addr, "#bridge=")
-	if idx < 0 {
-		return addr, "", false
-	}
-	return addr[:idx], addr[idx+8:], true
-}
+func ParseBridgeAddr(addr string) (string, string, bool) { return proto.ParseBridgeAddr(addr) }
 
 // bridgeTags tracks the tags of via streams relayed for old peers. A via
 // rebind reuses the tag of its (dead) stream on a request that otherwise

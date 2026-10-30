@@ -847,5 +847,16 @@
   "login.topo.tag.compat": "호환 연결",
   "login.topo.tag.remoteAdmin": "릴레이 원격 관리",
   "login.topo.tag.noPw": "비밀번호 없이 접속",
-  "login.caps": "Caps Lock이 켜져 있습니다"
+  "login.caps": "Caps Lock이 켜져 있습니다",
+  "users.nodeAccess": "노드 접속",
+  "users.nodeAccessHint": "이 노드에서 보이는 노드를 출구로 사용할 수 있습니다.",
+  "users.allowInternal": "내부 주소 허용",
+  "users.allowInternalHint": "루프백, 사설 및 출구 자체 네트워크.",
+  "nodes.access": "접속 방식",
+  "nodes.accessFull": "전체 노드",
+  "nodes.accessUser": "노드 접속 (사용자)",
+  "nodes.userPassword": "사용자 비밀번호",
+  "nodes.restricted": "제한",
+  "nodes.restrictedTitle": "노드 접속(사용자)으로 연결: 트래픽만 가능",
+  "devices.hy2Node": "hy2 (노드 접속)"
 }

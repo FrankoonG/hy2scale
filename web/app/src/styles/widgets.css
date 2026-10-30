@@ -134,3 +134,7 @@
 /* ====== Country flag (left of a public address) ====== */
 .cflag{display:inline-block;width:1.35em;height:.9em;margin-right:.45em;vertical-align:-.1em;border-radius:2px;box-shadow:0 0 0 1px var(--border);object-fit:cover;flex:none;user-select:none}
 .cflag-wait{background:var(--border);opacity:.5;box-shadow:none}
+
+/* ====== Restricted (node access by user) badge ====== */
+.hy-badge.badge-restricted{color:#0f766e;background:rgba(20,184,166,.12);border-color:rgba(20,184,166,.4)}
+:root[data-theme="dark"] .hy-badge.badge-restricted{color:#5eead4;background:rgba(45,212,191,.12);border-color:rgba(45,212,191,.35)}

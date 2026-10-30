@@ -38,6 +38,8 @@ export interface TopologyNode {
   ip_statuses?: IPStatus[];
   // who set up the live hole-punched connection(s) to this direct peer
   punched?: string[];
+  // reached through node access by user (traffic only: no management)
+  restricted?: boolean;
   exit_node: boolean;
   direction: 'inbound' | 'outbound' | 'local' | '';
   connected: boolean;
@@ -88,6 +90,8 @@ export interface ClientEntry {
   addr: string;
   addrs?: string[];
   password: string;
+  /** 'user': node access by user (password = a user's hy2 password there) */
+  access?: 'user';
   sni?: string;
   insecure?: boolean;
   ca?: string;
@@ -149,6 +153,10 @@ export interface UserConfig {
   traffic_used: number;
   expiry_date?: string;
   enabled: boolean;
+  /** may use this node's visible nodes as exits (node access by user) */
+  node_access?: boolean;
+  /** flows may not reach internal destinations */
+  deny_internal?: boolean;
 }
 
 /** Password conflict info: username → proxy → list of conflicting usernames */

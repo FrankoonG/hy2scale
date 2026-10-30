@@ -3,6 +3,7 @@ module github.com/FrankoonG/hy2scale
 go 1.27.0
 
 require (
+	github.com/FrankoonG/hy2scale/core v0.0.0-00010101000000-000000000000
 	github.com/apernet/hysteria/core/v2 v2.8.1
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/xen0bit/veepin v0.0.0-00010101000000-000000000000
@@ -31,3 +32,7 @@ require (
 exclude golang.zx2c4.com/wireguard/tun/netstack v0.0.0-20220703234212-c31a7b1ab478
 
 replace github.com/xen0bit/veepin => ./third_party/veepin
+
+// The shared core (protocol, client, msess) is its own module so other
+// projects can use it; this repository builds against the in-tree copy.
+replace github.com/FrankoonG/hy2scale/core => ./core

@@ -191,6 +191,12 @@
 .hy-topo-dot.native .hy-topo-dot-outer{color:#eab308}
 .hy-topo-dot.native .hy-topo-dot-inner{color:#92400e}
 .hy-topo-dot.native .hy-topo-dot-name{color:#92400e}
+/* RESTRICTED — reached through node access by user: traffic only, no
+   management. Teal, apart from red (unreachable) and yellow (native);
+   the edge into such a tree is dashed. Offline (below) still wins. */
+.hy-topo-dot.restricted .hy-topo-dot-outer{color:#14b8a6}
+.hy-topo-dot.restricted .hy-topo-dot-inner{color:#0f766e}
+.hy-topo-dot.restricted .hy-topo-dot-name{color:#0f766e}
 /* Offline — peer is configured but currently unreachable (couldn't
    complete the QUIC handshake / register flow / etc.). Distinct from
    `disabled` (user-toggled off, faded) and `bad` (incompatible peer,
@@ -299,6 +305,10 @@
  * the rest of the topology in its idle state. */
 .hy-topo-edge.to-native .hy-topo-edge-base{color:#fde68a;stroke-opacity:.55}
 .hy-topo-edge.to-native .hy-topo-edge-flow{color:#fde68a;stroke-opacity:.95}
+.hy-topo-edge.restricted .hy-topo-edge-base,.hy-topo-edge.restricted-entry .hy-topo-edge-base{color:#14b8a6;stroke-opacity:.5}
+.hy-topo-edge.restricted .hy-topo-edge-flow,.hy-topo-edge.restricted-entry .hy-topo-edge-flow{color:#14b8a6}
+.hy-topo-edge.restricted-entry:not(.offline) .hy-topo-edge-base{stroke-dasharray:6 4}
+.hy-topo-edge.restricted .hy-topo-edge-draw,.hy-topo-edge.restricted-entry .hy-topo-edge-draw{color:#0d9488}
 @keyframes hy-topo-path-draw{to{stroke-dashoffset:0}}
 
 /* Offline / disabled edges — red, dashed, no flow, × marker. */
@@ -352,6 +362,10 @@
 :root[data-theme="dark"] .hy-topo-dot-name{color:#e3e6ed}
 :root[data-theme="dark"] .hy-topo-dot.self .hy-topo-dot-name{color:#8ea4ff}
 :root[data-theme="dark"] .hy-topo-dot.native .hy-topo-dot-inner,:root[data-theme="dark"] .hy-topo-dot.native .hy-topo-dot-name{color:#fbbf24}
+:root[data-theme="dark"] .hy-topo-dot.restricted .hy-topo-dot-outer{color:#2dd4bf}
+:root[data-theme="dark"] .hy-topo-dot.restricted .hy-topo-dot-inner,:root[data-theme="dark"] .hy-topo-dot.restricted .hy-topo-dot-name{color:#5eead4}
+:root[data-theme="dark"] .hy-topo-edge.restricted .hy-topo-edge-base,:root[data-theme="dark"] .hy-topo-edge.restricted-entry .hy-topo-edge-base,:root[data-theme="dark"] .hy-topo-edge.restricted .hy-topo-edge-flow,:root[data-theme="dark"] .hy-topo-edge.restricted-entry .hy-topo-edge-flow{color:#2a9d8f}
+:root[data-theme="dark"] .hy-topo-edge.restricted .hy-topo-edge-draw,:root[data-theme="dark"] .hy-topo-edge.restricted-entry .hy-topo-edge-draw{color:#14b8a6}
 :root[data-theme="dark"] .hy-topo-dot.offline .hy-topo-dot-outer{color:#f87171}
 :root[data-theme="dark"] .hy-topo-dot.offline .hy-topo-dot-inner{color:#fca5a5}
 :root[data-theme="dark"] .hy-topo-dot.offline .hy-topo-dot-name{color:#fca5a5}

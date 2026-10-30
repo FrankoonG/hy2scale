@@ -210,10 +210,10 @@ func (a *App) handleSS(conn net.Conn, method string) {
 				}
 				remaining = append(remaining, extra...)
 			}
-			remote, err = a.dialSniffedTCP(a.appCtx, a.exitRoute(exitVia, exitPaths, exitMode), nil,
+			remote, err = a.dialSniffedTCP(withRestrict(a.appCtx, a.userRestrict(username)), a.exitRoute(exitVia, exitPaths, exitMode), nil,
 				addr, remaining, waited, isLoopbackAddr(conn.RemoteAddr()))
 		} else {
-			remote, err = a.dialRoutedTCP(a.appCtx, exitVia, exitPaths, exitMode, addr)
+			remote, err = a.dialRoutedTCP(withRestrict(a.appCtx, a.userRestrict(username)), exitVia, exitPaths, exitMode, addr)
 		}
 		if err != nil {
 			return
@@ -358,10 +358,10 @@ func (a *App) handleSSNone(conn net.Conn) {
 	if wantSniff(addr) {
 		peeked, waited := peekHello(conn, remaining)
 		remaining = peeked
-		remote, err = a.dialSniffedTCP(a.appCtx, a.exitRoute(exitVia, exitPaths, exitMode), nil,
+		remote, err = a.dialSniffedTCP(withRestrict(a.appCtx, a.userRestrict(username)), a.exitRoute(exitVia, exitPaths, exitMode), nil,
 			addr, remaining, waited, isLoopbackAddr(conn.RemoteAddr()))
 	} else {
-		remote, err = a.dialRoutedTCP(a.appCtx, exitVia, exitPaths, exitMode, addr)
+		remote, err = a.dialRoutedTCP(withRestrict(a.appCtx, a.userRestrict(username)), exitVia, exitPaths, exitMode, addr)
 	}
 	if err != nil {
 		return
