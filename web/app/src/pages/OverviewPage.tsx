@@ -581,25 +581,8 @@ export default function OverviewPage() {
   return (
     <div className="hy-page ov-page">
       <div className="ov-grid">
-        {/* Traffic */}
-        <Card
-          className="ov-span-8"
-          title={t('overview.traffic')}
-          actions={
-            <SegmentedControl items={rangeTabs} value={range} onChange={setRange} />
-          }
-        >
-          <TrafficChart data={chartData} range={range} />
-          <div className="ov-metrics">
-            <Metric label={t('overview.totalUp')} value={<span className="stat-up">{stats ? fmtBytes(stats.tx_bytes) : '—'}</span>} />
-            <Metric label={t('overview.totalDown')} value={<span className="stat-down">{stats ? fmtBytes(stats.rx_bytes) : '—'}</span>} />
-            <Metric label={t('stats.connections')} value={stats?.conns ?? '—'} spark={<MiniSpark data={sConns} cls="ov-spark-pri" />} />
-            <Metric label={t('stats.exitClients')} value={stats?.exit_clients ?? '—'} spark={<MiniSpark data={sExits} cls="ov-spark-pri" />} />
-          </div>
-        </Card>
-
         {/* This node */}
-        <Card className="ov-span-4" title={t('overview.thisNode')}>
+        <Card className="ov-span-5" title={t('overview.thisNode')}>
           <div className="ov-node-head">
             <span className="ov-node-name">{node?.node_id || '—'}</span>
             {node?.version && <VersionBadge version={node.version} limited={node.limited} update={update} />}
@@ -733,6 +716,23 @@ export default function OverviewPage() {
                 </div>
               );
             })}
+          </div>
+        </Card>
+
+        {/* Traffic */}
+        <Card
+          className="ov-span-7"
+          title={t('overview.traffic')}
+          actions={
+            <SegmentedControl items={rangeTabs} value={range} onChange={setRange} />
+          }
+        >
+          <TrafficChart data={chartData} range={range} />
+          <div className="ov-metrics">
+            <Metric label={t('overview.totalUp')} value={<span className="stat-up">{stats ? fmtBytes(stats.tx_bytes) : '—'}</span>} />
+            <Metric label={t('overview.totalDown')} value={<span className="stat-down">{stats ? fmtBytes(stats.rx_bytes) : '—'}</span>} />
+            <Metric label={t('stats.connections')} value={stats?.conns ?? '—'} spark={<MiniSpark data={sConns} cls="ov-spark-pri" />} />
+            <Metric label={t('stats.exitClients')} value={stats?.exit_clients ?? '—'} spark={<MiniSpark data={sExits} cls="ov-spark-pri" />} />
           </div>
         </Card>
 
