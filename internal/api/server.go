@@ -112,6 +112,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.proxyRoutes(authed)
 	s.endpointRoutes(authed)
 	s.webRoutes(authed)
+	s.publicIPRoutes(authed)
 	s.shellRoutes(authed)
 
 	apiMux.Handle("/api/", s.authMiddleware(authed))

@@ -79,6 +79,8 @@ func (s *Server) coreRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/logs", s.handleLogs)
 	m.HandleFunc("GET /api/settings/ui", s.getUISettings)
 	m.HandleFunc("PUT /api/settings/ui", s.updateUISettings)
+	m.HandleFunc("GET /api/settings/node", s.getNodeSettings)
+	m.HandleFunc("PUT /api/settings/node", s.updateNodeSettings)
 	// TLS
 	m.HandleFunc("GET /api/tls", s.listCerts)
 	m.HandleFunc("POST /api/tls/import", s.importCert)

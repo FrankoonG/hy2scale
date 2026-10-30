@@ -1,4 +1,9 @@
-package app
+// Package publicip is the public-address add-on: it finds the public
+// address of every interface that reaches the internet (and its country)
+// through public services, and publishes the egress interfaces' as this
+// node's "egress" attribute (core/proto.AttrEgress). The core never calls
+// these services; it only carries the attribute.
+package publicip
 
 import (
 	"context"
@@ -9,6 +14,8 @@ import (
 	"time"
 
 	"github.com/FrankoonG/hy2scale/core/iface"
+	"github.com/FrankoonG/hy2scale/core/node"
+	"github.com/FrankoonG/hy2scale/core/proto"
 	"github.com/FrankoonG/hy2scale/internal/ipcountry"
 	"github.com/FrankoonG/hy2scale/internal/pubip"
 )
@@ -24,8 +31,29 @@ type pubKey struct {
 	fam   int
 }
 
-type pubState struct {
-	m *ifaceManager
+// Config: how the public address of an interface is detected.
+type Config struct {
+	Method   string   `yaml:"method,omitempty" json:"method"` // "public" | "peer+public"
+	Interval int      `yaml:"interval,omitempty" json:"interval"`
+	Servers  []string `yaml:"servers,omitempty" json:"servers"`
+}
+
+// Host is what the detector needs from the node.
+type Host interface {
+	// Config: the configured detection (nil = defaults).
+	Config() *Config
+	// Children: the configured child interfaces.
+	Children() []iface.InterfaceConfig
+	// PeerAddr asks a peer reached through iface which address it sees
+	// this node at ("peer+public").
+	PeerAddr(ctx context.Context, iface string, fam int) pubip.Result
+}
+
+// Detector runs the detection.
+type Detector struct {
+	m    *iface.Manager
+	host Host
+	ctx  context.Context
 
 	mu      sync.Mutex
 	results map[pubKey]pubip.Result
@@ -64,15 +92,16 @@ func (e countryEntry) retryAfter() time.Duration {
 	return d
 }
 
-func newPubState(m *ifaceManager) *pubState {
-	return &pubState{m: m, results: map[pubKey]pubip.Result{}, running: map[pubKey]bool{},
+// New: the detector of the interfaces of m; Run starts it.
+func New(m *iface.Manager, h Host) *Detector {
+	return &Detector{m: m, host: h, ctx: context.Background(), results: map[pubKey]pubip.Result{}, running: map[pubKey]bool{},
 		lastLoc: map[string]string{}, kickCh: make(chan string, 64),
 		countries: map[netip.Addr]countryEntry{}, countryRun: map[netip.Addr]bool{},
 		countryRetry: map[netip.Addr]*time.Timer{}}
 }
 
-func (p *pubState) settings() (interval time.Duration, servers []string, method string) {
-	pc := p.m.a.store.Get().PublicIP
+func (p *Detector) settings() (interval time.Duration, servers []string, method string) {
+	pc := p.host.Config()
 	interval, servers, method = 10*time.Minute, pubip.DefaultServers, "public"
 	if pc != nil {
 		if pc.Interval >= 60 {
@@ -89,8 +118,7 @@ func (p *pubState) settings() (interval time.Duration, servers []string, method 
 }
 
 // targets lists the (interface, family) pairs worth checking.
-func (p *pubState) targets() []pubKey {
-	a := p.m.a
+func (p *Detector) targets() []pubKey {
 	seen := map[pubKey]bool{}
 	var out []pubKey
 	add := func(name string, fam int) {
@@ -100,12 +128,12 @@ func (p *pubState) targets() []pubKey {
 			out = append(out, k)
 		}
 	}
-	sel := a.egressSelection()
+	sel := p.m.Selection()
 	add(sel.IPv4, 4)
 	add(sel.IPv6, 6)
 	add(iface.DefaultRouteIface(4), 4)
 	add(iface.DefaultRouteIface(6), 6)
-	for _, c := range a.store.Get().Interfaces {
+	for _, c := range p.host.Children() {
 		if !c.Enabled {
 			continue
 		}
@@ -119,18 +147,20 @@ func (p *pubState) targets() []pubKey {
 	return out
 }
 
-func (p *pubState) kick(name string) {
+// Kick re-checks interface name ("" = all).
+func (p *Detector) Kick(name string) {
 	select {
 	case p.kickCh <- name:
 	default:
 	}
 }
 
-func (p *pubState) kickAll() { p.kick("") }
+// KickAll re-checks every interface.
+func (p *Detector) KickAll() { p.Kick("") }
 
-// detectNow re-checks one interface (both families) and waits a little for
+// DetectNow re-checks one interface (both families) and waits a little for
 // the result so the API can return it.
-func (p *pubState) detectNow(name string) {
+func (p *Detector) DetectNow(name string) {
 	var wg sync.WaitGroup
 	for _, k := range p.targets() {
 		if k.iface == name {
@@ -146,9 +176,11 @@ func (p *pubState) detectNow(name string) {
 	}
 }
 
-// run is the scheduler: every interval, on kicks, and when an interface's
-// local addresses change.
-func (p *pubState) run(ctx context.Context) {
+// Run is the scheduler: every interval, on kicks, and when an interface's
+// local addresses change. It also publishes the egress attribute on n.
+func (p *Detector) Run(ctx context.Context, n *node.Node) {
+	p.ctx = ctx
+	go p.publish(ctx, n)
 	interval, _, _ := p.settings()
 	full := time.NewTimer(5 * time.Second)
 	poll := time.NewTicker(30 * time.Second)
@@ -186,7 +218,7 @@ func (p *pubState) run(ctx context.Context) {
 }
 
 // localAddrs: a fingerprint of an interface's current addresses.
-func (p *pubState) localAddrs(name string) string {
+func (p *Detector) localAddrs(name string) string {
 	var s string
 	for _, ip := range p.local(name) {
 		s += ip.String() + ","
@@ -194,7 +226,7 @@ func (p *pubState) localAddrs(name string) string {
 	return s
 }
 
-func (p *pubState) local(name string) []netip.Addr {
+func (p *Detector) local(name string) []netip.Addr {
 	if i := p.m.Child(name); i != nil {
 		st := i.Status()
 		var out []netip.Addr
@@ -220,7 +252,7 @@ func (p *pubState) local(name string) []netip.Addr {
 }
 
 // detect checks one interface and family; manual = an operator's refresh.
-func (p *pubState) detect(k pubKey, manual bool) {
+func (p *Detector) detect(k pubKey, manual bool) {
 	p.mu.Lock()
 	if p.running[k] {
 		p.mu.Unlock()
@@ -235,11 +267,11 @@ func (p *pubState) detect(k pubKey, manual bool) {
 	}()
 
 	_, servers, method := p.settings()
-	ctx, cancel := context.WithTimeout(p.m.a.appCtx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(p.ctx, 30*time.Second)
 	defer cancel()
 	var res pubip.Result
 	if method == "peer+public" {
-		res = p.m.a.peerReportedAddr(ctx, k.iface, k.fam)
+		res = p.host.PeerAddr(ctx, k.iface, k.fam)
 	}
 	if !res.IP.IsValid() {
 		dial, resolve := p.funcs(k)
@@ -257,7 +289,7 @@ func (p *pubState) detect(k pubKey, manual bool) {
 // detected on, unless a recent answer is cached. A failure is retried on
 // its own, backing off, while ip is still that interface's address; an
 // operator's refresh (manual) retries it at once.
-func (p *pubState) lookupCountry(k pubKey, ip netip.Addr, manual bool) {
+func (p *Detector) lookupCountry(k pubKey, ip netip.Addr, manual bool) {
 	ip = ip.Unmap()
 	p.mu.Lock()
 	e, ok := p.countries[ip]
@@ -272,7 +304,7 @@ func (p *pubState) lookupCountry(k pubKey, ip netip.Addr, manual bool) {
 	p.countryRun[ip] = true
 	p.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(p.m.a.appCtx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(p.ctx, 30*time.Second)
 	defer cancel()
 	dial, resolve := p.funcs(k)
 	code, _ := ipcountry.Lookup(ctx, k.fam, ip, dial, resolve)
@@ -306,23 +338,23 @@ func (p *pubState) lookupCountry(k pubKey, ip netip.Addr, manual bool) {
 		cur := p.results[k].IP.Unmap() == ip
 		delete(p.countryRetry, ip)
 		p.mu.Unlock()
-		if cur && p.m.a.appCtx.Err() == nil {
+		if cur && p.ctx.Err() == nil {
 			p.lookupCountry(k, ip, false)
 		}
 	})
 }
 
 // country is the cached country code of ip ("" = unknown).
-func (p *pubState) country(ip netip.Addr) string {
+func (p *Detector) country(ip netip.Addr) string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.countries[ip.Unmap()].code
 }
 
 // funcs: dial and resolve through the interface.
-func (p *pubState) funcs(k pubKey) (pubip.DialFunc, pubip.ResolveFunc) {
+func (p *Detector) funcs(k pubKey) (pubip.DialFunc, pubip.ResolveFunc) {
 	name := k.iface
-	if p.m.a.isChildIface(name) {
+	if p.m.IsChild(name) {
 		return func(ctx context.Context, network, addr string) (net.Conn, error) {
 				i := p.m.Child(name)
 				if i == nil {
@@ -349,14 +381,14 @@ type errNotRunning string
 func (e errNotRunning) Error() string { return "interface " + string(e) + " is not running" }
 
 // view is the API form of one result (nil = not checked).
-func (p *pubState) view(name string, fam int) *PublicView {
+func (p *Detector) view(name string, fam int) *iface.PublicView {
 	p.mu.Lock()
 	r, ok := p.results[pubKey{name, fam}]
 	p.mu.Unlock()
 	if !ok {
 		return nil
 	}
-	v := &PublicView{OK: r.IP.IsValid()}
+	v := &iface.PublicView{OK: r.IP.IsValid()}
 	if !r.Checked.IsZero() {
 		v.Checked = r.Checked.Unix()
 	}
@@ -374,8 +406,8 @@ func (p *pubState) view(name string, fam int) *PublicView {
 	return v
 }
 
-// fill sets an interface's public addresses in its API view.
-func (p *pubState) fill(v *IfaceView) {
+// Fill sets an interface's public addresses in its API view.
+func (p *Detector) Fill(v *iface.IfaceView) {
 	v.Public["ipv4"] = p.view(v.Name, 4)
 	v.Public["ipv6"] = p.view(v.Name, 6)
 }
@@ -396,15 +428,15 @@ type EgressPublic struct {
 	Country string `json:"country,omitempty"`
 }
 
-// SelfEgress reports this node's egress.
-func (a *App) SelfEgress() SelfEgress {
-	sel := a.egressSelection()
+// Self reports this node's egress.
+func (p *Detector) Self() SelfEgress {
+	sel := p.m.Selection()
 	one := func(name string, fam int) *EgressPublic {
 		if name == "" {
 			return nil
 		}
 		e := &EgressPublic{}
-		if v := a.ifaces.pub.view(name, fam); v != nil && v.OK {
+		if v := p.view(name, fam); v != nil && v.OK {
 			e.IP, e.OK, e.Country = v.IP, true, v.Country
 		}
 		return e
@@ -412,15 +444,33 @@ func (a *App) SelfEgress() SelfEgress {
 	return SelfEgress{IPv4: one(sel.IPv4, 4), IPv6: one(sel.IPv6, 6)}
 }
 
-// selfEgressJSON serves the relay's egress stream.
-func (a *App) selfEgressJSON() []byte {
-	b, _ := json.Marshal(a.SelfEgress())
+// SelfJSON is Self as JSON (the egress attribute).
+func (p *Detector) SelfJSON() []byte {
+	b, _ := json.Marshal(p.Self())
 	return b
 }
 
-// addrs: the detected public addresses (this node's own, for the
+// publish keeps the egress attribute current.
+func (p *Detector) publish(ctx context.Context, n *node.Node) {
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	var last string
+	for {
+		if b := p.SelfJSON(); string(b) != last {
+			last = string(b)
+			n.SetAttr(proto.AttrEgress, json.RawMessage(b))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// Addrs: the detected public addresses (this node's own, for the
 // internal-destination check).
-func (p *pubState) addrs() []netip.Addr {
+func (p *Detector) Addrs() []netip.Addr {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	var out []netip.Addr

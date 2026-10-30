@@ -5,6 +5,7 @@ import type {
   IKEv2Config, OpenVPNConfig, WireGuardConfig, WireGuardPeer,
   RoutingRule, CertInfo, UISettings, PortConflict, PasswordConflicts,
   UpgradeStatus, UpgradeCheckResult, NodeEgress, NodeEgressFamily,
+  PublicIPSettings,
 } from './types';
 
 export type { NodeConfig, Stats, TopologyNode, ClientEntry, PathStatus, UserConfig, Session, ProxyConfig, SSConfig, L2TPConfig, IKEv2Config, OpenVPNConfig, WireGuardConfig, WireGuardPeer, RoutingRule, CertInfo, UISettings, PortConflict, PasswordConflicts, UpgradeStatus, UpgradeCheckResult, NodeEgress, NodeEgressFamily };
@@ -201,6 +202,13 @@ export const setEgress = (data: import('./types').Egress) =>
 export const getUISettings = () => api<UISettings>('/settings/ui');
 export const updateUISettings = (data: Partial<UISettings>) =>
   api('/settings/ui', { method: 'PUT', body: JSON.stringify(data) });
+// Settings by owner: the node (core), the web UI, public-address detection.
+export const updateNodeSettings = (data: Partial<UISettings>) =>
+  api('/settings/node', { method: 'PUT', body: JSON.stringify(data) });
+export const updateWebSettings = (data: Partial<UISettings>) =>
+  api('/settings/web', { method: 'PUT', body: JSON.stringify(data) });
+export const updatePublicIPSettings = (data: PublicIPSettings) =>
+  api('/settings/public-ip', { method: 'PUT', body: JSON.stringify(data) });
 export const changePassword = (data: { current_password: string; new_username?: string; new_password?: string }) =>
   api('/settings/password', { method: 'PUT', body: JSON.stringify(data) });
 

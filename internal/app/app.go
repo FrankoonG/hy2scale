@@ -375,8 +375,8 @@ func (a *App) Run(ctx context.Context) error {
 	a.ifaces.Start(ctx)
 	a.ifaces.apply(cfg)
 	go a.initEgress(ctx)
-	go a.ifaces.pub.run(ctx)
-	go a.attrsLoop(ctx)
+	go a.ifaces.pub.Run(ctx, a.node)
+	go a.node.RunAttrs(ctx)
 	go a.tree.Run(ctx)
 	a.exit.Start(ctx)
 

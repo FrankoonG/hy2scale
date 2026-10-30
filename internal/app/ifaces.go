@@ -1,12 +1,15 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"path/filepath"
 	"strings"
 
 	"github.com/FrankoonG/hy2scale/core/iface"
+	"github.com/FrankoonG/hy2scale/internal/publicip"
+	"github.com/FrankoonG/hy2scale/internal/pubip"
 )
 
 // Interfaces: the system's own interfaces (read only) and the child
@@ -28,26 +31,34 @@ type (
 	InterfacesView  = iface.InterfacesView
 )
 
-// PublicIPConfig: how the public address of an interface is detected.
-type PublicIPConfig struct {
-	Method   string   `yaml:"method,omitempty" json:"method"` // "public" | "peer+public"
-	Interval int      `yaml:"interval,omitempty" json:"interval"`
-	Servers  []string `yaml:"servers,omitempty" json:"servers"`
-}
+// PublicIPConfig: how the public address of an interface is detected
+// (the publicip add-on).
+type PublicIPConfig = publicip.Config
 
 // ifaceManager: the interfaces (core/iface) and their public addresses.
 type ifaceManager struct {
 	*iface.Manager
 	a   *App
-	pub *pubState
+	pub *publicip.Detector
+}
+
+// pubHost: the public-address add-on's view of this node.
+type pubHost struct{ a *App }
+
+func (h pubHost) Config() *publicip.Config { return h.a.store.Get().PublicIP }
+
+func (h pubHost) Children() []iface.InterfaceConfig { return h.a.store.Get().Interfaces }
+
+func (h pubHost) PeerAddr(ctx context.Context, name string, fam int) pubip.Result {
+	return h.a.peerReportedAddr(ctx, name, fam)
 }
 
 func newIfaceManager(a *App) *ifaceManager {
 	m := &ifaceManager{Manager: iface.New(filepath.Join(a.dataDir, "ifaces")), a: a}
-	m.pub = newPubState(m)
-	m.OnChange = m.pub.kick
-	m.OwnAddrs = m.pub.addrs
-	m.Fill = m.pub.fill
+	m.pub = publicip.New(m.Manager, pubHost{a})
+	m.OnChange = m.pub.Kick
+	m.OwnAddrs = m.pub.Addrs
+	m.Fill = m.pub.Fill
 	return m
 }
 
@@ -297,7 +308,7 @@ func (a *App) RenewInterface(name string) error {
 
 // RefreshPublicIP re-detects an interface's public addresses now.
 func (a *App) RefreshPublicIP(name string) {
-	a.ifaces.pub.detectNow(name)
+	a.ifaces.pub.DetectNow(name)
 }
 
 // isChildIface reports whether name is a configured child interface.
@@ -324,3 +335,6 @@ func (a *App) BindableInterfaces() []IfaceInfo {
 // installChildListen lets node addresses bound to a child interface open
 // their UDP socket on it.
 func (a *App) installChildListen() { childListen = a.ifaces.ChildListen }
+
+// SelfEgress reports this node's egress (the publicip add-on).
+func (a *App) SelfEgress() publicip.SelfEgress { return a.ifaces.pub.Self() }

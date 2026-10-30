@@ -14,6 +14,8 @@ import (
 
 // webRoutes: the routes of the web add-on (account).
 func (s *Server) webRoutes(m *http.ServeMux) {
+	m.HandleFunc("GET /api/settings/web", s.getWebSettings)
+	m.HandleFunc("PUT /api/settings/web", s.updateWebSettings)
 	m.HandleFunc("GET /api/me", s.getMe)
 	m.HandleFunc("PUT /api/settings/password", s.changePassword)
 }
