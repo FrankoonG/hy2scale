@@ -1389,7 +1389,9 @@ func (a *App) newHy2Server(ctx context.Context, conn net.PacketConn, cert tls.Ce
 	auth hyserver.Authenticator, events server.ConnEvents) (hyserver.Server, error) {
 	return server.New(ctx, a.node, a.exit, server.Config{
 		Conn: conn, Cert: cert, Auth: auth, Events: events,
-		Users: &nodeOutbound{app: a, node: a.node, ctx: ctx},
+		Users:    &nodeOutbound{app: a, node: a.node, ctx: ctx},
+		Access:   accessGrants{a},
+		MaxChain: func() int { return a.tree.Limits().MaxDepth },
 		WrapAPI: func(c net.Conn, authID string) net.Conn {
 			return &RelayAuthConn{Conn: c, AuthID: authID}
 		},
@@ -2292,18 +2294,8 @@ type nodeOutbound struct {
 	ctx  context.Context
 }
 
+// (Mesh-internal streams of users are the server's: core/server/access.go.)
 func (o *nodeOutbound) TCP(_ context.Context, authID, peerAddr, actualAddr string, isBridged bool) (net.Conn, error) {
-	if relay.IsRelayStream(actualAddr) || IsBondStream(actualAddr) {
-		// A user credential must never reach mesh-internal streams: via
-		// streams would route an hy2 user through the mesh past the exit
-		// assigned to them, and register would join them as a peer. A user
-		// with node access may open the few listed in access.go, checked
-		// there.
-		if o.app.nodeAccessUser(authID) {
-			return o.accessTCP(authID, peerAddr, actualAddr)
-		}
-		return nil, fmt.Errorf("relay stream not permitted for %s", authID)
-	}
 	// hy2 users follow their exit route like every other protocol, and get
 	// a device row with live accounting.
 	if err := o.app.hy2UserUsable(authID); err != nil {
@@ -2354,13 +2346,6 @@ func (o *nodeOutbound) localTCPCtx(ctx context.Context, actualAddr string, isBri
 }
 
 func (o *nodeOutbound) UDP(_ context.Context, authID, peerAddr, reqAddr string) (hyserver.UDPConn, error) {
-	// Multi-hop UDP: a user may only go on through node access.
-	if chain, targetAddr, isVia := relay.ParseVia(reqAddr); isVia {
-		if o.app.nodeAccessUser(authID) {
-			return o.accessUDP(authID, peerAddr, chain, targetAddr)
-		}
-		return nil, fmt.Errorf("relay stream not permitted for %s", authID)
-	}
 	if err := o.app.hy2UserUsable(authID); err != nil {
 		return nil, err
 	}

@@ -57,6 +57,10 @@ type Config struct {
 	// LocalTCP dials a plain target of a node's stream from this node
 	// (nil: through the exit engine with host-name recovery).
 	LocalTCP func(ctx context.Context, addr string, bridged bool) (net.Conn, error)
+	// Access grants node access by user (access.go); nil: none.
+	Access Access
+	// MaxChain bounds the via chains of node access (nil: 5).
+	MaxChain func() int
 }
 
 // New builds the server; ctx bounds the streams it serves.
@@ -120,6 +124,16 @@ func (o *outbound) TCP(reqAddr string) (net.Conn, error) {
 	addr, _, bridged := relay.ParseBridgeAddr(reqAddr)
 	authID, peerAddr := take()
 	if strings.HasPrefix(authID, UserPrefix) {
+		// A user credential never reaches mesh-internal streams (a via
+		// would take it past its own exit, register would make it a
+		// peer) unless node access grants the few access.go lists.
+		if relay.IsRelayStream(addr) || exit.IsBondStream(addr) {
+			g, err := o.grant(authID)
+			if err != nil {
+				return nil, err
+			}
+			return o.accessTCP(authID, peerAddr, addr, g)
+		}
 		if o.cfg.Users == nil {
 			return nil, fmt.Errorf("%s: user streams are not served here", authID)
 		}
@@ -149,6 +163,21 @@ func (o *outbound) TCP(reqAddr string) (net.Conn, error) {
 		return o.bond(addr), nil
 	}
 	return o.local(o.ctx, addr, bridged)
+}
+
+// grant: the node access of a user's stream, or why it is refused.
+func (o *outbound) grant(authID string) (Grant, error) {
+	if o.cfg.Access == nil {
+		return Grant{}, fmt.Errorf("relay stream not permitted for %s", authID)
+	}
+	g, ok, err := o.cfg.Access.Grant(authID)
+	switch {
+	case err != nil:
+		return Grant{}, err
+	case !ok:
+		return Grant{}, fmt.Errorf("relay stream not permitted for %s", authID)
+	}
+	return g, nil
 }
 
 func (o *outbound) bond(addr string) net.Conn {
@@ -188,6 +217,13 @@ func LocalTCP(ctx context.Context, ex *exit.Engine, addr string, bridged bool) (
 func (o *outbound) UDP(reqAddr string) (hyserver.UDPConn, error) {
 	authID, peerAddr := take()
 	if strings.HasPrefix(authID, UserPrefix) {
+		if chain, target, ok := relay.ParseVia(reqAddr); ok {
+			g, err := o.grant(authID)
+			if err != nil {
+				return nil, err
+			}
+			return o.accessUDP(authID, peerAddr, chain, target, g)
+		}
 		if o.cfg.Users == nil {
 			return nil, fmt.Errorf("%s: user streams are not served here", authID)
 		}
