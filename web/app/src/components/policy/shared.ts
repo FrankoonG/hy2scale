@@ -1,5 +1,5 @@
 import type { TFunction } from 'i18next';
-import type { Cond, CondField, Terminal, PolicySet, ConditionSet } from '@/api/policy';
+import type { Action, Cond, CondField, End, PolicySet, ConditionSet } from '@/api/policy';
 
 /** Client-side id of a new rule (sets get theirs from the node). */
 export const newId = () => 'r' + Math.random().toString(36).slice(2, 10);
@@ -51,10 +51,12 @@ export function describeCond(c: Cond | undefined, t: TFunction, names: { cond: M
   }
 }
 
-/** One-line description of a terminal. */
-export function describeTerminal(x: Terminal, t: TFunction, policies: Map<string, string>): string {
+/** One-line description of an end or a nested flow. */
+export function describeTerminal(x: Action, t: TFunction, policies: Map<string, string>): string {
   switch (x.type) {
-    case 'deny': return x.reject === false ? t('policy.term.drop') : t('policy.term.reject');
+    case 'result': return t(x.result ? 'policy.result.true' : 'policy.result.false');
+    case 'flow': return t('policy.termKind.flow');
+    case 'deny': return x.reject ? t('policy.term.reject') : t('policy.term.drop');
     case 'exit': return `${t('policy.term.exit')}: ${x.paths.join(' | ') || '—'}`;
     case 'iface': return `${t('policy.term.iface')}: ${x.iface}${x.src ? ` (${x.src})` : ''}`;
     case 'call': return `${t('policy.term.call')}: ${policies.get(x.policy) || x.policy}`;
@@ -63,4 +65,7 @@ export function describeTerminal(x: Terminal, t: TFunction, policies: Map<string
 }
 
 export type SetKind = 'policy' | 'condition';
+
+/** A set's end when its default is not set. */
+export const builtinDefault = (k: SetKind): End => (k === 'policy' ? { type: 'default' } : { type: 'result', result: false });
 export type AnySet = PolicySet | ConditionSet;

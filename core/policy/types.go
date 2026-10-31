@@ -10,6 +10,7 @@ package policy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 )
@@ -134,9 +135,14 @@ func ViaExit(paths []string, mode string) Start {
 type Hop struct {
 	Policy     string `json:"policy"`
 	PolicyName string `json:"policy_name"`
-	Rule       string `json:"rule"`      // rule id; "" = the set's default end
-	RuleName   string `json:"rule_name"` // rule name ("" = none)
-	Depth      int    `json:"depth"`     // 1 = first policy set entered
+	Rule       string `json:"rule"`      // the deciding rule's id; "" = a default end
+	RuleName   string `json:"rule_name"` // its name ("" = none)
+	// Path: 1-based rule positions from the set down to the deciding rule
+	// ([2, 1] = rule 1 of the flow in rule 2). For a default end: the
+	// positions of the flow whose default it is ([] = the set's).
+	Path      []int `json:"path"`
+	Otherwise bool  `json:"otherwise,omitempty"` // a default end decided
+	Depth     int   `json:"depth"`               // 1 = first policy set entered
 }
 
 // Decision is the outcome of evaluating a Conn.
@@ -224,16 +230,24 @@ type Condition struct {
 	Values []string    `yaml:"values,omitempty" json:"values,omitempty"` // match (any of)
 }
 
-// Terminal types.
+// Action types. A rule's then is an end (the set kind decides which ends
+// are allowed) or a nested flow; a set's default is an end.
 const (
+	// policy-set ends
 	TermDeny    = "deny"
 	TermExit    = "exit"
 	TermIface   = "iface"
 	TermCall    = "call"
 	TermDefault = "default"
+	// condition-set end
+	TermResult = "result"
+	// TermFlow: a nested flow (rules + optional default), evaluated like a
+	// set. When none of its rules match and it has no default, evaluation
+	// continues with the rule after the one that entered it.
+	TermFlow = "flow"
 )
 
-// Terminal is where a policy rule sends a flow.
+// Terminal is a rule's then, a flow's default, or a decision's terminal.
 type Terminal struct {
 	Type   string   `yaml:"type" json:"type"`
 	Reject bool     `yaml:"reject,omitempty" json:"reject,omitempty"` // deny
@@ -242,27 +256,14 @@ type Terminal struct {
 	Iface  string   `yaml:"iface,omitempty" json:"iface,omitempty"`   // iface
 	Src    string   `yaml:"src,omitempty" json:"src,omitempty"`       // iface: source address (optional)
 	Policy string   `yaml:"policy,omitempty" json:"policy,omitempty"` // call
+	Result bool     `yaml:"result,omitempty" json:"result,omitempty"` // result
+	// flow
+	Rules   []Rule    `yaml:"rules,omitempty" json:"rules,omitempty"`
+	Default *Terminal `yaml:"default,omitempty" json:"default,omitempty"` // nil = continue outside
 }
 
-// CondRule is a condition-set rule.
-type CondRule struct {
-	ID      string     `yaml:"id" json:"id"`
-	Name    string     `yaml:"name,omitempty" json:"name,omitempty"`
-	Enabled bool       `yaml:"enabled" json:"enabled"`
-	When    *Condition `yaml:"when,omitempty" json:"when,omitempty"` // nil = always
-	Result  bool       `yaml:"result" json:"result"`
-}
-
-// ConditionSet: the first enabled rule whose When holds gives the result;
-// none → false.
-type ConditionSet struct {
-	ID    string     `yaml:"id" json:"id"`
-	Name  string     `yaml:"name" json:"name"`
-	Rules []CondRule `yaml:"rules" json:"rules"`
-}
-
-// PolicyRule is a policy-set rule.
-type PolicyRule struct {
+// Rule: when its condition holds, then decides (an end, or a nested flow).
+type Rule struct {
 	ID      string     `yaml:"id" json:"id"`
 	Name    string     `yaml:"name,omitempty" json:"name,omitempty"`
 	Enabled bool       `yaml:"enabled" json:"enabled"`
@@ -270,12 +271,79 @@ type PolicyRule struct {
 	Then    Terminal   `yaml:"then" json:"then"`
 }
 
-// PolicySet: the first enabled rule whose When holds gives the terminal;
-// none → default.
-type PolicySet struct {
-	ID    string       `yaml:"id" json:"id"`
-	Name  string       `yaml:"name" json:"name"`
-	Rules []PolicyRule `yaml:"rules" json:"rules"`
+// Set is a condition set or a policy set; both are the same flow: the
+// first enabled rule whose When holds decides, else the default. They
+// differ only in their ends: a condition set returns true/false (default
+// false), a policy set ends in a terminal (default: the default route).
+type Set struct {
+	ID      string    `yaml:"id" json:"id"`
+	Name    string    `yaml:"name" json:"name"`
+	Rules   []Rule    `yaml:"rules" json:"rules"`
+	Default *Terminal `yaml:"default,omitempty" json:"default,omitempty"` // nil = the built-in default
+}
+
+// Set kinds (validation of the ends).
+type SetKind int
+
+const (
+	KindCondition SetKind = iota
+	KindPolicy
+)
+
+// BuiltinDefault is a set's end when Default is nil.
+func BuiltinDefault(k SetKind) Terminal {
+	if k == KindCondition {
+		return Terminal{Type: TermResult, Result: false}
+	}
+	return Terminal{Type: TermDefault}
+}
+
+// Aliases kept for readability at call sites.
+type (
+	ConditionSet = Set
+	PolicySet    = Set
+	CondRule     = Rule
+	PolicyRule   = Rule
+)
+
+// MaxFlowDepth bounds nested flows inside one set.
+const MaxFlowDepth = 8
+
+// WalkEnds calls fn with every end of s (rule thens that are not flows,
+// flow defaults, the set default) and its path.
+func (s *Set) WalkEnds(fn func(t *Terminal, path string)) {
+	walkRuleEnds(s.Rules, "rules", fn)
+	if s.Default != nil {
+		fn(s.Default, "default")
+	}
+}
+
+func walkRuleEnds(rules []Rule, path string, fn func(t *Terminal, path string)) {
+	for i := range rules {
+		p := fmt.Sprintf("%s[%d].then", path, i)
+		t := &rules[i].Then
+		if t.Type != TermFlow {
+			fn(t, p)
+			continue
+		}
+		walkRuleEnds(t.Rules, p+".rules", fn)
+		if t.Default != nil {
+			fn(t.Default, p+".default")
+		}
+	}
+}
+
+// WalkRules calls fn with every rule of s, nested ones included.
+func (s *Set) WalkRules(fn func(r *Rule, path string)) { walkRules(s.Rules, "rules", fn) }
+
+func walkRules(rules []Rule, path string, fn func(r *Rule, path string)) {
+	for i := range rules {
+		p := fmt.Sprintf("%s[%d]", path, i)
+		fn(&rules[i], p)
+		if rules[i].Then.Type == TermFlow {
+			walkRules(rules[i].Then.Rules, p+".then.rules", fn)
+		}
+	}
 }
 
 // Stop behaviours of a capture layer.

@@ -33,15 +33,14 @@ func NewID(prefix string) string {
 	return prefix + hex.EncodeToString(b[:])
 }
 
-// FillRuleIDs gives rules without an id a fresh one.
-func FillRuleIDs[T any](rules []T, id func(*T) *string) {
-	for i := range rules {
-		if p := id(&rules[i]); strings.TrimSpace(*p) == "" {
-			*p = NewID("r")
+// FillRuleIDs gives rules without an id (nested ones included) a fresh one.
+func FillRuleIDs(s *Set) {
+	s.WalkRules(func(r *Rule, _ string) {
+		if strings.TrimSpace(r.ID) == "" {
+			r.ID = NewID("r")
 		}
-	}
+	})
 }
-
 func (c *Config) condSet(id string) *ConditionSet {
 	for i := range c.Conditions {
 		if c.Conditions[i].ID == id {
@@ -128,17 +127,11 @@ func refPaths(c *Condition, path string, out *[][2]string) {
 	}
 }
 
-// condRefs: the condition sets cs references directly.
-func condRefs(cs *ConditionSet) []string {
+// condRefs: the condition sets s references directly (with paths).
+func condRefs(s *Set) [][2]string {
 	var refs [][2]string
-	for i, r := range cs.Rules {
-		refPaths(r.When, fmt.Sprintf("rules[%d].when", i), &refs)
-	}
-	out := make([]string, len(refs))
-	for i, r := range refs {
-		out[i] = r[0]
-	}
-	return out
+	s.WalkRules(func(r *Rule, path string) { refPaths(r.When, path+".when", &refs) })
+	return refs
 }
 
 // reachesCond reports whether condition set target is reachable from
@@ -156,62 +149,78 @@ func (c *Config) reachesCond(from, target string, seen map[string]bool) bool {
 		return false
 	}
 	for _, r := range condRefs(cs) {
-		if c.reachesCond(r, target, seen) {
+		if c.reachesCond(r[0], target, seen) {
 			return true
 		}
 	}
 	return false
 }
 
-func checkRuleIDs(ids []string) *Error {
-	seen := map[string]bool{}
-	for i, id := range ids {
-		if strings.TrimSpace(id) == "" {
-			return errAt(fmt.Sprintf("rules[%d].id", i), "missing id")
-		}
-		if seen[id] {
-			return errAt(fmt.Sprintf("rules[%d].id", i), "duplicate rule id %q", id)
-		}
-		seen[id] = true
-	}
-	return nil
-}
-
-// CheckConditionSet validates cs as it stands in cfg (cfg already holds
-// cs, so references to and from it resolve): name, rule ids, conditions,
-// and no reference cycle through cs.
-func CheckConditionSet(cfg *Config, cs *ConditionSet) error {
-	if strings.TrimSpace(cs.Name) == "" {
+// checkSet validates s of kind k as it stands in cfg: name, rule ids
+// (unique across nested flows), conditions, flow depth and the ends the
+// kind allows.
+func checkSet(cfg *Config, s *Set, k SetKind) *Error {
+	if strings.TrimSpace(s.Name) == "" {
 		return errAt("name", "name required")
 	}
-	ids := make([]string, len(cs.Rules))
-	for i, r := range cs.Rules {
-		ids[i] = r.ID
-	}
-	if e := checkRuleIDs(ids); e != nil {
+	ids := map[string]bool{}
+	if e := checkRules(cfg, s.Rules, "rules", k, 0, ids); e != nil {
 		return e
 	}
-	for i, r := range cs.Rules {
-		if r.When == nil {
-			continue
-		}
-		if e := checkCond(cfg, r.When, fmt.Sprintf("rules[%d].when", i)); e != nil {
+	if s.Default != nil {
+		if e := checkEnd(cfg, s.Default, "default", k); e != nil {
 			return e
 		}
 	}
-	var refs [][2]string
-	for i, r := range cs.Rules {
-		refPaths(r.When, fmt.Sprintf("rules[%d].when", i), &refs)
-	}
-	for _, r := range refs {
-		if cfg.reachesCond(r[0], cs.ID, map[string]bool{}) {
-			return errAt(r[1], "condition set cycle")
+	return nil
+}
+
+func checkRules(cfg *Config, rules []Rule, path string, k SetKind, depth int, ids map[string]bool) *Error {
+	for i := range rules {
+		r := &rules[i]
+		p := fmt.Sprintf("%s[%d]", path, i)
+		if strings.TrimSpace(r.ID) == "" {
+			return errAt(p+".id", "missing id")
+		}
+		if ids[r.ID] {
+			return errAt(p+".id", "duplicate rule id %q", r.ID)
+		}
+		ids[r.ID] = true
+		if r.When != nil {
+			if e := checkCond(cfg, r.When, p+".when"); e != nil {
+				return e
+			}
+		}
+		t := &r.Then
+		if t.Type != TermFlow {
+			if e := checkEnd(cfg, t, p+".then", k); e != nil {
+				return e
+			}
+			continue
+		}
+		if depth+1 > MaxFlowDepth {
+			return errAt(p+".then", "flows nested deeper than %d", MaxFlowDepth)
+		}
+		if e := checkRules(cfg, t.Rules, p+".then.rules", k, depth+1, ids); e != nil {
+			return e
+		}
+		if t.Default != nil {
+			if e := checkEnd(cfg, t.Default, p+".then.default", k); e != nil {
+				return e
+			}
 		}
 	}
 	return nil
 }
 
-func checkTerminal(cfg *Config, t *Terminal, path string) *Error {
+// checkEnd validates an end allowed for kind k.
+func checkEnd(cfg *Config, t *Terminal, path string, k SetKind) *Error {
+	if k == KindCondition {
+		if t.Type != TermResult {
+			return errAt(path+".type", "a condition set ends in result, not %q", t.Type)
+		}
+		return nil
+	}
 	switch t.Type {
 	case TermDeny, TermDefault:
 	case TermExit:
@@ -250,31 +259,39 @@ func checkTerminal(cfg *Config, t *Terminal, path string) *Error {
 	return nil
 }
 
+// CheckConditionSet validates cs as it stands in cfg (cfg already holds
+// cs, so references to and from it resolve), refusing reference cycles
+// through cs.
+func CheckConditionSet(cfg *Config, cs *ConditionSet) error {
+	if e := checkSet(cfg, cs, KindCondition); e != nil {
+		return e
+	}
+	for _, r := range condRefs(cs) {
+		if cfg.reachesCond(r[0], cs.ID, map[string]bool{}) {
+			return errAt(r[1], "condition set cycle")
+		}
+	}
+	return nil
+}
+
 // CheckPolicySet validates ps as it stands in cfg. Call cycles through ps
 // are allowed (the depth limit ends them) and reported as warnings.
 func CheckPolicySet(cfg *Config, ps *PolicySet) (warnings []string, err error) {
-	if strings.TrimSpace(ps.Name) == "" {
-		return nil, errAt("name", "name required")
-	}
-	ids := make([]string, len(ps.Rules))
-	for i, r := range ps.Rules {
-		ids[i] = r.ID
-	}
-	if e := checkRuleIDs(ids); e != nil {
+	if e := checkSet(cfg, ps, KindPolicy); e != nil {
 		return nil, e
 	}
-	for i := range ps.Rules {
-		r := &ps.Rules[i]
-		if r.When != nil {
-			if e := checkCond(cfg, r.When, fmt.Sprintf("rules[%d].when", i)); e != nil {
-				return nil, e
-			}
-		}
-		if e := checkTerminal(cfg, &r.Then, fmt.Sprintf("rules[%d].then", i)); e != nil {
-			return nil, e
-		}
-	}
 	return PolicyCycles(cfg, ps.ID), nil
+}
+
+// calls: the policy sets s calls (with the call's path).
+func calls(s *Set) [][2]string {
+	var out [][2]string
+	s.WalkEnds(func(t *Terminal, path string) {
+		if t.Type == TermCall {
+			out = append(out, [2]string{t.Policy, path})
+		}
+	})
+	return out
 }
 
 // PolicyCycles describes the call cycles through policy set id.
@@ -284,11 +301,8 @@ func PolicyCycles(cfg *Config, id string) []string {
 		return nil
 	}
 	var out []string
-	for i, r := range ps.Rules {
-		if r.Then.Type != TermCall {
-			continue
-		}
-		if path := cfg.callPath(r.Then.Policy, id, map[string]bool{}); path != nil {
+	for _, cl := range calls(ps) {
+		if path := cfg.callPath(cl[0], id, map[string]bool{}); path != nil {
 			names := []string{ps.Name}
 			for _, p := range path {
 				n := p
@@ -297,7 +311,7 @@ func PolicyCycles(cfg *Config, id string) []string {
 				}
 				names = append(names, n)
 			}
-			out = append(out, fmt.Sprintf("rules[%d]: call cycle %s", i, strings.Join(names, " > ")))
+			out = append(out, fmt.Sprintf("%s: call cycle %s", cl[1], strings.Join(names, " > ")))
 		}
 	}
 	return out
@@ -317,11 +331,9 @@ func (c *Config) callPath(from, target string, seen map[string]bool) []string {
 	if ps == nil {
 		return nil
 	}
-	for _, r := range ps.Rules {
-		if r.Then.Type == TermCall {
-			if p := c.callPath(r.Then.Policy, target, seen); p != nil {
-				return append([]string{from}, p...)
-			}
+	for _, cl := range calls(ps) {
+		if p := c.callPath(cl[0], target, seen); p != nil {
+			return append([]string{from}, p...)
 		}
 	}
 	return nil
@@ -411,12 +423,12 @@ func (c *Config) Normalize() {
 	}
 	for i := range c.Conditions {
 		if c.Conditions[i].Rules == nil {
-			c.Conditions[i].Rules = []CondRule{}
+			c.Conditions[i].Rules = []Rule{}
 		}
 	}
 	for i := range c.Policies {
 		if c.Policies[i].Rules == nil {
-			c.Policies[i].Rules = []PolicyRule{}
+			c.Policies[i].Rules = []Rule{}
 		}
 	}
 }
@@ -436,36 +448,27 @@ func (c *Config) InternalRefs(id string) []Ref {
 	if c.Direct == id && id != "" {
 		out = append(out, Ref{Kind: "direct", ID: id, Name: ""})
 	}
-	usesRef := func(when *Condition) bool {
-		var refs [][2]string
-		refPaths(when, "", &refs)
-		for _, r := range refs {
+	uses := func(s *Set) bool {
+		for _, r := range condRefs(s) {
 			if r[0] == id {
+				return true
+			}
+		}
+		for _, cl := range calls(s) {
+			if cl[0] == id {
 				return true
 			}
 		}
 		return false
 	}
-	for _, cs := range c.Conditions {
-		if cs.ID == id {
-			continue
-		}
-		for _, r := range cs.Rules {
-			if usesRef(r.When) {
-				out = append(out, Ref{Kind: "condition", ID: cs.ID, Name: cs.Name})
-				break
-			}
+	for i := range c.Conditions {
+		if cs := &c.Conditions[i]; cs.ID != id && uses(cs) {
+			out = append(out, Ref{Kind: "condition", ID: cs.ID, Name: cs.Name})
 		}
 	}
-	for _, ps := range c.Policies {
-		if ps.ID == id {
-			continue
-		}
-		for _, r := range ps.Rules {
-			if usesRef(r.When) || (r.Then.Type == TermCall && r.Then.Policy == id) {
-				out = append(out, Ref{Kind: "policy", ID: ps.ID, Name: ps.Name})
-				break
-			}
+	for i := range c.Policies {
+		if ps := &c.Policies[i]; ps.ID != id && uses(ps) {
+			out = append(out, Ref{Kind: "policy", ID: ps.ID, Name: ps.Name})
 		}
 	}
 	return out

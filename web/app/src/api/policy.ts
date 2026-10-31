@@ -19,12 +19,20 @@ export type Terminal =
   | { type: 'call'; policy: string }
   | { type: 'default' };
 
-export interface CondRule { id: string; enabled: boolean; when?: Cond; result: boolean }
-export interface PolicyRule { id: string; name?: string; enabled: boolean; when?: Cond; then: Terminal }
+/** An end: policy sets end in a terminal, condition sets in a result. */
+export type End = Terminal | { type: 'result'; result: boolean };
+/** A nested flow: rules like a set's; no default = continue with the next outer rule. */
+export interface Flow { type: 'flow'; rules: Rule[]; default?: End }
+export type Action = End | Flow;
+
+export interface Rule { id: string; name?: string; enabled: boolean; when?: Cond; then: Action }
+export type CondRule = Rule;
+export type PolicyRule = Rule;
 
 export interface SetRef { kind: 'user' | 'proxy' | 'wireguard' | 'vpn' | 'policy' | 'condition' | 'direct'; id: string; name: string }
-export interface ConditionSet { id: string; name: string; rules: CondRule[]; refs?: SetRef[] }
-export interface PolicySet { id: string; name: string; rules: PolicyRule[]; refs?: SetRef[]; warnings?: string[] }
+/** Condition sets and policy sets are the same flow; only their ends differ. */
+export interface PolicySet { id: string; name: string; rules: Rule[]; default?: End; refs?: SetRef[]; warnings?: string[] }
+export type ConditionSet = PolicySet;
 
 export type OnStop = 'open' | 'block';
 export interface SystemLocal { enabled: boolean; dns: boolean; on_stop: OnStop }
@@ -58,7 +66,7 @@ export interface PolicyTestRequest {
   dest: { host?: string; ip?: string; port: number; proto: 'tcp' | 'udp' };
 }
 export interface PolicyTestResult {
-  chain: { policy: string; policy_name: string; rule: string; rule_name?: string; depth: number }[];
+  chain: { policy: string; policy_name: string; rule: string; rule_name?: string; path: number[]; otherwise?: boolean; depth: number }[];
   terminal: Terminal;
   reason?: string;
   fields?: Record<string, string>;

@@ -163,9 +163,9 @@ func (a *App) DismissPolicyNotice() error {
 // PutConditionSet creates (id "") or replaces a condition set.
 func (a *App) PutConditionSet(id string, cs policy.ConditionSet) (policy.ConditionSet, error) {
 	if cs.Rules == nil {
-		cs.Rules = []policy.CondRule{}
+		cs.Rules = []policy.Rule{}
 	}
-	policy.FillRuleIDs(cs.Rules, func(r *policy.CondRule) *string { return &r.ID })
+	policy.FillRuleIDs(&cs)
 	err := a.updatePolicy(func(p *policy.Config) error {
 		if id == "" {
 			cs.ID = policy.NewID("cs_")
@@ -187,18 +187,22 @@ func (a *App) PutConditionSet(id string, cs policy.ConditionSet) (policy.Conditi
 // call cycles through it.
 func (a *App) PutPolicySet(id string, ps policy.PolicySet) (policy.PolicySet, []string, error) {
 	if ps.Rules == nil {
-		ps.Rules = []policy.PolicyRule{}
+		ps.Rules = []policy.Rule{}
 	}
-	policy.FillRuleIDs(ps.Rules, func(r *policy.PolicyRule) *string { return &r.ID })
-	for i := range ps.Rules {
-		t := &ps.Rules[i].Then
-		if t.Type == policy.TermExit {
-			if m, err := SanitizeExitMode(t.Paths, t.Mode); err != nil {
-				return ps, nil, &policy.Error{Path: fmt.Sprintf("rules[%d].then.mode", i), Msg: err.Error()}
-			} else {
-				t.Mode = m
-			}
+	policy.FillRuleIDs(&ps)
+	var modeErr error
+	ps.WalkEnds(func(t *policy.Terminal, path string) {
+		if t.Type != policy.TermExit || modeErr != nil {
+			return
 		}
+		if m, err := SanitizeExitMode(t.Paths, t.Mode); err != nil {
+			modeErr = &policy.Error{Path: path + ".mode", Msg: err.Error()}
+		} else {
+			t.Mode = m
+		}
+	})
+	if modeErr != nil {
+		return ps, nil, modeErr
 	}
 	var warnings []string
 	err := a.updatePolicy(func(p *policy.Config) error {
@@ -305,12 +309,12 @@ func policyExitPaths(cfg *Config) []string {
 		return nil
 	}
 	var out []string
-	for _, ps := range cfg.Policy.Policies {
-		for _, r := range ps.Rules {
-			if r.Then.Type == policy.TermExit {
-				out = append(out, r.Then.Paths...)
+	for i := range cfg.Policy.Policies {
+		cfg.Policy.Policies[i].WalkEnds(func(t *policy.Terminal, _ string) {
+			if t.Type == policy.TermExit {
+				out = append(out, t.Paths...)
 			}
-		}
+		})
 	}
 	sort.Strings(out)
 	return out

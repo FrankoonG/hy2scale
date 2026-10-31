@@ -78,3 +78,10 @@
 .ptest-term{font-weight:600;color:var(--text)}
 .ptest-fields{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12px}
 .rules-page .muted,.pset .muted,.direct .muted,.ptest .muted{color:var(--text-muted)}
+
+.pflow{display:flex;flex-direction:column;gap:10px;min-width:0}
+.pflow.nested{margin-left:8px;padding:10px 0 2px 12px;border-left:2px solid var(--border)}
+.pflow.nested .prule{background:var(--bg)}
+.prule-default .term{flex:1}
+.prule-default{align-items:start}
+.prule-default .prule-k{padding-top:8px}

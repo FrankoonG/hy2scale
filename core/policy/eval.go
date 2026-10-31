@@ -24,28 +24,26 @@ type cnode struct {
 	leaf  *leaf
 }
 
-type crule struct {
-	enabled bool
-	when    *cnode
-	result  bool
+// flow is a compiled rule list with its default (nil = fall through).
+type flow struct {
+	rules []frule
+	def   *Terminal
+}
+
+type frule struct {
+	id, name string
+	enabled  bool
+	when     *cnode
+	then     Terminal // not TermFlow
+	sub      *flow    // then is a nested flow
 }
 
 type cset struct {
 	id, name string
-	rules    []crule
+	flow     *flow
 }
 
-type prule struct {
-	id, name string
-	enabled  bool
-	when     *cnode
-	then     Terminal
-}
-
-type pset struct {
-	id, name string
-	rules    []prule
-}
+type pset = cset
 
 // Compile builds the program of cfg (nil = empty). Invalid values are
 // skipped (validation rejects them on save); a leaf left without values
@@ -56,23 +54,74 @@ func Compile(cfg *Config) *Program {
 		return p
 	}
 	p.direct = cfg.Direct
-	for _, cs := range cfg.Conditions {
-		c := &cset{id: cs.ID, name: cs.Name}
-		for _, r := range cs.Rules {
-			c.rules = append(c.rules, crule{enabled: r.Enabled, when: compileCond(r.When), result: r.Result})
-		}
-		p.conds[cs.ID] = c
+	for i := range cfg.Conditions {
+		p.conds[cfg.Conditions[i].ID] = compileSet(&cfg.Conditions[i], KindCondition)
 	}
-	for _, ps := range cfg.Policies {
-		s := &pset{id: ps.ID, name: ps.Name}
-		for _, r := range ps.Rules {
-			s.rules = append(s.rules, prule{id: r.ID, name: r.Name, enabled: r.Enabled, when: compileCond(r.When), then: r.Then})
-		}
-		p.pols[ps.ID] = s
+	for i := range cfg.Policies {
+		p.pols[cfg.Policies[i].ID] = compileSet(&cfg.Policies[i], KindPolicy)
 	}
 	return p
 }
 
+func compileSet(s *Set, k SetKind) *cset {
+	f := compileFlow(s.Rules, s.Default, 0)
+	if f.def == nil {
+		d := BuiltinDefault(k)
+		f.def = &d
+	}
+	return &cset{id: s.ID, name: s.Name, flow: f}
+}
+
+func compileFlow(rules []Rule, def *Terminal, depth int) *flow {
+	f := &flow{}
+	if def != nil && def.Type != TermFlow {
+		d := *def
+		f.def = &d
+	}
+	for _, r := range rules {
+		fr := frule{id: r.ID, name: r.Name, enabled: r.Enabled, when: compileCond(r.When), then: r.Then}
+		if r.Then.Type == TermFlow {
+			if depth >= MaxFlowDepth {
+				continue
+			}
+			fr.sub = compileFlow(r.Then.Rules, r.Then.Default, depth+1)
+		}
+		f.rules = append(f.rules, fr)
+	}
+	return f
+}
+
+// end is the outcome of running a flow.
+type end struct {
+	t         Terminal
+	rule      *frule // deciding rule (nil = a default)
+	path      []int
+	otherwise bool
+}
+
+// run evaluates f: the first enabled rule whose condition holds decides;
+// a nested flow that decides nothing falls through to the next rule.
+// ok=false: nothing decided (only for flows without a default).
+func (ev *evaluator) run(f *flow, path []int, depth int) (end, bool) {
+	for i := range f.rules {
+		r := &f.rules[i]
+		if !r.enabled || (r.when != nil && !ev.cond(r.when, depth)) {
+			continue
+		}
+		p := append(append([]int(nil), path...), i+1)
+		if r.sub != nil {
+			if e, ok := ev.run(r.sub, p, depth); ok {
+				return e, true
+			}
+			continue
+		}
+		return end{t: r.then, rule: r, path: p}, true
+	}
+	if f.def != nil {
+		return end{t: *f.def, path: append([]int{}, path...), otherwise: true}, true
+	}
+	return end{}, false
+}
 func compileCond(c *Condition) *cnode {
 	if c == nil {
 		return nil
@@ -150,35 +199,25 @@ func (p *Program) Evaluate(ctx context.Context, c *Conn, s Start) Decision {
 			d.Reason = ReasonMissing
 			return ev.finish(d)
 		}
-		var hit *prule
-		for i := range ps.rules {
-			r := &ps.rules[i]
-			if !r.enabled {
-				continue
-			}
-			if r.when == nil || ev.cond(r.when, 0) {
-				hit = r
-				break
-			}
-		}
+		e, _ := ev.run(ps.flow, nil, 0) // a set's flow always has a default
 		d.Policy = id
-		if hit == nil {
-			d.Chain = append(d.Chain, Hop{Policy: id, PolicyName: ps.name, Depth: depth})
-			d.Terminal = Terminal{Type: TermDefault}
-			d.Reason = ReasonDefault
-			return ev.finish(d)
+		h := Hop{Policy: id, PolicyName: ps.name, Path: e.path, Otherwise: e.otherwise, Depth: depth}
+		if e.rule != nil {
+			h.Rule, h.RuleName = e.rule.id, e.rule.name
 		}
-		d.Chain = append(d.Chain, Hop{Policy: id, PolicyName: ps.name, Rule: hit.id, RuleName: hit.name, Depth: depth})
-		if hit.then.Type == TermCall {
-			id = hit.then.Policy
+		d.Chain = append(d.Chain, h)
+		if e.t.Type == TermCall {
+			id = e.t.Policy
 			continue
 		}
-		d.Terminal = hit.then
+		d.Terminal = e.t
 		d.Reason = ReasonRule
+		if e.otherwise {
+			d.Reason = ReasonDefault
+		}
 		return ev.finish(d)
 	}
 }
-
 func (ev *evaluator) finish(d Decision) Decision {
 	if u := ev.c.lazy.used; len(u) > 0 {
 		d.Fields = make(map[string]string, len(u))
@@ -218,8 +257,8 @@ func (ev *evaluator) cond(n *cnode, depth int) bool {
 	return false
 }
 
-// condSet evaluates a condition set: first enabled matching rule's result,
-// else false. Memoised per evaluation.
+// condSet evaluates a condition set's flow; its end gives the result.
+// Memoised per evaluation.
 func (ev *evaluator) condSet(id string, depth int) bool {
 	if depth > maxRefDepth {
 		return false
@@ -230,14 +269,8 @@ func (ev *evaluator) condSet(id string, depth int) bool {
 	cs := ev.p.conds[id]
 	res := false
 	if cs != nil {
-		for _, r := range cs.rules {
-			if !r.enabled {
-				continue
-			}
-			if r.when == nil || ev.cond(r.when, depth) {
-				res = r.result
-				break
-			}
+		if e, ok := ev.run(cs.flow, nil, depth); ok {
+			res = e.t.Type == TermResult && e.t.Result
 		}
 	}
 	if ev.memo == nil {
@@ -429,8 +462,9 @@ func (e *Engine) Evaluate(ctx context.Context, c *Conn, s Start) Decision {
 	return e.p.Load().Evaluate(ctx, c, s)
 }
 
-// ChainText renders a chain as "name/rule > name/rule" (rule name, else
-// id; a default end as "default").
+// ChainText renders a chain as "name/rule > name/rule": the rule's name,
+// else its position ("#2.1"); a default end as "default" ("#2.default"
+// for a nested flow's).
 func ChainText(chain []Hop) string {
 	var b strings.Builder
 	for i, h := range chain {
@@ -444,12 +478,21 @@ func ChainText(chain []Hop) string {
 		b.WriteString(n)
 		b.WriteByte('/')
 		switch {
-		case h.Rule == "":
-			b.WriteString("default")
-		case h.RuleName != "":
+		case h.RuleName != "" && !h.Otherwise:
 			b.WriteString(h.RuleName)
+		case h.Otherwise && len(h.Path) == 0:
+			b.WriteString("default")
 		default:
-			b.WriteString(h.Rule)
+			b.WriteByte('#')
+			for j, x := range h.Path {
+				if j > 0 {
+					b.WriteByte('.')
+				}
+				b.WriteString(strconv.Itoa(x))
+			}
+			if h.Otherwise {
+				b.WriteString(".default")
+			}
 		}
 	}
 	return b.String()
