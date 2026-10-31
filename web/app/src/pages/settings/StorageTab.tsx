@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Card, Button, Input, Toggle, FormGroup, FormGrid, FormStack, Hint, FileDropZone, Progress, Badge, useConfirm, useToast,
+  Card, Button, Input, Toggle, FormGroup, FormGrid, FormStack, Hint, FileDropZone, Progress, Badge, DetailGrid, SegmentedControl,
+  useConfirm, useToast,
 } from '@hy2scale/ui';
 import {
-  getStorageSettings, updateStorageSettings, wipeStorage, deleteGeoDatabase, uploadGeoDatabase,
-  type StorageKind, type GeoDatabase,
+  getStorageSettings, updateStorageSettings, wipeStorage, deleteGeoDatabase, uploadGeoDatabase, setGeoMode, updateGeoNow,
+  type StorageKind, type GeoDatabase, type GeoMode,
 } from '@/api/storage';
 import { useGeoStatus, clearGeoCache } from '@/hooks/useGeo';
 import { fmtBytes } from '@/hooks/useFormat';
@@ -90,6 +91,8 @@ function KeptCard({ kind, cur }: { kind: Kind; cur?: StorageKind }) {
 }
 
 const KIND_ORDER = ['city', 'country', 'asn'] as const;
+const SOURCE_NAME: Record<string, string> = { dbip: 'DB-IP Lite', iplocate: 'IPLocate' };
+const when = (s?: string) => (s ? new Date(s).toLocaleString() : '—');
 
 function GeoCard() {
   const { t } = useTranslation();
@@ -99,8 +102,37 @@ function GeoCard() {
   const { data: status } = useGeoStatus();
   const [file, setFile] = useState<File | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
+  const [switching, setSwitching] = useState(false);
+  const mode: GeoMode = status?.mode || 'manual';
+  const auto = status?.auto;
+  const checking = mode === 'auto' && auto?.state === 'checking';
 
   const refresh = () => { clearGeoCache(); qc.invalidateQueries({ queryKey: ['geoStatus'] }); };
+  // While an automatic check runs, follow it.
+  useEffect(() => {
+    if (!checking) return;
+    const id = window.setInterval(refresh, 3000);
+    return () => window.clearInterval(id);
+  }, [checking]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const switchMode = async (m: GeoMode) => {
+    if (m === mode) return;
+    setSwitching(true);
+    try {
+      await setGeoMode(m);
+      refresh();
+    } catch (e: any) {
+      toast.error(String(e.message || e));
+    } finally {
+      setSwitching(false);
+    }
+  };
+  const checkNow = async () => {
+    try {
+      await updateGeoNow();
+      refresh();
+    } catch (e: any) { toast.error(String(e.message || e)); }
+  };
   const upload = async () => {
     if (!file) return;
     setProgress(0);
@@ -124,12 +156,52 @@ function GeoCard() {
   };
 
   const dbs = [...(status?.databases || [])].sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind));
-  const dbip = dbs.some((d) => /db-?ip/i.test(d.type));
 
   return (
-    <Card title={t('storage.geoip')} fill={1}>
+    <Card
+      title={t('storage.geoip')}
+      fill={1}
+      actions={(
+        <SegmentedControl<GeoMode>
+          items={[
+            { key: 'manual', label: t('storage.geoManual'), testId: 'geo-mode-manual' },
+            { key: 'auto', label: t('storage.geoAuto'), testId: 'geo-mode-auto' },
+          ]}
+          value={mode}
+          onChange={(m) => { if (!switching) switchMode(m); }}
+        />
+      )}
+    >
       <FormStack maxWidth={640}>
-        <Hint>{t('storage.geoHint')}</Hint>
+        <Hint>{t(mode === 'auto' ? 'storage.geoAutoHint' : 'storage.geoHint')}</Hint>
+
+        {mode === 'auto' && (
+          <div className="geo-auto" data-testid="geo-auto">
+            <DetailGrid
+              variant="plain"
+              columns={2}
+              items={[
+                [t('storage.geoSource'), (
+                  <span data-testid="geo-auto-source">
+                    {auto?.source ? SOURCE_NAME[auto.source] : '—'}
+                    {auto?.source && <span className="muted"> · {t(auto.source === 'dbip' ? 'storage.geoPrimary' : 'storage.geoBackup')}</span>}
+                  </span>
+                )],
+                [t('storage.geoState'), (
+                  <span data-testid="geo-auto-state">
+                    {auto?.state === 'checking' ? t('storage.geoChecking')
+                      : auto?.state === 'error' ? <span className="storage-warn">{auto.error || t('storage.geoFailed')}</span>
+                        : t('storage.geoIdle')}
+                  </span>
+                )],
+                [t('storage.geoLastUpdate'), when(auto?.last_update)],
+                [t('storage.geoNextCheck'), when(auto?.next_check)],
+              ]}
+            />
+            <Button className="align-start" onClick={checkNow} loading={checking} data-testid="geo-check">{t('storage.geoCheckNow')}</Button>
+          </div>
+        )}
+
         {dbs.length === 0 ? (
           <div className="muted" data-testid="geo-none">{t('storage.geoNone')}</div>
         ) : (
@@ -139,30 +211,31 @@ function GeoCard() {
                 <Badge variant="blue">{t(`storage.geoKind.${d.kind}`)}</Badge>
                 <span className="geo-db-type">{d.type}</span>
                 <span className="muted">
-                  {[d.build ? new Date(d.build).toLocaleDateString() : '', fmtBytes(d.size)].filter(Boolean).join(' · ')}
+                  {[d.build ? new Date(d.build).toLocaleDateString() : '', fmtBytes(d.size),
+                    d.source ? (SOURCE_NAME[d.source] || t('storage.geoUploadedSrc')) : ''].filter(Boolean).join(' · ')}
                 </span>
                 <span className="spacer" />
-                <Button size="sm" variant="danger" onClick={() => remove(d)}>{t('app.delete')}</Button>
+                {mode === 'manual' && <Button size="sm" variant="danger" onClick={() => remove(d)}>{t('app.delete')}</Button>}
               </div>
             ))}
           </div>
         )}
-        <FileDropZone
-          file={file}
-          onFileSelected={setFile}
-          accept=".mmdb,.gz,.tgz"
-          emptyHint={t('storage.geoDrop')}
-          emptyAcceptHint={t('storage.geoAccept')}
-          disabled={progress !== null}
-        />
-        {progress !== null && <Progress value={progress} />}
-        <Button variant="primary" className="align-start" onClick={upload} disabled={!file || progress !== null} data-testid="geo-upload">
-          {t('storage.geoUpload')}
-        </Button>
-        {dbip && (
-          <div className="muted geo-attrib">
-            <a href="https://db-ip.com" target="_blank" rel="noreferrer">IP Geolocation by DB-IP</a>
-          </div>
+
+        {mode === 'manual' && (
+          <>
+            <FileDropZone
+              file={file}
+              onFileSelected={setFile}
+              accept=".mmdb,.gz,.tgz"
+              emptyHint={t('storage.geoDrop')}
+              emptyAcceptHint={t('storage.geoAccept')}
+              disabled={progress !== null}
+            />
+            {progress !== null && <Progress value={progress} />}
+            <Button variant="primary" className="align-start" onClick={upload} disabled={!file || progress !== null} data-testid="geo-upload">
+              {t('storage.geoUpload')}
+            </Button>
+          </>
         )}
       </FormStack>
     </Card>

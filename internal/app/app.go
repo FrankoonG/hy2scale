@@ -138,6 +138,8 @@ type Config struct {
 	PublicIP   *PublicIPConfig       `yaml:"public_ip,omitempty" json:"public_ip,omitempty"`
 	// Storage: logs and audit records kept on disk (storage.go); nil = both off.
 	Storage *StorageConfig `yaml:"storage,omitempty" json:"storage,omitempty"`
+	// GeoIP: how the GeoIP databases are kept (geoip.go); nil = manual.
+	GeoIP *GeoIPConfig `yaml:"geoip,omitempty" json:"geoip,omitempty"`
 	UIListen    string                `yaml:"ui_listen,omitempty" json:"ui_listen,omitempty"`
 	UIBasePath  string                `yaml:"ui_base_path,omitempty" json:"ui_base_path,omitempty"`
 	WebUsername string                `yaml:"web_username,omitempty" json:"web_username,omitempty"`

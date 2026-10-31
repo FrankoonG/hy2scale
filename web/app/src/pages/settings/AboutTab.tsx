@@ -9,9 +9,21 @@ import {
 import * as api from '@/api';
 import type { BuildInfoDep, BuildInfoNative } from '@/api';
 import BrandLogo from '@/components/login/BrandLogo';
+import { useGeoStatus } from '@/hooks/useGeo';
+import type { GeoDatabase } from '@/api/storage';
 
 const DOCKER_HUB = 'https://hub.docker.com/r/frankoong/hy2scale';
 const FIRST_YEAR = 2026;
+
+/**
+ * Attribution of the GeoIP data in use, worded as each publisher asks
+ * (the notices themselves stay in English).
+ */
+const GEO_DATA: { key: string; match: (d: GeoDatabase) => boolean; notice: string; href: string; license: string }[] = [
+  { key: 'dbip', match: (d) => d.source === 'dbip' || /^dbip/i.test(d.type), notice: 'IP Geolocation by DB-IP', href: 'https://db-ip.com', license: 'CC BY 4.0' },
+  { key: 'iplocate', match: (d) => d.source === 'iplocate' || /iplocate/i.test(d.type), notice: 'IP address data powered by IPLocate.io', href: 'https://www.iplocate.io', license: 'CC BY-SA 4.0' },
+  { key: 'maxmind', match: (d) => /^(geolite2|geoip2)/i.test(d.type), notice: 'This product includes GeoLite2 data created by MaxMind', href: 'https://www.maxmind.com', license: 'GeoLite2 EULA' },
+];
 
 /** A Go module version; a pseudo-version (an untagged commit) as "hash · date". */
 function modVersion(v: string) {
@@ -24,6 +36,8 @@ export default function AboutTab() {
   const { t } = useTranslation();
   const { data } = useQuery({ queryKey: ['buildInfo'], queryFn: api.getBuildInfo, staleTime: 60_000 });
   const [list, setList] = useState<'natives' | 'go'>('natives');
+  const { data: geo } = useGeoStatus();
+  const geoData = GEO_DATA.filter((g) => (geo?.databases || []).some(g.match));
   if (!data) return null;
 
   const repo = data.repository;
@@ -111,6 +125,21 @@ export default function AboutTab() {
           </Card>
         )}
       </div>
+
+      {geoData.length > 0 && (
+        <Card title={t('about.data')}>
+          <ul className="about-credits" data-testid="about-data">
+            {geoData.map((g) => (
+              <li key={g.key} data-testid={`about-data-${g.key}`}>
+                <a className="about-credit-name" href={g.href} target="_blank" rel="noopener noreferrer">
+                  {g.notice}<IconExternalLink size={11} />
+                </a>
+                <span className="about-credit-lic">{g.license}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
 
       <Card
         title={t('about.licenses')}

@@ -98,7 +98,13 @@ func (s *Store) Lookup(ip netip.Addr, lang string) Result {
 		if err := res.Decode(&m); err != nil {
 			continue
 		}
-		merge(&out, decodeRecord(m, langChain(want, d.info.Languages)))
+		r := decodeRecord(m, langChain(want, d.info.Languages))
+		if kind == KindASN {
+			// only the AS: the country in an ASN record is where the AS is
+			// registered, not where the address is
+			r = Result{ASN: r.ASN, Org: r.Org}
+		}
+		merge(&out, r)
 	}
 	s.mu.RUnlock()
 	s.cache.put(k, out, gen)
@@ -252,6 +258,9 @@ func decodeRecord(m map[string]any, langs []string) Result {
 		r.ASN = uint(*n)
 	}
 	r.Org = firstStr(m, "autonomous_system_organization", "as_name", "as_org", "organization", "org")
+	if r.Org == "" && r.ASN != 0 {
+		r.Org = str(m["name"]) // IPLocate: org, else the AS name
+	}
 	if r.ASN == 0 && r.Org == "" {
 		if t, ok := m["traits"].(map[string]any); ok {
 			if n := num(t["autonomous_system_number"]); n != nil && *n > 0 {

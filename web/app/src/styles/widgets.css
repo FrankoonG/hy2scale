@@ -158,5 +158,5 @@
 .geo-dbs{display:flex;flex-direction:column;gap:8px}
 .geo-db{display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--border-light);border-radius:var(--radius);font-size:13px}
 .geo-db-type{font-weight:600;color:var(--text)}
-.geo-attrib{font-size:12px}
+.geo-auto{display:flex;flex-direction:column;gap:12px;padding:12px 14px;border:1px solid var(--border-light);border-radius:var(--radius)}
 .storage-warn{font-size:13px;color:var(--c-orange)}

@@ -14,8 +14,15 @@ export const wipeStorage = (kind: 'logs' | 'audit') => api(`/storage/${kind}`, {
 // ---------------------------------------------------------------- GeoIP
 
 export type GeoKind = 'city' | 'country' | 'asn';
-export interface GeoDatabase { kind: GeoKind; type: string; build?: string; size: number; languages?: string[]; ip_version?: number; nodes?: number }
-export interface GeoStatus { available: boolean; databases: GeoDatabase[] }
+export type GeoSource = 'dbip' | 'iplocate' | 'upload';
+export interface GeoDatabase { kind: GeoKind; type: string; build?: string; size: number; languages?: string[]; ip_version?: number; nodes?: number; source?: GeoSource }
+export type GeoMode = 'manual' | 'auto';
+export interface GeoAuto {
+  state: 'idle' | 'checking' | 'error';
+  source: '' | 'dbip' | 'iplocate';
+  last_check?: string; last_update?: string; next_check?: string; error?: string;
+}
+export interface GeoStatus { available: boolean; databases: GeoDatabase[]; mode?: GeoMode; auto?: GeoAuto }
 export interface GeoInfo {
   country?: string; continent?: string; region?: string; city?: string; postal?: string;
   lat?: number; lon?: number; tz?: string; asn?: number; org?: string; names_lang?: string;
@@ -23,6 +30,9 @@ export interface GeoInfo {
 }
 
 export const getGeoStatus = () => api<GeoStatus>('/geoip/status');
+export const setGeoMode = (mode: GeoMode) =>
+  api<GeoStatus>('/geoip/settings', { method: 'PUT', body: JSON.stringify({ mode }) });
+export const updateGeoNow = () => api('/geoip/update', { method: 'POST' });
 export const deleteGeoDatabase = (kind: GeoKind) => api(`/geoip/${kind}`, { method: 'DELETE' });
 export const lookupGeo = (ips: string[], lang: string) =>
   api<{ results: Record<string, GeoInfo> }>('/geoip/lookup', { method: 'POST', body: JSON.stringify({ ips, lang }) });

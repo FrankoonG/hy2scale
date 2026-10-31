@@ -26,6 +26,12 @@ var ErrTooLarge = errors.New("file too large")
 // content — into a temporary file of the store's directory, validates it
 // and swaps it in as the kind it is.
 func (s *Store) Install(r io.Reader) (DBInfo, error) {
+	return s.installStream(r, "", fileMeta{Source: SourceUpload})
+}
+
+// installStream is Install of a database that must be of kind want ("" =
+// any), recorded with fm.
+func (s *Store) installStream(r io.Reader, want string, fm fileMeta) (DBInfo, error) {
 	if err := os.MkdirAll(s.dir, 0o755); err != nil {
 		return DBInfo{}, err
 	}
@@ -42,7 +48,7 @@ func (s *Store) Install(r io.Reader) (DBInfo, error) {
 		os.Remove(tmp)
 		return DBInfo{}, err
 	}
-	return s.InstallFile(tmp)
+	return s.installTemp(tmp, want, fm)
 }
 
 // unpack writes the database in r to w.
