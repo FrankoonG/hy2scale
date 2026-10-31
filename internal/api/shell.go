@@ -175,8 +175,27 @@ func (s *Server) getBuildInfo(w http.ResponseWriter, r *http.Request) {
 		License string `json:"license"`
 		Source  string `json:"source"`
 	}
+	type credit struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+		License string `json:"license"`
+		Source  string `json:"source"`
+	}
 	goDeps := []dep{}
+	var goVersion, commit, commitTime string
+	var modified bool
 	if info, ok := debug.ReadBuildInfo(); ok {
+		goVersion = info.GoVersion
+		for _, kv := range info.Settings {
+			switch kv.Key {
+			case "vcs.revision":
+				commit = kv.Value
+			case "vcs.time":
+				commitTime = kv.Value
+			case "vcs.modified":
+				modified = kv.Value == "true"
+			}
+		}
 		for _, m := range info.Deps {
 			// Skip replaced / anonymous — keep the resolved identity.
 			resolved := m
@@ -190,6 +209,22 @@ func (s *Server) getBuildInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sort.Slice(goDeps, func(i, j int) bool { return goDeps[i].Path < goDeps[j].Path })
+	// The upstream projects this one is built on, with the version linked.
+	known := []struct{ name, module, license, source string }{
+		{"Hysteria 2", "github.com/apernet/hysteria/core/v2", "MIT", "https://github.com/apernet/hysteria"},
+		{"quic-go", "github.com/apernet/quic-go", "MIT", "https://github.com/apernet/quic-go"},
+		{"wireguard-go", "golang.zx2c4.com/wireguard", "MIT", "https://git.zx2c4.com/wireguard-go"},
+		{"gVisor", "gvisor.dev/gvisor", "Apache-2.0", "https://github.com/google/gvisor"},
+	}
+	credits := []credit{}
+	for _, k := range known {
+		for _, d := range goDeps {
+			if d.Path == k.module {
+				credits = append(credits, credit{Name: k.name, Version: d.Version, License: k.license, Source: k.source})
+				break
+			}
+		}
+	}
 	// Native components bundled into the Docker image but not tracked
 	// by the Go module graph. Kept short and hand-maintained — these
 	// are the pieces whose licences directly constrain the umbrella
@@ -199,11 +234,17 @@ func (s *Server) getBuildInfo(w http.ResponseWriter, r *http.Request) {
 		{Name: "iptables (nf_tables backend)", Version: "distro-packaged", License: "GPL-2.0-or-later", Source: "https://www.netfilter.org/projects/iptables/"},
 	}
 	writeJSON(w, map[string]any{
-		"version":    Version,
-		"license":    "GPL-3.0-or-later",
-		"repository": "https://github.com/FrankoonG/hy2scale",
-		"go_deps":    goDeps,
-		"natives":    natives,
+		"version":     Version,
+		"license":     "GPL-3.0-or-later",
+		"repository":  "https://github.com/FrankoonG/hy2scale",
+		"go_deps":     goDeps,
+		"natives":     natives,
+		"credits":     credits,
+		"go_version":  goVersion,
+		"platform":    runtime.GOOS + "/" + runtime.GOARCH,
+		"commit":      commit,
+		"commit_time": commitTime,
+		"modified":    modified,
 	})
 }
 

@@ -63,7 +63,7 @@ Routing rules apply to their users in every mode. Capturing the host's own
 traffic and hosts routed through it (transparent rules) needs `--network host`
 and `NET_ADMIN`; server port hopping needs `NET_ADMIN`.
 
-Open `http://<host>:5565/scale/` — default login `admin` / `admin`.
+Open `https://<host>:5565/scale/` (self-signed certificate by default) — default login `admin` / `admin`.
 
 For iKuai v4, download the `.ipkg` from [Releases](https://github.com/FrankoonG/hy2scale/releases) and install via the app store — see the [iKuai v4 guide](https://github.com/FrankoonG/hy2scale/wiki/iKuai-v4-Installation).
 

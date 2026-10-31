@@ -1,0 +1,38 @@
+/* Settings → About */
+.about{display:flex;flex-direction:column;gap:20px}
+.about-hero{position:relative;overflow:hidden;display:flex;align-items:center;flex-wrap:wrap;gap:20px 24px;padding:28px;border:1px solid var(--border);border-radius:var(--radius);background:linear-gradient(120deg,var(--primary-light) 0%,var(--surface) 55%)}
+.about-logo{display:flex;align-items:center;justify-content:center;width:112px;height:112px;flex-shrink:0;border-radius:26px;background:var(--surface);border:1px solid var(--border-light);box-shadow:var(--shadow)}
+.about-title{flex:1;min-width:220px}
+.about-name{margin:0;font-size:26px;font-weight:700;letter-spacing:.08em;color:var(--text)}
+.about-tagline{margin:4px 0 12px;font-size:14px;color:var(--text-secondary)}
+.about-chips{display:flex;flex-wrap:wrap;gap:6px}
+.about-chip{padding:2px 10px;border:1px solid var(--border);border-radius:999px;background:var(--surface);font-family:var(--mono);font-size:12px;color:var(--text-secondary)}
+.about-chip:first-child{border-color:var(--primary);color:var(--primary)}
+.about-links{display:flex;flex-wrap:wrap;gap:8px;max-width:560px;justify-content:flex-end}
+.about-link{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);font-size:13px;color:var(--text);text-decoration:none;transition:border-color .15s,color .15s}
+.about-link:hover{border-color:var(--primary);color:var(--primary)}
+.about-link svg{flex-shrink:0;color:var(--text-muted)}
+.about-link:hover svg{color:currentColor}
+.about-cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+.about-commit{display:inline-flex;align-items:center;gap:6px}
+.about-commit a{color:var(--primary);text-decoration:none}
+.about-commit a:hover{text-decoration:underline}
+.about-credits{list-style:none;margin:0;padding:0}
+.about-credits li{display:flex;align-items:baseline;gap:10px;padding:8px 0;border-bottom:1px solid var(--border-light)}
+.about-credits li:first-child{padding-top:0}
+.about-credits li:last-child{border-bottom:0;padding-bottom:0}
+.about-credit-name{flex:1;min-width:0;display:inline-flex;align-items:center;gap:4px;font-size:13px;font-weight:500;color:var(--text);text-decoration:none}
+.about-credit-name svg{color:var(--text-muted)}
+.about-credit-name:hover{color:var(--primary)}
+.about-credit-ver{font-size:12px;color:var(--text-muted);white-space:nowrap}
+.about-credit-lic{padding:1px 7px;border-radius:4px;background:var(--bg);font-family:var(--mono);font-size:11px;color:var(--text-secondary);white-space:nowrap}
+.about-note{margin:12px 0 0;font-size:11.5px;line-height:1.5;color:var(--text-muted)}
+.about-foot{display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 0 8px;font-size:12px;color:var(--text-muted);text-align:center}
+@media(max-width:900px){
+  .about-cols{grid-template-columns:minmax(0,1fr)}
+  .about-links{max-width:none;justify-content:flex-start;width:100%}
+}
+@media(max-width:560px){
+  .about-hero{padding:20px}
+  .about-logo{width:84px;height:84px;border-radius:20px}
+}

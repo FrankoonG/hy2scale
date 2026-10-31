@@ -11,7 +11,7 @@ Features:
 - Web management UI
 
 Usage:
-1. Access http://<device-ip>:<web-port>/scale/ after installation
+1. Access https://<device-ip>:<web-port>/scale/ after installation (self-signed certificate by default)
 2. Default username: admin, set password on first login
 3. Add relay nodes on the Nodes page
 4. Add VPN users on the Users page

@@ -31,12 +31,12 @@ func (s *Server) webSettings(cfg app.Config) map[string]any {
 		sessionH = 12
 	}
 	return map[string]any{
-		"listen":        s.addr,
-		"base_path":     s.basePath,
-		"force_https":   cfg.ForceHTTPS,
-		"https_cert_id": cfg.HTTPSCertID,
-		// plain http is being redirected right now (force on + usable cert)
-		"https_active":      s.web != nil && s.web.forced(),
+		"listen":    s.addr,
+		"base_path": s.basePath,
+		// https is always on
+		"force_https":       true,
+		"https_cert_id":     cfg.HTTPSCertID,
+		"https_active":      true,
 		"session_timeout_h": sessionH,
 	}
 }
@@ -174,9 +174,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, own int) {
 		if body.DNS != nil {
 			c.DNS = *body.DNS
 		}
-		if body.ForceHTTPS != nil {
-			c.ForceHTTPS = *body.ForceHTTPS
-		}
+		// force_https is not settable: https is always on.
 		if body.HTTPSCertID != nil {
 			c.HTTPSCertID = *body.HTTPSCertID
 		}

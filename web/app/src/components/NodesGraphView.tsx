@@ -11,7 +11,7 @@ import { fmtRate } from '@/hooks/useFormat';
 import { useExitPaths } from '@/hooks/useExitPaths';
 import { usePanZoom, type View } from '@/hooks/usePanZoom';
 import {
-  useConfirm, useMediaQuery, useToast, MenuCheck, readStored, writeStored,
+  useConfirm, useMediaQuery, useToast, readStored, writeStored,
   IconCopy, IconMaximize2, IconChevronLeft, IconChevronRight, IconScan, IconZoomIn, IconZoomOut,
 } from '@hy2scale/ui';
 import { copyToClipboard } from '@/utils/clipboard';
@@ -1007,12 +1007,17 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     }
   };
 
-  const menuProps: CanvasMenuProps = {
+  const canvasMenu: CanvasMenuProps = {
     presets: PRESET_IDS.map((id) => ({ key: 'p:' + id, label: presetLabel(id) })),
     customs: (list || []).map((c) => ({ key: 'c:' + c.id, label: canvasLabel(c) })),
     activeKey: activeKey || '',
     activeLabel,
     isCustom,
+    options: [
+      { key: 'grid', label: t('nodes.graph.showGrid'), checked: showGrid, onChange: (on) => { setShowGrid(on); lsSet(GRID_STORE, on ? '1' : '0'); } },
+      // Snapping only applies where nodes can be moved.
+      ...(isCustom ? [{ key: 'snap', label: t('nodes.graph.snap'), checked: snap, onChange: (on: boolean) => { setSnap(on); lsSet(SNAP_STORE, on ? '1' : '0'); } }] : []),
+    ],
     onSelect: selectCanvas,
     onCopy,
     onImport: () => fileRef.current?.click(),
@@ -1363,26 +1368,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   })();
 
   // ---------------------------------------------------------------- chrome
-  const gridBox = (
-    <MenuCheck checked={showGrid} onChange={(on) => { setShowGrid(on); lsSet(GRID_STORE, on ? '1' : '0'); }} testId="canvas-grid">
-      {t('nodes.graph.showGrid')}
-    </MenuCheck>
-  );
-  // Snapping only applies where nodes can be moved.
-  const snapBox = isCustom ? (
-    <MenuCheck checked={snap} onChange={(on) => { setSnap(on); lsSet(SNAP_STORE, on ? '1' : '0'); }} testId="canvas-snap">
-      {t('nodes.graph.snap')}
-    </MenuCheck>
-  ) : null;
   // ResponsiveActions closes its ⋯ menu on Escape.
   const closeMore = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-  const more: ReactNode = (
-    <>
-      {narrow && <CanvasSubmenu {...menuProps} onDone={closeMore} />}
-      {gridBox}
-      {snapBox}
-    </>
-  );
+  const more: ReactNode = narrow ? <CanvasSubmenu {...canvasMenu} onDone={closeMore} /> : null;
   const actionsEl = typeof actions === 'function' ? actions(more) : actions;
 
   return (
@@ -1415,7 +1403,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
           <button type="button" className="iface-topo-tool" onClick={() => zoomBy(1.2)} title={t('nodes.graph.zoomIn')} data-testid="topo-zoom-in">
             <IconZoomIn size={14} />
           </button>
-          {!narrow && <CanvasMenuButton {...menuProps} />}
+          {!narrow && <CanvasMenuButton {...canvasMenu} />}
         </div>
         {actionsEl && <div className="hy-topo-graph-actions" data-testid="topo-actions">{actionsEl}</div>}
       </div>
