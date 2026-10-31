@@ -63,7 +63,7 @@ capability나 디바이스가 필요 없고, 일반 포트 매핑만으로 충�
 호스트를 경유하는 장치의 트래픽을 투명하게 캡처하려면 `--network host`와 `NET_ADMIN`이
 필요하며, 서버 포트 호핑에는 `NET_ADMIN`이 필요합니다.
 
-`http://<호스트>:5565/scale/` 접속 — 기본 로그인 `admin` / `admin`.
+`https://<호스트>:5565/scale/` 접속(기본은 자체 서명 인증서) — 기본 로그인 `admin` / `admin`.
 
 iKuai v4 사용자는 [Releases](https://github.com/FrankoonG/hy2scale/releases)에서 `.ipkg`를 다운로드해 앱 스토어로 설치하세요 — 자세한 내용은 [iKuai v4 가이드](https://github.com/FrankoonG/hy2scale/wiki/iKuai-v4-Installation)를 참고하세요.
 

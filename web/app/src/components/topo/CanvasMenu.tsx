@@ -8,12 +8,16 @@ import {
 
 export interface CanvasMenuEntry { key: string; label: string }
 
+/** A view option shown as a check item; toggling keeps the menu open. */
+export interface CanvasMenuOption { key: string; label: string; checked: boolean; onChange: (on: boolean) => void }
+
 export interface CanvasMenuProps {
   presets: CanvasMenuEntry[];
   customs: CanvasMenuEntry[];
   activeKey: string;
   activeLabel: string;
   isCustom: boolean;
+  options?: CanvasMenuOption[];
   onSelect: (key: string) => void;
   onCopy: () => void;
   onImport: () => void;
@@ -47,6 +51,25 @@ function MenuItems(p: CanvasMenuProps & { close: () => void }) {
       {p.presets.map(item)}
       <div className="hy-topo-canvas-sec">{t('nodes.canvas.custom')}</div>
       {p.customs.length ? p.customs.map(item) : <div className="hy-topo-canvas-empty">{t('nodes.canvas.none')}</div>}
+      {!!p.options?.length && (
+        <>
+          <div className="hy-dd-divider" />
+          {p.options.map((o) => (
+            <button
+              key={o.key}
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={o.checked}
+              className="hy-dropdown-item"
+              data-testid={`canvas-${o.key}`}
+              onClick={() => o.onChange(!o.checked)}
+            >
+              <span className="hy-dd-check">{o.checked && <IconCheck size={14} />}</span>
+              <span className="hy-topo-canvas-name">{o.label}</span>
+            </button>
+          ))}
+        </>
+      )}
       <div className="hy-dd-divider" />
       <button type="button" role="menuitem" className="hy-dropdown-item" data-testid="canvas-copy" onClick={act(p.onCopy)}>{t('nodes.canvas.copy')}</button>
       <button type="button" role="menuitem" className="hy-dropdown-item" data-testid="canvas-import" onClick={act(p.onImport)}>{t('nodes.canvas.import')}</button>

@@ -61,7 +61,7 @@ capability 或设备，普通端口映射即可。路由规则在任何模式下
 透明接管宿主机自身以及经其路由的主机的流量需要 `--network host` 和 `NET_ADMIN`；
 服务端端口跳跃需要 `NET_ADMIN`。
 
-打开 `http://<主机>:5565/scale/` — 默认登录 `admin` / `admin`。
+打开 `https://<主机>:5565/scale/`（默认为自签名证书）— 默认登录 `admin` / `admin`。
 
 iKuai v4 用户请从 [Releases](https://github.com/FrankoonG/hy2scale/releases) 下载 `.ipkg` 并通过应用商店安装 — 详见 [iKuai v4 指南](https://github.com/FrankoonG/hy2scale/wiki/iKuai-v4-Installation)。
 

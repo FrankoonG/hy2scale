@@ -7,7 +7,9 @@
 .hy-toggle input:checked+.slider{background:var(--primary)}
 .hy-toggle input:checked+.slider::before{transform:translateX(16px)}
 .hy-toggle.disabled{opacity:.4;pointer-events:none}
-.hy-toggle input:disabled+.slider{opacity:.4;cursor:not-allowed}
+.hy-toggle:has(input:disabled){cursor:not-allowed}
+.hy-toggle input:disabled+.slider{opacity:.55}
+.hy-toggle input:disabled:checked+.slider{background:var(--text-muted)}
 .hy-toggle.sm{width:30px;height:16px}
 .hy-toggle.sm .slider{border-radius:3px}
 .hy-toggle.sm .slider::before{width:10px;height:10px;border-radius:2px}

@@ -5,7 +5,6 @@ import { useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { useToast } from '@hy2scale/ui';
 import * as api from '@/api';
 import type { UISettings } from '@/api';
-import { getBasePath } from '@/api/client';
 import { useServerFormInit } from '@/hooks/useFormInit';
 import { signOut } from '@/hooks/authTransition';
 import { sha256 } from '@/hooks/useAuth';
@@ -152,7 +151,6 @@ export function useWebForm(settingsQ: UseQueryResult<UISettings>) {
   const queryClient = useQueryClient();
   const [listen, setListen] = useState('');
   const [basePath, setBasePath] = useState('');
-  const [forceHttps, setForceHttps] = useState(false);
   const [httpsCertId, setHttpsCertId] = useState('');
   const [sessionTimeout, setSessionTimeout] = useState('12');
   const [saving, setSaving] = useState(false);
@@ -160,36 +158,26 @@ export function useWebForm(settingsQ: UseQueryResult<UISettings>) {
   const resync = useServerFormInit(settingsQ, (s) => {
     setListen(s.listen || '');
     setBasePath(s.base_path || '');
-    setForceHttps(s.force_https || false);
     setHttpsCertId(s.https_cert_id || '');
     setSessionTimeout(String(s.session_timeout_h || 12));
   });
 
   const save = async () => {
-    if (forceHttps && !httpsCertId) {
-      toast.error(t('settings.httpsCertRequired'));
-      return;
-    }
     setSaving(true);
     try {
       await api.updateWebSettings({
-        listen, base_path: basePath, force_https: forceHttps,
+        listen, base_path: basePath,
         https_cert_id: httpsCertId, session_timeout_h: parseInt(sessionTimeout) || 12,
       });
       toast.success(t('settings.saved'));
       resync();
       queryClient.invalidateQueries({ queryKey: ['settings'] });
-      // HTTPS applies immediately; move this tab over (not for /remote/ tabs,
-      // whose origin is the proxying node).
-      if (forceHttps && window.location.protocol === 'http:' && !getBasePath().includes('/remote/')) {
-        window.location.href = `https://${window.location.host}${window.location.pathname}`;
-      }
     } catch (e: any) { toast.error(String(e.message || e)); }
     finally { setSaving(false); }
   };
 
   return {
-    listen, setListen, basePath, setBasePath, forceHttps, setForceHttps,
+    listen, setListen, basePath, setBasePath,
     httpsCertId, setHttpsCertId, sessionTimeout, setSessionTimeout, save, saving,
   };
 }

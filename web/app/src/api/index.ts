@@ -38,6 +38,14 @@ export interface BuildInfo {
   repository: string;
   go_deps: BuildInfoDep[];
   natives: BuildInfoNative[];
+  /** Upstream projects this build is built on. */
+  credits?: BuildInfoNative[];
+  go_version?: string;
+  /** os/arch */
+  platform?: string;
+  commit?: string;
+  commit_time?: string;
+  modified?: boolean;
 }
 export const getBuildInfo = () => api<BuildInfo>('/build-info');
 

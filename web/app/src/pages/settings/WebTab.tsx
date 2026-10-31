@@ -9,7 +9,7 @@ export default function WebTab({ web }: { web: WebForm }) {
   const { t } = useTranslation();
   const { data: certs = [] } = useQuery({ queryKey: ['certs'], queryFn: api.getCerts });
   const certOptions = [
-    { value: '', label: '—' },
+    { value: '', label: t('settings.httpsCertDefault') },
     ...certs.map((c) => ({ value: c.id, label: c.name || c.id })),
   ];
   return (
@@ -22,7 +22,8 @@ export default function WebTab({ web }: { web: WebForm }) {
           <Input value={web.basePath} onChange={(e) => web.setBasePath(e.target.value)} placeholder="/scale" />
         </FormGroup>
         <FormGroup label={t('settings.forceHttps')}>
-          <Toggle checked={web.forceHttps} onChange={(e) => web.setForceHttps(e.target.checked)} />
+          {/* always on */}
+          <Toggle checked disabled readOnly data-testid="web-force-https" />
         </FormGroup>
         <FormGroup label={t('settings.httpsCert')}>
           <Select value={web.httpsCertId} onChange={(e) => web.setHttpsCertId(e.target.value)} options={certOptions} />

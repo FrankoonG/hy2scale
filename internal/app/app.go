@@ -140,7 +140,7 @@ type Config struct {
 	WebUsername string                `yaml:"web_username,omitempty" json:"web_username,omitempty"`
 	WebPassword string                `yaml:"web_password,omitempty" json:"web_password,omitempty"`
 	DNS         string                `yaml:"dns,omitempty" json:"dns,omitempty"`
-	ForceHTTPS  bool                  `yaml:"force_https,omitempty" json:"force_https,omitempty"`
+	ForceHTTPS  bool                  `yaml:"force_https,omitempty" json:"force_https,omitempty"` // ignored: the web UI is always https
 	HTTPSCertID     string                `yaml:"https_cert_id,omitempty" json:"https_cert_id,omitempty"`
 	SessionTimeoutH int                   `yaml:"session_timeout_h,omitempty" json:"session_timeout_h,omitempty"` // hours, default 12
 	// PathLossGraceS: quality/aggregate connections survive this many

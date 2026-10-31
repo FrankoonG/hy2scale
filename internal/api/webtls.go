@@ -1,10 +1,16 @@
 package api
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
 	"io"
 	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -15,15 +21,17 @@ import (
 	"github.com/FrankoonG/hy2scale/internal/app"
 )
 
-// Web UI TLS. The UI port speaks plain HTTP and TLS at the same time: the
-// first byte of a connection decides (0x16 = TLS handshake record). TLS is
-// served whenever Settings → Web has a usable certificate selected; with
-// force_https on, plain HTTP requests are redirected to https. Both settings
-// are read per connection / request, so a save applies without a restart.
+// Web UI TLS. The UI is always served over https: the port still accepts
+// plain HTTP (the first byte of a connection decides, 0x16 = TLS handshake
+// record), but only to redirect it to https. The certificate is the one
+// selected in Settings → Web, else the node's "default" certificate, else a
+// self-signed one made in memory. The selection is read per connection, so
+// a save applies without a restart. (force_https in old configs is ignored.)
 
 const sniffTimeout = 30 * time.Second
 
-var errNoWebCert = errors.New("web ui: no usable https certificate")
+// fallbackID: the certificate used when none is selected.
+const fallbackID = "default"
 
 type webTLS struct {
 	store *app.TLSStore
@@ -34,15 +42,36 @@ type webTLS struct {
 	mod    time.Time
 	cert   *tls.Certificate
 	badKey string // id+mtime of the last failed load, logged once
+
+	selfOnce sync.Once
+	self     *tls.Certificate
 }
 
-// certificate returns the selected certificate, reloading it when the id or
-// the files change. nil when none is selected or it cannot be loaded.
+// certificate: the certificate served; never nil.
 func (w *webTLS) certificate() *tls.Certificate {
-	id := w.conf().HTTPSCertID
-	if id == "" {
-		return nil
+	if id := w.conf().HTTPSCertID; id != "" && id != fallbackID {
+		if c := w.load(id); c != nil {
+			return c
+		}
 	}
+	if c := w.load(fallbackID); c != nil {
+		return c
+	}
+	w.selfOnce.Do(func() {
+		c, err := selfSigned()
+		if err != nil {
+			log.Printf("[web] self-signed certificate: %v", err)
+			return
+		}
+		log.Printf("[web] no usable certificate: serving a self-signed one")
+		w.self = c
+	})
+	return w.self
+}
+
+// load returns certificate id from the store, reloading it when the id or
+// the files change; nil when it cannot be loaded.
+func (w *webTLS) load(id string) *tls.Certificate {
 	cp, kp := w.store.CertPath(id), w.store.KeyPath(id)
 	ci, err1 := os.Stat(cp)
 	ki, err2 := os.Stat(kp)
@@ -79,13 +108,30 @@ func (w *webTLS) logBadLocked(id string, mod time.Time, why string) {
 	k := id + "@" + mod.String()
 	if w.badKey != k {
 		w.badKey = k
-		log.Printf("[web] https certificate %q unusable (%s): serving plain http only", id, why)
+		log.Printf("[web] https certificate %q unusable (%s)", id, why)
 	}
 }
 
-// forced: plain HTTP must be redirected (force_https on and a usable cert).
-func (w *webTLS) forced() bool {
-	return w.conf().ForceHTTPS && w.certificate() != nil
+// selfSigned: an in-memory certificate for when the store has none.
+func selfSigned() (*tls.Certificate, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 62))
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "hy2scale"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(10 * 365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return nil, err
+	}
+	return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
 }
 
 func (w *webTLS) serverConfig() *tls.Config {
@@ -96,22 +142,23 @@ func (w *webTLS) serverConfig() *tls.Config {
 			if c := w.certificate(); c != nil {
 				return c, nil
 			}
-			return nil, errNoWebCert
+			return nil, errors.New("web ui: no https certificate")
 		},
 	}
 }
 
-// redirect wraps the public handler. Requests that already arrived over TLS,
-// or behind a TLS-terminating proxy, pass through.
+// redirect wraps the public handler: plain HTTP is sent to https. Requests
+// that already arrived over TLS, or behind a TLS-terminating proxy, pass
+// through.
 func (w *webTLS) redirect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		if r.TLS == nil && !strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") && w.forced() {
+		if r.TLS == nil && !strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
 			if r.Host == "" {
 				http.Error(rw, "https required", http.StatusBadRequest)
 				return
 			}
-			// 307, not 308: a permanent redirect is cached by browsers and
-			// would outlive turning the setting off again.
+			// 307 keeps the method and body. Not 308: a permanent redirect
+			// is cached by browsers and outlives a change of port.
 			http.Redirect(rw, r, "https://"+r.Host+r.URL.RequestURI(), http.StatusTemporaryRedirect)
 			return
 		}
@@ -166,10 +213,6 @@ func (l *sniffListener) classify(c net.Conn) {
 	c.SetReadDeadline(time.Time{})
 	var out net.Conn = &prefixConn{Conn: c, head: b[:]}
 	if b[0] == 0x16 {
-		if l.web.certificate() == nil {
-			c.Close()
-			return
-		}
 		out = tls.Server(out, l.web.serverConfig())
 	}
 	select {
