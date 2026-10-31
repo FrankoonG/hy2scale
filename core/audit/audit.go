@@ -30,12 +30,15 @@ type Record struct {
 	User        string `json:"user,omitempty"`
 	Src         string `json:"src,omitempty"`
 	SrcNode     string `json:"src_node,omitempty"`
+	InIface     string `json:"in_iface,omitempty"` // inbound interface (forwarded traffic)
+	SrcMAC      string `json:"src_mac,omitempty"`  // source MAC (forwarded traffic)
 	Dst         string `json:"dst,omitempty"`
 	DstHost     string `json:"dst_host,omitempty"`
 	DstIP       string `json:"dst_ip,omitempty"`
 	Rule        string `json:"rule,omitempty"`     // policy chain ("set/rule > set/rule")
 	Policy      string `json:"policy,omitempty"`   // the policy set that gave the terminal (id)
 	Terminal    string `json:"terminal,omitempty"` // deny | exit | iface | default
+	Reason      string `json:"reason,omitempty"`   // why: rule | default | direct | exit | depth | missing
 	Exit        string `json:"exit,omitempty"`     // direct | node | blocked
 	ExitPath    string `json:"exit_path,omitempty"`
 	ExitMode    string `json:"exit_mode,omitempty"`
@@ -215,6 +218,29 @@ func (f *Flow) SetPolicy(chain, policy, terminal string) {
 	}
 	f.Set(func(r *Record) {
 		r.Rule, r.Policy, r.Terminal = chain, policy, terminal
+	})
+}
+
+// SetReason records why the terminal was chosen (policy.Reason*).
+func (f *Flow) SetReason(reason string) {
+	if f == nil || reason == "" {
+		return
+	}
+	f.Set(func(r *Record) { r.Reason = reason })
+}
+
+// SetLink records the inbound interface and source MAC of a forwarded flow.
+func (f *Flow) SetLink(iface, mac string) {
+	if f == nil || (iface == "" && mac == "") {
+		return
+	}
+	f.Set(func(r *Record) {
+		if iface != "" {
+			r.InIface = iface
+		}
+		if mac != "" {
+			r.SrcMAC = mac
+		}
 	})
 }
 

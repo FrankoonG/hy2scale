@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
-import { Button, IconButton, Input, Select, SegmentedControl, IconX } from '@hy2scale/ui';
+import { Button, IconButton, Input, MultiSelect, Select, SegmentedControl, IconX } from '@hy2scale/ui';
 import type { Cond, CondField } from '@/api/policy';
 import { FIELDS, fieldInfo, parseValues } from './shared';
 
@@ -119,12 +119,13 @@ function Node({ value, onChange, onRemove, depth, ctx, root }: {
         {info.input === 'text'
           ? <ValuesInput values={inner.values} placeholder={info.placeholder} onChange={(v) => setInner({ ...inner, values: v })} />
           : (
-            <Chips
+            <MultiSelect testId="cond-multi"
               options={info.input === 'user'
                 ? ctx.users.map((u) => ({ value: u.id, label: u.name }))
                 : (info.choices || []).map((c) => ({ value: c, label: inner.field === 'src_kind' ? t(`policy.kind.${c}`) : c.toUpperCase() }))}
-              values={inner.values}
+              value={inner.values}
               onChange={(v) => setInner({ ...inner, values: v })}
+              placeholder={t(info.input === 'user' ? 'policy.pickUsers' : 'policy.pickValues')}
             />
           )}
       </div>
@@ -142,23 +143,5 @@ function ValuesInput({ values, placeholder, onChange }: { values: string[]; plac
   return (
     <Input value={text} placeholder={placeholder} data-testid="cond-values"
       onChange={(e) => { setText(e.target.value); onChange(parseValues(e.target.value)); }} />
-  );
-}
-
-function Chips({ options, values, onChange }: { options: { value: string; label: string }[]; values: string[]; onChange: (v: string[]) => void }) {
-  const { t } = useTranslation();
-  if (!options.length) return <span className="muted">{t('policy.noChoices')}</span>;
-  return (
-    <div className="cond-chips" data-testid="cond-chips">
-      {options.map((o) => {
-        const on = values.includes(o.value);
-        return (
-          <button key={o.value} type="button" className={clsx('cond-chip', on && 'on')}
-            onClick={() => onChange(on ? values.filter((v) => v !== o.value) : [...values, o.value])}>
-            {o.label}
-          </button>
-        );
-      })}
-    </div>
   );
 }

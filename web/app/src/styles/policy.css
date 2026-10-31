@@ -33,9 +33,6 @@
 .cond-not{flex:none;margin-top:6px;padding:1px 7px;border:1px solid var(--border);border-radius:10px;background:none;font:inherit;font-size:11px;color:var(--text-muted);cursor:pointer}
 .cond-not.on{border-color:var(--red);background:var(--red);color:#fff}
 .cond-leaf.negated .cond-field .hy-select,.cond-leaf.negated .cond-value .hy-input-wrap{border-color:var(--red)}
-.cond-chips{display:flex;flex-wrap:wrap;gap:6px;padding-top:4px}
-.cond-chip{padding:3px 10px;border:1px solid var(--border);border-radius:12px;background:var(--surface);font:inherit;font-size:12px;color:var(--text-secondary);cursor:pointer}
-.cond-chip.on{border-color:var(--primary);background:var(--primary-light);color:var(--primary)}
 .cond-add{display:flex;flex-wrap:wrap;gap:4px}
 
 /* terminal editor */
@@ -60,11 +57,6 @@
 .direct-opt{display:flex;align-items:center;gap:12px;font-size:13px;color:var(--text-secondary)}
 .direct-opt-col{display:flex;flex-direction:column;gap:6px}
 .direct-opt-label{font-size:12px;font-weight:500;color:var(--text-secondary)}
-.direct-ifaces{display:flex;flex-direction:column;gap:4px}
-.direct-iface{display:flex;align-items:center;gap:10px;padding:6px 10px;border:1px solid var(--border-light);border-radius:var(--radius);font-size:13px;cursor:pointer}
-.direct-iface.on{border-color:var(--primary)}
-.direct-iface.down{opacity:.6}
-.direct-iface-name{font-weight:600;color:var(--text)}
 
 /* dry run */
 .ptest{display:flex;flex-direction:column;gap:14px}

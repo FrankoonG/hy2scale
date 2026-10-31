@@ -174,6 +174,8 @@ func (r *routed) decide(ctx context.Context) policy.Decision {
 	r.d = r.a.pol.Evaluate(ctx, r.c, r.start)
 	if af := audit.FromContext(ctx); af != nil {
 		af.SetPolicy(policy.ChainText(r.d.Chain), r.d.Policy, r.d.Terminal.Type)
+		af.SetReason(r.d.Reason)
+		af.SetLink(r.c.InIface, r.c.SrcMAC)
 	}
 	return r.d
 }

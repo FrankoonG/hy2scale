@@ -149,6 +149,7 @@ export const IconChevronUp = icon('chevron-up', <path d="m18 15-6-6-6 6" />);
 export const IconChevronsUpDown = icon('chevrons-up-down', <><path d="m7 15 5 5 5-5" /><path d="m7 9 5-5 5 5" /></>);
 export const IconCheck = icon('check', <path d="M20 6 9 17l-5-5" />);
 export const IconX = icon('x', <><path d="M18 6 6 18" /><path d="m6 6 12 12" /></>);
+export const IconSearch = icon('search', <><path d="m21 21-4.34-4.34" /><circle cx="11" cy="11" r="8" /></>);
 export const IconPlus = icon('plus', <><path d="M5 12h14" /><path d="M12 5v14" /></>);
 export const IconLink = icon('link', <><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></>);
 export const IconMinus = icon('minus', <path d="M5 12h14" />);

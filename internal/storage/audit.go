@@ -202,7 +202,7 @@ func (s *AuditStore) WriteNow(r *audit.Record) {
 type Query struct {
 	From, To int64 // unix ms; a record matches when it overlaps [From, To]
 	User     string
-	Src      string // substring of src / src_node
+	Src      string // substring of user / src / src_node / in_iface / src_mac
 	Dst      string // substring of dst / dst_host / dst_ip
 	Inbound  string
 	Exit     string
@@ -350,14 +350,14 @@ func (m *matcher) match(line []byte) (audit.Record, bool) {
 		(q.Result != "" && r.Result != q.Result) {
 		return r, false
 	}
-	if m.srcL != "" && !containsAny(m.srcL, r.Src, r.SrcNode) {
+	if m.srcL != "" && !containsAny(m.srcL, r.User, r.Src, r.SrcNode, r.InIface, r.SrcMAC) {
 		return r, false
 	}
 	if m.dstL != "" && !containsAny(m.dstL, r.Dst, r.DstHost, r.DstIP) {
 		return r, false
 	}
-	if m.qL != "" && !containsAny(m.qL, r.ID, r.Proto, r.Inbound, r.User, r.Src, r.SrcNode, r.Dst, r.DstHost,
-		r.DstIP, r.Rule, r.Policy, r.Terminal, r.Exit, r.ExitPath, r.ExitMode, r.EgressIface, r.EgressSrc, r.Result, r.Error) {
+	if m.qL != "" && !containsAny(m.qL, r.ID, r.Proto, r.Inbound, r.User, r.Src, r.SrcNode, r.InIface, r.SrcMAC, r.Dst, r.DstHost,
+		r.DstIP, r.Rule, r.Policy, r.Terminal, r.Reason, r.Exit, r.ExitPath, r.ExitMode, r.EgressIface, r.EgressSrc, r.Result, r.Error) {
 		return r, false
 	}
 	return r, true
@@ -572,8 +572,8 @@ func top(m map[string]*Stat, n int) []Stat {
 // ---------------------------------------------------------------- export
 
 // CSVColumns: the export columns, in order.
-var CSVColumns = []string{"id", "start", "end", "partial", "proto", "inbound", "user", "src", "src_node",
-	"dst", "dst_host", "dst_ip", "rule", "policy", "terminal", "exit", "exit_path", "exit_mode", "egress_iface", "egress_src",
+var CSVColumns = []string{"id", "start", "end", "partial", "proto", "inbound", "user", "src", "src_node", "in_iface", "src_mac",
+	"dst", "dst_host", "dst_ip", "rule", "policy", "terminal", "reason", "exit", "exit_path", "exit_mode", "egress_iface", "egress_src",
 	"up", "down", "result", "error"}
 
 func csvRow(r *audit.Record) []string {
@@ -582,8 +582,8 @@ func csvRow(r *audit.Record) []string {
 	if r.Partial {
 		p = "true"
 	}
-	return []string{r.ID, i(r.Start), i(r.End), p, r.Proto, r.Inbound, r.User, r.Src, r.SrcNode,
-		r.Dst, r.DstHost, r.DstIP, r.Rule, r.Policy, r.Terminal, r.Exit, r.ExitPath, r.ExitMode, r.EgressIface, r.EgressSrc,
+	return []string{r.ID, i(r.Start), i(r.End), p, r.Proto, r.Inbound, r.User, r.Src, r.SrcNode, r.InIface, r.SrcMAC,
+		r.Dst, r.DstHost, r.DstIP, r.Rule, r.Policy, r.Terminal, r.Reason, r.Exit, r.ExitPath, r.ExitMode, r.EgressIface, r.EgressSrc,
 		i(r.Up), i(r.Down), r.Result, r.Error}
 }
 

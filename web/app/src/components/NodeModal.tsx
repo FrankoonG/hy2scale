@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import {
   Modal, Button, Input, PasswordInput, Toggle, Textarea, Select, Tabs,
-  FormGroup, FormGrid, SortableList, useToast,
+  FormGroup, FormGrid, SortableList, MultiSelect, useToast,
 } from '@hy2scale/ui';
 import * as api from '@/api';
 import type { ClientEntry, CertInfo, TopologyNode } from '@/api';
@@ -565,21 +565,11 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
                   />
                 </div>
                 <div className="punch-sub">{t('nodes.iface')}</div>
-                <div data-testid="punch-binds" style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px' }}>
-                  {bindOptions(ifaces, '', t('nodes.ifaceAuto'), punchFamily === 'ipv6' ? 6 : 4).map((o) => (
-                    <label key={o.value} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-                      <input
-                        type="checkbox"
-                        checked={punchBinds.includes(o.value)}
-                        onChange={(e) => {
-                          const next = e.target.checked ? [...punchBinds, o.value] : punchBinds.filter((b) => b !== o.value);
-                          setPunchBinds(next.length ? next : ['']);
-                        }}
-                      />
-                      {o.label}
-                    </label>
-                  ))}
-                </div>
+                <MultiSelect testId="punch-binds"
+                  options={bindOptions(ifaces, '', '', punchFamily === 'ipv6' ? 6 : 4).filter((o) => o.value)}
+                  value={punchBinds.filter((b) => b)}
+                  onChange={(next) => setPunchBinds(next.length ? next : [''])}
+                  placeholder={t('nodes.ifaceAuto')} />
               </div>
             ) : (
             <>
