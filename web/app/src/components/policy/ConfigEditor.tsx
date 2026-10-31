@@ -1,19 +1,20 @@
-// CodeMirror YAML editor (lazy chunk): highlighting, completion from
-// yamlSchema, parse errors linted live, and diagnostics pushed by the
-// caller (server validation) until the next edit.
+// Config-mode editor (lazy chunk, CodeMirror YAML): highlighting,
+// completion from yamlSchema (Enter or Tab accepts; Tab indents otherwise),
+// parse errors linted live, and diagnostics pushed by the caller (server
+// validation, a refused tab switch) until the next edit.
 import { useEffect, useRef } from 'react';
 import { EditorState } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { yaml as yamlLang } from '@codemirror/lang-yaml';
 import { HighlightStyle, syntaxHighlighting, indentOnInput, bracketMatching } from '@codemirror/language';
-import { autocompletion, completionKeymap, type CompletionContext } from '@codemirror/autocomplete';
+import { acceptCompletion, autocompletion, completionKeymap, type CompletionContext } from '@codemirror/autocomplete';
 import { linter, lintGutter, setDiagnostics, type Diagnostic } from '@codemirror/lint';
 import { tags } from '@lezer/highlight';
-import { parseDocument } from 'yaml';
+import { lintConfig } from './setConfig';
 import { suggest, type YamlData } from './yamlSchema';
 
-export interface YamlEditorProps {
+export interface ConfigEditorProps {
   value: string;
   onChange: (v: string) => void;
   data: YamlData;
@@ -42,7 +43,7 @@ const theme = EditorView.theme({
   '.cm-completionDetail': { color: 'var(--text-muted)', marginLeft: '8px' },
 });
 
-export default function YamlEditor({ value, onChange, data, extra }: YamlEditorProps) {
+export default function ConfigEditor({ value, onChange, data, extra }: ConfigEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const dataRef = useRef(data);
@@ -65,11 +66,7 @@ export default function YamlEditor({ value, onChange, data, extra }: YamlEditorP
     };
     const lint = (v: EditorView): Diagnostic[] => {
       const text = v.state.doc.toString();
-      const doc = parseDocument(text);
-      const out: Diagnostic[] = [...doc.errors, ...doc.warnings].map((e) => ({
-        from: Math.min(e.pos[0], text.length), to: Math.min(Math.max(e.pos[1], e.pos[0] + 1), text.length),
-        severity: doc.errors.includes(e as any) ? 'error' : 'warning', message: e.message.split('\n')[0].replace(/ at line \d+, column \d+:?$/, ''),
-      }));
+      const out: Diagnostic[] = lintConfig(text).map((d) => ({ from: d.from, to: d.to, severity: d.error ? 'error' : 'warning', message: d.message }));
       for (const x of extraRef.current) {
         out.push({ from: Math.min(x.from, text.length), to: Math.min(Math.max(x.to, x.from), text.length), severity: 'error', message: x.message });
       }
@@ -85,7 +82,8 @@ export default function YamlEditor({ value, onChange, data, extra }: YamlEditorP
           yamlLang(), syntaxHighlighting(highlight), theme, EditorState.tabSize.of(2),
           autocompletion({ override: [complete], activateOnTyping: true }),
           linter(lint, { delay: 300 }), lintGutter(),
-          keymap.of([...completionKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
+          // Tab: accept an open completion, else indent.
+          keymap.of([{ key: 'Tab', run: acceptCompletion }, ...completionKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
           EditorView.updateListener.of((u) => {
             if (!u.docChanged) return;
             extraRef.current = [];
@@ -111,5 +109,5 @@ export default function YamlEditor({ value, onChange, data, extra }: YamlEditorP
     if (v) v.dispatch(setDiagnostics(v.state, lintRef.current(v)));
   }, [extra]);
 
-  return <div ref={host} className="yaml-editor" data-testid="yaml-editor" />;
+  return <div ref={host} className="config-editor" data-testid="config-editor" />;
 }

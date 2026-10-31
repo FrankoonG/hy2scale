@@ -153,7 +153,7 @@ export function suggest(text: string, n: number, col: number, d: YamlData): { fr
     const from = col - k[3].length;
     const anc = ancestors(lines, n, keyCol);
     switch (scope(anc)) {
-      case 'top': return { from, options: keys(['name', 'rules', 'default']) };
+      case 'top': return { from, options: keys(['rules', 'default']) };
       case 'rule': return { from, options: keys(['name', 'enabled', 'when', 'then', 'id']) };
       case 'cond': return { from, options: keys(COND_KEYS) };
       case 'then': case 'default': return { from, options: keys(ACTION_KEYS[d.kind]) };
