@@ -239,6 +239,11 @@ func (s *Server) getBuildInfo(w http.ResponseWriter, r *http.Request) {
 	natives := []native{
 		{Name: "veepin (vendored, patched)", Version: "bcac178", License: "MIT", Source: "https://github.com/xen0bit/veepin"},
 		{Name: "iptables (nf_tables backend)", Version: "distro-packaged", License: "GPL-2.0-or-later", Source: "https://www.netfilter.org/projects/iptables/"},
+		{Name: "iptables-legacy (built from source)", Version: "1.8.3", License: "GPL-2.0-or-later", Source: "https://www.netfilter.org/projects/iptables/"},
+		// Docker image only, used on iKuai routers, whose kernel only works
+		// with iKuai's own iptables build (taken from iKuai firmware).
+		{Name: "iptables for iKuai (from iKuai firmware)", Version: "libxtables 12", License: "GPL-2.0-or-later", Source: "https://www.netfilter.org/projects/iptables/"},
+		{Name: "uClibc-ng / musl runtime for iKuai (from iKuai firmware)", Version: "1.0.40 / —", License: "LGPL-2.1 / MIT", Source: "https://uclibc-ng.org/"},
 	}
 	writeJSON(w, map[string]any{
 		"version":     Version,
