@@ -5,6 +5,9 @@ package api
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/internal/buildsig"
 	"github.com/FrankoonG/hy2scale/internal/selfupdate"
 )
 
@@ -74,6 +78,10 @@ func (s *Server) downloadBackup(w http.ResponseWriter, r *http.Request) {
 		if rel == "." {
 			return nil
 		}
+		// The stored upgrade binary is not configuration.
+		if rel == "bin" && info.IsDir() {
+			return filepath.SkipDir
+		}
 		hdr, err := tar.FileInfoHeader(info, "")
 		if err != nil {
 			return nil
@@ -108,6 +116,10 @@ func (s *Server) uploadRestore(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			http.Error(w, "invalid tar: "+err.Error(), 400)
 			return
+		}
+		// Never the stored upgrade binary: a restore must not change what runs.
+		if n := filepath.ToSlash(filepath.Clean(hdr.Name)); n == "bin" || strings.HasPrefix(n, "bin/") {
+			continue
 		}
 		target := filepath.Join(dataDir, filepath.Clean(hdr.Name))
 		// Security: ensure target is within dataDir
@@ -163,6 +175,7 @@ func (s *Server) getSystemArch(w http.ResponseWriter, r *http.Request) {
 		"binary":      filepath.Base(self),
 		"binary_size": size,
 		"in_docker":   isRunningInDocker(),
+		"official":    buildsig.Self().Status == buildsig.Official,
 	})
 }
 
@@ -257,6 +270,7 @@ func (s *Server) getBuildInfo(w http.ResponseWriter, r *http.Request) {
 		"commit":      commit,
 		"commit_time": commitTime,
 		"modified":    modified,
+		"build":       buildsig.Self(),
 	})
 }
 
@@ -282,7 +296,17 @@ func (s *Server) uploadUpgrade(w http.ResponseWriter, r *http.Request) {
 	tmp.Close()
 	defer os.Remove(tmp.Name())
 
-	if err := applyTarball(tmp.Name(), s.app.DataDir()); err != nil {
+	a, err := readUpgradeArchive(tmp.Name())
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if err := installUpgrade(a, s.app.DataDir(), r.URL.Query().Get("allow_unofficial") == "1"); err != nil {
+		var ue unofficialError
+		if errors.As(err, &ue) {
+			writeUnofficial(w, ue)
+			return
+		}
 		http.Error(w, err.Error(), 400)
 		return
 	}
@@ -296,90 +320,157 @@ func (s *Server) uploadUpgrade(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-// applyTarball extracts the matching platform binary from a gzipped tar
-// archive at path. In a container it is stored in the data directory (see
-// internal/selfupdate: the container's own filesystem is reset whenever it
-// is recreated); otherwise it is atomically swapped into place, leaving the
-// previous binary as <self>.bak. Caller is responsible for triggering os.Exit so
-// the process restarts on the new binary. Used by both the manual upload
-// path (uploadUpgrade) and the online-update path
-// (applyDownloadedUpgrade) so the two stay in lock-step.
-func applyTarball(path, dataDir string) error {
+// upgradeArchive: the binary for this platform taken from an upgrade
+// archive (a temp file), its signature file and the result of checking them.
+type upgradeArchive struct {
+	bin   string
+	sig   []byte
+	check buildsig.Result
+}
+
+// readUpgradeArchive takes the binary for this platform (and its signature
+// file, if any) out of the gzipped tar at path. The binary is hashed as it
+// is written, so the check is about exactly the bytes that get installed;
+// an archive with more than one candidate binary or signature is refused.
+func readUpgradeArchive(path string) (*upgradeArchive, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("open: %w", err)
+		return nil, fmt.Errorf("open: %w", err)
 	}
 	defer f.Close()
-
 	gr, err := gzip.NewReader(f)
 	if err != nil {
-		return fmt.Errorf("invalid gzip: %w", err)
+		return nil, fmt.Errorf("invalid gzip: %w", err)
 	}
 	defer gr.Close()
 
+	plat := buildsig.Platform()
+	names := map[string]bool{"hy2scale": true}
+	for _, p := range []string{plat, runtime.GOOS + "-" + runtime.GOARCH} {
+		names["hy2scale-"+p] = true
+		names["hy2scale_"+p] = true
+	}
+	a := &upgradeArchive{}
+	var sum []byte
 	tr := tar.NewReader(gr)
-	expectedArch := runtime.GOOS + "-" + runtime.GOARCH
-	expectedBin := "hy2scale"
-
-	var tmpPath string
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("invalid tar: %w", err)
+			a.remove()
+			return nil, fmt.Errorf("invalid tar: %w", err)
 		}
 		if hdr.Typeflag != tar.TypeReg {
 			continue
 		}
 		name := filepath.Base(hdr.Name)
-		isMatch := name == expectedBin ||
-			name == expectedBin+"-"+expectedArch ||
-			name == expectedBin+"_"+expectedArch
-		if !isMatch {
-			continue
-		}
-		tmp, err := os.CreateTemp("", "hy2scale-upgrade-*")
-		if err != nil {
-			return fmt.Errorf("temp file: %w", err)
-		}
-		if _, err := io.Copy(tmp, tr); err != nil {
+		switch {
+		case names[name]:
+			if a.bin != "" {
+				a.remove()
+				return nil, fmt.Errorf("more than one binary for %s in the archive", plat)
+			}
+			tmp, err := os.CreateTemp("", "hy2scale-upgrade-*")
+			if err != nil {
+				return nil, fmt.Errorf("temp file: %w", err)
+			}
+			a.bin = tmp.Name()
+			h := sha256.New()
+			_, err = io.Copy(io.MultiWriter(tmp, h), tr)
 			tmp.Close()
-			os.Remove(tmp.Name())
-			return fmt.Errorf("extract: %w", err)
+			if err != nil {
+				a.remove()
+				return nil, fmt.Errorf("extract: %w", err)
+			}
+			os.Chmod(a.bin, 0o755)
+			sum = h.Sum(nil)
+		case strings.HasSuffix(name, ".sig") && names[strings.TrimSuffix(name, ".sig")]:
+			if a.sig != nil {
+				a.remove()
+				return nil, fmt.Errorf("more than one signature in the archive")
+			}
+			a.sig, err = io.ReadAll(io.LimitReader(tr, buildsig.MaxFile))
+			if err != nil {
+				a.remove()
+				return nil, fmt.Errorf("extract: %w", err)
+			}
 		}
-		tmp.Close()
-		os.Chmod(tmp.Name(), 0755)
-		tmpPath = tmp.Name()
-		break
 	}
-	if tmpPath == "" {
-		return fmt.Errorf("no matching binary for %s found in archive", expectedArch)
+	if a.bin == "" {
+		return nil, fmt.Errorf("no binary for %s in the archive", plat)
 	}
+	a.check = buildsig.Check(a.sig, sum)
+	return a, nil
+}
 
+func (a *upgradeArchive) remove() {
+	if a.bin != "" {
+		os.Remove(a.bin)
+	}
+}
+
+// unofficialError: installing a binary that is not an official build on a
+// node that runs one, without the user having accepted it.
+type unofficialError struct{ r buildsig.Result }
+
+func (e unofficialError) Error() string {
+	if e.r.Reason != "" {
+		return "not an official build: " + e.r.Reason
+	}
+	return "not an official build"
+}
+
+// writeUnofficial answers 409 with what the warning dialog shows.
+func writeUnofficial(w http.ResponseWriter, e unofficialError) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusConflict)
+	json.NewEncoder(w).Encode(map[string]any{"error": "unofficial", "status": e.r.Status, "reason": e.r.Reason})
+}
+
+// installUpgrade installs the archive's binary. A node running an official
+// build only takes one that is not official when allowUnofficial is set
+// (the user accepted the warning). In a container the binary is stored in
+// the data directory (see internal/selfupdate: the container's own
+// filesystem is reset whenever it is recreated); otherwise it is swapped
+// into place, leaving the previous binary as <self>.bak. Its signature file
+// goes along with it. The caller triggers os.Exit so the process restarts
+// on the new binary.
+func installUpgrade(a *upgradeArchive, dataDir string, allowUnofficial bool) error {
+	defer a.remove()
+	if a.check.Status != buildsig.Official && buildsig.Self().Status == buildsig.Official && !allowUnofficial {
+		return unofficialError{a.check}
+	}
+	var sig []byte
+	want := ""
+	if a.check.Status == buildsig.Official {
+		sig, want = a.sig, a.check.Manifest.Version
+	}
+	log.Printf("[upgrade] installing a binary: %s %s", a.check.Status, a.check.Reason)
 	if isRunningInDocker() {
-		defer os.Remove(tmpPath)
-		return selfupdate.Install(dataDir, tmpPath, Version)
+		return selfupdate.Install(dataDir, a.bin, Version, sig, want)
 	}
 
 	self, err := os.Executable()
 	if err != nil {
-		os.Remove(tmpPath)
 		return fmt.Errorf("cannot find self: %w", err)
 	}
 	self, _ = filepath.EvalSymlinks(self)
-
 	bakPath := self + ".bak"
 	os.Remove(bakPath)
 	if err := os.Rename(self, bakPath); err != nil {
-		os.Remove(tmpPath)
 		return fmt.Errorf("backup old binary: %w", err)
 	}
-	if err := os.Rename(tmpPath, self); err != nil {
+	if err := os.Rename(a.bin, self); err != nil {
 		os.Rename(bakPath, self)
 		return fmt.Errorf("install new binary: %w", err)
 	}
-	os.Chmod(self, 0755)
+	os.Chmod(self, 0o755)
+	if sig != nil {
+		os.WriteFile(buildsig.SigPath(self), sig, 0o644)
+	} else {
+		os.Remove(buildsig.SigPath(self))
+	}
 	return nil
 }

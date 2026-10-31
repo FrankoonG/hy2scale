@@ -16,11 +16,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
 	relay "github.com/FrankoonG/hy2scale/core/node"
+	"github.com/FrankoonG/hy2scale/internal/buildsig"
 )
 
 // relayCtxKey carries the hyserver authID of the QUIC connection that
@@ -352,6 +352,9 @@ func (s *Server) pushBinary(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Chain []string `json:"chain"`
 		Token string   `json:"token"`
+		// The user accepted installing a binary that is not an official
+		// build on an official remote.
+		AllowUnofficial bool `json:"allow_unofficial"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Chain) == 0 {
 		http.Error(w, "chain required", 400)
@@ -395,17 +398,27 @@ func (s *Server) pushBinary(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 	go func() { <-ctx.Done(); conn.Close() }()
 
+	// Its release signature goes along, so an official build stays one.
+	sig, _ := os.ReadFile(buildsig.SigPath(exe))
+
 	pr, pw := io.Pipe()
 	defer pr.Close()
 	go func() {
 		gz := gzip.NewWriter(pw)
 		tw := tar.NewWriter(gz)
+		// Plain "hy2scale": the name every version takes as its own platform's.
 		err := tw.WriteHeader(&tar.Header{
-			Name: "hy2scale-" + runtime.GOOS + "-" + runtime.GOARCH, Mode: 0o755,
+			Name: "hy2scale", Mode: 0o755,
 			Size: fi.Size(), ModTime: fi.ModTime(), Typeflag: tar.TypeReg,
 		})
 		if err == nil {
 			_, err = io.Copy(tw, f)
+		}
+		if err == nil && len(sig) > 0 {
+			err = tw.WriteHeader(&tar.Header{Name: "hy2scale.sig", Mode: 0o644, Size: int64(len(sig)), ModTime: fi.ModTime(), Typeflag: tar.TypeReg})
+			if err == nil {
+				_, err = tw.Write(sig)
+			}
 		}
 		if err == nil {
 			err = tw.Close()
@@ -416,7 +429,11 @@ func (s *Server) pushBinary(w http.ResponseWriter, r *http.Request) {
 		pw.CloseWithError(err)
 	}()
 
-	req, _ := http.NewRequest("POST", "http://127.0.0.1:5565/scale/api/upgrade", pr)
+	target := "http://127.0.0.1:5565/scale/api/upgrade"
+	if body.AllowUnofficial {
+		target += "?allow_unofficial=1"
+	}
+	req, _ := http.NewRequest("POST", target, pr)
 	req.Host = "127.0.0.1:5565"
 	req.Header.Set("Content-Type", "application/gzip")
 	if body.Token != "" {
@@ -433,11 +450,21 @@ func (s *Server) pushBinary(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	log.Printf("[upgrade] pushed own binary (%s, %d bytes) to %s: %d", Version, fi.Size(), strings.Join(chain, "/"), resp.StatusCode)
-	writeJSON(w, map[string]any{
+	out := map[string]any{
 		"ok":      resp.StatusCode == 200,
 		"status":  resp.StatusCode,
 		"message": strings.TrimSpace(string(msg)),
 		"version": Version,
 		"bytes":   fi.Size(),
-	})
+	}
+	// The remote runs an official build and this one is not: its warning.
+	var un struct {
+		Error  string `json:"error"`
+		Reason string `json:"reason"`
+	}
+	if resp.StatusCode == http.StatusConflict && json.Unmarshal(msg, &un) == nil && un.Error == "unofficial" {
+		out["unofficial"] = true
+		out["message"] = un.Reason
+	}
+	writeJSON(w, out)
 }

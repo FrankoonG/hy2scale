@@ -73,6 +73,12 @@ export default function AboutTab() {
           <div className="about-chips">
             <span className="about-chip" data-testid="about-version">v{data.version}</span>
             <span className="about-chip">{data.license}</span>
+            {data.build && (
+              <span className={`about-chip ${data.build.status === 'official' ? 'official' : 'self'}`} data-testid="about-origin"
+                title={data.build.reason || undefined}>
+                {data.build.status === 'official' ? t('build.official') : t('build.selfBuilt')}
+              </span>
+            )}
           </div>
         </div>
         <nav className="about-links">
