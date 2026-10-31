@@ -8,6 +8,8 @@
 .about-chips{display:flex;flex-wrap:wrap;gap:6px}
 .about-chip{padding:2px 10px;border:1px solid var(--border);border-radius:999px;background:var(--surface);font-family:var(--mono);font-size:12px;color:var(--text-secondary)}
 .about-chip:first-child{border-color:var(--primary);color:var(--primary)}
+.about-chip.official{border-color:var(--green);color:var(--green)}
+.about-chip.self{border-color:var(--orange);color:var(--orange)}
 .about-links{display:flex;flex-wrap:wrap;gap:8px;max-width:560px;justify-content:flex-end}
 .about-link{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);font-size:13px;color:var(--text);text-decoration:none;transition:border-color .15s,color .15s}
 .about-link:hover{border-color:var(--primary);color:var(--primary)}

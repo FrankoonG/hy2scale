@@ -32,7 +32,11 @@ export const getPathStatus = () => api<PathStatus[]>('/paths/status');
 // running and under which licence.
 export interface BuildInfoDep { path: string; version: string }
 export interface BuildInfoNative { name: string; version: string; license: string; source: string }
+/** Whether a binary is an official release build. */
+export interface BuildStatus { status: 'official' | 'unsigned' | 'invalid'; reason?: string; manifest?: { version: string; platform: string; commit: string; tag: string } }
 export interface BuildInfo {
+  /** This node's own binary. */
+  build?: BuildStatus;
   version: string;
   license: string;
   repository: string;
@@ -246,11 +250,15 @@ export const uploadRestore = async (file: File) => {
 };
 
 // Upgrade
-export const getSystemArch = () => api<{ os: string; arch: string; version: string; binary: string; in_docker: boolean }>('/system/arch');
-export const uploadUpgrade = async (file: File) => {
+export const getSystemArch = () => api<{ os: string; arch: string; version: string; binary: string; binary_size?: number; in_docker: boolean; official?: boolean }>('/system/arch');
+/** Thrown when an official node is offered a binary that is not an official build (HTTP 409). */
+export class UnofficialBuildError extends Error {
+  constructor(public status: string, public reason: string) { super(reason || status); }
+}
+export const uploadUpgrade = async (file: File, allowUnofficial = false) => {
   const base = (window as any).__BASE__ || '';
   const token = sessionStorage.getItem('token:' + base);
-  const res = await fetch(`${base}/api/upgrade`, {
+  const res = await fetch(`${base}/api/upgrade${allowUnofficial ? '?allow_unofficial=1' : ''}`, {
     method: 'POST',
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -258,6 +266,10 @@ export const uploadUpgrade = async (file: File) => {
     },
     body: file,
   });
+  if (res.status === 409) {
+    const d = await res.json().catch(() => ({}));
+    if (d?.error === 'unofficial') throw new UnofficialBuildError(d.status, d.reason || '');
+  }
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 };

@@ -23,10 +23,12 @@ echo "=== Building hy2scale v${VERSION} ipkg ==="
 echo "[1/5] Syncing version to manifest.json..."
 sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${VERSION}\"/" "$SCRIPT_DIR/hy2scale/manifest.json"
 
-# Step 2: Build Docker image (DOCKER_BUILDKIT=0 for iKuai Docker 18.09 compat)
+# Step 2: Build Docker image. The Dockerfile needs BuildKit (per-arch
+# TARGETARCH); `docker save` still writes the classic archive that iKuai's
+# Docker loads.
 echo "[2/5] Building Docker image..."
 cd "$PROJECT_DIR"
-DOCKER_BUILDKIT=0 docker build -t hy2scale:ikuai .
+DOCKER_BUILDKIT=1 docker build -t hy2scale:ikuai .
 
 # Step 3: Export image as offline package
 echo "[3/5] Exporting Docker image..."

@@ -27,7 +27,7 @@ const RESTART_WAIT = 180_000;
 
 type Via = 'trust' | 'password';
 interface Auth { token: string; via: Via; exp: number }
-interface RemoteInfo { version: string; os: string; arch: string; inDocker: boolean }
+interface RemoteInfo { version: string; os: string; arch: string; inDocker: boolean; official?: boolean }
 type Op =
   | { kind: 'idle' }
   | { kind: 'checking' }
@@ -79,7 +79,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
   const [authError, setAuthError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const [info, setInfo] = useState<RemoteInfo | null>(null);
-  const [local, setLocal] = useState<{ version: string; os: string; arch: string; size: number } | null>(null);
+  const [local, setLocal] = useState<{ version: string; os: string; arch: string; size: number; official: boolean } | null>(null);
   const [op, setOp] = useState<Op>({ kind: 'idle' });
   // The password sign-in, kept in memory only, to sign in again after the
   // remote restarts (its sessions do not survive a restart).
@@ -156,7 +156,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
       const a = await autoSignIn();
       if (!gone) setAuth(a);
     })();
-    api.getSystemArch().then((a: any) => setLocal({ version: a.version, os: a.os, arch: a.arch, size: a.binary_size || 0 })).catch(() => {});
+    api.getSystemArch().then((a) => setLocal({ version: a.version, os: a.os, arch: a.arch, size: a.binary_size || 0, official: !!a.official })).catch(() => {});
     return () => { gone = true; };
   }, [open, chainKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -176,7 +176,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
       const r = await rfetch('/system/arch', {}, token);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
-      if (alive.current) setInfo({ version: d.version, os: d.os, arch: d.arch, inDocker: !!d.in_docker });
+      if (alive.current) setInfo({ version: d.version, os: d.os, arch: d.arch, inDocker: !!d.in_docker, official: d.official });
     } catch {
       if (alive.current) setInfo(null);
     }
@@ -263,7 +263,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
     try {
       const r = await rfetch('/system/arch', {}, a.token);
       const d = await r.json();
-      setInfo({ version: d.version, os: d.os, arch: d.arch, inDocker: !!d.in_docker });
+      setInfo({ version: d.version, os: d.os, arch: d.arch, inDocker: !!d.in_docker, official: d.official });
       setOp({ kind: 'done', from, to: d.version });
     } catch {
       setOp({ kind: 'done', from, to: '' });
@@ -322,11 +322,30 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
       confirmText: t('remote.upgrade'),
     })) return;
     const from = info.version;
+    const warn = (status: string, reason = '') => confirm({
+      title: t('build.unofficialTitle'),
+      message: t(status === 'invalid' ? 'build.invalidWarnRemote' : 'build.unsignedWarnRemote', { name: targetLabel, reason }),
+      danger: true,
+      confirmText: t('build.installAnyway'),
+    });
+    // An official remote is about to get a binary that is not official.
+    let allow = false;
+    if (info.official && !local.official) {
+      if (!await warn('unsigned')) return;
+      allow = true;
+    }
     setOp({ kind: 'pushing' });
     try {
-      const res = await request<{ ok: boolean; status: number; message: string }>('/remote/push-binary', {
-        method: 'POST', body: JSON.stringify({ chain, token: auth.token }),
+      const push = (allowUnofficial: boolean) => request<{ ok: boolean; status: number; message: string; unofficial?: boolean }>('/remote/push-binary', {
+        method: 'POST', body: JSON.stringify({ chain, token: auth.token, allow_unofficial: allowUnofficial }),
       });
+      let res = await push(allow);
+      if (!res.ok && res.unofficial) {
+        setOp({ kind: 'idle' });
+        if (!await warn('invalid', res.message)) return;
+        setOp({ kind: 'pushing' });
+        res = await push(true);
+      }
       if (!res.ok) throw new Error(res.message || `HTTP ${res.status}`);
       setOp({ kind: 'restarting', from });
       await awaitRestart(from);
@@ -415,11 +434,12 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
           <div className="remote-sec-title">{t('remote.manage')}</div>
           <DetailGrid
             variant="plain"
-            columns={3}
+            columns={4}
             items={[
               [t('remote.version'), <span className="mono" data-testid="remote-version">{info?.version || '—'}</span>],
               [t('remote.platform'), <span className="mono">{platform || '—'}</span>],
               [t('remote.deployment'), info ? (info.inDocker ? t('remote.container') : t('remote.native')) : '—'],
+              [t('build.origin'), info?.official === undefined ? '—' : (info.official ? t('build.official') : t('build.selfBuilt'))],
             ]}
           />
           <div className="remote-row">
@@ -454,6 +474,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
               <div className="remote-upg-name">{t('remote.pushLocal')}</div>
               <div className="remote-muted">
                 {local ? t('remote.localBinary', { version: local.version, platform: localPlatform, size: fmtBytes(local.size) }) : '…'}
+                {local && !local.official && <> · {t('build.selfBuilt')}</>}
               </div>
               <div className="remote-upg-actions">
                 <span title={signedIn && pushBlock !== '…' ? pushBlock || undefined : undefined}>

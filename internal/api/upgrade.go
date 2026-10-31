@@ -8,11 +8,11 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/internal/buildsig"
 	"github.com/FrankoonG/hy2scale/internal/selfupdate"
 )
 
@@ -125,9 +125,10 @@ func (j *upgradeJob) broadcast(snap upgradeJobSnapshot) {
 
 // expectedAsset returns the GitHub release asset filename for the running
 // platform — must match the tar-naming convention in
-// .github/workflows/release.yml ("hy2scale-{goos}-{goarch}.tar.gz").
+// .github/workflows/release.yml ("hy2scale-{platform}.tar.gz", e.g.
+// linux-amd64, linux-armv7, linux-mipsle-softfloat).
 func expectedAsset() string {
-	return fmt.Sprintf("hy2scale-%s-%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	return fmt.Sprintf("hy2scale-%s.tar.gz", buildsig.Platform())
 }
 
 // semverGreater compares two MAJOR.MINOR.PATCH strings (no pre-release /
@@ -460,7 +461,7 @@ func (s *Server) streamUpgradeEvents(w http.ResponseWriter, r *http.Request) {
 // applyDownloadedUpgrade applies a tarball previously fetched into the job's
 // filePath. Reuses the same in-place swap logic as the manual uploadUpgrade
 // handler — the heavy lifting (extract, verify, rename, restart) lives in
-// applyTarball so both code paths stay in lock-step.
+// readUpgradeArchive / installUpgrade so both code paths stay in lock-step.
 func (s *Server) applyDownloadedUpgrade(w http.ResponseWriter, r *http.Request) {
 	if !isRunningInDocker() {
 		http.Error(w, "upgrade via web is only available in Docker deployments", 403)
@@ -479,7 +480,17 @@ func (s *Server) applyDownloadedUpgrade(w http.ResponseWriter, r *http.Request) 
 	j.mu.Unlock()
 	j.broadcast(snap)
 
-	if err := applyTarball(path, s.app.DataDir()); err != nil {
+	// A release from the project's own repository must be an official
+	// build: anything else means the download was tampered with.
+	a, err := readUpgradeArchive(path)
+	if err == nil && a.check.Status != buildsig.Official {
+		a.remove()
+		err = fmt.Errorf("the downloaded release is not an official build (%s %s)", a.check.Status, a.check.Reason)
+	}
+	if err == nil {
+		err = installUpgrade(a, s.app.DataDir(), false)
+	}
+	if err != nil {
 		j.markError("apply: " + err.Error())
 		http.Error(w, err.Error(), 500)
 		return

@@ -78,8 +78,10 @@ func Healthy(dataDir string) {
 
 // Install stores the binary at src as the in-app upgrade, atomically. It
 // must be newer than current (the running version): anything else would be
-// dropped again at the next start.
-func Install(dataDir, src, current string) error {
+// dropped again at the next start. sig: its release signature file, stored
+// next to it (nil: none); want: the version that signature names ("" when
+// unsigned), which the binary must report.
+func Install(dataDir, src, current string, sig []byte, want string) error {
 	if err := os.MkdirAll(binDir(dataDir), 0755); err != nil {
 		return err
 	}
@@ -107,13 +109,24 @@ func Install(dataDir, src, current string) error {
 		os.Remove(tmp)
 		return fmt.Errorf("the uploaded binary does not run here")
 	}
+	if want != "" && v != want {
+		os.Remove(tmp)
+		return fmt.Errorf("the binary reports version %s, its signature %s", v, want)
+	}
 	if !Newer(v, current) {
 		os.Remove(tmp)
 		return fmt.Errorf("version %s is not newer than the running %s", v, current)
 	}
 	os.Remove(Path(dataDir) + ".failed")
 	os.Remove(triesPath(dataDir))
-	return os.Rename(tmp, Path(dataDir))
+	if err := os.Rename(tmp, Path(dataDir)); err != nil {
+		return err
+	}
+	if sig != nil {
+		return os.WriteFile(Path(dataDir)+".sig", sig, 0o644)
+	}
+	os.Remove(Path(dataDir) + ".sig")
+	return nil
 }
 
 // versionOf runs "<p> --version" ("hy2scale X.Y.Z") and returns X.Y.Z, or

@@ -103,18 +103,21 @@ info "Fetching $URL"
 curl -fL --progress-bar "$URL" -o "${TMP_DIR}/${TARBALL}" \
   || err "download failed — check the version tag and network"
 
-# Optional: verify against checksums-sha256.txt if available
+# Verify against the release's checksums-sha256.txt (required)
 CHECKSUM_URL="https://github.com/${REPO}/releases/download/${VERSION}/checksums-sha256.txt"
-if curl -fsSL "$CHECKSUM_URL" -o "${TMP_DIR}/checksums.txt" 2>/dev/null; then
-  EXPECTED="$(grep -E "[[:space:]]\\*?${TARBALL}\$" "${TMP_DIR}/checksums.txt" | awk '{print $1}')"
-  if [ -n "$EXPECTED" ] && command -v sha256sum >/dev/null 2>&1; then
-    ACTUAL="$(sha256sum "${TMP_DIR}/${TARBALL}" | awk '{print $1}')"
-    if [ "$ACTUAL" != "$EXPECTED" ]; then
-      err "checksum mismatch — expected $EXPECTED, got $ACTUAL"
-    fi
-    info "Checksum OK"
-  fi
+curl -fsSL "$CHECKSUM_URL" -o "${TMP_DIR}/checksums.txt" \
+  || err "could not download checksums-sha256.txt for ${VERSION}"
+EXPECTED="$(grep -E "[[:space:]]\\*?${TARBALL}\$" "${TMP_DIR}/checksums.txt" | awk '{print $1}')"
+[ -n "$EXPECTED" ] || err "${TARBALL} is not listed in checksums-sha256.txt"
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL="$(sha256sum "${TMP_DIR}/${TARBALL}" | awk '{print $1}')"
+elif command -v openssl >/dev/null 2>&1; then
+  ACTUAL="$(openssl dgst -sha256 "${TMP_DIR}/${TARBALL}" | awk '{print $NF}')"
+else
+  err "need sha256sum or openssl to verify the download"
 fi
+[ "$ACTUAL" = "$EXPECTED" ] || err "checksum mismatch — expected $EXPECTED, got $ACTUAL"
+info "Checksum OK"
 
 # ─── 6. extract ───────────────────────────────────────────────────────────
 tar -xzf "${TMP_DIR}/${TARBALL}" -C "${TMP_DIR}"
@@ -129,6 +132,12 @@ fi
 
 mkdir -p "$(dirname "$BIN_PATH")"
 install -m 0755 "$EXTRACTED" "$BIN_PATH"
+# Release signature next to the binary (the node shows itself as an official build)
+if [ -f "${EXTRACTED}.sig" ]; then
+  install -m 0644 "${EXTRACTED}.sig" "${BIN_PATH}.sig"
+else
+  rm -f "${BIN_PATH}.sig"
+fi
 info "Binary installed at $BIN_PATH"
 
 # ─── 8. data dir ──────────────────────────────────────────────────────────
