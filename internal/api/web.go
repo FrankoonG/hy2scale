@@ -18,6 +18,17 @@ func (s *Server) webRoutes(m *http.ServeMux) {
 	m.HandleFunc("PUT /api/settings/web", s.updateWebSettings)
 	m.HandleFunc("GET /api/me", s.getMe)
 	m.HandleFunc("PUT /api/settings/password", s.changePassword)
+	m.HandleFunc("POST /api/logout", s.logout)
+}
+
+// logout ends the session of the request's bearer token.
+func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
+	if h := r.Header.Get("Authorization"); len(h) > 7 && h[:7] == "Bearer " {
+		s.mu.Lock()
+		delete(s.sessions, h[7:])
+		s.mu.Unlock()
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 func (s *Server) generateToken() string {

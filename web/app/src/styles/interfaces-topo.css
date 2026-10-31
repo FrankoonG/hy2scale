@@ -7,11 +7,18 @@
 .iface-topo:active{cursor:grabbing}
 .iface-topo-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:13px}
 .iface-topo-stage{position:absolute;left:0;top:0;transform-origin:0 0}
-.iface-topo-svg{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+.iface-topo-svg{position:absolute;left:0;top:0;overflow:visible;pointer-events:none;transition:opacity .25s ease-out}
+/* Style switch: boxes glide to their new place (0.5 s), edges come back after it, new boxes fade in. */
+.iface-topo.is-morph .iface-topo-svg{opacity:0;transition:none}
+.iface-topo.is-morph :is(.iface-topo-card,.iface-topo-gw,.iface-topo-inet,.iface-topo-frame){transition:left .5s cubic-bezier(.4,0,.2,1),top .5s cubic-bezier(.4,0,.2,1),width .5s cubic-bezier(.4,0,.2,1),height .5s cubic-bezier(.4,0,.2,1),border-color .12s,box-shadow .12s}
+.iface-topo.is-morph .iface-topo-vlan{opacity:0}
+.iface-topo :is(.iface-topo-card,.iface-topo-gw,.iface-topo-inet,.iface-topo-frame).enter{animation:iface-topo-in .45s ease-out both}
+@keyframes iface-topo-in{from{opacity:0;transform:scale(.96)}}
+@media(prefers-reduced-motion:reduce){.iface-topo.is-morph :is(.iface-topo-card,.iface-topo-gw,.iface-topo-inet,.iface-topo-frame){transition:none}.iface-topo .enter{animation:none}}
 .iface-topo-ellip{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .iface-topo-frame{position:absolute;box-sizing:border-box;border:1px dashed #c4cad6;border-radius:10px;background:rgba(67,97,238,.025)}
 .iface-topo-frame-title{position:absolute;left:12px;right:12px;top:7px;font-size:10px;line-height:13px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:#7a8294}
-.iface-topo-card{position:absolute;box-sizing:border-box;border:1px solid var(--border);border-radius:7px;background:var(--surface);padding:4px 8px;box-shadow:0 1px 3px rgba(0,0,0,.05);cursor:pointer;transition:border-color .12s,box-shadow .12s,opacity .12s;outline:none}
+.iface-topo-card{position:absolute;box-sizing:border-box;overflow:hidden;border:1px solid var(--border);border-radius:7px;background:var(--surface);padding:4px 8px;box-shadow:0 1px 3px rgba(0,0,0,.05);cursor:pointer;transition:border-color .12s,box-shadow .12s,opacity .12s;outline:none}
 .iface-topo-card:hover{border-color:#9aa8f5}
 .iface-topo-card:focus-visible{border-color:#4361ee}
 .iface-topo-card.sel{border-color:#4361ee;box-shadow:0 0 0 2px rgba(67,97,238,.28)}

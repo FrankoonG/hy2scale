@@ -29,6 +29,8 @@ func (s *Server) shellRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/system/arch", s.getSystemArch)
 	m.HandleFunc("GET /api/build-info", s.getBuildInfo)
 	m.HandleFunc("POST /api/upgrade", s.uploadUpgrade)
+	// Install this node's binary on a remote node (see remote.go).
+	m.HandleFunc("POST /api/remote/push-binary", s.pushBinary)
 	// Online-update endpoints. /check polls GitHub for the latest release;
 	// /download starts a server-side download whose progress every session
 	// observes via /events (SSE); /apply swaps in the downloaded binary.
@@ -150,12 +152,17 @@ func isRunningInDocker() bool {
 
 func (s *Server) getSystemArch(w http.ResponseWriter, r *http.Request) {
 	self, _ := os.Executable()
+	var size int64
+	if fi, err := os.Stat(self); err == nil {
+		size = fi.Size()
+	}
 	writeJSON(w, map[string]any{
-		"os":        runtime.GOOS,
-		"arch":      runtime.GOARCH,
-		"version":   Version,
-		"binary":    filepath.Base(self),
-		"in_docker": isRunningInDocker(),
+		"os":          runtime.GOOS,
+		"arch":        runtime.GOARCH,
+		"version":     Version,
+		"binary":      filepath.Base(self),
+		"binary_size": size,
+		"in_docker":   isRunningInDocker(),
 	})
 }
 

@@ -3,13 +3,20 @@
 package api
 
 import (
+	"archive/tar"
 	"bufio"
+	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -189,39 +196,11 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 	// Proxy base: what the remote's __BASE__ should point to
 	proxyBase := s.basePath + "/remote/" + strings.Join(chain, "/")
 
-	// Native peers are vanilla hysteria2 servers — they have no hy2scale
-	// relay-API listener on the other end of `_relay_api_:0`, so opening a
-	// remote-UI tunnel into them just hangs or 502s with a confusing error.
-	// v1.2's web UI suppressed this at the click; the React rewrite lost the
-	// guard. Restore it here so a manually-typed `/remote/<native>/scale/`
-	// URL also gets a clear refusal instead of a useless 502. English-only
-	// by intent — this is a misuse path, not a localised user surface.
-	nativeMap := s.app.Node().NativeMap()
-	if nativeMap[chain[len(chain)-1]] {
-		http.Error(w,
-			"Remote UI is not available for native peers. The selected node is a vanilla hysteria2 server and does not host the hy2scale management API. To route traffic through it, add a user with this peer set as Exit instead of opening it as a remote node.",
-			409)
-		return
-	}
-
-	// Nodes reached by node access by user are traffic-only.
-	if s.app.Node().IsRestricted(chain[0]) {
-		http.Error(w, "Remote UI is not available through node access by user.", 409)
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-
-	var conn net.Conn
-	var err error
-	if len(chain) == 1 {
-		conn, err = s.app.Node().DialTCP(ctx, chain[0], relay.StreamAPI)
-	} else {
-		conn, err = s.app.Node().DialVia(ctx, chain, relay.StreamAPI)
-	}
+	conn, code, err := s.dialRemoteAPI(ctx, chain)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("tunnel to %s failed: %v", strings.Join(chain, "/"), err), 502)
+		http.Error(w, err.Error(), code)
 		return
 	}
 	defer conn.Close()
@@ -333,4 +312,132 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// dialRemoteAPI opens the management API stream of the node at the end of
+// chain; on failure it returns the HTTP status to answer with.
+func (s *Server) dialRemoteAPI(ctx context.Context, chain []string) (net.Conn, int, error) {
+	// Native peers are vanilla hysteria2 servers: they have no hy2scale
+	// relay-API listener on the other end of `_relay_api_:0`, so a tunnel
+	// into them just hangs or 502s with a confusing error. English-only by
+	// intent: this is a misuse path, not a localised user surface.
+	if s.app.Node().NativeMap()[chain[len(chain)-1]] {
+		return nil, 409, fmt.Errorf("Remote UI is not available for native peers. The selected node is a vanilla hysteria2 server and does not host the hy2scale management API. To route traffic through it, add a user with this peer set as Exit instead of opening it as a remote node.")
+	}
+	// Nodes reached by node access by user are traffic-only.
+	if s.app.Node().IsRestricted(chain[0]) {
+		return nil, 409, fmt.Errorf("Remote UI is not available through node access by user.")
+	}
+	var conn net.Conn
+	var err error
+	if len(chain) == 1 {
+		conn, err = s.app.Node().DialTCP(ctx, chain[0], relay.StreamAPI)
+	} else {
+		conn, err = s.app.Node().DialVia(ctx, chain, relay.StreamAPI)
+	}
+	if err != nil {
+		return nil, 502, fmt.Errorf("tunnel to %s failed: %v", strings.Join(chain, "/"), err)
+	}
+	return conn, 0, nil
+}
+
+// pushBinary installs this node's own binary on a remote node: the binary
+// is packed as an upgrade archive and posted to the remote's upgrade
+// endpoint over the management stream, signed in with the remote session
+// token the caller holds. The remote checks the platform, stores the binary
+// and restarts. The answer carries the remote's status and message; a
+// remote 401 is not passed through as a 401 (that would sign the caller
+// out of this node).
+func (s *Server) pushBinary(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Chain []string `json:"chain"`
+		Token string   `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Chain) == 0 {
+		http.Error(w, "chain required", 400)
+		return
+	}
+	chain := append([]string(nil), body.Chain...)
+	s.mu.RLock()
+	for i, name := range chain {
+		if newID, ok := s.oldNodeIDs[name]; ok {
+			chain[i] = newID
+		}
+	}
+	s.mu.RUnlock()
+
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	var f *os.File
+	if err == nil {
+		f, err = os.Open(exe)
+	}
+	if err != nil {
+		http.Error(w, "own binary: "+err.Error(), 500)
+		return
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		http.Error(w, "own binary: "+err.Error(), 500)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
+	defer cancel()
+	conn, code, err := s.dialRemoteAPI(ctx, chain)
+	if err != nil {
+		http.Error(w, err.Error(), code)
+		return
+	}
+	defer conn.Close()
+	go func() { <-ctx.Done(); conn.Close() }()
+
+	pr, pw := io.Pipe()
+	defer pr.Close()
+	go func() {
+		gz := gzip.NewWriter(pw)
+		tw := tar.NewWriter(gz)
+		err := tw.WriteHeader(&tar.Header{
+			Name: "hy2scale-" + runtime.GOOS + "-" + runtime.GOARCH, Mode: 0o755,
+			Size: fi.Size(), ModTime: fi.ModTime(), Typeflag: tar.TypeReg,
+		})
+		if err == nil {
+			_, err = io.Copy(tw, f)
+		}
+		if err == nil {
+			err = tw.Close()
+		}
+		if err == nil {
+			err = gz.Close()
+		}
+		pw.CloseWithError(err)
+	}()
+
+	req, _ := http.NewRequest("POST", "http://127.0.0.1:5565/scale/api/upgrade", pr)
+	req.Host = "127.0.0.1:5565"
+	req.Header.Set("Content-Type", "application/gzip")
+	if body.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+body.Token)
+	}
+	req.Close = true
+	// The remote may answer before reading the whole body (refusal).
+	go req.Write(conn)
+	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	if err != nil {
+		http.Error(w, "no answer from remote: "+err.Error(), 502)
+		return
+	}
+	defer resp.Body.Close()
+	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	log.Printf("[upgrade] pushed own binary (%s, %d bytes) to %s: %d", Version, fi.Size(), strings.Join(chain, "/"), resp.StatusCode)
+	writeJSON(w, map[string]any{
+		"ok":      resp.StatusCode == 200,
+		"status":  resp.StatusCode,
+		"message": strings.TrimSpace(string(msg)),
+		"version": Version,
+		"bytes":   fi.Size(),
+	})
 }

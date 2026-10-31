@@ -122,3 +122,27 @@
 /* ====== Restricted (node access by user) badge ====== */
 .hy-badge.badge-restricted{color:#0f766e;background:rgba(20,184,166,.12);border-color:rgba(20,184,166,.4)}
 :root[data-theme="dark"] .hy-badge.badge-restricted{color:#5eead4;background:rgba(45,212,191,.12);border-color:rgba(45,212,191,.35)}
+
+/* Remote node dialog */
+.remote{display:flex;flex-direction:column;gap:16px}
+.remote-sec{display:flex;flex-direction:column;gap:12px;padding:14px 16px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface)}
+.remote-sec-title{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-muted)}
+.remote-ops{transition:opacity .2s,filter .2s}
+.remote-ops.locked{opacity:.45;filter:grayscale(1);pointer-events:none;user-select:none}
+.remote-auth-in{display:flex;align-items:center;flex-wrap:wrap;gap:10px;font-size:13px}
+.remote-auth-in .spacer{flex:1}
+.remote-auth-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.remote-auth-actions,.remote-auth-form .remote-error{grid-column:1/-1}
+.remote-auth-actions{display:flex;gap:8px}
+.remote-muted{font-size:12.5px;color:var(--text-muted)}
+.remote-error{font-size:12.5px;color:var(--red)}
+.remote-ok{font-size:12.5px;color:var(--green)}
+.remote-warn{font-size:12.5px;color:var(--orange)}
+.remote-row{display:flex;gap:8px}
+.remote-sub{margin-top:4px;font-size:12px;font-weight:600;color:var(--text-secondary)}
+.remote-upg{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.remote-upg-item{display:flex;flex-direction:column;gap:6px;padding:12px;border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--bg)}
+.remote-upg-name{font-size:13px;font-weight:600;color:var(--text)}
+.remote-upg-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:2px}
+.remote-progress{display:flex;flex-direction:column;gap:6px}
+@media(max-width:640px){.remote-auth-form,.remote-upg{grid-template-columns:minmax(0,1fr)}}
