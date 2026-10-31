@@ -16,7 +16,7 @@ import { fmtRate } from '@/hooks/useFormat';
 import NodeModal from '@/components/NodeModal';
 import NodeImportModal from '@/components/NodeImportModal';
 import EditSelfModal from '@/components/EditSelfModal';
-import RemoteConnectModal from '@/components/RemoteConnectModal';
+import RemoteModal from '@/components/RemoteModal';
 import NodeDetailModal from '@/components/NodeDetailModal';
 import ResponsiveActions from '@/components/ResponsiveActions';
 import { useImportExport } from '@/components/ImportExport';
@@ -695,7 +695,7 @@ export default function NodesPage() {
         }}
       />
 
-      <RemoteConnectModal
+      <RemoteModal
         open={!!remoteConnect}
         onClose={() => setRemoteConnect(null)}
         chain={remoteConnect?.chain ?? []}

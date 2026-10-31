@@ -48,6 +48,7 @@ interface Props {
 const FAM_LABEL: Record<IfaceFamilyKey, string> = { ipv4: 'IPv4', ipv6: 'IPv6' };
 const FAM_SHORT: Record<IfaceFamilyKey, string> = { ipv4: 'v4', ipv6: 'v6' };
 const STYLE_STORE = 'hy-iface-topo-style';
+const MORPH_MS = 560; // matches the transitions in interfaces-topo.css
 const styleCodec = {
   parse: (raw: string) => ((IFACE_TOPO_STYLES as string[]).includes(raw) ? (raw as IfaceTopoStyle) : undefined),
   serialize: (v: IfaceTopoStyle) => v,
@@ -104,22 +105,33 @@ export default function InterfacesTopoView({
     return { x, y, k };
   }, [size.w, size.h, availW, availH, layout.w, layout.h, clampK]);
 
-  // A new style starts fitted again.
-  const prevStyle = useRef(style);
-  useLayoutEffect(() => {
-    if (prevStyle.current === style) return;
-    prevStyle.current = style;
+  // Switching style (or showing hidden networks) morphs: boxes glide to
+  // their new place, edges are redrawn after it, new boxes fade in, and
+  // the view glides to the new fit.
+  const [morph, setMorph] = useState(false);
+  const morphRef = useRef(false);
+  morphRef.current = morph;
+  const morphTimer = useRef<number | undefined>(undefined);
+  const morphTo = (change: () => void) => {
     userMoved.current = false;
-    const v = fitTarget();
-    if (v) animateTo(v);
-  }, [style, fitTarget, animateTo]);
+    setMorph(true);
+    change();
+    window.clearTimeout(morphTimer.current);
+    morphTimer.current = window.setTimeout(() => setMorph(false), MORPH_MS);
+  };
+  useLayoutEffect(() => () => window.clearTimeout(morphTimer.current), []);
+  // What was on screen before this render, to tell new boxes apart.
+  const shownRef = useRef<Set<string>>(new Set());
+  const isNew = (key: string) => morph && !shownRef.current.has(key);
 
   // Keep the diagram fitted until the user pans or zooms.
   useLayoutEffect(() => {
     if (userMoved.current) return;
     const v = fitTarget();
-    if (v) setView(v);
-  }, [fitTarget, setView]);
+    if (!v) return;
+    if (morphRef.current) animateTo(v);
+    else setView(v);
+  }, [fitTarget, setView, animateTo]);
 
   const resetView = () => {
     userMoved.current = false;
@@ -221,7 +233,7 @@ export default function InterfacesTopoView({
     return (
       <div
         key={x.name}
-        className={clsx('iface-topo-card', c.child && 'child', isOff(x) && 'off', c.faint && 'faint', sel && 'sel')}
+        className={clsx('iface-topo-card', c.child && 'child', isOff(x) && 'off', c.faint && 'faint', sel && 'sel', isNew(`c:${x.name}`) && 'enter')}
         style={{ left: c.box.x, top: c.box.y, width: c.box.w, height: c.box.h }}
         data-testid={`topo-card-${x.name}`}
         data-col={c.col}
@@ -340,11 +352,18 @@ export default function InterfacesTopoView({
     }
   };
   const styleLabel = (k: IfaceTopoStyle) => t(`iface.topo.style.${k}`);
+  useLayoutEffect(() => {
+    const keys = new Set<string>([...L.cards.map((c) => `c:${c.x.name}`), ...L.gws.map((g) => `g:${g.key}`)]);
+    if (L.frame) keys.add('frame');
+    if (L.inet) keys.add('inet');
+    // Frozen while morphing so "new" holds for the whole transition.
+    if (!morph) shownRef.current = keys;
+  });
 
   return (
     <div
       ref={wrapRef}
-      className={clsx('iface-topo', `is-${L.style}`)}
+      className={clsx('iface-topo', `is-${L.style}`, morph && 'is-morph')}
       data-testid="iface-topo"
       data-style={L.style}
       onClick={onBlankClick}
@@ -358,7 +377,7 @@ export default function InterfacesTopoView({
           style={{ width: L.w, height: L.h, transform: `translate(${view.x}px,${view.y}px) scale(${view.k})` }}
         >
           {L.frame && (
-            <div className="iface-topo-frame" style={{ left: L.frame.x, top: L.frame.y, width: L.frame.w, height: L.frame.h }}>
+            <div className={clsx('iface-topo-frame', isNew('frame') && 'enter')} style={{ left: L.frame.x, top: L.frame.y, width: L.frame.w, height: L.frame.h }}>
               <span className="iface-topo-frame-title iface-topo-ellip">{hostName || t('iface.topo.host')}</span>
             </div>
           )}
@@ -368,7 +387,7 @@ export default function InterfacesTopoView({
           </svg>
 
           {L.inet && (
-            <div className="iface-topo-inet" style={{ left: L.inet.x, top: L.inet.y, width: L.inet.w, height: L.inet.h }} data-testid="topo-inet">
+            <div className={clsx('iface-topo-inet', isNew('inet') && 'enter')} style={{ left: L.inet.x, top: L.inet.y, width: L.inet.w, height: L.inet.h }} data-testid="topo-inet">
               <div className="iface-topo-inet-head" style={{ height: INET_HEAD }}>
                 <IconGlobe className="iface-topo-globe" size={16} />
                 <span>{t('iface.topo.internet')}</span>
@@ -387,7 +406,7 @@ export default function InterfacesTopoView({
               <div
                 key={g.key}
                 className={clsx('iface-topo-gw', g.lines.length > 1 && 'multi', local && 'local', eg,
-                  !local && g.members.every((m) => m.off) && 'off')}
+                  !local && g.members.every((m) => m.off) && 'off', isNew(`g:${g.key}`) && 'enter')}
                 style={{ left: g.box.x, top: g.box.y, width: g.box.w, height: g.box.h }}
                 title={local ? undefined : [...new Set(g.members.map((m) => m.name))].join(', ')}
                 data-testid={local ? 'topo-uplink-none' : `topo-gw-${ips || 'direct'}`}
@@ -433,14 +452,14 @@ export default function InterfacesTopoView({
                     aria-checked={k === style}
                     className={clsx('hy-dropdown-item', k === style && 'current')}
                     data-testid={`iface-style-${k}`}
-                    onClick={() => { close(); setStyle(k); }}
+                    onClick={() => { close(); if (k !== style) morphTo(() => setStyle(k)); }}
                   >
                     <span className="hy-dd-check">{k === style && <IconCheck size={14} />}</span>
                     <span className="hy-topo-canvas-name">{styleLabel(k)}</span>
                   </button>
                 ))}
                 <div className="hy-dd-divider" />
-                <TopoMenuCheck checked={showHidden} onChange={onShowHidden} label={t('iface.showHidden')}
+                <TopoMenuCheck checked={showHidden} onChange={(on) => morphTo(() => onShowHidden(on))} label={t('iface.showHidden')}
                   count={hiddenCount > 0 ? hiddenCount : undefined} testId="show-hidden" />
                 <div className="hy-dd-divider" />
                 <button type="button" role="menuitem" className="hy-dropdown-item" data-testid="topo-save-image"
