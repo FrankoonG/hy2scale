@@ -6,11 +6,7 @@ export interface TabPanelProps {
   children: ReactNode;
   /** Ordered list of tab keys — used to determine slide direction */
   keys?: string[];
-  /**
-   * When true, the panel (and its active child) flexes to fill remaining
-   * height inside a `.hy-page` container. Use together with `Card fill={…}`
-   * so the tabbed content scrolls internally.
-   */
+  /** When true, the active child's panels stack with the page gap. */
   fill?: boolean;
 }
 
@@ -32,16 +28,19 @@ export function TabPanel({ activeKey, children, keys, fill }: TabPanelProps) {
 
   const dir = dirRef.current;
 
-  const rootStyle: CSSProperties = fill
-    ? { position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }
-    : { position: 'relative' };
+  // fill: the active child's panels stack with the page gap (panels take
+  // their content's height; nothing scrolls inside them).
+  const rootStyle: CSSProperties = { position: 'relative' };
   const motionStyle: CSSProperties | undefined = fill
-    ? { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: 20 }
+    ? { display: 'flex', flexDirection: 'column', gap: 20 }
     : undefined;
 
   return (
     <div style={rootStyle}>
-      <AnimatePresence initial={false} custom={dir}>
+      {/* popLayout takes the leaving panel out of the flow itself; animating
+          top/left from `auto` in the exit variant never completed, so leaving
+          panels piled up invisible in the DOM. */}
+      <AnimatePresence initial={false} custom={dir} mode="popLayout">
         <motion.div
           key={activeKey}
           custom={dir}
@@ -52,7 +51,7 @@ export function TabPanel({ activeKey, children, keys, fill }: TabPanelProps) {
           variants={{
             enter: (d: number) => ({ opacity: 0, x: 20 * d }),
             center: { opacity: 1, x: 0, transition: { duration: 0.35, ease: 'easeOut' } },
-            exit: (d: number) => ({ opacity: 0, x: -20 * d, position: 'absolute' as const, top: 0, left: 0, right: 0, transition: { duration: 0.2 } }),
+            exit: (d: number) => ({ opacity: 0, x: -20 * d, transition: { duration: 0.2 } }),
           }}
         >
           {children}

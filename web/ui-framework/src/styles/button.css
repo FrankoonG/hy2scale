@@ -1,0 +1,57 @@
+/* Buttons. */
+/* ====== Buttons ====== */
+.hy-btn{padding:8px 16px;border-radius:var(--radius-sm);border:1px solid var(--border);background:var(--surface);color:var(--text);cursor:pointer;font-size:13px;font-family:var(--font);font-weight:500;transition:all .15s;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.hy-btn:hover{border-color:var(--primary);color:var(--primary)}
+.hy-btn:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
+.hy-btn.sm{padding:5px 10px;font-size:12px}
+.hy-btn.primary{background:var(--primary);border-color:var(--primary);color:#fff;transition:all .15s ease}
+.hy-btn.primary:hover{background:var(--primary-dark);border-color:var(--primary-dark);color:#fff;transform:translateY(-1px);box-shadow:0 2px 8px rgba(67,97,238,.25)}
+.hy-btn.primary:active{transform:translateY(0);box-shadow:none}
+.hy-btn.success{background:var(--green);border-color:var(--green);color:#fff;transition:all .15s ease}
+.hy-btn.success:hover{background:#16a34a;border-color:#16a34a;color:#fff;transform:translateY(-1px);box-shadow:0 2px 8px rgba(34,197,94,.25)}
+.hy-btn.success:active{transform:translateY(0);box-shadow:none}
+.hy-btn.danger{color:var(--red);border-color:transparent;background:transparent;padding:4px 8px}
+.hy-btn.danger:hover{background:var(--red-bg)}
+.hy-btn.ghost{border:none;background:none;color:var(--text-secondary)}
+.hy-btn.ghost:hover{color:var(--primary);background:var(--primary-light)}
+.hy-btn.full-width{width:100%;justify-content:center}
+.hy-btn>svg{flex-shrink:0}
+
+/* ====== Icon button ====== */
+/* ghost (default): bare icon tinted on hover */
+.hy-icon-btn{padding:6px;border:none;background:transparent;color:var(--text-muted);cursor:pointer;display:inline-flex;align-items:center;justify-content:center;transition:all .15s;border-radius:var(--radius-sm);flex-shrink:0}
+.hy-icon-btn:hover{color:var(--primary);background:var(--primary-light)}
+.hy-icon-btn.tone-danger:hover{color:var(--red);background:var(--red-bg)}
+.hy-icon-btn:disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
+/* subtle: dimmed until hover (row actions) */
+.hy-icon-btn.subtle{opacity:.5}
+.hy-icon-btn.subtle:hover{opacity:1}
+.hy-icon-btn.subtle svg{width:15px;height:15px}
+.hy-icon-btn.subtle:disabled{opacity:.25}
+/* circle: round bordered, beside an input */
+.hy-icon-btn.circle{width:32px;height:32px;padding:0;border-radius:50%;border:1px solid var(--text-muted);background:var(--surface);color:var(--text-secondary)}
+.hy-icon-btn.circle:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-light)}
+.hy-icon-btn.circle svg{width:14px;height:14px}
+/* outline: square bordered toolbar button */
+.hy-icon-btn.outline{width:32px;height:32px;padding:0;border:1px solid var(--border);background:var(--surface);color:var(--text-secondary);transition:background .12s,color .12s}
+.hy-icon-btn.outline:hover,.hy-icon-btn.outline.active{background:var(--primary-light);color:var(--primary);border-color:var(--primary)}
+/* Button with secondary actions (ExpandButton): main part + caret; the
+   actions drop down on hover, long press or the caret. */
+.hy-expand{position:relative;display:inline-flex}
+.hy-expand-btn{padding:0!important;gap:0!important;overflow:hidden}
+.hy-expand-btn.disabled{opacity:.45;pointer-events:none}
+.hy-expand-main,.hy-expand-caret{align-self:stretch;display:inline-flex;align-items:center;gap:6px;border:none;background:none;color:inherit;font:inherit;cursor:pointer;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none}
+.hy-expand-main{padding:5px 8px 5px 10px}
+.hy-expand-caret{padding:5px 7px;border-left:1px solid currentColor;border-left-color:color-mix(in srgb,currentColor 28%,transparent)}
+.hy-expand-caret svg{transition:transform .15s}
+.hy-expand.open .hy-expand-caret svg{transform:rotate(180deg)}
+.hy-expand-panel{position:absolute;top:calc(100% + 4px);right:0;z-index:60;min-width:100%;display:flex;flex-direction:column;gap:2px;padding:4px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-md);transform-origin:top right}
+/* Hover bridge: the 4px gap above the panel still counts as the button. */
+.hy-expand-panel::before{content:'';position:absolute;left:0;right:0;top:-6px;height:6px}
+.hy-expand-item{display:flex;align-items:center;gap:8px;padding:6px 10px;border:none;border-radius:var(--radius-sm);background:none;color:var(--text);font:inherit;font-size:12.5px;text-align:left;white-space:nowrap;cursor:pointer}
+.hy-expand-item:hover,.hy-expand-item:focus-visible{background:var(--primary-light);color:var(--primary);outline:none}
+.hy-expand-item:disabled{opacity:.45;cursor:not-allowed}
+.hy-expand-item svg{flex-shrink:0;opacity:.75}
+/* Flat form inside an overflow menu: main action, then its sub-actions. */
+.hy-expand-flat{display:flex;flex-direction:column;gap:4px;width:100%}
+.hy-expand-flat .hy-expand-sub{padding-left:22px}

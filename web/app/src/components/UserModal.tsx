@@ -1,13 +1,23 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
-import { Modal, Button, Input, PasswordInput, Toggle, FormGroup, FormGrid, Tabs, TabPanel, useToast } from '@hy2scale/ui';
-import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from './ExitPathList';
+import { Modal, Button, Input, PasswordInput, Toggle, Select, FormGroup, FormGrid, Tabs, TabPanel, useToast } from '@hy2scale/ui';
+import { exitPathToApi, apiToExitPath, type ExitPathValue } from './ExitPathList';
+import ExitChoice from './policy/ExitChoice';
 import * as api from '@/api';
-import type { UserConfig } from '@/api';
+import type { UserConfig, TrafficReset } from '@/api';
 import { PROXY_REGISTRY } from '@/config/proxyRegistry';
 import { useNodeStore } from '@/store/node';
 import { useDialogInit } from '@/hooks/useFormInit';
+
+const RESET_PERIODS: TrafficReset[] = ['', 'daily', 'weekly', 'monthly'];
+
+/** Monday..Sunday in the UI language. */
+function weekdayNames(lang: string): string[] {
+  const f = new Intl.DateTimeFormat(lang, { weekday: 'long' });
+  // 2024-01-01 was a Monday.
+  return Array.from({ length: 7 }, (_, i) => f.format(new Date(2024, 0, 1 + i)));
+}
 
 interface Props {
   open: boolean;
@@ -25,7 +35,7 @@ interface Props {
 }
 
 export default function UserModal({ open, onClose, editing, animateFrom }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
 
@@ -39,9 +49,16 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
   // every proxy.
   const [proxyDisabled, setProxyDisabled] = useState<Set<string>>(new Set());
   const [exitPath, setExitPath] = useState<ExitPathValue>({ paths: [''], mode: '' });
+  const [exitPolicy, setExitPolicy] = useState('');
   const [trafficLimit, setTrafficLimit] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
+  const [resetPeriod, setResetPeriod] = useState<TrafficReset>('');
+  const [resetDay, setResetDay] = useState(1);
   const [enabled, setEnabled] = useState(true);
+  // node access by user; internal destinations (new users: denied)
+  const [nodeAccess, setNodeAccess] = useState(false);
+  const [accessMode, setAccessMode] = useState<'restricted' | 'full'>('restricted');
+  const [allowInternal, setAllowInternal] = useState(false);
 
   // Seed on open / on switching to another user only — the users list
   // refetches every 5 s and a user with traffic is a new object each flush.
@@ -51,7 +68,10 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
       setUsername(''); setPassword(''); setProxyPasswords({});
       setProxyDisabled(new Set());
       setExitPath({ paths: [''], mode: '' });
+      setExitPolicy('');
       setTrafficLimit(''); setExpiryDate(''); setEnabled(true);
+      setResetPeriod(''); setResetDay(1);
+      setNodeAccess(false); setAccessMode('restricted'); setAllowInternal(false);
       return;
     }
     setUsername(editing.username);
@@ -59,9 +79,15 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
     setProxyPasswords(editing.proxy_passwords || {});
     setProxyDisabled(new Set(editing.proxy_disabled || []));
     setExitPath(apiToExitPath(editing.exit_via, editing.exit_paths, editing.exit_mode));
+    setExitPolicy(editing.exit_policy || '');
     setTrafficLimit(editing.traffic_limit > 0 ? String(editing.traffic_limit / 1073741824) : '');
     setExpiryDate(editing.expiry_date || '');
+    setResetPeriod(editing.traffic_reset || '');
+    setResetDay(editing.traffic_reset_day || 1);
     setEnabled(editing.enabled);
+    setNodeAccess(!!editing.node_access);
+    setAccessMode(editing.node_access_mode === 'full' ? 'full' : 'restricted');
+    setAllowInternal(!editing.deny_internal);
   });
 
   const handleSubmit = async () => {
@@ -91,9 +117,15 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
       proxy_passwords: Object.keys(filteredProxyPw).length > 0 ? filteredProxyPw : undefined,
       proxy_disabled: proxyDisabledArr.length > 0 ? proxyDisabledArr : undefined,
       ...exitData,
+      exit_policy: exitPolicy,
       traffic_limit: trafficLimit ? parseFloat(trafficLimit) * 1073741824 : 0,
       expiry_date: expiryDate || undefined,
+      traffic_reset: resetPeriod,
+      traffic_reset_day: resetPeriod === 'weekly' || resetPeriod === 'monthly' ? resetDay : 0,
       enabled,
+      node_access: nodeAccess,
+      node_access_mode: (nodeAccess && accessMode === 'full' ? 'full' : undefined) as 'full' | undefined,
+      deny_internal: !allowInternal,
     };
 
     try {
@@ -113,6 +145,8 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
       setLoading(false);
     }
   };
+
+  const weekdays = weekdayNames(i18n.language);
 
   const title = editing ? t('users.editPrefix', { name: username }) : t('users.addTitle');
 
@@ -161,7 +195,7 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
                 </FormGroup>
               </FormGrid>
 
-              <ExitPathList value={exitPath} onChange={setExitPath} />
+              <ExitChoice policy={exitPolicy} onPolicy={setExitPolicy} exit={exitPath} onExit={setExitPath} />
 
               <FormGrid>
                 <FormGroup label={t('users.trafficLimit')}>
@@ -169,6 +203,54 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
                 </FormGroup>
                 <FormGroup label={t('users.expiryDate')}>
                   <Input type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} />
+                </FormGroup>
+              </FormGrid>
+
+              <FormGrid>
+                <FormGroup label={t('users.trafficReset')}>
+                  <div data-testid="user-traffic-reset">
+                    <Select
+                      value={resetPeriod}
+                      onChange={(e) => setResetPeriod(e.target.value as TrafficReset)}
+                      options={RESET_PERIODS.map((p) => ({ value: p, label: t(`users.reset.${p || 'never'}`) }))}
+                    />
+                  </div>
+                </FormGroup>
+                {(resetPeriod === 'weekly' || resetPeriod === 'monthly') && (
+                  <FormGroup label={t('users.trafficResetDay')}>
+                    <div data-testid="user-traffic-reset-day">
+                      <Select
+                        value={String(resetPeriod === 'weekly' ? Math.min(resetDay, 7) : resetDay)}
+                        onChange={(e) => setResetDay(Number(e.target.value))}
+                        options={resetPeriod === 'weekly'
+                          ? weekdays.map((name, i) => ({ value: String(i + 1), label: name }))
+                          : Array.from({ length: 31 }, (_, i) => ({ value: String(i + 1), label: t('users.reset.dayOfMonth', { day: i + 1 }) }))}
+                      />
+                    </div>
+                  </FormGroup>
+                )}
+              </FormGrid>
+
+              <FormGrid>
+                <FormGroup label={t('users.nodeAccess')} hint={t('users.nodeAccessHint')}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <Toggle checked={nodeAccess} onChange={(e) => setNodeAccess(e.target.checked)} data-testid="user-node-access" />
+                    {nodeAccess && (
+                      <div style={{ flex: 1, minWidth: 0 }} data-testid="user-access-mode">
+                        <Select
+                          value={accessMode}
+                          onChange={(e) => setAccessMode(e.target.value === 'full' ? 'full' : 'restricted')}
+                          options={[
+                            { value: 'restricted', label: t('users.accessRestricted') },
+                            { value: 'full', label: t('users.accessFull') },
+                          ]}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </FormGroup>
+                <FormGroup label={t('users.allowInternal')} hint={t('users.allowInternalHint')}>
+                  <Toggle checked={allowInternal} onChange={(e) => setAllowInternal(e.target.checked)} data-testid="user-allow-internal" />
                 </FormGroup>
               </FormGrid>
 

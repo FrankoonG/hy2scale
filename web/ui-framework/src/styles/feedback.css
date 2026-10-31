@@ -1,0 +1,36 @@
+/* Alerts, empty states, spinner, progress, banners. */
+/* ====== Alert ====== */
+.hy-alert-warn{padding:12px 16px;background:var(--orange-bg);border:1px solid var(--orange);border-radius:var(--radius-sm);font-size:13px;color:var(--text)}
+
+/* ====== Empty (table rows) ====== */
+.hy-empty{text-align:center;padding:24px;color:var(--text-muted);font-size:13px}
+
+
+/* ====== Spinner ====== */
+.hy-spinner{display:inline-block;border:2px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:hy-spin .6s linear infinite}
+.hy-spinner.sm{width:16px;height:16px}
+.hy-spinner.md{width:24px;height:24px}
+@keyframes hy-spin{to{transform:rotate(360deg)}}
+
+/* ====== Progress ====== */
+.hy-progress{width:100%;height:6px;background:var(--border-light);border-radius:3px;overflow:hidden}
+.hy-progress-bar{height:100%;border-radius:3px;transition:width .3s;background:var(--primary)}
+.hy-progress-bar.green{background:var(--green)}
+.hy-progress-bar.orange{background:var(--orange)}
+.hy-progress-bar.red{background:var(--red)}
+
+
+/* ====== Code Block ====== */
+.hy-code-block{font-size:11px;font-family:var(--mono);background:var(--bg);color:var(--text);padding:10px;border-radius:var(--radius-sm);border:1px solid var(--border);overflow:auto;max-height:160px;white-space:pre-wrap;word-break:break-all;margin:0}
+
+
+/* ====== Warning banner ====== */
+.hy-warn-banner{background:var(--red-bg);color:var(--red);padding:8px 14px;border-radius:var(--radius-sm);font-size:13px;font-weight:500;margin-bottom:12px}
+
+
+/* ====== Section divider ====== */
+.section-divider{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;padding:12px 0 8px;border-top:1px solid var(--border-light);margin-top:4px;display:flex;align-items:center;gap:6px;user-select:none}
+.section-divider.collapsible{cursor:pointer}
+.section-divider.collapsible:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.section-caret{flex-shrink:0;transition:transform .15s}
+.section-divider[aria-expanded="true"] .section-caret{transform:rotate(90deg)}

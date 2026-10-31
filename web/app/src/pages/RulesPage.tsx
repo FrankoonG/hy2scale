@@ -1,288 +1,85 @@
-import { useState, useCallback, useRef, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  Card, Button, Table, Toggle, Badge, Modal, Input, Tabs, TabPanel,
-  FormGroup, Autocomplete, useToast, useConfirm, useSelection, type Column,
-} from '@hy2scale/ui';
-import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
-import { TargetList } from '@/components/TargetList';
-import { ExitViaCell } from '@/components/ExitViaCell';
-import ImportExportButton from '@/components/ImportExportButton';
-import ResponsiveActions from '@/components/ResponsiveActions';
-import { useExitPaths } from '@/hooks/useExitPaths';
-import { useDeselectOnBlankClick } from '@/hooks/useDeselectOnBlankClick';
-import type { RoutingRule } from '@/api';
-import * as api from '@/api';
+import { Badge, Button, Card, ExpandButton, Table, useModalState, type Column } from '@hy2scale/ui';
+import { dismissPolicyNotice, getPolicy, type ConditionSet, type PolicySet } from '@/api/policy';
+import SetModal from '@/components/policy/SetModal';
+import DirectModal from '@/components/policy/DirectModal';
+import TestModal from '@/components/policy/TestModal';
+import { refsText } from '@/components/policy/RefsLine';
+import type { SetKind } from '@/components/policy/shared';
 
+/**
+ * Rules: one list of policy sets (where connections go, or whether they
+ * may) and condition sets (reusable true / false), plus the direct entry.
+ */
 export default function RulesPage() {
   const { t } = useTranslation();
-  const toast = useToast();
-  const confirmDlg = useConfirm();
-  const queryClient = useQueryClient();
+  const qc = useQueryClient();
+  const { data: cfg } = useQuery({ queryKey: ['policy'], queryFn: getPolicy });
+  const edit = useModalState<{ kind: SetKind; set: PolicySet | ConditionSet | null }>();
+  const direct = useModalState();
+  const test = useModalState();
 
-  const { data } = useQuery({ queryKey: ['rules'], queryFn: api.getRules });
-  const { exitPaths } = useExitPaths();
-
-  const rules = data?.rules || [];
-  const available = data?.available !== false;
-
-  const [tab, setTab] = useState('ip');
-
-  const ipRules = rules.filter((r) => r.type === 'ip');
-  const domainRules = rules.filter((r) => r.type === 'domain');
-  const currentRules = tab === 'ip' ? ipRules : domainRules;
-
-  const selection = useSelection(currentRules.map((r) => r.id));
-  const listScopeRef = useRef<HTMLDivElement | null>(null);
-  useDeselectOnBlankClick(selection, listScopeRef);
-
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editId, setEditId] = useState<string | null>(null);
-  const [clickPos, setClickPos] = useState<{ x: number; y: number } | undefined>();
-
-  // Rule form
-  const [name, setName] = useState('');
-  const [targets, setTargets] = useState<string[]>([]);
-  const [exitPath, setExitPath] = useState<ExitPathValue>({ paths: [''], mode: '' });
-  const [useTun, setUseTun] = useState(false);
-  const [tunExitVia, setTunExitVia] = useState('');
-  const [priority, setPriority] = useState<string>('0');
-  const [ruleEnabled, setRuleEnabled] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  const resetForm = () => {
-    setName(''); setTargets([]); setExitPath({ paths: [''], mode: '' });
-    setUseTun(false); setTunExitVia(''); setPriority('0'); setRuleEnabled(true);
-  };
-
-  const openAdd = (e: MouseEvent) => {
-    setClickPos({ x: e.clientX, y: e.clientY });
-    setEditId(null);
-    resetForm();
-    setModalOpen(true);
-  };
-
-  const openEdit = (r: RoutingRule, e: MouseEvent) => {
-    setClickPos({ x: e.clientX, y: e.clientY });
-    setEditId(r.id);
-    setName(r.name);
-    setTargets([...r.targets]);
-    setUseTun(!!r.use_tun);
-    setTunExitVia(r.use_tun ? r.exit_via : '');
-    setPriority(String(r.priority || 0));
-    setExitPath(apiToExitPath(r.exit_via, r.exit_paths, r.exit_mode));
-    setRuleEnabled(r.enabled);
-    setModalOpen(true);
-  };
-
-  const handleSave = async () => {
-    const targetList = targets.filter(Boolean);
-    if (targetList.length === 0) { toast.error(t('rules.targetsRequired')); return; }
-
-    let exitData: { exit_via: string; exit_paths?: string[]; exit_mode?: '' | 'quality' | 'aggregate' };
-    if (useTun) {
-      if (!tunExitVia.trim()) { toast.error(t('rules.exitRequired')); return; }
-      exitData = { exit_via: tunExitVia.trim(), exit_paths: undefined, exit_mode: '' };
-    } else {
-      exitData = exitPathToApi(exitPath) as typeof exitData;
-      if (!exitData.exit_via) { toast.error(t('rules.exitRequired')); return; }
-    }
-
-    setSaving(true);
-    try {
-      const prioN = parseInt(priority, 10);
-      const ruleType = tab as 'ip' | 'domain';
-      const ruleData = {
-        id: editId || `${ruleType}-${Date.now().toString(36)}`,
-        name, type: ruleType, targets: targetList,
-        ...exitData,
-        use_tun: useTun || undefined,
-        priority: Number.isFinite(prioN) ? prioN : 0,
-        enabled: ruleEnabled,
-      };
-      if (editId) {
-        await api.updateRule(editId, ruleData);
-      } else {
-        await api.createRule(ruleData);
-      }
-      toast.success(t('rules.saved'));
-      queryClient.invalidateQueries({ queryKey: ['rules'] });
-      setModalOpen(false);
-    } catch (e: any) { toast.error(String(e.message || e)); }
-    finally { setSaving(false); }
-  };
-
-  const bulkToggle = useCallback(async (enabled: boolean) => {
-    try {
-      await Promise.all([...selection.selected].map((id) => api.toggleRule(id, enabled)));
-      toast.success(`${enabled ? t('app.bulkEnable') : t('app.bulkDisable')}: ${selection.count}`);
-      queryClient.invalidateQueries({ queryKey: ['rules'] });
-    } catch (e: any) { toast.error(String(e.message || e)); }
-  }, [selection, queryClient, toast, t]);
-
-  const bulkDelete = useCallback(async () => {
-    const ok = await confirmDlg({
-      title: t('app.bulkDelete'), message: t('rules.deleteConfirm'),
-      danger: true, confirmText: t('app.delete'), cancelText: t('app.cancel'),
-    });
-    if (!ok) return;
-    try {
-      await Promise.all([...selection.selected].map((id) => api.deleteRule(id)));
-      toast.success(`${t('app.bulkDelete')}: ${selection.count}`);
-      queryClient.invalidateQueries({ queryKey: ['rules'] });
-    } catch (e: any) { toast.error(String(e.message || e)); }
-  }, [selection, confirmDlg, queryClient, toast, t]);
-
-  const unavailableBanner = !available ? (
-    <div className="hy-warn-banner">
-      {t('rules.unavailable')}
-    </div>
-  ) : null;
-
-  const columns: Column<RoutingRule>[] = [
-    { key: 'name', title: t('rules.name'), render: (r) => (
-      <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <strong>{r.name || '—'}</strong>
-        {r.tun_active && <Badge variant="blue">{t('rules.tun')}</Badge>}
-      </span>
-    )},
-    { key: 'targets', title: t('rules.targets'), render: (r) => <span className="mono" style={{ fontSize: 11 }}>{r.targets.slice(0, 3).join(', ')}{r.targets.length > 3 ? ` +${r.targets.length - 3}` : ''}</span> },
-    { key: 'exit', title: t('rules.exitVia'), render: (r) => <ExitViaCell exitVia={r.exit_via} exitPaths={r.exit_paths} exitMode={r.exit_mode} /> },
-    // Per-row edit column retired — select a row and use the top-right Edit button.
+  type Row = { kind: SetKind; set: PolicySet | ConditionSet };
+  const rows: Row[] = [
+    ...(cfg?.policies || []).map((set) => ({ kind: 'policy' as const, set })),
+    ...(cfg?.conditions || []).map((set) => ({ kind: 'condition' as const, set })),
   ];
 
-  const tabTitle = tab === 'ip' ? t('rules.ipRules') : t('rules.domainRules');
+  const cols: Column<Row>[] = [
+    {
+      key: 'name', title: t('policy.name'), sortValue: (r) => r.set.name,
+      render: (r) => (
+        <span className="pset-name">
+          <strong>{r.set.name}</strong>
+          {cfg?.direct === r.set.id && <Badge variant="blue">{t('policy.directEntryBadge')}</Badge>}
+        </span>
+      ),
+    },
+    {
+      key: 'kind', title: t('policy.setKind'), sortValue: (r) => r.kind,
+      render: (r) => <Badge variant={r.kind === 'policy' ? 'green' : 'muted'}>{t(r.kind === 'policy' ? 'policy.kindPolicy' : 'policy.kindCondition')}</Badge>,
+    },
+    { key: 'rules', title: t('policy.rules'), sortValue: (r) => r.set.rules.length, render: (r) => r.set.rules.length },
+    { key: 'refs', title: t('policy.usedBy'), render: (r) => <span className="muted">{refsText(r.set.refs, t)}</span> },
+  ];
+  const dismiss = async () => {
+    await dismissPolicyNotice().catch(() => {});
+    qc.invalidateQueries({ queryKey: ['policy'] });
+  };
 
   return (
-    <div className="hy-page">
-      <Tabs
-        items={[
-          { key: 'ip', label: t('rules.ipRules') },
-          { key: 'domain', label: t('rules.domainRules') },
-        ]}
-        activeKey={tab}
-        onChange={setTab}
-      />
-
-      <TabPanel fill activeKey={tab} keys={['ip', 'domain']}>
-        {unavailableBanner}
-        <Card
-          fill={1}
-          title={tabTitle}
-          count={currentRules.length}
-          actions={
-            <ResponsiveActions
-              selectedCount={selection.count}
-              onClearSelection={selection.clear}
-              selectedLabel={t('app.selected', { count: selection.count })}
-            >
-              {(() => {
-                const sel = [...selection.selected];
-                const items = sel.map((id) => currentRules.find((r) => r.id === id)).filter(Boolean);
-                const hasDisabled = items.some((r) => !r!.enabled);
-                const hasEnabled = items.some((r) => r!.enabled);
-                return <>
-                  {hasDisabled && <Button size="sm" onClick={() => bulkToggle(true)}>{t('app.bulkEnable')}</Button>}
-                  {hasEnabled && <Button size="sm" onClick={() => bulkToggle(false)}>{t('app.bulkDisable')}</Button>}
-                  {selection.count > 0 && <Button size="sm" variant="danger" onClick={bulkDelete}>{t('app.bulkDelete')}</Button>}
-                </>;
-              })()}
-              <ImportExportButton target="rules" />
-              {(() => {
-                const sel = [...selection.selected];
-                if (sel.length !== 1) return null;
-                const single = currentRules.find((r) => r.id === sel[0]);
-                if (!single) return null;
-                const onEditClick = (e: MouseEvent) => openEdit(single, e);
-                return (
-                  <Button size="sm" variant="success" data-testid="edit-selected-btn" onClick={onEditClick}>
-                    {t('app.edit')}
-                  </Button>
-                );
-              })()}
-              <Button size="sm" variant="primary" onClick={openAdd}>{t('rules.newRule')}</Button>
-            </ResponsiveActions>
-          }
-          noPadding
-        >
-          <div ref={listScopeRef} style={{ display: 'contents' }}>
-          <Table
-            columns={columns}
-            data={currentRules}
-            rowKey={(r) => r.id}
-            rowClassName={(r) => !r.enabled ? 'disabled-row' : undefined}
-            emptyText={t('rules.noRules')}
-            selection={selection}
-          />
-          </div>
-        </Card>
-      </TabPanel>
-
-      {/* Rule Modal — type determined by active tab */}
-      <Modal
-        open={modalOpen} onClose={() => setModalOpen(false)}
-        title={editId ? t('app.edit') : t('rules.newRule')}
-        animateFrom={clickPos}
-        footer={
-          <>
-            <Button onClick={() => setModalOpen(false)}>{t('app.cancel')}</Button>
-            <Button variant="primary" onClick={handleSave} loading={saving}>
-              {editId ? t('app.save') : t('rules.add')}
-            </Button>
-          </>
-        }
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <FormGroup label={t('rules.name')}>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t('tls.optional')} />
-          </FormGroup>
-          <TargetList type={tab as 'ip' | 'domain'} value={targets} onChange={setTargets} />
-
-          <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
-            <div style={{ flex: tab === 'ip' ? '0 0 120px' : 1 }}>
-              <FormGroup label={t('rules.priority')}>
-                <Input
-                  type="number"
-                  value={priority}
-                  onChange={(e) => setPriority(e.target.value)}
-                  placeholder="0"
-                />
-              </FormGroup>
-            </div>
-            {tab === 'ip' && (
-              <div style={{ flex: 1 }}>
-                <FormGroup label={t('rules.useTun')}>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    <Toggle checked={useTun} onChange={(e) => {
-                      const on = e.target.checked;
-                      setUseTun(on);
-                      if (on && !tunExitVia) {
-                        const first = exitPath.paths.find(Boolean);
-                        if (first) setTunExitVia(first);
-                      }
-                    }} />
-                    <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('rules.useTunHint')}</div>
-                  </div>
-                </FormGroup>
-              </div>
-            )}
-          </div>
-
-          {useTun ? (
-            <FormGroup label={t('rules.exitVia')} required>
-              <Autocomplete
-                value={tunExitVia}
-                onChange={setTunExitVia}
-                options={exitPaths}
-                placeholder={t('users.exitViaHint')}
-              />
-            </FormGroup>
-          ) : (
-            <ExitPathList value={exitPath} onChange={setExitPath} label={t('rules.exitVia')} />
-          )}
+    <div className="hy-page rules-page" data-testid="rules-page">
+      {cfg?.migrated_notice && (
+        <div className="hy-warn-banner policy-notice" data-testid="policy-notice">
+          <span>{t('policy.migratedNotice')}</span>
+          <Button size="sm" onClick={dismiss}>{t('app.close')}</Button>
         </div>
-      </Modal>
+      )}
+
+      <Card
+        title={t('policy.sets')}
+        count={rows.length}
+        noPadding
+        actions={(
+          <div className="button-row">
+            <Button onClick={(e) => direct.show(undefined, e)} data-testid="rules-direct">{t('policy.direct')}</Button>
+            <Button onClick={(e) => test.show(undefined, e)} data-testid="rules-test">{t('policy.test')}</Button>
+            <ExpandButton variant="primary" label={`+ ${t('policy.newPolicy')}`} moreLabel={t('app.moreActions')}
+              testId="rules-new-policy"
+              onClick={(e) => edit.show({ kind: 'policy', set: null }, e)}
+              actions={[{ key: 'condition', label: t('policy.newCondition'), testId: 'rules-new-condition',
+                onClick: (e) => edit.show({ kind: 'condition', set: null }, e) }]} />
+          </div>
+        )}
+      >
+        <Table id="policy.sets" columns={cols} data={rows} rowKey={(r) => r.set.id}
+          emptyText={t('policy.noSets')}
+          onRowClick={(r, _i, o) => edit.show({ kind: r.kind, set: r.set }, o)} />
+      </Card>
+      <SetModal {...edit.modalProps} kind={edit.data?.kind ?? 'policy'} editing={edit.data?.set ?? null} cfg={cfg} />
+      <DirectModal {...direct.modalProps} cfg={cfg} />
+      <TestModal {...test.modalProps} cfg={cfg} />
     </div>
   );
 }

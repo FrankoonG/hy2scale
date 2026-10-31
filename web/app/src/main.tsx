@@ -3,12 +3,17 @@
 // store module body, which reads sessionStorage synchronously inside
 // its create() call.
 import './bootstrap/handoff';
+// Theme before the first React render (index.html already set it pre-paint).
+import './theme';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ToastProvider, ConfirmProvider, setImperativeToast, useToast } from '@hy2scale/ui';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from './queryClient';
+import { ToastProvider, ConfirmProvider, setImperativeToast, useToast, UiLabelsProvider } from '@hy2scale/ui';
+import { useTranslation } from 'react-i18next';
 import '@hy2scale/ui/css';
+import '@/styles/index.css';
 import { setTokenGetter } from '@/api/client';
 import { getToken } from '@/hooks/useAuth';
 import '@/i18n';
@@ -50,15 +55,30 @@ setTokenGetter(getToken);
   window.addEventListener('focus', check);
 })();
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 1,
-      refetchOnWindowFocus: false,
-      staleTime: 2000,
-    },
-  },
-});
+// Translated words for framework components (tables, controls, dialogs)
+function UiLabels({ children }: { children: React.ReactNode }) {
+  const { t, i18n } = useTranslation();
+  const labels = React.useMemo(() => ({
+    columns: t('table.columns'),
+    reset: t('table.reset'),
+    perPage: t('table.perPage'),
+    total: (n: number) => t('table.total', { n }),
+    prev: t('table.prev'),
+    next: t('table.next'),
+    generate: t('app.generate'),
+    showPassword: t('app.showPassword'),
+    hidePassword: t('app.hidePassword'),
+    clear: t('app.clear'),
+    menu: t('app.menu'),
+    confirm: t('app.confirm'),
+    cancel: t('app.cancel'),
+    replaceFile: t('app.replaceFile'),
+    search: t('app.search'),
+    noResults: t('app.noResults'),
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [i18n.language]);
+  return <UiLabelsProvider labels={labels}>{children}</UiLabelsProvider>;
+}
 
 // Bridge imperative toast from inside React tree
 function ToastBridge() {
@@ -74,7 +94,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <ToastProvider>
           <ConfirmProvider>
             <ToastBridge />
-            <App />
+            <UiLabels>
+              <App />
+            </UiLabels>
           </ConfirmProvider>
         </ToastProvider>
       </BrowserRouter>

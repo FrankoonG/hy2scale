@@ -32,10 +32,49 @@ type UserConfig struct {
 	ExitVia       string   `yaml:"exit_via" json:"exit_via"`
 	ExitPaths     []string `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
 	ExitMode      string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"` // ""|"quality"|"aggregate"
-	TrafficLimit  int64    `yaml:"traffic_limit" json:"traffic_limit"`             // bytes, 0=unlimited
-	TrafficUsed   int64    `yaml:"traffic_used" json:"traffic_used"`
-	ExpiryDate    string   `yaml:"expiry_date,omitempty" json:"expiry_date"`
-	Enabled       bool     `yaml:"enabled" json:"enabled"`
+	// ExitPolicy: a policy set id; when set, the exit fields above are
+	// ignored and the user's flows enter that set (core/policy).
+	ExitPolicy   string `yaml:"exit_policy,omitempty" json:"exit_policy"`
+	TrafficLimit int64  `yaml:"traffic_limit" json:"traffic_limit"` // bytes, 0=unlimited
+	TrafficUsed  int64  `yaml:"traffic_used" json:"traffic_used"`
+	ExpiryDate   string `yaml:"expiry_date,omitempty" json:"expiry_date"`
+	Enabled      bool   `yaml:"enabled" json:"enabled"`
+	// NodeAccess: with this user's hy2 credentials, a hy2scale node or an
+	// access client may use the nodes this node sees as exits (node access
+	// by user, core/proto/access.go).
+	NodeAccess bool `yaml:"node_access,omitempty" json:"node_access"`
+	// NodeAccessMode: "restricted" (traffic only; "" = restricted) or
+	// "full" (also management, nested lists and punching through it).
+	NodeAccessMode string `yaml:"node_access_mode,omitempty" json:"node_access_mode,omitempty"`
+	// DenyInternal: this user's flows may not reach internal destinations
+	// (loopback, private, link-local, the exit's own networks) — here, and
+	// at 1.4.0+ exits further away.
+	DenyInternal bool `yaml:"deny_internal,omitempty" json:"deny_internal"`
+
+	// TrafficReset: periodic reset of TrafficUsed at 00:00 local time —
+	// "" (never), "daily", "weekly" or "monthly" (traffic_reset.go).
+	TrafficReset string `yaml:"traffic_reset,omitempty" json:"traffic_reset"`
+	// TrafficResetDay: weekly → ISO weekday 1 (Monday) .. 7 (Sunday);
+	// monthly → 1..31, clamped to the month's last day. 0 otherwise.
+	TrafficResetDay int `yaml:"traffic_reset_day,omitempty" json:"traffic_reset_day,omitempty"`
+	// TrafficResetAt (RFC3339): the last automatic or manual reset.
+	// Server-managed: kept on update like TrafficUsed.
+	TrafficResetAt string `yaml:"traffic_reset_at,omitempty" json:"traffic_reset_at,omitempty"`
+	// TrafficResetFrom (RFC3339): when the current period setting took
+	// effect. Boundaries before it never reset (setting a period doesn't
+	// reset at once). Internal, not in the API.
+	TrafficResetFrom string `yaml:"traffic_reset_from,omitempty" json:"-"`
+
+	// Shared users (shared_users.go). On the manager: the nodes the user is
+	// pushed to (relay chains "a/b") and the revision of its last change.
+	ShareTargets []string `yaml:"share_targets,omitempty" json:"share_targets,omitempty"`
+	ShareRev     int64    `yaml:"share_rev,omitempty" json:"share_rev,omitempty"`
+	// ShareResetRev: the revision of the last manual traffic reset (the
+	// targets reset their own counters when they see it).
+	ShareResetRev int64 `yaml:"share_reset_rev,omitempty" json:"-"`
+	// SharedFrom: on a receiving node, the manager that owns this user.
+	// Only exit settings may be changed here.
+	SharedFrom *SharedFrom `yaml:"shared_from,omitempty" json:"shared_from,omitempty"`
 }
 
 // EffectivePassword returns the proxy-specific password if set, else the main password.
@@ -68,41 +107,12 @@ type ProxyConfig struct {
 	TLSCert  string `yaml:"tls_cert,omitempty" json:"tls_cert,omitempty"` // TLS cert ID (enables TLS wrapping)
 	// Method is the AEAD cipher for the shadowsocks protocol. Ignored for
 	// other protocols. Empty → "aes-256-gcm".
-	Method   string `yaml:"method,omitempty" json:"method,omitempty"`
+	Method    string   `yaml:"method,omitempty" json:"method,omitempty"`
 	ExitVia   string   `yaml:"exit_via,omitempty" json:"exit_via,omitempty"`
 	ExitPaths []string `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
 	ExitMode  string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"`
-}
-
-// RoutingRule defines a traffic routing rule (IP or domain based).
-type RoutingRule struct {
-	ID       string   `yaml:"id" json:"id"`
-	Name     string   `yaml:"name" json:"name"`
-	Type     string   `yaml:"type" json:"type"`                           // "ip" or "domain"
-	Targets  []string `yaml:"targets" json:"targets"`                     // IPs/CIDRs/ranges or domains
-	ExitVia   string   `yaml:"exit_via" json:"exit_via"`
-	ExitPaths []string `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
-	ExitMode  string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"` // ""|"quality"|"aggregate"
-	Enabled   bool     `yaml:"enabled" json:"enabled"`
-	// Priority resolves overlaps between rules. Higher priority wins for the
-	// same IP/CIDR. At equal priority, use_tun=true wins (TUN naturally
-	// preempts proxy at the routing layer anyway). Default 0.
-	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
-	// UseTun requests full TUN forwarding for this rule. When the exit peer is
-	// TUN-capable (has NET_ADMIN + /dev/net/tun) and the target is routable,
-	// packets go through a raw IP tunnel (source IP preserved, ICMP supported).
-	// Otherwise silently falls back to normal relay proxy. When UseTun is set
-	// ExitPaths and ExitMode are ignored — only a single exit_via is honored.
-	UseTun bool `yaml:"use_tun,omitempty" json:"use_tun,omitempty"`
-}
-
-// TunModeConfig controls TUN-based IP packet forwarding for the rules engine.
-// When enabled, raw IP packets are forwarded through the relay instead of
-// TCP/UDP proxy, preserving end-to-end connections (required for protocols
-// like Moonlight ENC-RTSP that bind encryption to TCP sessions).
-type TunModeConfig struct {
-	Enabled bool   `yaml:"enabled" json:"enabled"`
-	Mode    string `yaml:"mode" json:"mode"` // "mixed" (routable=TUN, others=proxy) or "full" (all TUN)
+	// ExitPolicy: a policy set id (overrides the exit fields).
+	ExitPolicy string `yaml:"exit_policy,omitempty" json:"exit_policy"`
 }
 
 // ConfigStore manages dynamic configuration with persistence.
@@ -186,6 +196,14 @@ func LoadOrInitConfig(dataDir string) (Config, error) {
 		if cfg.NodeID == "" {
 			cfg.NodeID = nodeID
 		}
+		// A punch-only node entry is keyed by its first punch route.
+		for i := range cfg.Clients {
+			if c := &cfg.Clients[i]; c.Addr == "" && len(c.Addrs) == 0 {
+				if pa := c.punchAddrs(); len(pa) > 0 {
+					c.Addr = pa[0]
+				}
+			}
+		}
 		// Legacy `name` field migration: cfg.Name and cfg.NodeID used to be
 		// independent, but the UI conflated them on save (every PUT
 		// /api/node sent name = node_id), so in practice every deployed
@@ -208,19 +226,6 @@ func LoadOrInitConfig(dataDir string) (Config, error) {
 		if cfg.Peers == nil {
 			cfg.Peers = make(map[string]PeerConfig)
 		}
-		// Migration: old global tun_mode → per-rule use_tun. When the legacy
-		// global flag was enabled, mark every IP rule as TUN-using so existing
-		// deployments keep their current behaviour after upgrade. The global
-		// TunMode struct is left in place (unused) and will be dropped on the
-		// next config save naturally.
-		if cfg.TunMode != nil && cfg.TunMode.Enabled {
-			for i := range cfg.Rules {
-				if cfg.Rules[i].Type == "ip" {
-					cfg.Rules[i].UseTun = true
-				}
-			}
-			cfg.TunMode = nil
-		}
 		return cfg, nil
 	}
 
@@ -242,10 +247,10 @@ func LoadOrInitConfig(dataDir string) (Config, error) {
 		NodeID:   nodeID,
 		ExitNode: true,
 		Server: &ServerConfig{
-			Listen:  "0.0.0.0:5565",
+			Listen:   "0.0.0.0:5565",
 			Password: password,
-			TLSCert: filepath.Join(dataDir, "tls", "default.crt"),
-			TLSKey:  filepath.Join(dataDir, "tls", "default.key"),
+			TLSCert:  filepath.Join(dataDir, "tls", "default.crt"),
+			TLSKey:   filepath.Join(dataDir, "tls", "default.key"),
 		},
 		Peers: make(map[string]PeerConfig),
 		WireGuard: &WireGuardConfig{

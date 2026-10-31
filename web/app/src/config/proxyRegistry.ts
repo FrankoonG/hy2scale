@@ -8,7 +8,7 @@ import type { SSConfig, ProxyConfig } from '@/api';
  *  2. Add i18n keys if the label needs translation
  *  3. Backend: add the proxy key to the conflict detection list in app.go rebuildUserIndex()
  *
- * That's it — UserDetailModal (links), UserModal (proxy password tab),
+ * That's it — UserInfoModal (proxies tab), UserModal (proxy password tab),
  * and conflict detection all derive from this registry automatically.
  */
 
@@ -105,14 +105,14 @@ export const PROXY_REGISTRY: ProxyRegistryEntry[] = [
   // VPN proxies — included so the user-modal "proxy auth" tab can list a
   // per-proxy enable toggle for them. They don't appear in the user-detail
   // share-link list (filtered by category='vpn'); their connection details
-  // come from the dedicated L2TP / IKEv2 admin pages instead.
+  // come from the dedicated L2TP / IKEv2 / OpenVPN admin pages instead.
   {
     key: 'l2tp',
     label: 'L2TP/IPsec',
     authType: 'username_password',
     category: 'vpn',
-    defaultPort: '1701',
-    getPort: () => '1701',
+    defaultPort: '500',
+    getPort: () => '500',
     buildUrl: () => '',
   },
   {
@@ -124,10 +124,16 @@ export const PROXY_REGISTRY: ProxyRegistryEntry[] = [
     getPort: () => '500',
     buildUrl: () => '',
   },
+  {
+    key: 'openvpn',
+    label: 'OpenVPN',
+    authType: 'username_password',
+    category: 'vpn',
+    defaultPort: '1194',
+    getPort: () => '1194',
+    buildUrl: () => '',
+  },
 ];
-
-/** Proxy types that support per-proxy password overrides (password-only auth). */
-export const PASSWORD_ONLY_PROXIES = PROXY_REGISTRY.filter((p) => p.authType === 'password');
 
 /** L7 proxy types shown in user detail modal (excludes VPN types like l2tp/ikev2). */
 export const DETAIL_PROXIES = PROXY_REGISTRY.filter((p) => p.category === 'l7');

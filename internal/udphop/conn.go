@@ -11,6 +11,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/FrankoonG/hy2scale/core/sockmark"
 )
 
 const (
@@ -68,7 +70,7 @@ func NewUDPHopPacketConn(addr *UDPHopAddr, hopInterval HopIntervalConfig, listen
 	}
 	if listenUDPFunc == nil {
 		listenUDPFunc = func() (net.PacketConn, error) {
-			return net.ListenUDP("udp", nil)
+			return sockmark.ListenUDP("udp", nil)
 		}
 	}
 	addrs, err := addr.addrs()

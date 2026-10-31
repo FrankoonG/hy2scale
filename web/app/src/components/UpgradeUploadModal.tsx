@@ -45,7 +45,21 @@ export default function UpgradeUploadModal({ open, onClose, animateFrom }: Props
     setUploading(true);
     try {
       toast.info(t('settings.upgradeUploading'));
-      await api.uploadUpgrade(file);
+      try {
+        await api.uploadUpgrade(file);
+      } catch (e) {
+        // This node runs an official build and the package is not one.
+        if (!(e instanceof api.UnofficialBuildError)) throw e;
+        const go = await confirm({
+          title: t('build.unofficialTitle'),
+          message: t(e.status === 'invalid' ? 'build.invalidWarn' : 'build.unsignedWarn', { reason: e.reason }),
+          danger: true,
+          confirmText: t('build.installAnyway'),
+          cancelText: t('app.cancel'),
+        });
+        if (!go) return;
+        await api.uploadUpgrade(file, true);
+      }
       toast.success(t('settings.upgradeComplete'));
       onClose();
       setTimeout(() => window.location.reload(), 5000);

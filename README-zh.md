@@ -45,27 +45,23 @@ docker run -d --name hy2scale \
   frankoong/hy2scale:latest
 ```
 
-Bridge 模式（VPN + 代理，不含路由规则）：
+Bridge 模式（VPN + 代理，规则作用于其用户）：
 
 ```bash
 docker run -d --name hy2scale \
-  --cap-add NET_ADMIN --cap-add NET_RAW \
-  --device-cgroup-rule="c 10:200 rwm" \
-  --device-cgroup-rule="c 108:0 rwm" \
   -p 5565:5565/tcp -p 5565:5565/udp \
-  -p 500:500/udp -p 4500:4500/udp -p 1701:1701/udp -p 51820:51820/udp \
+  -p 500:500/udp -p 4500:4500/udp -p 1194:1194/udp -p 51820:51820/udp \
   -v hy2scale-data:/data \
   --restart unless-stopped \
   frankoong/hy2scale:latest
 ```
 
-两条 `--device-cgroup-rule` 分别授予容器对 `/dev/net/tun`（中继包捕获）和
-`/dev/ppp`（L2TP/IPsec 的 PPP 层）的访问权限。少了 `c 108:0 rwm`，L2TP 隧道
-能完成 IKE+ESP 协商，但 pppd 启动后会因无法 open `/dev/ppp` 立即退出，客户端
-会短暂显示「已连接」然后断开。Full 模式不需要这两行，因为 `--privileged`
-默认授予所有设备权限。
+VPN 服务（IKEv2、L2TP/IPsec、OpenVPN、WireGuard）和代理均在用户态运行，不需要任何
+capability 或设备，普通端口映射即可。路由规则在任何模式下都作用于它们的用户。
+透明接管宿主机自身以及经其路由的主机的流量需要 `--network host` 和 `NET_ADMIN`；
+服务端端口跳跃需要 `NET_ADMIN`。
 
-打开 `http://<主机>:5565/scale/` — 默认登录 `admin` / `admin`。
+打开 `https://<主机>:5565/scale/`（默认为自签名证书）— 默认登录 `admin` / `admin`。
 
 iKuai v4 用户请从 [Releases](https://github.com/FrankoonG/hy2scale/releases) 下载 `.ipkg` 并通过应用商店安装 — 详见 [iKuai v4 指南](https://github.com/FrankoonG/hy2scale/wiki/iKuai-v4-Installation)。
 
@@ -73,7 +69,9 @@ iKuai v4 用户请从 [Releases](https://github.com/FrankoonG/hy2scale/releases)
 
 - 将节点连接成网状网络，通过其中任意一个节点转发流量。
 - 在交互式图形视图或表格视图中查看实时拓扑和延迟。
-- 运行 VPN / 代理服务：Hysteria 2、SOCKS5、HTTP、Shadowsocks、L2TP、IKEv2、WireGuard。
+- 运行 VPN / 代理服务：Hysteria 2、SOCKS5、HTTP、Shadowsocks、L2TP、IKEv2、OpenVPN、WireGuard，其中 VPN 完全运行在用户态，无需特权。
+- 打洞：位于 NAT 之后的节点之间，经双方都能到达的节点协助建立直连。
+- 多网卡节点可为每个地址指定出口网卡或源地址。
 - 按用户出口路由、流量限额、到期时间和批量管理。
 - IP 与域名路由规则将特定流量引向特定出口。
 - TLS 证书管理，内置 CA 签发。
@@ -95,6 +93,10 @@ git clone https://github.com/FrankoonG/hy2scale.git
 cd hy2scale
 docker build -t hy2scale .
 ```
+
+## 说明
+
+HY2 SCALE 使用 Hysteria 2 协议，与 Hysteria 项目以及 Tailscale 都没有隶属关系。
 
 ## Star 历史
 

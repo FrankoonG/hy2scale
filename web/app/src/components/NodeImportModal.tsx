@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
-import { Modal, Button, Textarea, FormGroup, useToast } from '@hy2scale/ui';
+import { Modal, Button, Textarea, FormGroup, FormStack, Hint, KeyValueList, KeyValue, useToast } from '@hy2scale/ui';
 import * as api from '@/api';
 import type { ClientEntry } from '@/api';
 import { parseHy2Url, type ParsedHy2 } from '@/utils/parseHy2Url';
@@ -86,7 +86,7 @@ export default function NodeImportModal({ open, onClose, animateFrom }: Props) {
         </>
       }
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <FormStack>
         <FormGroup label={t('nodes.importHint')} required>
           <Textarea
             value={url}
@@ -99,12 +99,12 @@ export default function NodeImportModal({ open, onClose, animateFrom }: Props) {
         </FormGroup>
 
         {url.trim() && !parsed && (
-          <div className="hy-warn-banner" style={{ marginTop: 0 }}>{t('nodes.importParseFail')}</div>
+          <div className="hy-warn-banner">{t('nodes.importParseFail')}</div>
         )}
 
         {parsed && (
           <FormGroup label={t('nodes.importPreview')}>
-            <div style={{ background: 'var(--bg-secondary)', borderRadius: 6, padding: '6px 12px' }} data-testid="hy2-import-preview">
+            <KeyValueList variant="compact" className="import-preview" testId="hy2-import-preview">
               <Row label={t('nodes.address')} value={`${parsed.host}:${parsed.port}`} mono />
               <Row label={t('nodes.password')} value={parsed.password ? mask(parsed.password) : '—'} mono />
               {parsed.name && <Row label={t('nodes.importLabel')} value={parsed.name} />}
@@ -114,25 +114,18 @@ export default function NodeImportModal({ open, onClose, animateFrom }: Props) {
               {parsed.downMbps !== undefined && <Row label={t('nodes.download')} value={`${parsed.downMbps} Mbps`} />}
               {parsed.fastOpen && <Row label={t('nodes.fastOpen')} value="✓" />}
               {parsed.unsupportedNotes.length > 0 && (
-                <div style={{ marginTop: 8, color: 'var(--text-muted)', fontSize: 12 }}>
-                  {t('nodes.importIgnored', { fields: parsed.unsupportedNotes.join(', ') })}
-                </div>
+                <Hint className="hint-gap">{t('nodes.importIgnored', { fields: parsed.unsupportedNotes.join(', ') })}</Hint>
               )}
-            </div>
+            </KeyValueList>
           </FormGroup>
         )}
-      </div>
+      </FormStack>
     </Modal>
   );
 }
 
 function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '4px 0', borderBottom: '1px solid var(--border)', fontSize: 13 }}>
-      <span style={{ color: 'var(--text-muted)' }}>{label}</span>
-      <span style={{ fontFamily: mono ? 'var(--mono)' : undefined, wordBreak: 'break-all', textAlign: 'right' }}>{value}</span>
-    </div>
-  );
+  return <KeyValue label={label} mono={mono}>{value}</KeyValue>;
 }
 
 function mask(s: string): string {

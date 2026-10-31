@@ -1,0 +1,88 @@
+/* Interfaces topology view. */
+/* ====== Interfaces topology ======
+   Nodes are HTML in a transformed stage; edges are SVG. SVG paints use a
+   literal `color` + `stroke: currentColor` (see docs/dark-reader-testing.md).
+   Card row heights must match the constants in InterfacesTopoView.tsx. */
+.iface-topo{position:relative;flex:1;min-height:0;overflow:hidden;background:var(--bg);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none}
+.iface-topo:active{cursor:grabbing}
+.iface-topo-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:13px}
+.iface-topo-stage{position:absolute;left:0;top:0;transform-origin:0 0}
+.iface-topo-svg{position:absolute;left:0;top:0;overflow:visible;pointer-events:none;transition:opacity .25s ease-out}
+/* Style switch: boxes glide to their new place (0.5 s), edges come back after it, new boxes fade in. */
+.iface-topo.is-morph .iface-topo-svg{opacity:0;transition:none}
+.iface-topo.is-morph :is(.iface-topo-card,.iface-topo-gw,.iface-topo-inet,.iface-topo-frame){transition:left .5s cubic-bezier(.4,0,.2,1),top .5s cubic-bezier(.4,0,.2,1),width .5s cubic-bezier(.4,0,.2,1),height .5s cubic-bezier(.4,0,.2,1),border-color .12s,box-shadow .12s}
+.iface-topo.is-morph .iface-topo-vlan{opacity:0}
+.iface-topo :is(.iface-topo-card,.iface-topo-gw,.iface-topo-inet,.iface-topo-frame).enter{animation:iface-topo-in .45s ease-out both}
+@keyframes iface-topo-in{from{opacity:0;transform:scale(.96)}}
+@media(prefers-reduced-motion:reduce){.iface-topo.is-morph :is(.iface-topo-card,.iface-topo-gw,.iface-topo-inet,.iface-topo-frame){transition:none}.iface-topo .enter{animation:none}}
+.iface-topo-ellip{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.iface-topo-frame{position:absolute;box-sizing:border-box;border:1px dashed #c4cad6;border-radius:10px;background:rgba(67,97,238,.025)}
+.iface-topo-frame-title{position:absolute;left:12px;right:12px;top:7px;font-size:10px;line-height:13px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:#7a8294}
+.iface-topo-card{position:absolute;box-sizing:border-box;overflow:hidden;border:1px solid var(--border);border-radius:7px;background:var(--surface);padding:4px 8px;box-shadow:0 1px 3px rgba(0,0,0,.05);cursor:pointer;transition:border-color .12s,box-shadow .12s,opacity .12s;outline:none}
+.iface-topo-card:hover{border-color:#9aa8f5}
+.iface-topo-card:focus-visible{border-color:#4361ee}
+.iface-topo-card.sel{border-color:#4361ee;box-shadow:0 0 0 2px rgba(67,97,238,.28)}
+.iface-topo-card.off{border-style:dashed;opacity:.62}
+.iface-topo-card.faint{opacity:.55}
+.iface-topo-card.sel.off,.iface-topo-card.sel.faint{opacity:.85}
+.iface-topo-card-name{display:flex;align-items:center;gap:4px;height:18px;font-family:var(--mono);font-size:12px;font-weight:700;color:var(--text)}
+.iface-topo-card-name>.iface-topo-ellip{flex:1}
+.iface-topo-card .iface-type{font-size:9.5px;line-height:13px;padding:0 5px}
+.iface-topo-card-lines{margin-top:2px}
+.iface-topo-line{display:flex;align-items:center;gap:5px;height:16px;font-family:var(--mono);font-size:11px;color:var(--text)}
+.iface-topo-line-label{flex-shrink:0;width:14px;font-size:9.5px;color:#9098a8;text-align:left}
+.iface-topo-line.pub .iface-topo-line-label{font-size:10.5px}
+.iface-topo-line.pub{padding-left:10px}
+.iface-topo-more{flex-shrink:0;font-size:9.5px;color:#9098a8}
+.iface-topo-pubip{font-weight:600}
+.iface-topo-eg{flex-shrink:0;font-family:var(--mono);font-size:9.5px;font-weight:600;line-height:13px;padding:0 4px;border-radius:4px;border:1px solid transparent}
+.iface-topo-eg.eg4{background:var(--blue-bg);color:#3b82f6}
+.iface-topo-eg.eg6{background:#f5f3ff;color:#7c3aed}
+.iface-topo-eg.warn{background:var(--orange-bg);color:#d97706;border-color:#f59e0b}
+.iface-topo-inet{position:absolute;box-sizing:border-box;border:1px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:0 1px 3px rgba(0,0,0,.05);overflow:hidden}
+.iface-topo-inet-head{display:flex;align-items:center;gap:6px;padding:0 10px;font-size:12px;font-weight:600;color:var(--text);border-bottom:1px solid var(--border-light);box-sizing:border-box}
+.iface-topo-globe{flex-shrink:0;color:#4361ee;fill:none;stroke:currentColor;stroke-width:1.6}
+.iface-topo-inet-line{display:flex;align-items:center;gap:5px;padding:0 10px;font-family:var(--mono);font-size:11px;color:var(--text)}
+.iface-topo-gw{position:absolute;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;gap:1px;padding:0 14px;border:1px solid var(--border);border-radius:19px;background:var(--surface);box-shadow:0 1px 3px rgba(0,0,0,.05)}
+.iface-topo-gw.eg4{border-color:#3b82f6}
+.iface-topo-gw.eg6{border-color:#8b5cf6}
+.iface-topo-gw.warn{border-color:#f59e0b}
+.iface-topo-gw.off{border-style:dashed;opacity:.62}
+.iface-topo-gw-row{display:flex;flex-direction:column;justify-content:center;gap:1px;min-width:0}
+.iface-topo-gw.multi{justify-content:flex-start;padding:3px 14px;border-radius:10px}
+.iface-topo-gw.multi .iface-topo-gw-row{height:30px}
+.iface-topo-gw.multi .iface-topo-gw-row+.iface-topo-gw-row{border-top:1px solid var(--border-light)}
+.iface-topo.is-uplink .iface-topo-gw{border-radius:10px}
+.iface-topo-gw.local{border-style:dashed;border-radius:10px;background:transparent;box-shadow:none}
+.iface-topo-gw-label{font-size:9.5px;color:#7a8294;line-height:12px}
+.iface-topo-gw-ip{font-family:var(--mono);font-size:11.5px;font-weight:600;color:var(--text);line-height:15px}
+.iface-topo-edge-line{color:#9ca3af;stroke:currentColor;stroke-width:1.5;fill:none}
+.iface-topo-edge.off .iface-topo-edge-line{stroke-dasharray:4 4;stroke-opacity:.7}
+.iface-topo-edge.eg4 .iface-topo-edge-line{color:#3b82f6;stroke-width:2.5}
+.iface-topo-edge.eg6 .iface-topo-edge-line{color:#8b5cf6;stroke-width:2.5}
+.iface-topo-edge.warn .iface-topo-edge-line{color:#f59e0b}
+.iface-topo-edge-flow{fill:none;stroke:currentColor;stroke-width:1.2;stroke-linecap:round;stroke-dasharray:2 10;animation:iface-topo-flow 1.2s linear infinite}
+.iface-topo-edge.eg4 .iface-topo-edge-flow{color:#bfdbfe}
+.iface-topo-edge.eg6 .iface-topo-edge-flow{color:#ddd6fe}
+.iface-topo-edge.warn .iface-topo-edge-flow{color:#fde68a}
+@keyframes iface-topo-flow{to{stroke-dashoffset:-24}}
+@media(prefers-reduced-motion:reduce){.iface-topo-edge-flow{animation:none}}
+.iface-topo-bracket{color:#9ca3af;stroke:currentColor;stroke-width:1.5;fill:none}
+.iface-topo-vlan{position:absolute;box-sizing:border-box;line-height:14px;padding:0 4px;font-size:9.5px;font-weight:600;white-space:nowrap;border:1px solid #c4cad6;border-radius:4px;background:var(--surface);color:#5a6070;pointer-events:none}
+.iface-topo-vlan.off{border-style:dashed;color:#9098a8}
+.iface-topo-topbar{position:absolute;top:10px;left:12px;right:12px;z-index:3;display:flex;align-items:center;justify-content:space-between;gap:12px;pointer-events:none}
+.iface-topo-topbar>*{pointer-events:auto}
+.iface-topo-tools{display:flex;align-items:center;gap:6px;flex:0 1 auto;min-width:0}
+.iface-topo-tool{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;flex-shrink:0;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-secondary);cursor:pointer}
+.iface-topo-tool:hover{color:var(--primary);border-color:var(--primary)}
+.iface-topo-tool svg{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.iface-topo-legend{display:flex;align-items:center;gap:12px;margin-left:6px;font-size:11px;color:var(--text-muted);white-space:nowrap;min-width:0;overflow:hidden}
+.iface-topo-legend-item{display:inline-flex;align-items:center;gap:5px}
+.iface-topo-legend-item svg{fill:none;stroke:currentColor;stroke-width:2.5;stroke-linecap:round}
+.iface-topo-legend-item.eg4 svg{color:#3b82f6}
+.iface-topo-legend-item.eg6 svg{color:#8b5cf6}
+@media(max-width:640px){.iface-topo-legend{display:none}}
+.iface-topo-actions{flex:0 1 auto;min-width:0}
+.iface-topo-actions .hy-btn{height:30px}
+.iface-topo-actions .hy-actions-overflow{width:30px;height:30px}
+.iface-topo-actions .hy-actions-row{flex-wrap:wrap;justify-content:flex-end;gap:6px}

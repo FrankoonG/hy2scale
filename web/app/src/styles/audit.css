@@ -1,0 +1,30 @@
+/* Audit page. */
+.audit-page{gap:16px}
+.audit-summary{display:grid;grid-template-columns:minmax(220px,1.2fr) repeat(3,minmax(0,1fr));gap:20px 32px}
+.audit-totals{display:flex;flex-wrap:wrap;gap:12px 28px}
+.audit-big{font-size:22px;font-weight:700;color:var(--text);font-variant-numeric:tabular-nums}
+.audit-top-title{font-size:12px;color:var(--text-muted);margin-bottom:4px}
+.audit-top-row{display:flex;justify-content:space-between;gap:10px;font-size:13px;line-height:1.7}
+.audit-top-key{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+.audit-bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px 12px}
+.audit-search{width:260px}
+.audit-auto{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary)}
+.audit-filters{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:12px}
+.audit-sel{min-width:0}
+.audit-addr{display:flex;flex-direction:column;line-height:1.35}
+.audit-path{display:inline-flex;align-items:center;flex-wrap:wrap;gap:2px}
+.audit-hop{padding:1px 6px;border-radius:4px;background:var(--primary-light);color:var(--primary);font-size:12px}
+.audit-hop+.audit-hop::before{content:'›';margin:0 4px 0 -2px;color:var(--text-muted)}
+.audit-more{display:flex;align-items:center;justify-content:center;gap:14px;padding:14px}
+.audit-note{padding:10px 20px;font-size:13px}
+.audit-note.error{color:var(--red)}
+.audit-page .nowrap{white-space:nowrap}
+.audit-page .num,.audit-page td.num{text-align:right;font-variant-numeric:tabular-nums}
+.audit-page .muted{color:var(--text-muted)}
+.audit-geo{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin-top:16px;padding-top:14px;border-top:1px solid var(--border-light)}
+.audit-geo-block .geo-card{min-width:0}
+.feature-off{display:flex;flex-direction:column;align-items:center;gap:14px;padding:40px 20px;text-align:center}
+.feature-off-title{font-size:15px;color:var(--text-secondary)}
+@media(max-width:900px){.audit-summary{grid-template-columns:1fr 1fr}}
+@media(max-width:600px){.audit-summary{grid-template-columns:1fr}.audit-search{width:100%}}
+.audit-sel.empty .hy-select-label{color:var(--text-muted)}

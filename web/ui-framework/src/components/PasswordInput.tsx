@@ -1,5 +1,7 @@
 import { forwardRef, useState, type InputHTMLAttributes } from 'react';
 import clsx from 'clsx';
+import { useUiLabels } from './UiLabels';
+import { IconEye, IconEyeOff, IconWandSparkles } from '../icons';
 
 function generatePassword(len = 24): string {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -17,6 +19,7 @@ export interface PasswordInputProps extends Omit<InputHTMLAttributes<HTMLInputEl
 
 export const PasswordInput = forwardRef<HTMLInputElement, PasswordInputProps>(
   ({ showToggle = true, error, className, onGenerate, ...props }, ref) => {
+    const L = useUiLabels();
     const [visible, setVisible] = useState(false);
     const hasGenerate = !!onGenerate;
 
@@ -26,6 +29,8 @@ export const PasswordInput = forwardRef<HTMLInputElement, PasswordInputProps>(
       onGenerate?.(pw);
     };
 
+    const Eye = visible ? IconEyeOff : IconEye;
+    const eyeLabel = visible ? L.hidePassword : L.showPassword;
     return (
       <div className={clsx('hy-pw-wrap', hasGenerate && 'hy-pw-wrap--gen')}>
         <input
@@ -35,24 +40,15 @@ export const PasswordInput = forwardRef<HTMLInputElement, PasswordInputProps>(
           {...props}
         />
         {hasGenerate && (
-          <button
-            type="button"
-            className="hy-pw-btn hy-pw-gen"
-            onClick={handleGenerate}
-            tabIndex={-1}
-            title="Generate"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+          <button type="button" className="hy-pw-btn hy-pw-gen" onClick={handleGenerate} tabIndex={-1}
+            title={L.generate} aria-label={L.generate}>
+            <IconWandSparkles size={16} />
           </button>
         )}
         {showToggle && (
-          <button
-            type="button"
-            className={clsx('hy-pw-btn hy-pw-eye', visible && 'visible')}
-            onClick={() => setVisible(!visible)}
-            tabIndex={-1}
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          <button type="button" className={clsx('hy-pw-btn hy-pw-eye', visible && 'visible')}
+            onClick={() => setVisible(!visible)} tabIndex={-1} title={eyeLabel} aria-label={eyeLabel} aria-pressed={visible}>
+            <Eye size={16} />
           </button>
         )}
       </div>

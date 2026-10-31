@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/FrankoonG/hy2scale/core/audit"
 )
 
 // userMeter counts one user connection's bytes while they flow, not only
@@ -21,7 +23,8 @@ type userMeter struct {
 	pending atomic.Int64
 	flushed atomic.Int64 // unix nanos of the last flush
 	over    atomic.Bool
-	stop    func() // closes the connection once the user is over the limit
+	stop    func()      // closes the connection once the user is over the limit
+	flow    *audit.Flow // the connection's audit record (nil = not recorded)
 }
 
 const (
@@ -40,6 +43,7 @@ func (a *App) newUserMeter(user, sid string, stop func()) *userMeter {
 
 // add records bytes from the user (up) and to the user (down).
 func (m *userMeter) add(up, down int64) {
+	m.flow.Add(up, down)
 	if m.dev != nil {
 		m.dev.TxBytes.Add(up)
 		m.dev.RxBytes.Add(down)
@@ -129,11 +133,13 @@ func (c *meteredConn) NoHalfClose() bool {
 
 // relayUser pipes a user connection to its dialed remote with a device row
 // and live accounting. halfClose forwards FINs (proxy protocols); transparent
-// L3 streams close as a whole.
-func (a *App) relayUser(conn, remote net.Conn, username, remoteIP, protocol string, halfClose bool) {
+// L3 streams close as a whole. af (the flow's audit record) ends with it.
+func (a *App) relayUser(conn, remote net.Conn, username, remoteIP, protocol string, halfClose bool, af *audit.Flow) {
+	defer af.End(nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	sid := a.Sessions.Connect(username, remoteIP, protocol, cancel)
 	m := a.newUserMeter(username, sid, cancel)
+	m.flow = af
 	uc := m.userSide(conn)
 	done := make(chan struct{})
 	go func() {
@@ -162,18 +168,26 @@ func (a *App) relayUser(conn, remote net.Conn, username, remoteIP, protocol stri
 // meterHy2 wraps an hy2 user's outbound stream (TCP or UDP): the hysteria
 // server reads the target from it (download) and writes the user's bytes
 // into it (upload). The device row lives as long as the stream.
-func (a *App) meterHy2(authID, peerAddr string, c net.Conn) net.Conn {
+func (a *App) meterHy2(authID, peerAddr string, c net.Conn, af *audit.Flow) net.Conn {
+	return a.meterHy2As(authID, peerAddr, "hy2", c, af)
+}
+
+// meterHy2As: meterHy2 with the device row's protocol ("hy2-node" for node
+// access by user). af (the stream's audit record, nil = none) ends with it.
+func (a *App) meterHy2As(authID, peerAddr, proto string, c net.Conn, af *audit.Flow) net.Conn {
 	name := strings.TrimPrefix(authID, "user:")
 	ip := peerAddr
 	if h, _, err := net.SplitHostPort(peerAddr); err == nil {
 		ip = h
 	}
-	sid := a.Sessions.Connect(name, ip, "hy2", func() { c.Close() })
+	sid := a.Sessions.Connect(name, ip, proto, func() { c.Close() })
 	m := a.newUserMeter(name, sid, func() { c.Close() })
+	m.flow = af
 	mc := m.remoteSide(c).(*meteredConn)
 	mc.onClose = func() {
 		a.Sessions.Disconnect(sid, 0, 0)
 		m.done()
+		af.End(nil)
 	}
 	return mc
 }

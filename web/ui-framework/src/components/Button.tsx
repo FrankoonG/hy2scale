@@ -1,5 +1,6 @@
-import { type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import clsx from 'clsx';
+import type { IconComponent } from '../icons';
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'default' | 'primary' | 'success' | 'danger' | 'ghost';
@@ -32,20 +33,35 @@ export function Button({
   );
 }
 
-export interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  icon: ReactNode;
-  variant?: 'default' | 'danger';
-  tooltip?: string;
+export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children'> {
+  icon: IconComponent;
+  /** Accessible name; also the hover title. */
+  label: string;
+  /**
+   * ghost: bare icon, tinted on hover (default) · subtle: ghost dimmed until
+   * hover (row actions) · circle: round bordered (inline "generate" next to
+   * an input) · outline: square bordered (toolbar).
+   */
+  variant?: 'ghost' | 'subtle' | 'circle' | 'outline';
+  tone?: 'default' | 'danger';
+  /** Pressed / open state (outline). */
+  active?: boolean;
+  iconSize?: number;
 }
 
-export function IconButton({ icon, variant = 'default', tooltip, className, ...props }: IconButtonProps) {
-  return (
+/** A button that is only an icon. */
+export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(
+  ({ icon: Icon, label, variant = 'ghost', tone = 'default', active, iconSize = 16, className, type = 'button', ...props }, ref) => (
     <button
-      className={clsx('hy-icon-btn', variant !== 'default' && variant, className)}
-      title={tooltip}
+      ref={ref}
+      type={type}
+      className={clsx('hy-icon-btn', variant !== 'ghost' && variant, tone === 'danger' && 'tone-danger', active && 'active', className)}
+      title={label}
+      aria-label={label}
       {...props}
     >
-      {icon}
+      <Icon size={iconSize} />
     </button>
-  );
-}
+  ),
+);
+IconButton.displayName = 'IconButton';

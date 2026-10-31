@@ -1,0 +1,62 @@
+/* Modal, toast, confirm, tooltip, dropdown. */
+/* ====== Modal ====== */
+.hy-modal-overlay{position:fixed;inset:0;background:var(--overlay);display:flex;align-items:center;justify-content:center;z-index:200}
+.hy-modal-overlay.hy-modal-layer{background:none}
+.hy-modal-backdrop{position:absolute;inset:0;background:var(--overlay)}
+.hy-modal{position:relative;background:var(--surface);border:1px solid var(--modal-border);border-radius:12px;width:100%;max-width:520px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow-modal)}
+.hy-modal.wide{max-width:680px}
+.hy-modal-header{display:flex;align-items:center;padding:20px 24px 16px;border-bottom:1px solid var(--border-light)}
+.hy-modal-header h2{font-size:16px;font-weight:600;flex:1}
+.hy-modal-body{padding:20px 24px;overflow-y:auto;flex:1}
+.hy-modal-footer{display:flex;justify-content:flex-end;gap:8px;padding:16px 24px;border-top:1px solid var(--border-light)}
+
+/* ====== Toast ====== */
+.hy-toast-container{position:fixed;top:20px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
+.hy-toast{padding:10px 20px;border-radius:var(--radius-sm);font-size:13px;font-weight:500;box-shadow:var(--shadow-md);pointer-events:auto;color:#fff}
+.hy-toast.success{background:var(--green)}
+.hy-toast.error{background:var(--red)}
+.hy-toast.info{background:var(--primary)}
+
+
+/* ====== Confirm Dialog ====== */
+.hy-confirm-body{font-size:14px;line-height:1.6;color:var(--text-secondary)}
+
+/* ====== Tooltip ====== */
+.hy-tooltip-wrap{position:relative;display:inline-flex}
+.hy-tooltip-wrap:has(> .hy-link-box){display:flex;width:100%}
+/* `white-space: pre-wrap` (was `pre`) lets long unbroken lines soft-wrap
+   instead of overflowing the rounded container; explicit \n / line
+   breaks in the content are still preserved.
+   `max-width` raised from a hard 300px to a viewport-responsive cap so
+   longer conflict messages or mono blocks size to content rather than
+   clipping into a narrow strip. The `min(560px, …)` keeps small
+   screens sane. */
+.hy-tooltip{position:fixed;z-index:99999;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 12px;font-family:var(--mono);font-size:12px;box-shadow:var(--shadow-tip);pointer-events:none;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8;max-width:min(560px,calc(100vw - 24px));margin-top:2px}
+
+
+/* ====== Dropdown ====== */
+.hy-dropdown{position:absolute;z-index:1050;min-width:160px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-pop);padding:4px 0;overflow:hidden}
+.hy-dropdown-item{display:flex;align-items:center;gap:8px;padding:8px 14px;font-size:13px;cursor:pointer;color:var(--text);border:none;background:none;width:100%;text-align:left}
+.hy-dropdown-item:hover{background:var(--primary-light)}
+.hy-dropdown-item.danger{color:var(--red)}
+.hy-dropdown-item.danger:hover{background:var(--red-bg)}
+
+/* ====== Menu (dropdown with icons, choices, accordion rows) ====== */
+.hy-dropdown-anchor{position:relative;display:inline-flex}
+.hy-dropdown-below{top:calc(100% + 6px);right:0}
+.hy-menu .hy-dropdown-item{font-family:var(--font)}
+.hy-menu .hy-dropdown-item>svg{width:16px;height:16px;flex-shrink:0;opacity:.7}
+.hy-menu .hy-dropdown-item.current svg{opacity:1}
+.hy-menu .hy-dropdown-item:disabled{opacity:.4;cursor:not-allowed;background:none}
+.hy-menu .hy-dropdown-item>.hy-dd-caret{width:14px;height:14px;margin-left:4px;transition:transform .15s}
+.hy-menu .hy-dropdown-item[aria-expanded="true"]>.hy-dd-caret{transform:rotate(90deg)}
+.hy-dd-meta{margin-left:auto;color:var(--text-muted);font-size:12px;white-space:nowrap}
+.hy-dd-sub{display:flex;flex-direction:column;padding-bottom:4px}
+.hy-dd-sub .hy-dropdown-item.current,.hy-menu>.hy-dropdown-item.current{color:var(--primary);font-weight:600}
+.hy-dd-check{display:inline-flex;width:16px;height:16px;flex-shrink:0}
+.hy-dd-divider{height:1px;margin:4px 0;background:var(--border-light)}
+/* Checkbox row (view options in an action menu) */
+.hy-menu-check{display:flex!important;flex-direction:row!important;align-items:center;gap:8px;padding:6px 8px;border-radius:var(--radius-sm);font-size:13px;color:var(--text);cursor:pointer;white-space:nowrap;user-select:none;-webkit-user-select:none}
+.hy-menu-check:hover{background:var(--primary-light)}
+.hy-menu-check input{margin:0;accent-color:var(--primary)}
+.hy-menu-check-count{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--text-muted)}

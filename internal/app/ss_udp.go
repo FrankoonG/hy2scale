@@ -12,6 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/audit"
+	"github.com/FrankoonG/hy2scale/core/policy"
+	"github.com/FrankoonG/hy2scale/core/sockmark"
 	"golang.org/x/crypto/hkdf"
 )
 
@@ -64,6 +67,7 @@ type ssUDPFlow struct {
 	mu         sync.Mutex
 	lastUsed   time.Time
 	dead       bool // upstream gone: the next datagram builds a new flow
+	af         *audit.Flow // audit record (nil = not recorded)
 }
 
 func (a *App) runSSUDP(ctx context.Context, listenAddr, method string) {
@@ -80,7 +84,7 @@ func (a *App) runSSUDP(ctx context.Context, listenAddr, method string) {
 		log.Printf("[ss-udp] resolve %s: %v", listenAddr, err)
 		return
 	}
-	conn, err := net.ListenUDP("udp", lAddr)
+	conn, err := sockmark.ListenUDP("udp", lAddr)
 	if err != nil {
 		log.Printf("[ss-udp] listen %s: %v", listenAddr, err)
 		return
@@ -250,14 +254,10 @@ func (a *App) handleSSUDPPacket(
 		// path: re-read the flow under flow.mu and skip re-dial.
 		flow.mu.Lock()
 		if flow.upstream == nil {
-			var remote net.Conn
-			var derr error
-			if u.ExitVia == "" {
-				remote, derr = net.DialTimeout("udp", dst, 5*time.Second)
-			} else {
-				remote, derr = a.dialExitUDPPaths(ctx, u.ExitVia, u.ExitPaths, u.ExitMode, dst)
-			}
+			af := beginUserFlow(audit.InSS, "udp", u.Username, src, dst)
+			remote, derr := a.dialRoutedUDP(audit.NewContext(withRestrict(ctx, a.userRestrict(u.Username)), af), userSel(&u), a.userSrc(policy.KindSS, &u, src), dst)
 			if derr != nil {
+				af.End(derr)
 				flow.mu.Unlock()
 				flowsMu.Lock()
 				if cur, ok := flows[clientKey]; ok && cur == flow {
@@ -267,6 +267,7 @@ func (a *App) handleSSUDPPacket(
 				return
 			}
 			flow.upstream = remote
+			flow.af = af
 			// Spawn the reverse-direction goroutine. It captures the
 			// flow pointer so subsequent address-rotations within the
 			// same flow (different dst addrs from same client) reflect
@@ -281,8 +282,10 @@ func (a *App) handleSSUDPPacket(
 		}
 		flow.lastUsed = time.Now()
 		upstream := flow.upstream
+		af := flow.af
 		flow.mu.Unlock()
 
+		af.Add(int64(len(payload)), 0)
 		if _, werr := upstream.Write(payload); werr != nil {
 			// Drop on write failure — upstream conn may have died.
 			// Don't tear the flow down here; the reverse-reader's next
@@ -325,10 +328,12 @@ func (a *App) ssUDPForward(
 	flow.lastUsed = time.Now()
 	upstream := flow.upstream
 	username := flow.username
+	af := flow.af
 	flow.mu.Unlock()
 	if upstream == nil || a.overTrafficLimit(username) {
 		return
 	}
+	af.Add(int64(len(payload)), 0)
 	_, _ = upstream.Write(payload)
 	if username != "" {
 		a.RecordTraffic(username, int64(len(payload)))
@@ -356,7 +361,9 @@ func (a *App) ssUDPReverse(
 		// upstream: every later datagram was dropped until the client went
 		// quiet for udpFlowIdle.
 		flow.dead = true
+		af := flow.af
 		flow.mu.Unlock()
+		af.End(nil)
 	}()
 	buf := make([]byte, 65535)
 	for {
@@ -412,6 +419,7 @@ func (a *App) ssUDPReverse(
 		out = append(out, replySalt...)
 		out = append(out, ct...)
 		_, _ = listener.WriteToUDP(out, clientAddr)
+		flow.af.Add(0, int64(n))
 		if username != "" {
 			a.RecordTraffic(username, int64(n))
 		}

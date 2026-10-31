@@ -1,14 +1,14 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
-import { Reorder, useDragControls } from 'framer-motion';
 import {
-  Modal, Button, Input, PasswordInput, Toggle, Textarea, Select,
-  FormGroup, FormGrid, GripIcon, useToast,
+  Modal, Button, Input, PasswordInput, Toggle, Textarea, Select, Tabs,
+  FormGroup, FormGrid, SortableList, MultiSelect, useToast,
 } from '@hy2scale/ui';
 import * as api from '@/api';
 import type { ClientEntry, CertInfo, TopologyNode } from '@/api';
 import { useNodeStore } from '@/store/node';
+import { OrderedList, toListItems, fromListItems, type ListItem } from '@/components/OrderedList';
 import { buildHy2Url, canExportAsHy2Url, copyToClipboard } from '@/utils/buildHy2Url';
 
 // Characters that would corrupt nested qualified paths (`/`), look weird in
@@ -19,7 +19,9 @@ function nameIsValid(s: string): boolean {
   return !!s && !NAME_BANNED_RE.test(s);
 }
 
-interface AddrItem { id: number; host: string; port: string; }
+// bind: "" (auto), "eth0", "eth0/10.0.0.5" or "/10.0.0.5" — the address's
+// "#..." suffix, i.e. the local interface / source its connection uses.
+interface AddrItem { id: number; host: string; port: string; bind: string; }
 let addrNextId = 1;
 
 interface Props {
@@ -32,6 +34,7 @@ interface Props {
 interface AddrRow {
   host: string;
   port: string;
+  bind: string;
 }
 
 function validatePortSpec(spec: string): boolean {
@@ -50,9 +53,42 @@ function validatePortSpec(spec: string): boolean {
   return true;
 }
 
+// isIPv6Literal: an IPv6 address, optionally with a zone ("fe80::1%eth0")
+// or an embedded IPv4 tail ("::ffff:192.0.2.1").
+function isIPv6Literal(s: string): boolean {
+  const [addr, zone] = s.split('%');
+  if (zone !== undefined && !/^[\w.-]+$/.test(zone)) return false;
+  if (!/^[0-9a-fA-F:.]+$/.test(addr) || !addr.includes(':')) return false;
+  let head = addr;
+  let groups = 8;
+  const v4 = addr.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
+  if (v4) {
+    if (!v4[2].split('.').every((o) => +o <= 255 && String(+o) === o)) return false;
+    head = v4[1].endsWith('::') ? v4[1] : v4[1].slice(0, -1);
+    groups = 6;
+  }
+  if (head.includes('.')) return false;
+  const halves = head.split('::');
+  if (halves.length > 2) return false;
+  const parts = (h: string) => (h ? h.split(':') : []);
+  const all = [...parts(halves[0]), ...(halves.length === 2 ? parts(halves[1]) : [])];
+  if (!all.every((g) => /^[0-9a-fA-F]{1,4}$/.test(g))) return false;
+  return halves.length === 2 ? all.length < groups : all.length === groups;
+}
+
+// hostFamily: 4 / 6 for an IP literal host (IPv6 bracketed or bare), else 0.
+function hostFamily(host: string): 0 | 4 | 6 {
+  const h = host.trim().replace(/^\[(.*)\]$/, '$1');
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(h)) return 4;
+  return h.includes(':') ? 6 : 0;
+}
+
 function parseAddr(a: string): AddrRow {
-  const m = a.match(/^(.+):(.+)$/);
-  return m ? { host: m[1], port: m[2] } : { host: a, port: '' };
+  const i = a.lastIndexOf('#');
+  const bind = i >= 0 ? a.slice(i + 1) : '';
+  const base = i >= 0 ? a.slice(0, i) : a;
+  const m = base.match(/^(.+):(.+)$/);
+  return m ? { host: m[1], port: m[2], bind } : { host: base, port: '', bind };
 }
 
 export default function NodeModal({ open, onClose, editingName, animateFrom }: Props) {
@@ -63,9 +99,20 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   const [loading, setLoading] = useState(false);
   const [name, setName] = useState('');
   const [nameError, setNameError] = useState('');
-  const [addrItems, setAddrItems] = useState<AddrItem[]>([{ id: addrNextId++, host: '', port: '' }]);
-  const addrListRef = useRef<HTMLUListElement>(null);
+  const [addrItems, setAddrItems] = useState<AddrItem[]>([{ id: addrNextId++, host: '', port: '', bind: '' }]);
+  const { data: ifaces = [] } = useQuery({ queryKey: ['interfaces'], queryFn: api.getInterfaces, enabled: open, staleTime: 30000 });
   const [addrError, setAddrError] = useState('');
+  // Addresses: manual rows and/or punch routes (both may be set).
+  const [addrTab, setAddrTab] = useState<'manual' | 'punch'>('manual');
+  const [punchSignal, setPunchSignal] = useState<ListItem[]>(toListItems([]));
+  const [punchRefl, setPunchRefl] = useState<ListItem[]>(toListItems([]));
+  const [punchBinds, setPunchBinds] = useState<string[]>(['']);
+  const [punchFamily, setPunchFamily] = useState<'ipv4' | 'ipv6'>('ipv4');
+  const [retryMin, setRetryMin] = useState('');
+  const [retryMax, setRetryMax] = useState('');
+  const [probeTimeout, setProbeTimeout] = useState('');
+  const [punchWindow, setPunchWindow] = useState('');
+  const exitPaths = useNodeStore((s) => s.exitPaths);
 
   // Live topology lookup — drives the disabled state of the name field.
   // Renaming a hy2scale peer mid-connection would orphan its keyed QUIC
@@ -135,7 +182,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
     // peer B would briefly render A's data — the bug pattern this fixes
     // also showed up in UserModal's exit_via column.
     setName(editingName || '');
-    setAddrItems([{ id: addrNextId++, host: '', port: '' }]);
+    setAddrItems([{ id: addrNextId++, host: '', port: '', bind: '' }]);
     setPassword(''); setFastOpen(false); setBrutal(false); setBbrProfile('');
     setMaxTx(''); setMaxRx('');
     setSni(''); setInsecure(true);
@@ -143,6 +190,9 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
     setInitStreamWin(''); setMaxStreamWin('');
     setInitConnWin(''); setMaxConnWin('');
     setShowQuic(false);
+    setAddrTab('manual');
+    setPunchSignal(toListItems([])); setPunchRefl(toListItems([])); setPunchBinds(['']); setPunchFamily('ipv4');
+    setRetryMin(''); setRetryMax(''); setProbeTimeout(''); setPunchWindow('');
     if (!editingName) {
       return;
     }
@@ -155,8 +205,22 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       if (cancelled) return;
       const c = clients.find((cl) => cl.name === editingName);
       if (!c) return;
-      const addrs = c.addrs && c.addrs.length ? c.addrs : (c.addr ? [c.addr] : ['']);
-      setAddrItems(addrs.map(a => { const p = parseAddr(a); return { id: addrNextId++, host: p.host, port: p.port }; }));
+      const manual = c.addrs && c.addrs.length ? c.addrs : (c.addr && !c.addr.startsWith('@punch:') ? [c.addr] : []);
+      const addrs = manual.length ? manual : [''];
+      if (c.punch) {
+        setPunchSignal(toListItems(c.punch.signal || []));
+        setPunchRefl(toListItems(c.punch.reflectors || []));
+        setPunchBinds(c.punch.binds && c.punch.binds.length ? c.punch.binds : ['']);
+        setPunchFamily(c.punch.family === 'ipv6' ? 'ipv6' : 'ipv4');
+        if (!manual.length) setAddrTab('punch');
+      }
+      const adv = c.advanced || {};
+      setRetryMin(adv.punch_retry_min ? String(adv.punch_retry_min) : '');
+      setRetryMax(adv.punch_retry_max ? String(adv.punch_retry_max) : '');
+      setProbeTimeout(adv.probe_timeout ? String(adv.probe_timeout) : '');
+      setPunchWindow(adv.punch_window ? String(adv.punch_window) : '');
+      const hasAdv = !!(adv.punch_retry_min || adv.punch_retry_max || adv.probe_timeout || adv.punch_window);
+      setAddrItems(addrs.map(a => { const p = parseAddr(a); return { id: addrNextId++, host: p.host, port: p.port, bind: p.bind }; }));
       setPassword(c.password || '');
       setFastOpen(c.fast_open || false);
       setBrutal(!!(c.max_tx || c.max_rx));
@@ -184,17 +248,17 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       setInitConnWin(c.init_conn_window ? String(c.init_conn_window) : '');
       setMaxConnWin(c.max_conn_window ? String(c.max_conn_window) : '');
       const hasQuic = !!(c.init_stream_window || c.max_stream_window || c.init_conn_window || c.max_conn_window);
-      setShowQuic(hasQuic);
+      setShowQuic(hasQuic || hasAdv);
     });
     return () => { cancelled = true; };
   }, [open, editingName]);
 
   // Sync connection mode when address count changes
   const addAddrRow = () => {
-    setAddrItems([...addrItems, { id: addrNextId++, host: '', port: '' }]);
+    setAddrItems([...addrItems, { id: addrNextId++, host: '', port: '', bind: '' }]);
   };
 
-  const updateAddrItem = (id: number, field: 'host' | 'port', val: string) => {
+  const updateAddrItem = (id: number, field: 'host' | 'port' | 'bind', val: string) => {
     setAddrItems(prev => prev.map(it => it.id === id ? { ...it, [field]: val } : it));
   };
 
@@ -202,8 +266,13 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
     setAddrItems(prev => prev.filter(it => it.id !== id));
   };
 
+  // Manual rows left entirely blank are "no manual address" (punch only).
+  const manualBlank = addrItems.every((r) => !r.host.trim() && !r.port.trim());
+  const punchSet = fromListItems(punchSignal).length > 0;
+
   const validateAddrs = (): string[] | null => {
     setAddrError('');
+    if (manualBlank && punchSet) return [];
     for (const item of addrItems) {
       const host = item.host.trim();
       if (!host) {
@@ -216,9 +285,9 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       }
       // IPv6 address validation: bracketed (`[fe80::1]`) or bare. Reject
       // anything that looks malformed before it reaches the backend
-      // (which uses net.SplitHostPort and would silently fail).
+      // (which refuses it).
       const stripped = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
-      if (stripped.includes(':') && !/^[0-9a-fA-F:]+$/.test(stripped)) {
+      if ((stripped.includes(':') || host.startsWith('[')) && !isIPv6Literal(stripped)) {
         setAddrError(t('nodes.invalidIPv6'));
         return null;
       }
@@ -228,7 +297,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       // Wrap bare IPv6 in brackets so `<host>:<port>` parses unambiguously.
       const isV6 = h.includes(':') && !h.startsWith('[');
       const formatted = isV6 ? `[${h}]` : h;
-      return `${formatted}:${r.port.trim()}`;
+      return `${formatted}:${r.port.trim()}${r.bind ? `#${r.bind}` : ''}`;
     });
     const seen = new Set<string>();
     for (const s of strs) {
@@ -264,6 +333,10 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   const handleExport = async () => {
     const addrs = validateAddrs();
     if (!addrs) return;
+    if (!addrs.length) {
+      toast.error(t('nodes.exportNotShareable'));
+      return;
+    }
     const finalName = resolveName(addrs);
     if (!finalName) return;
     if (!password.trim()) {
@@ -300,12 +373,32 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   const handleSubmit = async () => {
     const addrs = validateAddrs();
     if (!addrs) return;
-    const finalName = resolveName(addrs);
+    const finalName = resolveName(addrs.length ? addrs : [name.trim()]);
     if (!finalName) return;
-    if (!password.trim()) {
+    if (addrs.length && !password.trim()) {
       toast.error(t('nodes.passRequired'));
       return;
     }
+    const signal = fromListItems(punchSignal);
+    const reflectors = fromListItems(punchRefl);
+    if (signal.length) {
+      const bad = signal.find((p) => p.split('/').pop() !== finalName);
+      if (bad) {
+        setAddrTab('punch');
+        setAddrError(t('nodes.punchPathEnd', { path: bad, name: finalName }));
+        return;
+      }
+      if (!reflectors.length) {
+        setAddrTab('punch');
+        setAddrError(t('nodes.punchReflRequired'));
+        return;
+      }
+    }
+    const num = (v: string) => (v.trim() ? parseInt(v) || undefined : undefined);
+    const advanced = {
+      punch_retry_min: num(retryMin), punch_retry_max: num(retryMax),
+      probe_timeout: num(probeTimeout), punch_window: num(punchWindow),
+    };
 
     // Determine CA value
     let caVal: string | undefined;
@@ -318,9 +411,15 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
     setLoading(true);
     const data: ClientEntry = {
       name: finalName,
-      addr: addrs[0],
+      addr: addrs[0] || '',
       addrs: addrs.length > 1 ? addrs : undefined,
       password: password.trim(),
+      punch: signal.length ? {
+        signal, reflectors,
+        binds: punchBinds.filter((b, i, a) => a.indexOf(b) === i && bindFits(b, punchFamily === 'ipv6' ? 6 : 4)),
+        family: punchFamily === 'ipv6' ? 'ipv6' : undefined,
+      } : undefined,
+      advanced: Object.values(advanced).some((v) => v) ? advanced : undefined,
       sni: sni.trim() || undefined,
       insecure: insecure || undefined,
       ca: caVal,
@@ -353,6 +452,23 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
 
   const title = editingName ? t('nodes.editPrefix', { name: editingName }) : t('nodes.addTitle');
 
+  // Punch suggestions: signalling paths ending at this node; reflectors are
+  // the nodes the topology shows directly attached to it.
+  const target = name.trim() || editingName || '';
+  const signalOptions = exitPaths.filter((p) => p.includes('/') && (!target || p.split('/').pop() === target));
+  const reflOptions = useMemo(() => {
+    const out = new Set<string>();
+    const walk = (nodes: TopologyNode[]) => {
+      for (const n of nodes) {
+        if (!n.is_self && target && (n.children || []).some((c) => c.name === target)) out.add(n.name);
+        walk(n.children || []);
+      }
+    };
+    walk(topology);
+    if (!out.size) topology.filter((n) => !n.is_self && n.name !== target).forEach((n) => out.add(n.name));
+    return [...out];
+  }, [topology, target]);
+
   // Build CA select options. Annotate each TLS-list entry with whether
   // it's a CA cert or a self-signed leaf so the operator picks the right
   // one — the dropdown otherwise looks identical for both, and a peer
@@ -361,7 +477,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
     { value: '', label: t('nodes.caNone') },
     ...caCerts.map((c) => {
       const base = c.name || c.id;
-      const tag = c.is_ca ? '[CA]' : '[cert]';
+      const tag = c.is_ca ? t('nodes.certTagCa') : t('nodes.certTagLeaf');
       return { value: c.id, label: `${base} ${tag}` };
     }),
     { value: '__manual__', label: t('nodes.caManual') },
@@ -394,7 +510,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
             for offline entries; on create, blank falls back to first addr. */}
         <FormGroup label={t('nodes.nodeName')}>
           <>
-            {nameError && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 6 }}>{nameError}</div>}
+            {nameError && <div className="field-error above">{nameError}</div>}
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -412,40 +528,76 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
           </>
         </FormGroup>
 
-        {/* Address rows */}
+        {/* Addresses: manual rows and/or hole-punched routes */}
         <FormGroup label={t('nodes.addresses')}>
           <>
-            {addrError && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 6 }}>{addrError}</div>}
-            <Reorder.Group
-              ref={addrListRef}
-              axis="y"
-              values={addrItems}
+            <Tabs
+              variant="underline"
+              activeKey={addrTab}
+              onChange={(k) => setAddrTab(k as 'manual' | 'punch')}
+              items={[
+                { key: 'manual', label: `${t('nodes.addrManual')} (${manualBlank ? 0 : addrItems.length})` },
+                { key: 'punch', label: `${t('nodes.addrPunch')} (${punchSet ? punchBinds.length : 0})` },
+              ]}
+            />
+            {addrError && <div className="field-error">{addrError}</div>}
+            {addrTab === 'punch' ? (
+              <div data-testid="punch-panel" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+                <div className="punch-sub">{t('nodes.punchSignal')}</div>
+                <OrderedList items={punchSignal} onChange={setPunchSignal} options={signalOptions}
+                  placeholder={t('nodes.punchSignalHint')} addLabel={t('nodes.punchAddPath')}
+                  deleteTitle={t('app.delete')} testId="punch-signal" />
+                <div className="punch-sub">{t('nodes.punchReflectors')}</div>
+                <OrderedList items={punchRefl} onChange={setPunchRefl} options={reflOptions}
+                  placeholder={t('nodes.punchReflHint')} addLabel={t('nodes.punchAddRefl')}
+                  deleteTitle={t('app.delete')} testId="punch-refl" />
+                <div className="punch-sub">{t('nodes.punchFamily')}</div>
+                <div style={{ width: 150 }} data-testid="punch-family">
+                  <Select
+                    value={punchFamily}
+                    onChange={(e) => {
+                      const f = e.target.value === 'ipv6' ? 'ipv6' : 'ipv4';
+                      setPunchFamily(f);
+                      const kept = punchBinds.filter((b) => bindFits(b, f === 'ipv6' ? 6 : 4));
+                      setPunchBinds(kept.length ? kept : ['']);
+                    }}
+                    options={[{ value: 'ipv4', label: 'IPv4' }, { value: 'ipv6', label: 'IPv6' }]}
+                  />
+                </div>
+                <div className="punch-sub">{t('nodes.iface')}</div>
+                <MultiSelect testId="punch-binds"
+                  options={bindOptions(ifaces, '', '', punchFamily === 'ipv6' ? 6 : 4).filter((o) => o.value)}
+                  value={punchBinds.filter((b) => b)}
+                  onChange={(next) => setPunchBinds(next.length ? next : [''])}
+                  placeholder={t('nodes.ifaceAuto')} />
+              </div>
+            ) : (
+            <>
+            <SortableList
+              items={addrItems}
               onReorder={setAddrItems}
-              className="addr-list"
-              style={{ listStyle: 'none', padding: 0, margin: 0 }}
-            >
-              {addrItems.map((item) => (
-                <AddrRowItem
-                  key={item.id}
-                  item={item}
-                  canDrag={addrItems.length > 1}
-                  canRemove={addrItems.length > 1}
-                  constraintsRef={addrListRef}
-                  hostPlaceholder={t('nodes.host')}
-                  portPlaceholder={t('nodes.port')}
-                  deleteTitle={t('app.delete')}
-                  onUpdate={(field, val) => updateAddrItem(item.id, field, val)}
-                  onRemove={() => removeAddrItem(item.id)}
-                />
-              ))}
-            </Reorder.Group>
-            <div className="addr-add-row" onClick={addAddrRow}>
-              {t('nodes.addAddress')}
-            </div>
+              removeLabel={t('app.delete')}
+              onRemove={(item) => removeAddrItem(item.id)}
+              addLabel={t('nodes.addAddress')}
+              onAdd={addAddrRow}
+              renderItem={(item) => (
+                <>
+                  <Input value={item.host} onChange={(e) => updateAddrItem(item.id, 'host', e.target.value)} placeholder={t('nodes.host')} />
+                  <Input value={item.port} onChange={(e) => updateAddrItem(item.id, 'port', e.target.value)} placeholder={t('nodes.port')}
+                    className="addr-port" />
+                  <div title={t('nodes.iface')} className="addr-bind" data-testid="addr-bind">
+                    <Select value={item.bind} onChange={(e) => updateAddrItem(item.id, 'bind', e.target.value)}
+                      options={bindOptions(ifaces, item.bind, t('nodes.ifaceAuto'), hostFamily(item.host))} />
+                  </div>
+                </>
+              )}
+            />
+            </>
+            )}
           </>
         </FormGroup>
 
-        <FormGroup label={t('nodes.password')} required>
+        <FormGroup label={t('nodes.password')} required={!manualBlank || !punchSet}>
           <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} />
         </FormGroup>
 
@@ -534,8 +686,24 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
         {/* QUIC Advanced */}
         <details open={showQuic} onToggle={(e) => setShowQuic((e.target as HTMLDetailsElement).open)}>
           <summary style={{ cursor: 'pointer', fontSize: 13, color: 'var(--text-secondary)', marginBottom: 10 }}>
-            {t('nodes.quicAdvanced')}
+            {t('nodes.advanced')}
           </summary>
+          <div className="punch-sub" style={{ marginBottom: 6 }}>{t('nodes.advPunch')}</div>
+          <FormGrid>
+            <FormGroup label={t('nodes.punchRetryMin')}>
+              <Input type="number" value={retryMin} onChange={(e) => setRetryMin(e.target.value)} placeholder="5" suffix="s" data-testid="punch-retry-min" />
+            </FormGroup>
+            <FormGroup label={t('nodes.punchRetryMax')}>
+              <Input type="number" value={retryMax} onChange={(e) => setRetryMax(e.target.value)} placeholder="300" suffix="s" />
+            </FormGroup>
+            <FormGroup label={t('nodes.probeTimeout')}>
+              <Input type="number" value={probeTimeout} onChange={(e) => setProbeTimeout(e.target.value)} placeholder="5" suffix="s" />
+            </FormGroup>
+            <FormGroup label={t('nodes.punchWindow')}>
+              <Input type="number" value={punchWindow} onChange={(e) => setPunchWindow(e.target.value)} placeholder="5" suffix="s" />
+            </FormGroup>
+          </FormGrid>
+          <div className="punch-sub" style={{ margin: '10px 0 6px' }}>{t('nodes.advQuic')}</div>
           <FormGrid>
             <FormGroup label={t('nodes.initStreamWindow')}>
               <Input type="number" value={initStreamWin} onChange={(e) => setInitStreamWin(e.target.value)} />
@@ -556,52 +724,36 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   );
 }
 
-interface AddrRowItemProps {
-  item: AddrItem;
-  canDrag: boolean;
-  canRemove: boolean;
-  constraintsRef: React.RefObject<HTMLElement | null>;
-  hostPlaceholder: string;
-  portPlaceholder: string;
-  deleteTitle: string;
-  onUpdate: (field: 'host' | 'port', val: string) => void;
-  onRemove: () => void;
+// Interface / source choices for an address row: auto, each interface, and
+// each of its addresses (only those of family `fam` when it is set). A saved
+// binding this host does not have stays selectable so editing the row does
+// not silently drop it.
+// Child interfaces (kind "child") are listed right under their parent NIC.
+function bindOptions(ifaces: api.IfaceInfo[], current: string, autoLabel: string, fam: 0 | 4 | 6 = 0) {
+  const opts = [{ value: '', label: autoLabel }];
+  const tops = ifaces.filter((f) => f.kind !== 'child');
+  const kids = ifaces.filter((f) => f.kind === 'child');
+  const ordered: { f: api.IfaceInfo; child: boolean }[] = [];
+  for (const f of tops) {
+    ordered.push({ f, child: false });
+    for (const c of kids) if (c.parent === f.name) ordered.push({ f: c, child: true });
+  }
+  for (const c of kids) if (!tops.some((p) => p.name === c.parent)) ordered.push({ f: c, child: true });
+  for (const { f, child } of ordered) {
+    if (!f.up || f.loopback) continue;
+    const label = child ? `\u00a0\u00a0\u2514 ${f.name}` : f.name;
+    opts.push({ value: f.name, label });
+    for (const a of f.addrs) {
+      if (fam && hostFamily(a) !== fam) continue;
+      opts.push({ value: `${f.name}/${a}`, label: `${label} · ${a}` });
+    }
+  }
+  if (current && !opts.some(o => o.value === current)) opts.push({ value: current, label: current.replace('/', ' · ') });
+  return opts;
 }
 
-function AddrRowItem({ item, canDrag, canRemove, constraintsRef, hostPlaceholder, portPlaceholder, deleteTitle, onUpdate, onRemove }: AddrRowItemProps) {
-  const controls = useDragControls();
-  return (
-    <Reorder.Item
-      value={item}
-      dragListener={false}
-      dragControls={controls}
-      dragConstraints={constraintsRef}
-      dragElastic={0.1}
-      onDragStart={() => document.body.classList.add('dragging-active')}
-      onDragEnd={() => document.body.classList.remove('dragging-active')}
-      className="addr-row"
-      style={{ listStyle: 'none' }}
-    >
-      {canDrag && (
-        <div className="addr-drag" onPointerDown={(e) => controls.start(e)}>
-          <GripIcon />
-        </div>
-      )}
-      <Input
-        value={item.host}
-        onChange={(e) => onUpdate('host', e.target.value)}
-        placeholder={hostPlaceholder}
-        style={{ flex: 1 }}
-      />
-      <Input
-        value={item.port}
-        onChange={(e) => onUpdate('port', e.target.value)}
-        placeholder={portPlaceholder}
-        style={{ width: 140 }}
-      />
-      {canRemove && (
-        <button type="button" className="addr-del" onClick={onRemove} title={deleteTitle}>−</button>
-      )}
-    </Reorder.Item>
-  );
+// bindFits: a binding ("", "eth0", "eth0/<src>") usable in family `fam`.
+function bindFits(bind: string, fam: 4 | 6): boolean {
+  const i = bind.indexOf('/');
+  return i < 0 || hostFamily(bind.slice(i + 1)) === fam;
 }
