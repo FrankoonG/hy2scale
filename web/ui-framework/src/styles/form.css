@@ -122,7 +122,7 @@
 .hy-select-arrow{width:14px;height:14px;flex-shrink:0;color:var(--text-muted);margin-left:8px;transition:transform .2s}
 .hy-select.open .hy-select-arrow{transform:rotate(180deg)}
 .hy-select-dropdown{max-height:240px;overflow-y:auto;z-index:10000}
-.hy-dropdown.hy-select-dropdown{min-width:0}
+.hy-dropdown.hy-select-dropdown{min-width:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain}
 .hy-dropdown-item.active{color:var(--primary);font-weight:600;background:var(--primary-light)}
 
 

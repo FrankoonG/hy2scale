@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button, FormGroup, Input, Modal, useConfirm, useToast } from '@hy2scale/ui';
@@ -12,6 +12,10 @@ import { useDialogInit } from '@/hooks/useFormInit';
 import FlowEditor from './FlowEditor';
 import { type SetKind } from './shared';
 import { RefsLine } from './RefsLine';
+import type { SetBody } from './YamlModal';
+
+// Lazy: CodeMirror and the YAML parser load only when the view opens.
+const YamlModal = lazy(() => import('./YamlModal'));
 
 /** Dialog of one condition set or policy set: its name and ordered rules. */
 export default function SetModal({ open, onClose, animateFrom, kind, editing, cfg }: {
@@ -29,12 +33,14 @@ export default function SetModal({ open, onClose, animateFrom, kind, editing, cf
   const [def, setDef] = useState<End | undefined>(undefined);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<{ msg: string; path?: string } | null>(null);
+  const [yamlOpen, setYamlOpen] = useState(false);
 
   useDialogInit(open, `${kind}:${editing?.id ?? ''}`, () => {
     setName(editing?.name ?? '');
     setRules(editing ? editing.rules.map((r) => ({ ...r })) : []);
     setDef(editing?.default);
     setError(null);
+    setYamlOpen(false);
   });
 
   const isPolicy = kind === 'policy';
@@ -44,19 +50,23 @@ export default function SetModal({ open, onClose, animateFrom, kind, editing, cf
   };
   const callable = (cfg?.policies || []).filter((p) => !(isPolicy && p.id === editing?.id)).map((p) => ({ id: p.id, name: p.name }));
 
+  // Saves body as this set (form and YAML view alike); throws on rejection.
+  const persist = async (body: SetBody) => {
+    if (isPolicy) {
+      const res = editing ? await updatePolicySet({ ...(editing as PolicySet), ...body }) : await createPolicySet(body);
+      if (res?.warnings?.length) toast.info(res.warnings.join('; '));
+    } else if (editing) await updateCondition({ ...(editing as ConditionSet), ...body });
+    else await createCondition(body);
+    await qc.invalidateQueries({ queryKey: ['policy'] });
+    toast.success(t('policy.saved'));
+  };
+
   const save = async () => {
     if (!name.trim()) { setError({ msg: t('policy.nameRequired') }); return; }
     setSaving(true);
     setError(null);
     try {
-      const body = { name: name.trim(), rules, default: def };
-      if (isPolicy) {
-        const res = editing ? await updatePolicySet({ ...(editing as PolicySet), ...body }) : await createPolicySet(body);
-        if (res?.warnings?.length) toast.info(res.warnings.join('; '));
-      } else if (editing) await updateCondition({ ...(editing as ConditionSet), ...body });
-      else await createCondition(body);
-      await qc.invalidateQueries({ queryKey: ['policy'] });
-      toast.success(t('policy.saved'));
+      await persist({ name: name.trim(), rules, default: def });
       onClose();
     } catch (e: any) {
       setError({ msg: String(e?.message || e), path: e instanceof PolicyValidationError ? e.path : undefined });
@@ -65,6 +75,7 @@ export default function SetModal({ open, onClose, animateFrom, kind, editing, cf
     }
   };
 
+  const names = new Map([...(cfg?.conditions || []), ...(cfg?.policies || [])].map((s) => [s.id, s.name]));
   const remove = async () => {
     if (!editing) return;
     if (!await confirm({ title: t('app.delete'), message: t('policy.deleteConfirm', { name: editing.name }), danger: true, confirmText: t('app.delete') })) return;
@@ -87,6 +98,7 @@ export default function SetModal({ open, onClose, animateFrom, kind, editing, cf
       footer={(
         <>
           {editing && <Button variant="danger" onClick={remove} data-testid="set-delete">{t('app.delete')}</Button>}
+          <Button onClick={() => setYamlOpen(true)} data-testid="set-yaml">YAML</Button>
           <span className="spacer" />
           <Button onClick={onClose}>{t('app.cancel')}</Button>
           <Button variant="primary" onClick={save} loading={saving} data-testid="set-save">{t('app.save')}</Button>
@@ -107,6 +119,10 @@ export default function SetModal({ open, onClose, animateFrom, kind, editing, cf
           </div>
         )}
       </div>
+      {yamlOpen && <Suspense fallback={null}><YamlModal open={open && yamlOpen} onClose={() => setYamlOpen(false)} kind={kind}
+        body={{ name, rules, default: def }} names={names}
+        conditions={condCtx.conditions} policies={callable}
+        save={async (b) => { await persist(b); setYamlOpen(false); onClose(); }} /></Suspense>}
     </Modal>
   );
 }
