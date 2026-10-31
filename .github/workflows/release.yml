@@ -6,7 +6,8 @@ name: Release
 #
 # Jobs and what they may touch:
 #   version   reads the tag and the version constant      no token, no secrets
-#   build     builds the binaries (runs npm and go)       read-only token
+#   frontend  builds the web UI (npm, no install scripts) read-only token
+#   build     builds the binaries (go only)               read-only token
 #   sign      signs the built binaries                    the signing key only;
 #             (environment "release"; never checks out    no repository code
 #             or runs repository code)
@@ -76,10 +77,39 @@ jobs:
             case "$VERSION" in *-*) echo "prerelease=true" ;; *) echo "prerelease=false" ;; esac
           } >> "$GITHUB_OUTPUT"
 
-  # ─── Binaries (no secrets) ───────────────────────────────────────
+  # ─── Web UI (no secrets; npm runs in this job only) ──────────────
+  frontend:
+    name: Build web UI
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
+      # Dependencies' install scripts never run.
+      - name: Build
+        run: |
+          set -eux
+          (cd web/ui-framework && npm ci --ignore-scripts && npm run build)
+          (cd web/app && npm ci --ignore-scripts && npm run build)
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: web-static
+          path: web/app/dist/
+          if-no-files-found: error
+
+  # ─── Binaries (no secrets; go only) ──────────────────────────────
   build:
     name: Build ${{ matrix.platform }}
-    needs: version
+    needs: [version, frontend]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -97,20 +127,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 20
+      # The binary embeds internal/web/static: the UI built from this
+      # commit, never the committed bundle.
+      - name: Use the built web UI
+        run: rm -rf internal/web/static
 
-      # The binary embeds internal/web/static: build the frontend from this
-      # commit first, never ship the committed bundle.
-      - name: Build frontend
-        run: |
-          set -eux
-          (cd web/ui-framework && npm ci && npm run build)
-          (cd web/app && npm ci && npm run build)
-          rm -rf internal/web/static
-          mkdir -p internal/web/static
-          cp -r web/app/dist/. internal/web/static/
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: web-static
+          path: internal/web/static
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
@@ -147,11 +172,44 @@ jobs:
     environment: release
     permissions: {}
     steps:
+      # Each expected binary by its exact artifact name, nothing else.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: bin-*
-          merge-multiple: true
-          path: bin
+          name: bin-linux-amd64
+          path: in/linux-amd64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-arm64
+          path: in/linux-arm64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-armv7
+          path: in/linux-armv7
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-mips64le
+          path: in/linux-mips64le
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-mipsle-softfloat
+          path: in/linux-mipsle-softfloat
+
+      - name: Check the binaries
+        run: |
+          set -eu
+          mkdir bin
+          for p in \
+            'linux-amd64:ELF 64-bit LSB.*x86-64' \
+            'linux-arm64:ELF 64-bit LSB.*ARM aarch64' \
+            'linux-armv7:ELF 32-bit LSB.*ARM' \
+            'linux-mips64le:ELF 64-bit LSB.*MIPS' \
+            'linux-mipsle-softfloat:ELF 32-bit LSB.*MIPS'; do
+            plat="${p%%:*}"; want="${p#*:}"
+            [ "$(ls "in/$plat")" = "hy2scale-$plat" ] || { echo "::error::unexpected files for $plat: $(ls "in/$plat")"; exit 1; }
+            kind="$(file -b "in/$plat/hy2scale-$plat")"
+            echo "$kind" | grep -Eq "$want" || { echo "::error::hy2scale-$plat is not $want: $kind"; exit 1; }
+            mv "in/$plat/hy2scale-$plat" bin/
+          done
 
       - name: Sign
         env:

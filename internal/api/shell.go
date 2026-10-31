@@ -117,11 +117,12 @@ func (s *Server) uploadRestore(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid tar: "+err.Error(), 400)
 			return
 		}
-		// Never the stored upgrade binary: a restore must not change what runs.
-		if n := filepath.ToSlash(filepath.Clean(hdr.Name)); n == "bin" || strings.HasPrefix(n, "bin/") {
+		target := filepath.Join(dataDir, filepath.Clean(hdr.Name))
+		// Never the stored upgrade binary: a restore must not change what
+		// runs (judged by where the entry lands, whatever its spelling).
+		if rel, err := filepath.Rel(dataDir, target); err != nil || rel == "bin" || strings.HasPrefix(filepath.ToSlash(rel), "bin/") {
 			continue
 		}
-		target := filepath.Join(dataDir, filepath.Clean(hdr.Name))
 		// Security: ensure target is within dataDir
 		if !strings.HasPrefix(target, filepath.Clean(dataDir)+string(os.PathSeparator)) && target != filepath.Clean(dataDir) {
 			continue
