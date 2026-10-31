@@ -271,6 +271,20 @@ export interface OpenVPNConfig {
   pool6?: string;
   cert_id: string;
   mtu: number;
+  listen_ip?: string;
+  dns?: string[];
+  /** Control channel protection. */
+  control?: '' | 'tls-crypt' | 'tls-auth';
+  auth?: '' | 'SHA1' | 'SHA256';
+  shape?: boolean;
+  /** A static key exists (it is never returned). */
+  has_key?: boolean;
+  full_tunnel?: boolean;
+  tunnel_ipv6?: boolean;
+  routes?: string[];
+  profile_extra?: string;
+  /** Write only: replace the static key. */
+  rotate_key?: boolean;
 }
 
 // ===== WireGuard =====

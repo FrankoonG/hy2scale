@@ -160,3 +160,8 @@
 .geo-db-type{font-weight:600;color:var(--text)}
 .geo-auto{display:flex;flex-direction:column;gap:12px;padding:12px 14px;border:1px solid var(--border-light);border-radius:var(--radius)}
 .storage-warn{font-size:13px;color:var(--c-orange)}
+
+/* OpenVPN tab */
+.ovpn-sec{margin-top:6px;padding-top:12px;border-top:1px solid var(--border-light);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted)}
+.ovpn-key{display:flex;align-items:center;gap:10px}
+.hy-seg.ovpn-seg{width:max-content;align-self:flex-start;justify-self:start}

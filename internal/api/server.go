@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -191,6 +193,18 @@ func (s *Server) Start(ctx context.Context) error {
 				case strings.HasSuffix(path, ".json"):
 					w.Header().Set("Content-Type", "application/json")
 				}
+				if strings.HasPrefix(path, "geo/") {
+					// Map data (megabytes, fixed per build): cached, gzipped.
+					w.Header().Set("Cache-Control", "public, max-age=86400")
+					w.Header().Add("Vary", "Accept-Encoding")
+					if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+						w.Header().Set("Content-Encoding", "gzip")
+						w.Write(gzipStatic(path, data))
+						return
+					}
+					w.Write(data)
+					return
+				}
 				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 				w.Write(data)
 				return
@@ -302,3 +316,18 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 // --- Backup / Restore ---
+
+var gzipCache sync.Map // static path → gzipped bytes
+
+// gzipStatic: the gzip encoding of an embedded static file, made once.
+func gzipStatic(path string, data []byte) []byte {
+	if v, ok := gzipCache.Load(path); ok {
+		return v.([]byte)
+	}
+	var b bytes.Buffer
+	zw, _ := gzip.NewWriterLevel(&b, gzip.BestCompression)
+	zw.Write(data)
+	zw.Close()
+	gzipCache.Store(path, b.Bytes())
+	return b.Bytes()
+}

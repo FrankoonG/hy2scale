@@ -262,14 +262,24 @@ func (s *Server) updateIKEv2Config(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getOpenVPNConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
 	result := map[string]any{
-		"running":   s.app.VPNRunning("openvpn"),
-		"connected": s.app.VPNClientCount("openvpn"),
-		"enabled":   false,
-		"port":      1194,
-		"pool":      "10.8.0.1/24",
-		"pool6":     app.DefaultOpenVPNPool6,
-		"cert_id":   "",
-		"mtu":       1400,
+		"running":       s.app.VPNRunning("openvpn"),
+		"connected":     s.app.VPNClientCount("openvpn"),
+		"enabled":       false,
+		"port":          1194,
+		"pool":          "10.8.0.1/24",
+		"pool6":         app.DefaultOpenVPNPool6,
+		"cert_id":       "",
+		"mtu":           1400,
+		"listen_ip":     "",
+		"dns":           []string{},
+		"control":       "",
+		"auth":          "",
+		"shape":         false,
+		"has_key":       false,
+		"full_tunnel":   true,
+		"tunnel_ipv6":   true,
+		"routes":        []string{},
+		"profile_extra": "",
 	}
 	if c := cfg.OpenVPN; c != nil {
 		result["enabled"] = c.Enabled
@@ -278,6 +288,16 @@ func (s *Server) getOpenVPNConfig(w http.ResponseWriter, r *http.Request) {
 		result["pool6"] = orDefault(c.Pool6, app.DefaultOpenVPNPool6)
 		result["cert_id"] = c.CertID
 		result["mtu"] = c.MTU
+		result["listen_ip"] = c.ListenIP
+		result["dns"] = append([]string{}, c.DNS...)
+		result["control"] = c.Control
+		result["auth"] = c.Auth
+		result["shape"] = c.Shape
+		result["has_key"] = c.StaticKey != ""
+		result["full_tunnel"] = c.FullTunnel == nil || *c.FullTunnel
+		result["tunnel_ipv6"] = c.TunnelIPv6 == nil || *c.TunnelIPv6
+		result["routes"] = append([]string{}, c.Routes...)
+		result["profile_extra"] = c.ProfileExtra
 	}
 	writeJSON(w, result)
 }
@@ -288,11 +308,20 @@ func (s *Server) updateOpenVPNConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	if ovpn.Port < 0 || ovpn.Port > 65535 {
-		http.Error(w, "invalid port", 400)
+	if err := ovpn.Check(); err != nil {
+		http.Error(w, err.Error(), 400)
 		return
 	}
 	s.app.Store().Update(func(c *app.Config) {
+		// The static key is the node's: kept across saves, made when a
+		// protection mode first needs one, replaced on request.
+		if c.OpenVPN != nil && !ovpn.RotateKey {
+			ovpn.StaticKey = c.OpenVPN.StaticKey
+		}
+		if ovpn.StaticKey == "" && (ovpn.Control != "" || ovpn.RotateKey) {
+			ovpn.StaticKey = app.NewOpenVPNStaticKey()
+		}
+		ovpn.RotateKey = false
 		c.OpenVPN = &ovpn
 	})
 	if err := s.app.RestartOpenVPN(); err != nil {
