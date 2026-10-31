@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import clsx from 'clsx';
 import {
   Button, FormGroup, Input, Modal, useDismiss, IconCheck, IconChevronDown, IconChevronRight, IconLayers,
+  type IconComponent,
 } from '@hy2scale/ui';
 
 export interface CanvasMenuEntry { key: string; label: string }
@@ -25,6 +26,8 @@ export interface CanvasMenuProps {
   onRename: () => void;
   onReset: () => void;
   onDelete: () => void;
+  /** Downloads the topology as a PNG. */
+  onSaveImage?: () => void;
 }
 
 /** The menu body, shared by the toolbar dropdown and the ⋯ submenu. */
@@ -55,18 +58,7 @@ function MenuItems(p: CanvasMenuProps & { close: () => void }) {
         <>
           <div className="hy-dd-divider" />
           {p.options.map((o) => (
-            <button
-              key={o.key}
-              type="button"
-              role="menuitemcheckbox"
-              aria-checked={o.checked}
-              className="hy-dropdown-item"
-              data-testid={`canvas-${o.key}`}
-              onClick={() => o.onChange(!o.checked)}
-            >
-              <span className="hy-dd-check">{o.checked && <IconCheck size={14} />}</span>
-              <span className="hy-topo-canvas-name">{o.label}</span>
-            </button>
+            <TopoMenuCheck key={o.key} checked={o.checked} onChange={o.onChange} label={o.label} testId={`canvas-${o.key}`} />
           ))}
         </>
       )}
@@ -74,6 +66,9 @@ function MenuItems(p: CanvasMenuProps & { close: () => void }) {
       <button type="button" role="menuitem" className="hy-dropdown-item" data-testid="canvas-copy" onClick={act(p.onCopy)}>{t('nodes.canvas.copy')}</button>
       <button type="button" role="menuitem" className="hy-dropdown-item" data-testid="canvas-import" onClick={act(p.onImport)}>{t('nodes.canvas.import')}</button>
       <button type="button" role="menuitem" className="hy-dropdown-item" data-testid="canvas-export" onClick={act(p.onExport)}>{t('nodes.canvas.export')}</button>
+      {p.onSaveImage && (
+        <button type="button" role="menuitem" className="hy-dropdown-item" data-testid="topo-save-image" onClick={act(p.onSaveImage)}>{t('topo.saveImage')}</button>
+      )}
       {p.isCustom && (
         <>
           <div className="hy-dd-divider" />
@@ -86,9 +81,18 @@ function MenuItems(p: CanvasMenuProps & { close: () => void }) {
   );
 }
 
-/** Toolbar button with a dropdown of every canvas and the canvas actions. */
-export function CanvasMenuButton(p: CanvasMenuProps) {
-  const { t } = useTranslation();
+interface TopoMenuShell {
+  /** Text on the button (the current choice). */
+  label: string;
+  title: string;
+  testId: string;
+  icon?: IconComponent;
+  /** The menu body; `close` closes the menu. */
+  children: (close: () => void) => ReactNode;
+}
+
+/** A topology toolbar button with a dropdown (canvas / style menu). */
+export function TopoMenuButton({ label, title, testId, icon: Icon = IconLayers, children }: TopoMenuShell) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
@@ -100,12 +104,12 @@ export function CanvasMenuButton(p: CanvasMenuProps) {
         className={clsx('iface-topo-tool hy-topo-canvas-btn', open && 'open')}
         aria-haspopup="menu"
         aria-expanded={open}
-        title={t('nodes.canvas.title')}
-        data-testid="canvas-menu"
+        title={title}
+        data-testid={testId}
         onClick={() => setOpen((v) => !v)}
       >
-        <IconLayers size={14} />
-        <span className="hy-topo-canvas-label">{p.activeLabel}</span>
+        <Icon size={14} />
+        <span className="hy-topo-canvas-label">{label}</span>
         <IconChevronDown className="hy-topo-canvas-caret" size={12} />
       </button>
       <AnimatePresence>
@@ -118,7 +122,7 @@ export function CanvasMenuButton(p: CanvasMenuProps) {
             exit={{ opacity: 0, y: -6 }}
             transition={{ duration: 0.15, ease: 'easeOut' }}
           >
-            <MenuItems {...p} close={close} />
+            {children(close)}
           </motion.div>
         )}
       </AnimatePresence>
@@ -126,9 +130,8 @@ export function CanvasMenuButton(p: CanvasMenuProps) {
   );
 }
 
-/** The same menu as an inline-expanding submenu inside the ⋯ menu. */
-export function CanvasSubmenu(p: CanvasMenuProps & { onDone: () => void }) {
-  const { t } = useTranslation();
+/** The same menu as an inline-expanding submenu inside a ⋯ menu. */
+export function TopoSubmenu({ label, title, testId, icon: Icon = IconLayers, children, onDone }: TopoMenuShell & { onDone: () => void }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="hy-topo-canvas-inline">
@@ -136,20 +139,60 @@ export function CanvasSubmenu(p: CanvasMenuProps & { onDone: () => void }) {
         type="button"
         className="hy-dropdown-item"
         aria-expanded={open}
-        data-testid="canvas-submenu"
+        data-testid={testId}
         onClick={() => setOpen((v) => !v)}
       >
-        <IconLayers size={14} />
-        <span>{t('nodes.canvas.title')}</span>
-        <span className="hy-dd-meta">{p.activeLabel}</span>
+        <Icon size={14} />
+        <span>{title}</span>
+        <span className="hy-dd-meta">{label}</span>
         <IconChevronRight className="hy-dd-caret" size={14} />
       </button>
       {open && (
         <div className="hy-dd-sub" role="group">
-          <MenuItems {...p} close={() => { setOpen(false); p.onDone(); }} />
+          {children(() => { setOpen(false); onDone(); })}
         </div>
       )}
     </div>
+  );
+}
+
+/** A check item that keeps the menu open. */
+export function TopoMenuCheck({ checked, onChange, label, count, testId }: {
+  checked: boolean; onChange: (on: boolean) => void; label: string; count?: number; testId: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitemcheckbox"
+      aria-checked={checked}
+      className="hy-dropdown-item"
+      data-testid={testId}
+      onClick={() => onChange(!checked)}
+    >
+      <span className="hy-dd-check">{checked && <IconCheck size={14} />}</span>
+      <span className="hy-topo-canvas-name">{label}</span>
+      {count !== undefined && <span className="hy-dd-meta">{count}</span>}
+    </button>
+  );
+}
+
+/** Toolbar button with a dropdown of every canvas and the canvas actions. */
+export function CanvasMenuButton(p: CanvasMenuProps) {
+  const { t } = useTranslation();
+  return (
+    <TopoMenuButton label={p.activeLabel} title={t('nodes.canvas.title')} testId="canvas-menu">
+      {(close) => <MenuItems {...p} close={close} />}
+    </TopoMenuButton>
+  );
+}
+
+/** The canvas menu as an inline-expanding submenu inside the ⋯ menu. */
+export function CanvasSubmenu(p: CanvasMenuProps & { onDone: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <TopoSubmenu label={p.activeLabel} title={t('nodes.canvas.title')} testId="canvas-submenu" onDone={p.onDone}>
+      {(close) => <MenuItems {...p} close={close} />}
+    </TopoSubmenu>
   );
 }
 
