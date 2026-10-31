@@ -12,7 +12,7 @@ import { useExitPaths } from '@/hooks/useExitPaths';
 import { usePanZoom, type View } from '@/hooks/usePanZoom';
 import {
   useConfirm, useMediaQuery, useToast, readStored, writeStored,
-  IconCopy, IconMaximize2, IconChevronLeft, IconChevronRight, IconScan, IconZoomIn, IconZoomOut,
+  IconCopy, IconMaximize2, IconChevronLeft, IconChevronRight, IconScan, IconZoomIn, IconZoomOut, IconGlobe, IconCheck,
 } from '@hy2scale/ui';
 import { copyToClipboard } from '@/utils/clipboard';
 import { exportPng, imageFileName } from '@/utils/exportImage';
@@ -25,7 +25,17 @@ import {
   PRESET_IDS, presetLayout, graphSignature, routeEdges, placeLabels, pointAt, project, ghostPoints,
   toAbs, toRel, contentBounds, type PresetId, type Waypoint, type EdgeGeom,
 } from './topo/layouts';
-import { CanvasMenuButton, CanvasSubmenu, useNamePrompt, type CanvasMenuProps } from './topo/CanvasMenu';
+import { CanvasMenuButton, CanvasSubmenu, TopoMenuButton, TopoSubmenu, useNamePrompt, type CanvasMenuProps } from './topo/CanvasMenu';
+import { useGeoMany, useGeoStatus } from '@/hooks/useGeo';
+import type { Admin1, GeoData, MapProj, Palette } from './topo/geoMap';
+
+type GeoMod = typeof import('./topo/geoMap');
+/** The canvas that stores geo mode's custom lines (never listed). */
+const GEO_CANVAS = 'geo';
+const GEO_EMPTY: GraphCanvas = { id: GEO_CANVAS, name: '', nodes: {}, edges: {} };
+const MAPPROJ_STORE = 'hy2.topo.mapProj';
+const GEO_MIN_K = 0.25;
+const GEO_MAX_K = 800;
 
 // Graph model lives in ./topo/graphModel; re-exported for older imports.
 export { buildGraph, findPathsToName } from './topo/graphModel';
@@ -127,7 +137,7 @@ function useGraphCanvases() {
 const sameJSON = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
 export default function NodesGraphView({ topology, selfId, selfName, onOpenRemote, onOpenDetails, selectedQPath, onSelectQPath, full, actions }: Props) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { isReachableAt } = useExitPaths();
   const confirm = useConfirm();
   const toast = useToast();
@@ -184,7 +194,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   const activeKey = useMemo<string | null>(() => {
     if (storedKey?.startsWith('p:') && PRESET_IDS.includes(storedKey.slice(2) as PresetId)) return storedKey;
     if (!list) return null;
-    if (storedKey?.startsWith('c:') && list.some((c) => c.id === storedKey.slice(2))) return storedKey;
+    if (storedKey?.startsWith('c:') && storedKey !== 'c:' + GEO_CANVAS && list.some((c) => c.id === storedKey.slice(2))) return storedKey;
     if (list.some((c) => c.id === 'default')) return 'c:default';
     return 'p:layered';
   }, [storedKey, list]);
@@ -202,6 +212,46 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     lsSet(ACTIVE_STORE(), key);
     setStoredKey(key);
   }, []);
+
+  // ---------------------------------------------------------------- geo mode
+  // Nodes at their GeoIP location on a world map; lines stay editable and
+  // are kept in a canvas of their own.
+  const { data: geoStatus } = useGeoStatus();
+  const geoAvailable = !!geoStatus?.available;
+  const [geoMode, setGeoMode] = useState(false);
+  const geoModeRef = useRef(geoMode);
+  geoModeRef.current = geoMode;
+  const [geoLoading, setGeoLoading] = useState(false);
+  const [geo, setGeo] = useState<{ mod: GeoMod; data: GeoData } | null>(null);
+  const geoRef = useRef(geo);
+  geoRef.current = geo;
+  const [admin1, setAdmin1] = useState<Admin1 | null>(null);
+  const admin1Loading = useRef(false);
+  const [mapProj, setMapProjState] = useState<MapProj>(() => (lsGet(MAPPROJ_STORE) === 'equalearth' ? 'equalearth' : 'mercator'));
+  const mapProjRef = useRef(mapProj);
+  mapProjRef.current = mapProj;
+  const geoCanvas = useMemo(() => (list || []).find((c) => c.id === GEO_CANVAS) || GEO_EMPTY, [list]);
+  const editing = geoMode || isCustom;
+  const editCanvas = geoMode ? geoCanvas : activeCanvas;
+  const editCanvasRef = useRef(editCanvas);
+  editCanvasRef.current = editCanvas;
+
+  // The address each node reports (self: its own egress).
+  const ipOf = useMemo(() => {
+    const m = new Map<string, string>();
+    const walk = (ns: TopologyNode[]) => ns.forEach((n) => {
+      const key = n.is_self ? selfId : n.name;
+      const ip = n.egress?.ipv4?.ip || n.egress?.ipv6?.ip;
+      if (ip && !m.has(key)) m.set(key, ip.replace(/^\[|\]$/g, ''));
+      if (n.children) walk(n.children);
+    });
+    walk(topology);
+    return m;
+  }, [topology, selfId]);
+  const geoInfos = useGeoMany(geoMode ? [...ipOf.values()] : [], i18n.language);
+  const selfIP = ipOf.get(selfId);
+  const selfCountry = selfIP ? geoInfos.get(selfIP)?.country?.toUpperCase() : undefined;
+  const geoInfoSig = [...ipOf].map(([k, ip]) => { const g = geoInfos.get(ip); return `${k}=${g ? `${g.lat ?? ''},${g.lon ?? ''},${g.country ?? ''}` : '?'}`; }).join(';');
 
   // Preset layouts depend only on the graph's shape (signature), not on the
   // rates/latencies refreshed by every topology poll.
@@ -276,12 +326,12 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
   // Load / reconcile the active custom canvas with the server snapshot.
   useLayoutEffect(() => {
-    if (!isCustom || !activeCanvas) { loadedCanvasRef.current = null; return; }
-    const remoteNodes = activeCanvas.nodes || {};
-    const remoteEdges = activeCanvas.edges || {};
-    if (loadedCanvasRef.current !== activeCanvas.id) {
+    if (!editing || !editCanvas) { loadedCanvasRef.current = null; return; }
+    const remoteNodes = editCanvas.nodes || {};
+    const remoteEdges = editCanvas.edges || {};
+    if (loadedCanvasRef.current !== editCanvas.id) {
       // Switched to this canvas: take it as is.
-      loadedCanvasRef.current = activeCanvas.id;
+      loadedCanvasRef.current = editCanvas.id;
       animRef.current.clear();
       pendingNodes.current.clear();
       pendingEdges.current.clear();
@@ -345,10 +395,10 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       }
       return sameJSON(prev, next) ? prev : next;
     });
-  }, [isCustom, activeCanvas, fallbackPos, fillCustom, nodes]);
+  }, [editing, editCanvas, fallbackPos, fillCustom, nodes]);
 
   const saveCanvas = useCallback((nodesMap: Record<string, Pos>, edgeMap: Record<string, EdgeData>) => {
-    const c = activeCanvasRef.current;
+    const c = editCanvasRef.current;
     if (!c) return;
     const now = performance.now();
     const cleanNodes: Record<string, Pos> = {};
@@ -373,65 +423,26 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     for (const k of new Set([...Object.keys(prevEdges), ...Object.keys(cleanEdges)])) {
       pendingEdges.current.set(k, { json: JSON.stringify(cleanEdges[k] ?? null), at: now });
     }
-    const next: GraphCanvas = { ...c, nodes: cleanNodes, edges: cleanEdges };
-    setCanvases((l) => (l ? l.map((x) => (x.id === c.id ? next : x)) : l));
+    // Geo mode's canvas keeps lines only: its nodes sit at their location.
+    const next: GraphCanvas = { ...c, nodes: c.id === GEO_CANVAS ? {} : cleanNodes, edges: cleanEdges };
+    setCanvases((l) => (l ? (l.some((x) => x.id === c.id) ? l.map((x) => (x.id === c.id ? next : x)) : [...l, next]) : l));
     api.putGraphCanvas(next).catch((err: any) => toast.error(`${t('nodes.canvas.saveFailed')}: ${String(err?.message || err)}`));
   }, [setCanvases, toast, t]);
 
-  // ---------------------------------------------------------------- positions
-  const targetPos = useMemo<Record<string, Pos>>(() => {
-    if (!isCustom) return presetPos;
-    const m: Record<string, Pos> = {};
-    for (const k of nodesRef.current.keys()) m[k] = overrides[k] || fallbackPos[k] || { x: 0, y: 0 };
-    return m;
-    // The node set is part of `sig`; topology polls don't move anything.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isCustom, presetPos, overrides, sig, fallbackPos]);
-
-  // Canvas switch: dots glide from where they were to the new layout.
-  const [morph, setMorph] = useState<{ from: Record<string, Pos>; p: number } | null>(null);
-  const shownRef = useRef<Record<string, Pos>>({});
-  const positions = useMemo<Record<string, Pos>>(() => {
-    if (!morph) return targetPos;
-    const e = 1 - Math.pow(1 - morph.p, 3);
-    const m: Record<string, Pos> = {};
-    for (const k in targetPos) {
-      const a = morph.from[k], b = targetPos[k];
-      m[k] = a ? { x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e } : b;
-    }
-    return m;
-  }, [morph, targetPos]);
-  const positionsRef = useRef(positions);
-  positionsRef.current = positions;
-  useEffect(() => { shownRef.current = positions; }, [positions]);
-
-  // ---------------------------------------------------------------- routing
-  const waypointsMap = useMemo(() => {
-    if (!isCustom) return undefined;
-    const m: Record<string, Waypoint[] | undefined> = {};
-    for (const k in edgeDraft) m[k] = edgeDraft[k].waypoints;
-    return m;
-  }, [isCustom, edgeDraft]);
-  // Routing and label placement depend on the graph's shape only, so they
-  // are keyed on `sig`, not on every topology poll.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const geoms = useMemo(() => routeEdges(graphRef.current, positions, { waypoints: waypointsMap, avoid: true }), [sig, positions, waypointsMap]);
-  const geomsRef = useRef(geoms);
-  geomsRef.current = geoms;
-  const labelTMap = useMemo(() => {
-    const m: Record<string, number | undefined> = {};
-    if (isCustom) for (const k in edgeDraft) if (typeof edgeDraft[k].label_t === 'number') m[k] = edgeDraft[k].label_t;
-    return m;
-  }, [isCustom, edgeDraft]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const labelSpots = useMemo(() => placeLabels(graphRef.current, positions, geoms, labelTMap), [sig, positions, geoms, labelTMap]);
-
   // ---------------------------------------------------------------- view
   const userMoved = useRef(false);
+  const positionsRef = useRef<Record<string, Pos>>({});
   const clampView = useCallback((v: View): View => {
     const el = wrapRef.current;
     if (!el) return v;
     const r = el.getBoundingClientRect();
+    if (geoModeRef.current && geoRef.current) {
+      // Keep part of the world on screen.
+      const [[x0, y0], [x1, y1]] = geoRef.current.mod.worldBounds(mapProjRef.current);
+      const x = Math.min(r.width - CLAMP_VISIBLE - x0 * v.k, Math.max(CLAMP_VISIBLE - x1 * v.k, v.x));
+      const y = Math.min(r.height - CLAMP_VISIBLE - y0 * v.k, Math.max(CLAMP_VISIBLE - y1 * v.k, v.y));
+      return { ...v, x, y };
+    }
     const b = contentBounds(positionsRef.current);
     if (!b || r.width <= 0 || r.height <= 0) return v;
     const minX = b.minX - R_HUB_OUTER, maxX = b.maxX + R_HUB_OUTER, minY = b.minY - R_HUB_OUTER, maxY = b.maxY + R_HUB_OUTER;
@@ -446,8 +457,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   const cancelDragRef = useRef<() => void>(() => {});
   const { view, viewRef, setView, animateTo, zoomBy, consumeClick, clampK } = usePanZoom({
     ref: wrapRef,
-    minK: 0.2,
-    maxK: 3,
+    minK: geoMode ? GEO_MIN_K : 0.2,
+    maxK: geoMode ? GEO_MAX_K : 3,
     initial: { x: 400, y: 80, k: 1 },
     isOverlay: (el) => !!el.closest('[data-overlay]'),
     claim: (e) => claimRef.current(e),
@@ -455,6 +466,115 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     clamp: clampView,
     onUserMove: () => { userMoved.current = true; },
   });
+
+  // ---------------------------------------------------------------- positions
+  const targetPos = useMemo<Record<string, Pos>>(() => {
+    if (!isCustom) return presetPos;
+    const m: Record<string, Pos> = {};
+    for (const k of nodesRef.current.keys()) m[k] = overrides[k] || fallbackPos[k] || { x: 0, y: 0 };
+    return m;
+    // The node set is part of `sig`; topology polls don't move anything.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCustom, presetPos, overrides, sig, fallbackPos]);
+
+  // Canvas switch: dots glide from where they were to the new layout.
+  const [morph, setMorph] = useState<{ from: Record<string, Pos>; p: number } | null>(null);
+  const shownRef = useRef<Record<string, Pos>>({});
+  const layoutPositions = useMemo<Record<string, Pos>>(() => {
+    if (!morph) return targetPos;
+    const e = 1 - Math.pow(1 - morph.p, 3);
+    const m: Record<string, Pos> = {};
+    for (const k in targetPos) {
+      const a = morph.from[k], b = targetPos[k];
+      m[k] = a ? { x: a.x + (b.x - a.x) * e, y: a.y + (b.y - a.y) * e } : b;
+    }
+    return m;
+  }, [morph, targetPos]);
+
+  // Geo mode: base map coordinates of every node — its GeoIP location (the
+  // country's label point without coordinates); a node without either
+  // sits at a located neighbour, else at this node.
+  const geoBase = useMemo(() => {
+    const out: Record<string, Pos> = {};
+    const unlocated = new Set<string>();
+    if (!geo) return { out, unlocated };
+    for (const key of nodes.keys()) {
+      const ip = ipOf.get(key);
+      const g = ip ? geoInfos.get(ip) : undefined;
+      let ll: [number, number] | undefined;
+      if (g && typeof g.lat === 'number' && typeof g.lon === 'number') ll = [g.lon, g.lat];
+      else if (g?.country) ll = geo.data.byIso.get(g.country.toUpperCase())?.label;
+      const p = ll ? geo.mod.project(mapProj, ll) : null;
+      if (p) out[key] = p;
+      else unlocated.add(key);
+    }
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const e of edges.values()) {
+        if (!out[e.from] && out[e.to]) { out[e.from] = out[e.to]; changed = true; }
+        if (!out[e.to] && out[e.from]) { out[e.to] = out[e.from]; changed = true; }
+      }
+    }
+    const fallback = out[selfId] || { x: 0, y: 0 };
+    for (const key of nodes.keys()) if (!out[key]) out[key] = fallback;
+    return { out, unlocated };
+    // geoInfoSig stands for geoInfos
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geo, mapProj, nodes, edges, ipOf, geoInfoSig, selfId]);
+
+  // Geo mode positions are on screen (dots keep their size at any zoom):
+  // nodes at one place fan out around it, this node in the middle.
+  const geoPositions = useMemo<Record<string, Pos> | null>(() => {
+    if (!geoMode || !geo) return null;
+    const v = view;
+    const groups = new Map<string, string[]>();
+    for (const key in geoBase.out) {
+      const b = geoBase.out[key];
+      const gk = `${b.x.toFixed(4)},${b.y.toFixed(4)}`;
+      const l = groups.get(gk);
+      if (l) l.push(key); else groups.set(gk, [key]);
+    }
+    const m: Record<string, Pos> = {};
+    groups.forEach((keys) => {
+      const b = geoBase.out[keys[0]];
+      const c = { x: b.x * v.k + v.x, y: b.y * v.k + v.y };
+      const ring = keys.filter((k) => k !== selfId).sort();
+      const center = keys.length > 1 && keys.includes(selfId);
+      if (center) m[selfId] = c;
+      if (!center && ring.length === 1) { m[ring[0]] = c; return; }
+      const r = Math.max(36, (ring.length * 44) / (2 * Math.PI));
+      ring.forEach((k, i) => {
+        const a = -Math.PI / 2 + (i * 2 * Math.PI) / ring.length;
+        m[k] = { x: c.x + Math.cos(a) * r, y: c.y + Math.sin(a) * r };
+      });
+    });
+    return m;
+  }, [geoMode, geo, geoBase, selfId, view]);
+  const positions = geoPositions ?? layoutPositions;
+  positionsRef.current = positions;
+  useEffect(() => { shownRef.current = positions; }, [positions]);
+
+  // ---------------------------------------------------------------- routing
+  const waypointsMap = useMemo(() => {
+    if (!editing) return undefined;
+    const m: Record<string, Waypoint[] | undefined> = {};
+    for (const k in edgeDraft) m[k] = edgeDraft[k].waypoints;
+    return m;
+  }, [editing, edgeDraft]);
+  // Routing and label placement depend on the graph's shape only, so they
+  // are keyed on `sig`, not on every topology poll.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const geoms = useMemo(() => routeEdges(graphRef.current, positions, { waypoints: waypointsMap, avoid: true }), [sig, positions, waypointsMap]);
+  const geomsRef = useRef(geoms);
+  geomsRef.current = geoms;
+  const labelTMap = useMemo(() => {
+    const m: Record<string, number | undefined> = {};
+    if (editing) for (const k in edgeDraft) if (typeof edgeDraft[k].label_t === 'number') m[k] = edgeDraft[k].label_t;
+    return m;
+  }, [editing, edgeDraft]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const labelSpots = useMemo(() => placeLabels(graphRef.current, positions, geoms, labelTMap), [sig, positions, geoms, labelTMap]);
+
 
   const [size, setSize] = useState({ w: 0, h: 0 });
   useLayoutEffect(() => {
@@ -482,18 +602,103 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
   // Stay fitted until the user pans, zooms or drags.
   useLayoutEffect(() => {
-    if (!ready || userMoved.current || morph) return;
+    if (!ready || userMoved.current || morph || geoMode) return;
     const v = fitFor(targetPos, bendsOf(geomsRef.current));
     if (v) setView(v);
     // targetPos is read on purpose only when the shape or size changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, sig, size.w, size.h, fitFor, setView, morph, loadTick]);
+  }, [ready, sig, size.w, size.h, fitFor, setView, morph, loadTick, geoMode]);
 
   const fitView = () => {
+    if (geoMode) { const v = geoFit(); if (v) animateTo(v); return; }
     userMoved.current = false;
     const v = fitFor(positionsRef.current, bendsOf(geomsRef.current));
     if (v) animateTo(v);
   };
+
+  // ---------------------------------------------------------------- geo actions
+  /** The view that just holds this node's country (else the located nodes, else the world). */
+  const geoFit = useCallback((): View | null => {
+    const g = geoRef.current;
+    if (!g || !size.w || !size.h) return null;
+    const kind = mapProjRef.current;
+    const country = selfCountry ? g.data.byIso.get(selfCountry) : undefined;
+    let box = country ? g.mod.mainBounds(kind, country.f) : null;
+    if (!box) {
+      const pts = Object.entries(geoBase.out).filter(([k]) => !geoBase.unlocated.has(k)).map(([, p]) => p);
+      if (pts.length > 1) {
+        box = [[Math.min(...pts.map((p) => p.x)), Math.min(...pts.map((p) => p.y))], [Math.max(...pts.map((p) => p.x)), Math.max(...pts.map((p) => p.y))]];
+      } else box = g.mod.worldBounds(kind);
+    }
+    const [[x0, y0], [x1, y1]] = box;
+    const availH = Math.max(40, size.h - TOP_RESERVE);
+    const w = Math.max(x1 - x0, 0.02), h = Math.max(y1 - y0, 0.02);
+    const k = Math.max(GEO_MIN_K, Math.min(GEO_MAX_K, Math.min((size.w - 2 * FIT_PAD) / w, (availH - 2 * FIT_PAD) / h)));
+    return { k, x: size.w / 2 - ((x0 + x1) / 2) * k, y: TOP_RESERVE + availH / 2 - ((y0 + y1) / 2) * k };
+  }, [size.w, size.h, selfCountry, geoBase]);
+
+  // Entering geo mode (or switching the projection) fits this node's
+  // country once its location is known.
+  const geoFitPending = useRef(false);
+  useLayoutEffect(() => {
+    if (!geoMode || !geo || !geoFitPending.current) return;
+    if (selfIP && !geoInfos.has(selfIP)) return; // still looking it up
+    const v = geoFit();
+    if (!v) return;
+    geoFitPending.current = false;
+    setView(v);
+  }, [geoMode, geo, geoFit, selfIP, geoInfos, setView, mapProj]);
+
+  const enterGeo = async () => {
+    if (geoLoading) return;
+    if (!geoRef.current) {
+      setGeoLoading(true);
+      try {
+        const mod = await import('./topo/geoMap');
+        const data = await mod.loadGeo(getBasePath());
+        setGeo({ mod, data });
+      } catch {
+        toast.error(t('nodes.geo.loadFailed'));
+        setGeoLoading(false);
+        return;
+      }
+      setGeoLoading(false);
+    }
+    setSelectedEdge(null);
+    setHoverEdge(null);
+    geoFitPending.current = true;
+    setGeoMode(true);
+  };
+  const leaveGeo = () => {
+    setGeoMode(false);
+    setSelectedEdge(null);
+    setHoverEdge(null);
+    userMoved.current = false;
+  };
+  // Back from geo mode: fit the layout again.
+  const wasGeo = useRef(false);
+  useLayoutEffect(() => {
+    if (wasGeo.current && !geoMode) {
+      const v = fitFor(positionsRef.current, bendsOf(geomsRef.current));
+      if (v) setView(v);
+    }
+    wasGeo.current = geoMode;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [geoMode]);
+  const setMapProj = (p: MapProj) => {
+    if (p === mapProj) return;
+    lsSet(MAPPROJ_STORE, p);
+    geoFitPending.current = true;
+    setMapProjState(p);
+  };
+
+  // States and provinces load once the map is zoomed in far enough.
+  useEffect(() => {
+    if (!geoMode || !geo || admin1 || admin1Loading.current) return;
+    if (geo.mod.zoomLevel(view.k) < 3) return;
+    admin1Loading.current = true;
+    geo.mod.loadAdmin1(getBasePath()).then(setAdmin1, () => { admin1Loading.current = false; });
+  }, [geoMode, geo, admin1, view.k]);
 
   // Canvas switch → morph + animated fit to the new layout.
   const prevKeyRef = useRef<string | null>(null);
@@ -537,6 +742,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     const el = wrapRef.current;
     if (!el) return { x: 0, y: 0 };
     const r = el.getBoundingClientRect();
+    // Geo mode draws on screen coordinates.
+    if (geoModeRef.current) return { x: cx - r.left, y: cy - r.top };
     const v = viewRef.current;
     return { x: (cx - r.left - v.x) / v.k, y: (cy - r.top - v.y) / v.k };
   }, [viewRef]);
@@ -650,7 +857,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     window.clearTimeout(hoverTimer.current);
     hoverTimer.current = window.setTimeout(() => setHoverEdge(null), 140);
   };
-  useEffect(() => { if (!isCustom) { setHoverEdge(null); setSelectedEdge(null); } }, [isCustom]);
+  useEffect(() => { if (!editing) { setHoverEdge(null); setSelectedEdge(null); } }, [editing]);
 
   // ---------------------------------------------------------------- editing (custom canvases)
   const [snap, setSnap] = useState(() => lsGet(SNAP_STORE) === '1');
@@ -712,7 +919,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
   const nodeClickSuppress = useRef(false);
   claimRef.current = (e: PointerEvent) => {
-    if (!isCustom || !activeCanvas) return false;
+    if (!editing || !editCanvas) return false;
     const target = e.target as Element;
     const touch = e.pointerType !== 'mouse';
     const wpEl = target.closest('[data-wp]');
@@ -764,7 +971,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       e.preventDefault();
       return true;
     }
-    const ndEl = target.closest('[data-node-key]');
+    // Geo mode: nodes stay at their location.
+    const ndEl = geoMode ? null : target.closest('[data-node-key]');
     if (ndEl) {
       const key = ndEl.getAttribute('data-node-key') || '';
       const startPos = positionsRef.current[key];
@@ -873,9 +1081,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     if (!onCanvas(e)) return;
     const target = e.target as Element;
     const wp = target.closest('[data-wp]');
-    if (wp && isCustom) { deleteWaypoint(wp.getAttribute('data-edge') || '', Number(wp.getAttribute('data-wp'))); return; }
+    if (wp && editing) { deleteWaypoint(wp.getAttribute('data-edge') || '', Number(wp.getAttribute('data-wp'))); return; }
     const lb = target.closest('[data-label-key]');
-    if (lb && isCustom) { resetLabel(lb.getAttribute('data-label-key') || ''); return; }
+    if (lb && editing) { resetLabel(lb.getAttribute('data-label-key') || ''); return; }
     // A node double-click stays a selection gesture; details open from the
     // path panel's button.
   };
@@ -1012,6 +1220,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // edit handles, on the canvas background.
   const svgRef = useRef<SVGSVGElement>(null);
   const saveImage = async () => {
+    if (geoModeRef.current) { saveGeoImage(); return; }
     const svg = svgRef.current;
     const g = svg?.querySelector(':scope > g');
     if (!svg || !g || !wrapRef.current) return;
@@ -1050,7 +1259,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
   const canvasMenu: CanvasMenuProps = {
     presets: PRESET_IDS.map((id) => ({ key: 'p:' + id, label: presetLabel(id) })),
-    customs: (list || []).map((c) => ({ key: 'c:' + c.id, label: canvasLabel(c) })),
+    customs: (list || []).filter((c) => c.id !== GEO_CANVAS).map((c) => ({ key: 'c:' + c.id, label: canvasLabel(c) })),
     activeKey: activeKey || '',
     activeLabel,
     isCustom,
@@ -1068,6 +1277,124 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     onDelete,
     onSaveImage: saveImage,
   };
+
+  // Dark Reader rewrites SVG stroke colours as text colours, which turns a
+  // background-coloured halo into a light box; under it, labels go
+  // without a halo (they already sit beside their line).
+  const [darkReader, setDarkReader] = useState(false);
+  useEffect(() => {
+    const html = document.documentElement;
+    const check = () => setDarkReader(html.hasAttribute('data-darkreader-mode') || html.hasAttribute('data-darkreader-scheme'));
+    check();
+    const mo = new MutationObserver(check);
+    mo.observe(html, { attributes: true, attributeFilter: ['data-darkreader-mode', 'data-darkreader-scheme'] });
+    return () => mo.disconnect();
+  }, []);
+  const darkReaderRef = useRef(darkReader);
+  darkReaderRef.current = darkReader;
+
+  // ---------------------------------------------------------------- geo basemap
+  const mapRef = useRef<HTMLCanvasElement | null>(null);
+  /** Map colours: the theme's tokens; fixed dark ones under Dark Reader
+   *  (it does not recolour canvas pixels). */
+  const geoPalette = useCallback((): Palette => {
+    if (darkReaderRef.current) {
+      return { outside: '#181a1b', ocean: '#1b2230', land: '#25282a', border: '#41474d', region: '#555c63', text: '#b4ada3', halo: '#181a1b', city: '#948d82' };
+    }
+    const cs = getComputedStyle(wrapRef.current || document.documentElement);
+    const v = (n: string, d: string) => cs.getPropertyValue(n).trim() || d;
+    return {
+      outside: v('--bg', '#f5f6fa'), ocean: v('--primary-light', '#eef1fd'), land: v('--surface', '#ffffff'),
+      border: v('--border', '#e4e7ed'), region: v('--text-muted', '#9098a8'), text: v('--text-secondary', '#5a6070'),
+      halo: v('--surface', '#ffffff'), city: v('--text-muted', '#9098a8'),
+    };
+  }, []);
+  const geoLangOf = (l: string) => (l.startsWith('zh') ? 'zh' : l.startsWith('ko') ? 'ko' : 'en') as 'en' | 'zh' | 'ko';
+  useEffect(() => {
+    const cv = mapRef.current;
+    if (!geoMode || !geo || !cv || !size.w || !size.h) return;
+    const id = requestAnimationFrame(() => {
+      const dpr = window.devicePixelRatio || 1;
+      if (cv.width !== Math.round(size.w * dpr) || cv.height !== Math.round(size.h * dpr)) {
+        cv.width = Math.round(size.w * dpr);
+        cv.height = Math.round(size.h * dpr);
+      }
+      const ctx = cv.getContext('2d');
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      geo.mod.drawBasemap(ctx, size.w, size.h, mapProj, view, geo.data, admin1, geoPalette(), geoLangOf(i18n.language));
+    });
+    return () => cancelAnimationFrame(id);
+  }, [geoMode, geo, admin1, view, size.w, size.h, mapProj, darkReader, i18n.language, geoPalette]);
+
+  const resetGeoLines = async () => {
+    const ok = await confirm({
+      title: t('nodes.geo.resetLines'),
+      message: t('nodes.geo.resetLinesConfirm'),
+      confirmText: t('app.reset'),
+      cancelText: t('app.cancel'),
+      danger: true,
+    });
+    if (!ok) return;
+    edgeDraftRef.current = {};
+    setEdgeDraft({});
+    saveCanvas({}, {});
+  };
+
+  // Geo mode's picture is the view as shown: the map with the graph on it.
+  const saveGeoImage = async () => {
+    const svg = svgRef.current;
+    const g = geoRef.current;
+    if (!svg || !g || !wrapRef.current || !size.w) return;
+    const scale = 2;
+    const under = document.createElement('canvas');
+    under.width = size.w * scale;
+    under.height = size.h * scale;
+    const ctx = under.getContext('2d');
+    if (!ctx) return;
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    g.mod.drawBasemap(ctx, size.w, size.h, mapProj, viewRef.current, g.data, admin1, geoPalette(), geoLangOf(i18n.language));
+    try {
+      await exportPng(svg, {
+        width: size.w,
+        height: size.h,
+        scale,
+        background: getComputedStyle(wrapRef.current).backgroundColor,
+        underlay: under,
+        fileName: imageFileName(`${selfName || 'hy2scale'}-map`),
+        adjust: (clone) => {
+          const root = clone as SVGSVGElement;
+          root.style.width = `${size.w}px`;
+          root.style.height = `${size.h}px`;
+          root.style.position = 'static';
+          const cg = root.querySelector(':scope > g') as SVGGElement | null;
+          if (cg) cg.style.opacity = '1';
+          root.querySelectorAll('.hy-topo-handle-layer').forEach((e) => e.remove());
+        },
+      });
+    } catch (err: any) {
+      toast.error(String(err?.message || err));
+    }
+  };
+
+  const projLabel = (p: MapProj) => t(`nodes.geo.proj.${p}`);
+  const geoMenuShell = { label: projLabel(mapProj), title: t('nodes.geo.menu'), testId: 'topo-geo-menu', icon: IconGlobe };
+  const geoMenuBody = (close: () => void) => (
+    <>
+      <div className="hy-topo-canvas-sec">{t('nodes.geo.projection')}</div>
+      {(['mercator', 'equalearth'] as MapProj[]).map((p) => (
+        <button key={p} type="button" role="menuitemradio" aria-checked={p === mapProj}
+          className={clsx('hy-dropdown-item', p === mapProj && 'current')} data-testid={`geo-proj-${p}`}
+          onClick={() => { close(); setMapProj(p); }}>
+          <span className="hy-dd-check">{p === mapProj && <IconCheck size={14} />}</span>
+          <span className="hy-topo-canvas-name">{projLabel(p)}</span>
+        </button>
+      ))}
+      <div className="hy-dd-divider" />
+      <button type="button" role="menuitem" className="hy-dropdown-item" data-testid="geo-save-image" onClick={() => { close(); saveGeoImage(); }}>{t('topo.saveImage')}</button>
+      <button type="button" role="menuitem" className="hy-dropdown-item danger" data-testid="geo-reset-lines" onClick={() => { close(); resetGeoLines(); }}>{t('nodes.geo.resetLines')}</button>
+    </>
+  );
 
   // ---------------------------------------------------------------- flow chevrons
   const flowPathRefs = useRef(new Map<string, SVGPathElement>());
@@ -1118,18 +1445,6 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // Dark Reader rewrites SVG stroke colours as text colours, which turns a
-  // background-coloured halo into a light box; under it, labels go
-  // without a halo (they already sit beside their line).
-  const [darkReader, setDarkReader] = useState(false);
-  useEffect(() => {
-    const html = document.documentElement;
-    const check = () => setDarkReader(html.hasAttribute('data-darkreader-mode') || html.hasAttribute('data-darkreader-scheme'));
-    check();
-    const mo = new MutationObserver(check);
-    mo.observe(html, { attributes: true, attributeFilter: ['data-darkreader-mode', 'data-darkreader-scheme'] });
-    return () => mo.disconnect();
-  }, []);
 
   function edgeWidth(e: GraphEdge): number {
     const ref = e.configuredMaxRate > 0 ? e.configuredMaxRate : maxByEdgeRef.current.get(e.key) || 0;
@@ -1137,9 +1452,10 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   }
 
   // ---------------------------------------------------------------- render
-  const k = view.k;
+  // Geo mode draws on screen coordinates: no canvas transform.
+  const k = geoMode ? 1 : view.k;
   const handleKeys = new Set<string>();
-  if (isCustom) {
+  if (editing) {
     if (hoverEdge) handleKeys.add(hoverEdge);
     if (selectedEdge) handleKeys.add(selectedEdge);
     const d = dragRef.current;
@@ -1147,7 +1463,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   }
 
   const grid = (() => {
-    if (!showGrid) return null;
+    if (!showGrid || geoMode) return null;
     const vw = size.w || 1000, vh = size.h || 600;
     const pad = 2 * GRID_STEP;
     const x0 = Math.floor((-view.x / k - pad) / GRID_STEP) * GRID_STEP;
@@ -1168,6 +1484,11 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     const g = geoms.get(e.key);
     if (!g) return;
     const fromN = nodes.get(e.from), toN = nodes.get(e.to);
+    if (geoMode) {
+      // Zoomed out, a line between dots that touch is left out.
+      const a = positions[e.from], b = positions[e.to];
+      if (a && b && Math.hypot(a.x - b.x, a.y - b.y) < nodeRadiusFor(fromN) + nodeRadiusFor(toN) + 6) return;
+    }
     const offline = e.disabled || !!fromN?.offline || !!toN?.offline || e.segmentLatencyMs < 0;
     const idx = activePathOrder.get(e.key);
     const onPath = idx !== undefined;
@@ -1208,7 +1529,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         {offline && (
           <g transform={`translate(${mid.x},${mid.y})`} className="hy-topo-edge-x"><path d="M -4 -4 L 4 4 M -4 4 L 4 -4" /></g>
         )}
-        {isCustom && (
+        {editing && (
           <path
             d={g.d}
             className="hy-topo-edge-hit"
@@ -1239,11 +1560,11 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       labelEls.push(
         <g
           key={e.key}
-          className={clsx('hy-topo-edge-label-group', isCustom && 'editable', typeof labelTMap[e.key] === 'number' && 'placed')}
-          data-label-key={isCustom ? e.key : undefined}
+          className={clsx('hy-topo-edge-label-group', editing && 'editable', typeof labelTMap[e.key] === 'number' && 'placed')}
+          data-label-key={editing ? e.key : undefined}
           style={{ transform: `translate(${spot.x}px, ${spot.y}px)` }}
         >
-          {isCustom && <rect className="hy-topo-edge-label-hit" x={spot.anchor === 'start' ? -2 : spot.anchor === 'end' ? -58 : -30} y={showLatency && showRate ? -15 : -7} width={60} height={showLatency && showRate ? 30 : 16} />}
+          {editing && <rect className="hy-topo-edge-label-hit" x={spot.anchor === 'start' ? -2 : spot.anchor === 'end' ? -58 : -30} y={showLatency && showRate ? -15 : -7} width={60} height={showLatency && showRate ? 30 : 16} />}
           {lines.map((l, i) => (
             <g key={i}>
               {!darkReader && <text x={0} y={l.y} textAnchor={spot.anchor} className="hy-topo-edge-label-halo">{l.body}</text>}
@@ -1286,7 +1607,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         data-node-key={n.key}
         transform={`translate(${p.x},${p.y})`}
         className={clsx(
-          'hy-topo-dot', n.isSelf && 'self', n.disabled && 'disabled', n.offline && !n.disabled && 'offline',
+          'hy-topo-dot', n.isSelf && 'self', geoMode && geoBase.unlocated.has(n.key) && 'unlocated', n.disabled && 'disabled', n.offline && !n.disabled && 'offline',
           n.nested && 'nested', n.native && 'native', n.restricted && 'restricted', n.incompatible && 'bad', selectedKey === n.key && 'selected',
         )}
       >
@@ -1412,20 +1733,23 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // ---------------------------------------------------------------- chrome
   // ResponsiveActions closes its ⋯ menu on Escape.
   const closeMore = () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-  const more: ReactNode = narrow ? <CanvasSubmenu {...canvasMenu} onDone={closeMore} /> : null;
+  const more: ReactNode = narrow
+    ? (geoMode ? <TopoSubmenu {...geoMenuShell} onDone={closeMore}>{(close) => geoMenuBody(close)}</TopoSubmenu> : <CanvasSubmenu {...canvasMenu} onDone={closeMore} />)
+    : null;
   const actionsEl = typeof actions === 'function' ? actions(more) : actions;
 
   return (
     <div
       ref={wrapRef}
-      className={clsx('hy-topo-graph', full && 'is-full', isCustom ? 'is-custom' : 'is-preset', (dragging || !!morph) && 'is-busy', darkReader && 'is-dr')}
+      className={clsx('hy-topo-graph', full && 'is-full', editing ? 'is-custom' : 'is-preset', geoMode && 'is-geo', (dragging || !!morph) && 'is-busy', darkReader && 'is-dr')}
       data-testid="nodes-topo"
       data-canvas={activeKey || ''}
       onClick={onCanvasClick}
       onDoubleClick={onCanvasDoubleClick}
     >
+      {geoMode && <canvas ref={mapRef} className="hy-topo-geo-map" data-testid="topo-geo-map" />}
       <svg ref={svgRef} className="hy-topo-graph-svg" aria-hidden="true">
-        <g transform={`translate(${view.x},${view.y}) scale(${k})`} style={{ opacity: ready ? 1 : 0, transition: 'opacity 180ms ease-out' }}>
+        <g transform={geoMode ? undefined : `translate(${view.x},${view.y}) scale(${k})`} style={{ opacity: ready ? 1 : 0, transition: 'opacity 180ms ease-out' }}>
           {grid}
           <g className="hy-topo-edges">{edgeEls}</g>
           <g className="hy-topo-labels">{labelEls}</g>
@@ -1445,7 +1769,12 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
           <button type="button" className="iface-topo-tool" onClick={() => zoomBy(1.2)} title={t('nodes.graph.zoomIn')} data-testid="topo-zoom-in">
             <IconZoomIn size={14} />
           </button>
-          {!narrow && <CanvasMenuButton {...canvasMenu} />}
+          {!narrow && (geoMode ? <TopoMenuButton {...geoMenuShell}>{(close) => geoMenuBody(close)}</TopoMenuButton> : <CanvasMenuButton {...canvasMenu} />)}
+          <button type="button" className={clsx('iface-topo-tool', geoMode && 'on')} onClick={geoMode ? leaveGeo : enterGeo}
+            disabled={!geoAvailable || geoLoading} aria-pressed={geoMode}
+            title={!geoAvailable ? t('nodes.geo.needDb') : geoMode ? t('nodes.geo.leave') : t('nodes.geo.enter')} data-testid="topo-geo">
+            <IconGlobe size={14} />
+          </button>
         </div>
         {actionsEl && <div className="hy-topo-graph-actions" data-testid="topo-actions">{actionsEl}</div>}
       </div>

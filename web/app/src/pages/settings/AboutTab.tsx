@@ -25,6 +25,8 @@ const GEO_DATA: { key: string; match: (d: GeoDatabase) => boolean; notice: strin
   { key: 'maxmind', match: (d) => /^(geolite2|geoip2)/i.test(d.type), notice: 'This product includes GeoLite2 data created by MaxMind', href: 'https://www.maxmind.com', license: 'GeoLite2 EULA' },
 ];
 
+const MAP_DATA = { key: 'naturalearth', notice: 'Made with Natural Earth', href: 'https://www.naturalearthdata.com', license: 'Public domain' };
+
 /** A Go module version; a pseudo-version (an untagged commit) as "hash · date". */
 function modVersion(v: string) {
   const m = /-(?:0\.)?(\d{4})(\d{2})(\d{2})\d{6}-([0-9a-f]{12})$/.exec(v);
@@ -37,7 +39,8 @@ export default function AboutTab() {
   const { data } = useQuery({ queryKey: ['buildInfo'], queryFn: api.getBuildInfo, staleTime: 60_000 });
   const [list, setList] = useState<'natives' | 'go'>('natives');
   const { data: geo } = useGeoStatus();
-  const geoData = GEO_DATA.filter((g) => (geo?.databases || []).some(g.match));
+  // The bundled world map (topology map view) is always credited.
+  const geoData = [...GEO_DATA.filter((g) => (geo?.databases || []).some(g.match)), MAP_DATA];
   if (!data) return null;
 
   const repo = data.repository;

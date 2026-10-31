@@ -33,6 +33,8 @@ export interface ExportOptions {
   background: string;
   fileName: string;
   scale?: number;
+  /** Drawn first, stretched to the image (e.g. a map under the graph). */
+  underlay?: CanvasImageSource;
   /** Adjusts the styled clone before it is serialised (root first). */
   adjust?: (clone: Element) => void;
 }
@@ -66,6 +68,7 @@ export async function exportPng(el: Element, o: ExportOptions) {
   ctx.fillStyle = o.background;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   ctx.scale(k, k);
+  if (o.underlay) ctx.drawImage(o.underlay, 0, 0, w, h);
   ctx.drawImage(img, 0, 0, w, h);
   const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/png'));
   if (!blob) throw new Error('image encoding failed');

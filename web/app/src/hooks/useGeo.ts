@@ -81,6 +81,31 @@ export function useGeo(ip: string | undefined, uiLang: string): GeoInfo | undefi
   return enabled ? cacheOf(lang).data.get(key) : undefined;
 }
 
+/** Geo information of several IPs at once (absent entries: not known yet). */
+export function useGeoMany(ips: string[], uiLang: string): Map<string, GeoInfo> {
+  const { data: status } = useGeoStatus();
+  const lang = geoLang(uiLang);
+  const keys = [...new Set(ips.filter(Boolean).map(plainIP))].sort();
+  const sig = keys.join(',');
+  const enabled = keys.length > 0 && !!status?.available;
+  const [, bump] = useState(0);
+  useEffect(() => {
+    if (!enabled) return;
+    const c = cacheOf(lang);
+    const f = () => bump((n) => n + 1);
+    c.subs.add(f);
+    keys.forEach((k) => request(k, lang));
+    return () => { c.subs.delete(f); };
+    // keys is derived from sig
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, sig, lang]);
+  const out = new Map<string, GeoInfo>();
+  if (!enabled) return out;
+  const data = cacheOf(lang).data;
+  for (const k of keys) { const g = data.get(k); if (g) out.set(k, g); }
+  return out;
+}
+
 /** Strips the port of "ip:port" / "[v6]:port"; returns the bare address. */
 export function hostOf(addr: string | undefined): string {
   if (!addr) return '';

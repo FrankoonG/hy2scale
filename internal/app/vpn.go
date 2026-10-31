@@ -1,6 +1,8 @@
 package app
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -63,6 +65,91 @@ type OpenVPNConfig struct {
 	Pool6   string `yaml:"pool6,omitempty" json:"pool6"` // IPv6 prefix, e.g. "fd00:8::1/64"; "" = default
 	CertID  string `yaml:"cert_id" json:"cert_id"`       // CA cert ID: the server cert is signed from it
 	MTU     int    `yaml:"mtu" json:"mtu"`               // tunnel MTU, default 1400
+
+	ListenIP string   `yaml:"listen_ip,omitempty" json:"listen_ip"` // bind address; "" = all
+	DNS      []string `yaml:"dns,omitempty" json:"dns"`             // pushed DNS servers; empty = the node's VPN DNS
+	// Control channel protection: "" (none), "tls-crypt" or "tls-auth", with
+	// an OpenVPN static key (generated when empty) that profiles carry.
+	Control   string `yaml:"control,omitempty" json:"control"`
+	StaticKey string `yaml:"static_key,omitempty" json:"-"`
+	Auth      string `yaml:"auth,omitempty" json:"auth"` // tls-auth HMAC digest: SHA1 (default) | SHA256
+	// Shape pads downstream packets so inner handshakes keep no size pattern.
+	Shape bool `yaml:"shape,omitempty" json:"shape"`
+
+	// Client profile.
+	FullTunnel   *bool    `yaml:"full_tunnel,omitempty" json:"full_tunnel"`     // all traffic into the tunnel (default true)
+	TunnelIPv6   *bool    `yaml:"tunnel_ipv6,omitempty" json:"tunnel_ipv6"`     // IPv6 into the tunnel too (default true)
+	Routes       []string `yaml:"routes,omitempty" json:"routes"`               // split tunnel: networks through the tunnel
+	ProfileExtra string   `yaml:"profile_extra,omitempty" json:"profile_extra"` // lines appended to profiles
+
+	// RotateKey (API only) replaces the static key.
+	RotateKey bool `yaml:"-" json:"rotate_key,omitempty"`
+}
+
+// OpenVPN control channel modes.
+const (
+	OpenVPNTLSCrypt = "tls-crypt"
+	OpenVPNTLSAuth  = "tls-auth"
+)
+
+func boolOr(p *bool, def bool) bool {
+	if p == nil {
+		return def
+	}
+	return *p
+}
+
+// NewOpenVPNStaticKey is a fresh OpenVPN static key ("OpenVPN Static key V1":
+// 256 random bytes as 16 lines of 32 hex digits).
+func NewOpenVPNStaticKey() string {
+	var raw [256]byte
+	rand.Read(raw[:])
+	h := hex.EncodeToString(raw[:])
+	var b strings.Builder
+	b.WriteString("-----BEGIN OpenVPN Static key V1-----\n")
+	for i := 0; i < len(h); i += 32 {
+		b.WriteString(h[i : i+32])
+		b.WriteByte('\n')
+	}
+	b.WriteString("-----END OpenVPN Static key V1-----\n")
+	return b.String()
+}
+
+// Check validates the settings an operator enters (pools are checked when
+// the server starts).
+func (c *OpenVPNConfig) Check() error {
+	if c.Port < 0 || c.Port > 65535 {
+		return errors.New("invalid port")
+	}
+	if c.ListenIP != "" {
+		if _, err := netip.ParseAddr(c.ListenIP); err != nil {
+			return fmt.Errorf("invalid listen address %q", c.ListenIP)
+		}
+	}
+	for _, d := range c.DNS {
+		if _, err := netip.ParseAddr(strings.TrimSpace(d)); err != nil {
+			return fmt.Errorf("invalid DNS server %q", d)
+		}
+	}
+	switch c.Control {
+	case "", OpenVPNTLSCrypt, OpenVPNTLSAuth:
+	default:
+		return fmt.Errorf("unknown control channel protection %q", c.Control)
+	}
+	switch strings.ToUpper(c.Auth) {
+	case "", "SHA1", "SHA256":
+	default:
+		return fmt.Errorf("unsupported auth digest %q (SHA1, SHA256)", c.Auth)
+	}
+	for _, r := range c.Routes {
+		if _, err := netip.ParsePrefix(strings.TrimSpace(r)); err != nil {
+			return fmt.Errorf("invalid route %q", r)
+		}
+	}
+	if strings.ContainsAny(c.ProfileExtra, "<>") {
+		return errors.New("extra profile lines cannot contain inline blocks")
+	}
+	return nil
 }
 
 // Default IPv6 pools. Every client gets an IPv4 and an IPv6 address; which
@@ -528,14 +615,41 @@ func (a *App) StartOpenVPN(cfg OpenVPNConfig) error {
 		}
 		return a.userRoute(user, "openvpn"), true
 	}
+	dns := a.vpnDNS()
+	if len(cfg.DNS) > 0 {
+		dns = nil
+		for _, d := range cfg.DNS {
+			if ip := net.ParseIP(strings.TrimSpace(d)); ip != nil {
+				dns = append(dns, ip)
+			}
+		}
+	}
+	var tlsCrypt, tlsAuth []byte
+	switch cfg.Control {
+	case OpenVPNTLSCrypt:
+		tlsCrypt = []byte(cfg.StaticKey)
+	case OpenVPNTLSAuth:
+		tlsAuth = []byte(cfg.StaticKey)
+	}
+	shape := 0
+	if cfg.Shape {
+		shape = dataplane.DefaultShapeBytes
+	}
+	bindIP := net.ParseIP(cfg.ListenIP)
 	err = a.startVPN("openvpn", []netip.Addr{gw, gw6}, cfg.mtuVal(), resolve, func(n *vpnNet) (vpnServer, error) {
 		return openvpn.NewServer(openvpn.ServerConfig{
 			CA:         caPEM,
 			Cert:       certPEM,
 			Key:        keyPEM,
 			ListenPort: cfg.port(),
+			TLSCrypt:   tlsCrypt,
+			TLSAuth:    tlsAuth,
+			Auth:       cfg.Auth,
+			// profiles use key-direction 1
+			KeyDirection: 1,
+			Shape:        shape,
 			ListenPacket: func(port int) (*dataplane.PacketConn, error) {
-				c, err := sockmark.ListenUDP("udp", &net.UDPAddr{Port: port})
+				c, err := sockmark.ListenUDP("udp", &net.UDPAddr{IP: bindIP, Port: port})
 				if err != nil {
 					return nil, err
 				}
@@ -543,7 +657,7 @@ func (a *App) StartOpenVPN(cfg OpenVPNConfig) error {
 			},
 			Pool:   cidr,
 			Pool6:  cidr6,
-			DNS:    a.vpnDNS(),
+			DNS:    dns,
 			MTU:    cfg.mtuVal(),
 			Device: n.device(),
 			VerifyUser: func(user, pass string) bool {
@@ -627,10 +741,45 @@ func (a *App) OpenVPNProfile(endpoint string) (string, error) {
 	fmt.Fprintf(&b, "tun-mtu %d\n", cfg.mtuVal())
 	// both families into the tunnel: the server pushes an IPv6 address and
 	// gateway, and IPv6 left outside the tunnel would leak on dual-stack clients
-	b.WriteString("remote-cert-tls server\nauth-user-pass\nredirect-gateway def1 ipv6\n")
+	b.WriteString("remote-cert-tls server\nauth-user-pass\n")
+	ipv6 := boolOr(cfg.TunnelIPv6, true)
+	if boolOr(cfg.FullTunnel, true) {
+		if ipv6 {
+			b.WriteString("redirect-gateway def1 ipv6\n")
+		} else {
+			b.WriteString("redirect-gateway def1\n")
+		}
+	} else {
+		// split tunnel: only these networks go through the tunnel
+		for _, r := range cfg.Routes {
+			p, err := netip.ParsePrefix(strings.TrimSpace(r))
+			if err != nil {
+				continue
+			}
+			if p.Addr().Is4() {
+				m := net.CIDRMask(p.Bits(), 32)
+				fmt.Fprintf(&b, "route %s %s\n", p.Masked().Addr(), net.IP(m).String())
+			} else if ipv6 {
+				fmt.Fprintf(&b, "route-ipv6 %s\n", p.Masked())
+			}
+		}
+	}
 	b.WriteString("data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305\n")
+	if cfg.Control == OpenVPNTLSAuth && cfg.Auth != "" {
+		fmt.Fprintf(&b, "auth %s\n", strings.ToUpper(cfg.Auth))
+	}
+	if extra := strings.TrimSpace(cfg.ProfileExtra); extra != "" {
+		b.WriteString(strings.ReplaceAll(extra, "\r", ""))
+		b.WriteByte('\n')
+	}
 	b.WriteString("verb 3\n<ca>\n")
 	b.WriteString(strings.TrimSpace(string(ca)))
 	b.WriteString("\n</ca>\n")
+	switch cfg.Control {
+	case OpenVPNTLSCrypt:
+		b.WriteString("<tls-crypt>\n" + strings.TrimSpace(cfg.StaticKey) + "\n</tls-crypt>\n")
+	case OpenVPNTLSAuth:
+		b.WriteString("key-direction 1\n<tls-auth>\n" + strings.TrimSpace(cfg.StaticKey) + "\n</tls-auth>\n")
+	}
 	return b.String(), nil
 }
