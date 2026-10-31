@@ -4,6 +4,7 @@ import { Autocomplete, FormGroup, SortableList } from '@hy2scale/ui';
 import { useExitPaths } from '@/hooks/useExitPaths';
 import { useNodeStore } from '@/store/node';
 import type { TopologyNode } from '@/api';
+import { findPaths } from '@/components/topo/graphModel';
 
 export interface ExitPathValue {
   paths: string[];
@@ -130,6 +131,7 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
 
   const topology = useNodeStore((s) => s.topology);
   const selfId = useNodeStore((s) => s.node?.node_id);
+  const selfName = useNodeStore((s) => s.node?.name);
 
   const removePath = useCallback((id: number) => {
     setItems((prev) => {
@@ -156,6 +158,22 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
   const singleMultiConn = filledItems.length === 1 && pathHasMultiConn(topology, filledItems[0].value, selfId);
   const singleOnly = !hasMultiple && !singleMultiConn;
 
+  // One bare node entered and the topology knows more routes to it (the
+  // routes the topology's path panel steps through): offer them all.
+  const completion = (() => {
+    if (filledItems.length !== 1 || !selfId) return null;
+    const name = filledItems[0].value.trim();
+    if (!name || name.includes('/') || name === selfId || name === selfName) return null;
+    const routes = findPaths(topology, name, selfId, selfName).map((r) => r.segs.join('/'));
+    const all = Array.from(new Set(routes));
+    return all.length > 1 || (all.length === 1 && all[0] !== name) ? all : null;
+  })();
+  const completePaths = () => {
+    if (!completion) return;
+    pendingModeOverrideRef.current = completion.length > 1 ? (mode || 'quality') : mode;
+    setItems(toItems(completion));
+  };
+
   // Aggregate requires all paths to reach the same final exit node
   let aggregateDisabled = singleOnly;
   if (hasMultiple && !aggregateDisabled) {
@@ -179,6 +197,12 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
           <input type="radio" name="exitMode" checked={mode === 'aggregate'} onChange={() => setMode('aggregate')} disabled={aggregateDisabled} />
           {t('exit.modeSpeed')}
         </label>
+        {completion && (
+          <button type="button" className="exit-mode-fill" onClick={completePaths} data-testid="exit-complete-paths"
+            title={t('exit.completePathsHint', { count: completion.length })}>
+            {t('exit.completePaths')}
+          </button>
+        )}
       </div>
 
       {/* Path inputs. The radios keep name="exitMode" (UI regression driver);

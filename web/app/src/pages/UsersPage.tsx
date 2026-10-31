@@ -12,8 +12,7 @@ import { ListScope } from '@/hooks/useDeselectOnBlankClick';
 import { isPast } from '@/utils/date';
 import { ExitViaCell, exitViaSortValue } from '@/components/ExitViaCell';
 import UserModal from '@/components/UserModal';
-import UserLinksModal from '@/components/UserLinksModal';
-import UserDetailModal from '@/components/UserDetailModal';
+import UserInfoModal, { type UserInfoTab } from '@/components/UserInfoModal';
 import { useImportExport } from '@/components/ImportExport';
 import ResponsiveActions from '@/components/ResponsiveActions';
 import UsageMeter from '@/components/UsageMeter';
@@ -30,8 +29,8 @@ export default function UsersPage() {
   const queryClient = useQueryClient();
 
   const edit = useModalState<string | null>();      // user id; null = new user
-  const detail = useModalState<UserConfig>();       // row click
-  const links = useModalState<UserConfig>();        // username click
+  // row click: details; username click: proxies (share links)
+  const info = useModalState<{ user: UserConfig; tab: UserInfoTab }>();
 
   const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: api.getUsers, refetchInterval: 5000 });
   const { data: conflicts = {} } = useQuery<PasswordConflicts>({ queryKey: ['userConflicts'], queryFn: api.getUserConflicts, refetchInterval: 5000 });
@@ -47,7 +46,7 @@ export default function UsersPage() {
   }, [sessions]);
   // The dialog follows the live user row (traffic etc. keep polling); the
   // snapshot taken on open covers the close animation after a delete.
-  const detailUser = (detail.data && users.find((u) => u.id === detail.data!.id)) || detail.data || null;
+  const infoUser = (info.data && users.find((u) => u.id === info.data!.user.id)) || info.data?.user || null;
 
   const handleKick = useCallback(async (s: Session) => {
     try {
@@ -90,7 +89,7 @@ export default function UsersPage() {
               <IconCircleAlert size={14} className="alert-mark" />
             </Tooltip>
           )}
-          <a className="peer-link peer-name-cell" onClick={(e) => links.show(u, e)}>{u.username}</a>
+          <a className="peer-link peer-name-cell" onClick={(e) => { e.stopPropagation(); info.show({ user: u, tab: 'proxies' }, e); }}>{u.username}</a>
         </span>
       ),
     },
@@ -163,7 +162,7 @@ export default function UsersPage() {
             rowClassName={(u) => !u.enabled ? 'disabled-row' : undefined}
             emptyText={boldMarkup(t('users.noUsers'))}
             selection={selection}
-            onRowClick={(u, _i, origin) => detail.show(u, origin)}
+            onRowClick={(u, _i, origin) => info.show({ user: u, tab: 'details' }, origin)}
           />
         </ListScope>
       </Card>
@@ -173,15 +172,16 @@ export default function UsersPage() {
         editing={edit.data ? users.find((u) => u.id === edit.data) || null : null}
       />
 
-      <UserLinksModal {...links.modalProps} user={links.data ?? null} />
       {ie.modal}
 
-      <UserDetailModal
-        {...detail.modalProps}
-        user={detailUser}
-        sessions={(detailUser && sessionsByUser.get(detailUser.username)) || noSessions}
-        conflicts={detailUser ? conflicts[detailUser.username] : undefined}
+      <UserInfoModal
+        {...info.modalProps}
+        user={infoUser}
+        tab={info.data?.tab ?? 'details'}
+        sessions={(infoUser && sessionsByUser.get(infoUser.username)) || noSessions}
+        conflicts={infoUser ? conflicts[infoUser.username] : undefined}
         onKick={handleKick}
+        onEdit={(u, from) => { info.close(); edit.show(u.id, from); }}
       />
     </div>
   );

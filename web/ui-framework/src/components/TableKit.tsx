@@ -202,14 +202,16 @@ export function ColumnMenu<C extends ColumnPrefsSpec>({ prefs }: { prefs: Return
 
 /** The pager at the bottom of a panel. Hidden when everything fits on the
  *  smallest page. */
-export function Pager({ total, size, onSize, pager }: {
+export function Pager({ total, size, onSize, pager, sizes = PAGE_SIZES }: {
   total: number;
   size: number;
   onSize: (n: number) => void;
-  pager: ReturnType<typeof usePager>;
+  pager: { page: number; pages: number; setPage: (page: number) => void };
+  /** Page sizes offered (default PAGE_SIZES). */
+  sizes?: number[];
 }) {
   const L = useUiLabels();
-  if (total <= PAGE_SIZES[0]) return null;
+  if (total <= sizes[0]) return null;
   const { page, pages, setPage } = pager;
   const nums: (number | '…')[] = [];
   for (let p = 1; p <= pages; p++) {
@@ -222,7 +224,7 @@ export function Pager({ total, size, onSize, pager }: {
       <div className="hy-pager-size">
         <span>{L.perPage}</span>
         <Select className="hy-pager-select" value={String(size)} onChange={(e) => onSize(Number(e.target.value))}
-          options={PAGE_SIZES.map((n) => ({ value: String(n), label: String(n) }))} />
+          options={sizes.map((n) => ({ value: String(n), label: String(n) }))} />
       </div>
       <div className="hy-pager-pages">
         <button type="button" className="hy-pager-btn" disabled={page <= 1} aria-label={L.prev} onClick={() => setPage(page - 1)}><IconChevronLeft size={14} /></button>

@@ -27,6 +27,8 @@
 .exit-mode-opt input[type="radio"]{display:none}
 .exit-mode-opt:has(input:disabled){opacity:0.4;cursor:not-allowed;pointer-events:none}
 .exit-mode-opt:has(input:disabled):has(input:checked){opacity:1}
+.exit-mode-fill{margin-left:auto;padding:4px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--primary);font:inherit;font-size:12px;cursor:pointer;transition:all .15s}
+.exit-mode-fill:hover{border-color:var(--primary);background:var(--primary-light)}
 
 /* Login language picker: icon, current value, caret */
 .hy-pref-btn{border:none;background:none;cursor:pointer;display:flex;align-items:center;gap:4px;color:var(--text-secondary);font-size:13px;font-weight:500;font-family:var(--font);padding:4px 0}
