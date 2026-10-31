@@ -18,6 +18,8 @@ export interface UiLabels {
   confirm: string;
   cancel: string;
   replaceFile: string;
+  search: string;
+  noResults: string;
 }
 
 const defaults: UiLabels = {
@@ -35,6 +37,8 @@ const defaults: UiLabels = {
   confirm: 'Confirm',
   cancel: 'Cancel',
   replaceFile: 'Click or drop another file to replace',
+  search: 'Search',
+  noResults: 'No matches',
 };
 
 const Ctx = createContext<UiLabels>(defaults);

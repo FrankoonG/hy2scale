@@ -133,3 +133,27 @@
 .hy-autocomplete-list{z-index:10000;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);max-height:180px;overflow-y:auto;box-shadow:var(--shadow-pop)}
 .hy-autocomplete-item{padding:7px 10px;font-size:13px;cursor:pointer;font-family:var(--mono)}
 .hy-autocomplete-item:hover,.hy-autocomplete-item.highlighted{background:var(--primary-light);color:var(--primary)}
+
+/* MultiSelect */
+.hy-multi-wrap{min-width:0}
+.hy-multi{gap:6px;min-height:36px;padding:4px 10px 4px 6px}
+.hy-multi.disabled{opacity:.6;cursor:not-allowed}
+.hy-multi-tags{position:relative;flex:1;min-width:0;display:flex;flex-wrap:nowrap;align-items:center;gap:4px;overflow:hidden}
+.hy-multi-tags>.hy-select-label{padding-left:6px}
+.hy-multi-tag{display:inline-flex;align-items:center;gap:2px;flex:none;max-width:160px;height:24px;padding:0 4px 0 8px;border-radius:var(--radius-sm);background:var(--primary-light);color:var(--primary);font-size:12px;line-height:1}
+.hy-multi-tag-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hy-multi-tag-x{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;padding:0;border:none;border-radius:3px;background:none;color:inherit;opacity:.7;cursor:pointer}
+.hy-multi-tag-x:hover{opacity:1;background:var(--surface)}
+.hy-multi-more{padding:0 8px;background:var(--bg);color:var(--text-secondary)}
+.hy-dropdown.hy-multi-dropdown{display:flex;flex-direction:column;min-width:0;padding:0;overflow:hidden;z-index:10000}
+.hy-multi-search{display:flex;align-items:center;gap:6px;flex:none;padding:8px 10px;border-bottom:1px solid var(--border-light);color:var(--text-muted)}
+.hy-multi-search input{flex:1;min-width:0;border:none;outline:none;background:none;color:var(--text);font:inherit;font-size:13px}
+.hy-multi-list{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:4px 0}
+.hy-multi-item{display:flex;align-items:center;gap:8px;padding:7px 12px;font-size:13px;color:var(--text);cursor:pointer}
+.hy-multi-item:hover{background:var(--primary-light)}
+.hy-multi-item.on .hy-multi-item-label{color:var(--primary);font-weight:600}
+.hy-multi-item.disabled{opacity:.5;cursor:not-allowed}
+.hy-multi-item input{flex:none;margin:0;accent-color:var(--primary)}
+.hy-multi-item-label{white-space:pre;overflow:hidden;text-overflow:ellipsis}
+.hy-multi-item-detail{margin-left:auto;padding-left:12px;font-size:12px;color:var(--text-muted);white-space:nowrap}
+.hy-multi-empty{padding:10px 12px;font-size:13px;color:var(--text-muted)}

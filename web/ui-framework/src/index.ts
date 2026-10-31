@@ -26,6 +26,8 @@ export type { FileDropZoneProps } from './components/FileDropZone';
 export { FormGroup, FormGrid, FormStack, FormRow, Hint } from './components/FormGroup';
 export type { FormGroupProps, FormGridProps, FormStackProps } from './components/FormGroup';
 export { Autocomplete } from './components/Autocomplete';
+export { MultiSelect } from './components/MultiSelect';
+export type { MultiSelectProps, MultiSelectOption } from './components/MultiSelect';
 export type { AutocompleteProps } from './components/Autocomplete';
 export { SegmentedControl } from './components/SegmentedControl';
 export type { SegmentedControlProps, SegmentedItem } from './components/SegmentedControl';

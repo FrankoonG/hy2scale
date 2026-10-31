@@ -62,8 +62,10 @@ export function uploadGeoDatabase(file: File, onProgress?: (pct: number) => void
 export interface AuditRecord {
   id: string; start: number; end: number; partial?: boolean;
   proto: 'tcp' | 'udp';
-  inbound: string; user?: string; src?: string; src_node?: string;
-  dst?: string; dst_host?: string; dst_ip?: string; rule?: string;
+  inbound: string; user?: string; src?: string; src_node?: string; in_iface?: string; src_mac?: string;
+  dst?: string; dst_host?: string; dst_ip?: string;
+  /** Policy chain text, the policy set that decided (id), its terminal and why. */
+  rule?: string; policy?: string; terminal?: 'deny' | 'exit' | 'iface' | 'default'; reason?: string;
   exit?: 'direct' | 'node' | 'blocked'; exit_path?: string; exit_mode?: string;
   egress_iface?: string; egress_src?: string;
   up?: number; down?: number; result?: 'ok' | 'error' | 'refused' | 'blocked'; error?: string;

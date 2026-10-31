@@ -49,14 +49,13 @@ export default function AuditPage() {
   const [range, setRange] = useStoredState<Range>('hy-audit-range', '24h');
   const [auto, setAuto] = useStoredState('hy-audit-auto', false, boolCodec);
   const [q, setQ] = useState('');
-  const [user, setUser] = useState('');
   const [src, setSrc] = useState('');
   const [dst, setDst] = useState('');
   const [inbound, setInbound] = useState('');
   const [exit, setExit] = useState('');
   const [proto, setProto] = useState('');
   const [result, setResult] = useState('');
-  const text = useDebounced({ q, user, src, dst }, 400);
+  const text = useDebounced({ q, src, dst }, 400);
 
   const [records, setRecords] = useState<AuditRecord[]>([]);
   const [cursor, setCursor] = useState<string | undefined>();
@@ -70,7 +69,7 @@ export default function AuditPage() {
     const now = Date.now();
     return {
       from: RANGE_MS[range] ? now - RANGE_MS[range] : undefined,
-      q: text.q.trim(), user: text.user.trim(), src: text.src.trim(), dst: text.dst.trim(),
+      q: text.q.trim(), src: text.src.trim(), dst: text.dst.trim(),
       inbound, exit, proto, result,
     };
     // `tick` re-anchors the time window on refresh
@@ -112,10 +111,10 @@ export default function AuditPage() {
     { key: 'dur', title: t('audit.duration'), render: (r) => <span className="nowrap">{fmtDur(Math.max(0, r.end - r.start))}{r.partial ? ' …' : ''}</span>, sortValue: (r) => r.end - r.start },
     { key: 'proto', title: t('audit.proto'), render: (r) => <span className="mono">{r.proto.toUpperCase()}</span> },
     { key: 'inbound', title: t('audit.inbound'), render: (r) => <Badge variant="muted">{t(`audit.in.${r.inbound}`, { defaultValue: r.inbound })}</Badge> },
-    { key: 'user', title: t('audit.user'), render: (r) => r.user || <span className="muted">—</span>, sortValue: (r) => r.user || '' },
-    { key: 'src', title: t('audit.source'), render: (r) => <Source r={r} /> },
+    { key: 'src', title: t('audit.source'), render: (r) => <Source r={r} />, sortValue: (r) => r.user || r.src || '' },
     { key: 'dst', title: t('audit.destination'), render: (r) => <Dest r={r} />, sortValue: (r) => r.dst_host || r.dst || '' },
-    { key: 'rule', title: t('audit.rule'), render: (r) => r.rule || <span className="muted">—</span>, defaultHidden: true },
+    { key: 'policy', title: t('audit.policy'), render: (r) => <PolicyCell r={r} />, sortValue: (r) => r.rule || '' },
+    { key: 'link', title: t('audit.link'), render: (r) => <Link r={r} />, defaultHidden: true },
     { key: 'exit', title: t('audit.exit'), render: (r) => <ExitCell r={r} /> },
     { key: 'egress', title: t('audit.egress'), render: (r) => <Egress r={r} />, defaultHidden: true },
     { key: 'up', title: '↑', menuTitle: t('audit.up'), render: (r) => <span className="nowrap num">{fmtBytes(r.up || 0)}</span>, sortValue: (r) => r.up || 0, className: 'num' },
@@ -147,8 +146,7 @@ export default function AuditPage() {
           <Button onClick={() => { window.location.href = auditExportUrl(filter, 'csv'); }} data-testid="audit-export">{t('audit.exportCsv')}</Button>
         </div>
         <div className="audit-filters">
-          <Input value={user} onChange={(e) => setUser(e.target.value)} placeholder={t('audit.user')} data-testid="audit-user" />
-          <Input value={src} onChange={(e) => setSrc(e.target.value)} placeholder={t('audit.source')} data-testid="audit-src" />
+          <Input value={src} onChange={(e) => setSrc(e.target.value)} placeholder={t('audit.sourceFilter')} data-testid="audit-src" />
           <Input value={dst} onChange={(e) => setDst(e.target.value)} placeholder={t('audit.destination')} data-testid="audit-dst" />
           {sel(t('audit.inbound'), inbound, setInbound, INBOUNDS.map((k) => ({ value: k, label: t(`audit.in.${k}`) })), 'audit-inbound')}
           {sel(t('audit.exit'), exit, setExit, ['direct', 'node', 'blocked'].map((k) => ({ value: k, label: t(`audit.exitKind.${k}`) })), 'audit-exit')}
@@ -212,16 +210,40 @@ function AuditSummary({ stats }: { stats: AuditStats | null }) {
   );
 }
 
+/** Who: the user (when any), the client address, and where it came in. */
 function Source({ r }: { r: AuditRecord }) {
   const { t } = useTranslation();
+  const via = [r.src_node && t('audit.viaNode', { node: r.src_node }), r.in_iface].filter(Boolean).join(' · ');
   return (
     <span className="audit-addr">
-      {r.src && <span className="mono nowrap"><IPFlag addr={r.src} />{r.src}</span>}
-      {r.src_node && <span className="muted nowrap">{t('audit.viaNode', { node: r.src_node })}</span>}
+      {r.user && <b className="nowrap">{r.user}</b>}
+      {r.src && <span className={r.user ? 'mono muted nowrap' : 'mono nowrap'}><IPFlag addr={r.src} />{r.src}</span>}
+      {via && <span className="muted nowrap">{via}</span>}
+      {!r.user && !r.src && !via && <span className="muted">—</span>}
     </span>
   );
 }
 
+/** Inbound interface and source MAC (forwarded traffic). */
+function Link({ r }: { r: AuditRecord }) {
+  if (!r.in_iface && !r.src_mac) return <span className="muted">—</span>;
+  return <span className="mono nowrap">{[r.in_iface, r.src_mac].filter(Boolean).join(' · ')}</span>;
+}
+
+const TERM_TONE: Record<string, 'red' | 'blue' | 'muted' | 'green'> = { deny: 'red', exit: 'blue', iface: 'green', default: 'muted' };
+
+/** The policy outcome: its terminal and the rules that led there. */
+function PolicyCell({ r }: { r: AuditRecord }) {
+  const { t } = useTranslation();
+  if (!r.terminal && !r.rule) return <span className="muted">—</span>;
+  const why = r.reason ? t(`audit.reason.${r.reason}`, { defaultValue: r.reason }) : '';
+  return (
+    <span className="audit-addr" title={why || undefined}>
+      {r.terminal && <span><Badge variant={TERM_TONE[r.terminal] ?? 'muted'}>{t(`policy.termKind.${r.terminal}`, { defaultValue: r.terminal })}</Badge></span>}
+      {r.rule ? <span className="muted nowrap">{r.rule}</span> : why && <span className="muted nowrap">{why}</span>}
+    </span>
+  );
+}
 function Dest({ r }: { r: AuditRecord }) {
   const host = r.dst_host || (r.dst ? hostOf(r.dst) : '');
   const ip = r.dst_ip && r.dst_ip !== host ? r.dst_ip : '';
@@ -270,12 +292,15 @@ function AuditDetail({ open, onClose, animateFrom, record: r }: { open: boolean;
     [t('audit.proto'), r.proto.toUpperCase()],
     [t('audit.inbound'), t(`audit.in.${r.inbound}`, { defaultValue: r.inbound })],
     [t('audit.user'), r.user || dash],
-    [t('audit.source'), r.src ? <span className="mono">{r.src}</span> : dash],
+    [t('audit.sourceAddr'), r.src ? <span className="mono">{r.src}</span> : dash],
     [t('audit.fromNode'), r.src_node || dash],
+    [t('audit.inIface'), r.in_iface || dash],
+    [t('audit.srcMac'), r.src_mac ? <span className="mono">{r.src_mac}</span> : dash],
     [t('audit.requested'), r.dst ? <span className="mono">{r.dst}</span> : dash],
     [t('audit.host'), r.dst_host || dash],
     [t('audit.dialled'), r.dst_ip ? <span className="mono">{r.dst_ip}</span> : dash],
-    [t('audit.rule'), r.rule || dash],
+    [t('audit.policy'), <PolicyCell r={r} />],
+    [t('audit.reasonTitle'), r.reason ? t(`audit.reason.${r.reason}`, { defaultValue: r.reason }) : dash],
     [t('audit.exit'), <ExitCell r={r} />],
     [t('audit.egress'), <Egress r={r} />],
     [t('audit.up'), fmtBytes(r.up || 0)],

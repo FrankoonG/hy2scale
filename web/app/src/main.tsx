@@ -73,6 +73,8 @@ function UiLabels({ children }: { children: React.ReactNode }) {
     confirm: t('app.confirm'),
     cancel: t('app.cancel'),
     replaceFile: t('app.replaceFile'),
+    search: t('app.search'),
+    noResults: t('app.noResults'),
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [i18n.language]);
   return <UiLabelsProvider labels={labels}>{children}</UiLabelsProvider>;

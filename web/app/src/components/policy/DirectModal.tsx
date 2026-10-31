@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
-  Badge, Button, FormGroup, FormGrid, Hint, Input, Modal, SegmentedControl, Select, Textarea, Toggle, useToast,
+  Badge, Button, FormGroup, FormGrid, Hint, Input, Modal, SegmentedControl, Select, Textarea, Toggle, MultiSelect, useToast,
 } from '@hy2scale/ui';
 import {
   getPolicyCapabilities, getPolicyInterfaces, getPolicyStatus, updatePolicySettings,
@@ -126,21 +126,11 @@ export default function DirectModal({ open, onClose, animateFrom, cfg }: {
               <div className="direct-opt-col">
                 <span className="direct-opt-label">{t('policy.ifaces')}</span>
                 {ifaces.length === 0 ? <span className="muted">{t('policy.noIfaces')}</span> : (
-                  <div className="direct-ifaces" data-testid="direct-ifaces">
-                    {ifaces.map((i) => {
-                      const on = sys.forward.interfaces.includes(i.name);
-                      return (
-                        <label key={i.name} className={clsx('direct-iface', on && 'on', !i.up && 'down')}>
-                          <input type="checkbox" checked={on}
-                            onChange={() => setForward({ interfaces: on ? sys.forward.interfaces.filter((x) => x !== i.name) : [...sys.forward.interfaces, i.name] })} />
-                          <span className="direct-iface-name">{i.name}</span>
-                          <Badge variant="muted">{i.type}</Badge>
-                          <span className="muted mono">{i.addrs.join(', ')}</span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                )}
+                  <MultiSelect testId="direct-ifaces"
+                    options={ifaces.map((i) => ({ value: i.name, label: i.name, detail: [i.type, ...i.addrs].join(' · '), disabled: !i.up && !sys.forward.interfaces.includes(i.name) }))}
+                    value={sys.forward.interfaces}
+                    onChange={(v) => setForward({ interfaces: v })}
+                    placeholder={t('policy.pickIfaces')} />                )}
               </div>
               <FormGroup label={t('policy.sources')} hint={t('policy.sourcesHint')}>
                 <Textarea rows={2} value={sources} onChange={(e) => setSources(e.target.value)} placeholder="192.168.1.0/24" />
