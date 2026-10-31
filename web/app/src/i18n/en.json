@@ -472,7 +472,7 @@
   "openvpn.keyRotated": "Key replaced",
   "openvpn.shape": "Traffic shaping",
   "openvpn.shapeHint": "Pads downstream packets of each new flow.",
-  "openvpn.clientSec": "Client profile",
+  "openvpn.clientSec": "Profile options",
   "openvpn.fullTunnel": "All traffic through the tunnel",
   "openvpn.routes": "Tunnel routes",
   "openvpn.routesHint": "Networks routed through the tunnel, one per line.",
