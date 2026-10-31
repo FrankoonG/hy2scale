@@ -119,6 +119,11 @@ type outbound struct {
 	ctx context.Context
 }
 
+// CheckUDP: hysteria's per-destination check of a UDP session's later
+// packets. Every packet already goes through the session's WriteTo, which
+// applies our own policy, so nothing is refused here.
+func (o *outbound) CheckUDP(string) error { return nil }
+
 func (o *outbound) TCP(reqAddr string) (net.Conn, error) {
 	// An old relay's "#bridge=<id>" tag comes off before anything else.
 	addr, _, bridged := relay.ParseBridgeAddr(reqAddr)
