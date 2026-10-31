@@ -105,6 +105,15 @@ function DetailsTab({ user, sessions, conflicts, onKick }: {
     [t('users.expiry'), <span className={`cell-small${isPast(user.expiry_date) ? ' text-bad' : ''}`}>{user.expiry_date || '—'}</span>],
     [t('users.exitVia'), <ExitViaCell exitVia={user.exit_via} exitPaths={user.exit_paths} exitMode={user.exit_mode} />],
   ];
+  if (user.traffic_reset) {
+    const next = user.traffic_reset_next ? new Date(user.traffic_reset_next) : null;
+    fields.splice(2, 0, [t('users.trafficReset'), (
+      <span className="cell-small" data-testid="user-reset-info">
+        {t(`users.reset.${user.traffic_reset}`)}
+        {next && !isNaN(next.getTime()) && <> · {t('users.reset.next', { time: next.toLocaleString() })}</>}
+      </span>
+    )]);
+  }
   if (denied.length > 0) {
     fields.push([t('users.deniedProxies'), (
       <span className="badge-list">{denied.map((d) => <Badge key={d} variant="red">{d}</Badge>)}</span>

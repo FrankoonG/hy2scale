@@ -39,6 +39,9 @@ const (
 	StreamTree  = "_relay_tree_:0"
 	// StreamAttrs returns the node's attributes (Attrs, JSON).
 	StreamAttrs = "_relay_attrs_:0"
+	// StreamSpeed carries a throughput test (internal/tools): after a short
+	// header the node sends zeros or discards what it receives for a while.
+	StreamSpeed = "_relay_speed_:0"
 
 	ViaPrefix    = "_relay_via_"
 	DataPrefix   = "_relay_data_"
@@ -58,7 +61,8 @@ const (
 func IsRelayStream(addr string) bool {
 	switch addr {
 	case StreamRegister, StreamCtrlS2C, StreamListPeer, StreamPing, StreamLatency,
-		StreamAPI, StreamPunch, StreamEgress, StreamWhoami, StreamHello, StreamTree, StreamAttrs:
+		StreamAPI, StreamPunch, StreamEgress, StreamWhoami, StreamHello, StreamTree, StreamAttrs,
+		StreamSpeed:
 		return true
 	}
 	return strings.HasPrefix(addr, ViaPrefix) ||

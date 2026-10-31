@@ -17,6 +17,7 @@ import RulesPage from '@/pages/RulesPage';
 import TLSPage from '@/pages/TLSPage';
 import SettingsPage from '@/pages/SettingsPage';
 import LogsPage from '@/pages/LogsPage';
+import ToolsPage from '@/pages/ToolsPage';
 
 function AuthenticatedRoutes() {
   const setNode = useNodeStore((s) => s.setNode);
@@ -86,6 +87,7 @@ function AuthenticatedRoutes() {
         <Route path="/endpoints" element={<EndpointsPage />} />
         <Route path="/rules" element={<RulesPage />} />
         <Route path="/tls" element={<TLSPage />} />
+        <Route path="/tools" element={<ToolsPage />} />
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/overview" replace />} />

@@ -36,6 +36,7 @@ type Op =
   | { kind: 'pushing' }
   | { kind: 'restarting'; from: string }
   | { kind: 'done'; from: string; to: string }
+  | { kind: 'restarted' }
   | { kind: 'error'; message: string };
 
 interface Props {
@@ -234,7 +235,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
    * answers again after being unreachable, or when the old session is gone
    * (sessions do not survive a restart). Then signs in again the same way.
    */
-  const awaitRestart = async (from: string) => {
+  const awaitRestart = async (from: string, upgrade = true) => {
     if (!auth) return;
     const via = auth.via;
     const t0 = Date.now();
@@ -261,6 +262,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
       return;
     }
     setAuth(a);
+    if (!upgrade) { setOp({ kind: 'restarted' }); return; }
     try {
       const r = await rfetch('/system/arch', {}, a.token);
       const d = await r.json();
@@ -268,6 +270,25 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
       setOp({ kind: 'done', from, to: d.version });
     } catch {
       setOp({ kind: 'done', from, to: '' });
+    }
+  };
+
+  const restart = async () => {
+    if (!auth || !info) return;
+    if (!await confirm({
+      title: t('remote.restartTitle', { name: targetLabel }),
+      message: t('remote.restartConfirm', { name: targetLabel }),
+      confirmText: t('remote.restart'),
+      danger: true,
+    })) return;
+    const from = info.version;
+    setOp({ kind: 'restarting', from });
+    try {
+      const r = await rfetch('/system/restart', { method: 'POST' }, auth.token);
+      if (!r.ok) throw new Error((await r.text()).trim() || `HTTP ${r.status}`);
+      await awaitRestart(from, false);
+    } catch (err: any) {
+      setOp({ kind: 'error', message: String(err?.message || err) });
     }
   };
 
@@ -411,6 +432,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
           {op.to && op.to !== op.from ? t('remote.upgraded', { from: op.from, to: op.to }) : t('remote.unchanged', { version: op.to || op.from })}
         </div>
       );
+      case 'restarted': return <div className="remote-ok" data-testid="remote-done">{t('remote.restarted')}</div>;
       case 'error': return <div className="remote-error" data-testid="remote-op-error">{op.message}</div>;
       default: return null;
     }
@@ -445,6 +467,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
           />
           <div className="remote-row">
             <Button variant="primary" onClick={openUi} disabled={!signedIn} data-testid="remote-open-ui">{t('remote.openUi')}</Button>
+            <Button onClick={restart} disabled={!signedIn || busy || !info} data-testid="remote-restart">{t('remote.restart')}</Button>
           </div>
 
           <div className="remote-sub">{t('remote.upgradeSection')}</div>

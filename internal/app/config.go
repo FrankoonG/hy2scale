@@ -47,6 +47,31 @@ type UserConfig struct {
 	// (loopback, private, link-local, the exit's own networks) — here, and
 	// at 1.4.0+ exits further away.
 	DenyInternal bool `yaml:"deny_internal,omitempty" json:"deny_internal"`
+
+	// TrafficReset: periodic reset of TrafficUsed at 00:00 local time —
+	// "" (never), "daily", "weekly" or "monthly" (traffic_reset.go).
+	TrafficReset string `yaml:"traffic_reset,omitempty" json:"traffic_reset"`
+	// TrafficResetDay: weekly → ISO weekday 1 (Monday) .. 7 (Sunday);
+	// monthly → 1..31, clamped to the month's last day. 0 otherwise.
+	TrafficResetDay int `yaml:"traffic_reset_day,omitempty" json:"traffic_reset_day,omitempty"`
+	// TrafficResetAt (RFC3339): the last automatic or manual reset.
+	// Server-managed: kept on update like TrafficUsed.
+	TrafficResetAt string `yaml:"traffic_reset_at,omitempty" json:"traffic_reset_at,omitempty"`
+	// TrafficResetFrom (RFC3339): when the current period setting took
+	// effect. Boundaries before it never reset (setting a period doesn't
+	// reset at once). Internal, not in the API.
+	TrafficResetFrom string `yaml:"traffic_reset_from,omitempty" json:"-"`
+
+	// Shared users (shared_users.go). On the manager: the nodes the user is
+	// pushed to (relay chains "a/b") and the revision of its last change.
+	ShareTargets []string `yaml:"share_targets,omitempty" json:"share_targets,omitempty"`
+	ShareRev     int64    `yaml:"share_rev,omitempty" json:"share_rev,omitempty"`
+	// ShareResetRev: the revision of the last manual traffic reset (the
+	// targets reset their own counters when they see it).
+	ShareResetRev int64 `yaml:"share_reset_rev,omitempty" json:"-"`
+	// SharedFrom: on a receiving node, the manager that owns this user.
+	// Only exit settings may be changed here.
+	SharedFrom *SharedFrom `yaml:"shared_from,omitempty" json:"shared_from,omitempty"`
 }
 
 // EffectivePassword returns the proxy-specific password if set, else the main password.

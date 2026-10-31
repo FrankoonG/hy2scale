@@ -139,6 +139,8 @@ export interface PunchStatus {
 }
 
 // ===== Users =====
+export type TrafficReset = '' | 'daily' | 'weekly' | 'monthly';
+
 export interface UserConfig {
   id: string;
   username: string;
@@ -153,6 +155,14 @@ export interface UserConfig {
   exit_mode?: '' | 'quality' | 'aggregate';
   traffic_limit: number;
   traffic_used: number;
+  /** Automatic reset of traffic_used at 00:00 node time; '' = never. */
+  traffic_reset?: TrafficReset;
+  /** weekly: ISO weekday 1 (Mon)..7 (Sun); monthly: 1..31 (clamped to the month). */
+  traffic_reset_day?: number;
+  /** Last reset (RFC 3339, server-managed). */
+  traffic_reset_at?: string;
+  /** Next automatic reset (RFC 3339, read-only). */
+  traffic_reset_next?: string;
   expiry_date?: string;
   enabled: boolean;
   /** may use this node's visible nodes as exits (node access by user) */

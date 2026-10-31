@@ -29,7 +29,8 @@ export function useDismiss(
       if (listRef.current.some((r) => r.current?.contains(t))) return;
       cb.current();
     };
-    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') cb.current(); };
+    // Escape is consumed here: a dialog around the popover stays open.
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); cb.current(); } };
     document.addEventListener('mousedown', outside);
     document.addEventListener('touchstart', outside);
     if (escape) document.addEventListener('keydown', key);
