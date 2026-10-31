@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Badge, Button, Card, Table, useModalState, type Column } from '@hy2scale/ui';
+import { Badge, Button, Card, ExpandButton, Table, useModalState, type Column } from '@hy2scale/ui';
 import { dismissPolicyNotice, getPolicy, type ConditionSet, type PolicySet } from '@/api/policy';
 import SetModal from '@/components/policy/SetModal';
 import DirectModal from '@/components/policy/DirectModal';
@@ -9,8 +9,8 @@ import { refsText } from '@/components/policy/RefsLine';
 import type { SetKind } from '@/components/policy/shared';
 
 /**
- * Rules: policy sets (where connections go, or whether they may) and
- * condition sets (reusable true / false), plus the direct entry.
+ * Rules: one list of policy sets (where connections go, or whether they
+ * may) and condition sets (reusable true / false), plus the direct entry.
  */
 export default function RulesPage() {
   const { t } = useTranslation();
@@ -20,28 +20,29 @@ export default function RulesPage() {
   const direct = useModalState();
   const test = useModalState();
 
-  const policies = cfg?.policies || [];
-  const conditions = cfg?.conditions || [];
+  type Row = { kind: SetKind; set: PolicySet | ConditionSet };
+  const rows: Row[] = [
+    ...(cfg?.policies || []).map((set) => ({ kind: 'policy' as const, set })),
+    ...(cfg?.conditions || []).map((set) => ({ kind: 'condition' as const, set })),
+  ];
 
-  const policyCols: Column<PolicySet>[] = [
+  const cols: Column<Row>[] = [
     {
-      key: 'name', title: t('policy.name'), sortValue: (p) => p.name,
-      render: (p) => (
+      key: 'name', title: t('policy.name'), sortValue: (r) => r.set.name,
+      render: (r) => (
         <span className="pset-name">
-          <strong>{p.name}</strong>
-          {cfg?.direct === p.id && <Badge variant="blue">{t('policy.directEntryBadge')}</Badge>}
+          <strong>{r.set.name}</strong>
+          {cfg?.direct === r.set.id && <Badge variant="blue">{t('policy.directEntryBadge')}</Badge>}
         </span>
       ),
     },
-    { key: 'rules', title: t('policy.rules'), sortValue: (p) => p.rules.length, render: (p) => p.rules.length },
-    { key: 'refs', title: t('policy.usedBy'), render: (p) => <span className="muted">{refsText(p.refs, t)}</span> },
+    {
+      key: 'kind', title: t('policy.setKind'), sortValue: (r) => r.kind,
+      render: (r) => <Badge variant={r.kind === 'policy' ? 'green' : 'muted'}>{t(r.kind === 'policy' ? 'policy.kindPolicy' : 'policy.kindCondition')}</Badge>,
+    },
+    { key: 'rules', title: t('policy.rules'), sortValue: (r) => r.set.rules.length, render: (r) => r.set.rules.length },
+    { key: 'refs', title: t('policy.usedBy'), render: (r) => <span className="muted">{refsText(r.set.refs, t)}</span> },
   ];
-  const condCols: Column<ConditionSet>[] = [
-    { key: 'name', title: t('policy.name'), sortValue: (c) => c.name, render: (c) => <strong>{c.name}</strong> },
-    { key: 'rules', title: t('policy.rules'), sortValue: (c) => c.rules.length, render: (c) => c.rules.length },
-    { key: 'refs', title: t('policy.usedBy'), render: (c) => <span className="muted">{refsText(c.refs, t)}</span> },
-  ];
-
   const dismiss = async () => {
     await dismissPolicyNotice().catch(() => {});
     qc.invalidateQueries({ queryKey: ['policy'] });
@@ -57,39 +58,25 @@ export default function RulesPage() {
       )}
 
       <Card
-        title={t('policy.policies')}
-        count={policies.length}
+        title={t('policy.sets')}
+        count={rows.length}
         noPadding
         actions={(
           <div className="button-row">
             <Button onClick={(e) => direct.show(undefined, e)} data-testid="rules-direct">{t('policy.direct')}</Button>
             <Button onClick={(e) => test.show(undefined, e)} data-testid="rules-test">{t('policy.test')}</Button>
-            <Button variant="primary" onClick={(e) => edit.show({ kind: 'policy', set: null }, e)} data-testid="rules-new-policy">
-              + {t('policy.newPolicy')}
-            </Button>
+            <ExpandButton variant="primary" label={`+ ${t('policy.newPolicy')}`} moreLabel={t('app.moreActions')}
+              testId="rules-new-policy"
+              onClick={(e) => edit.show({ kind: 'policy', set: null }, e)}
+              actions={[{ key: 'condition', label: t('policy.newCondition'), testId: 'rules-new-condition',
+                onClick: (e) => edit.show({ kind: 'condition', set: null }, e) }]} />
           </div>
         )}
       >
-        <Table id="policy.policies" columns={policyCols} data={policies} rowKey={(p) => p.id} paginate={false}
-          emptyText={t('policy.noPolicies')}
-          onRowClick={(p, _i, o) => edit.show({ kind: 'policy', set: p }, o)} />
+        <Table id="policy.sets" columns={cols} data={rows} rowKey={(r) => r.set.id}
+          emptyText={t('policy.noSets')}
+          onRowClick={(r, _i, o) => edit.show({ kind: r.kind, set: r.set }, o)} />
       </Card>
-
-      <Card
-        title={t('policy.conditions')}
-        count={conditions.length}
-        noPadding
-        actions={(
-          <Button variant="primary" onClick={(e) => edit.show({ kind: 'condition', set: null }, e)} data-testid="rules-new-condition">
-            + {t('policy.newCondition')}
-          </Button>
-        )}
-      >
-        <Table id="policy.conditions" columns={condCols} data={conditions} rowKey={(c) => c.id} paginate={false}
-          emptyText={t('policy.noConditions')}
-          onRowClick={(c, _i, o) => edit.show({ kind: 'condition', set: c }, o)} />
-      </Card>
-
       <SetModal {...edit.modalProps} kind={edit.data?.kind ?? 'policy'} editing={edit.data?.set ?? null} cfg={cfg} />
       <DirectModal {...direct.modalProps} cfg={cfg} />
       <TestModal {...test.modalProps} cfg={cfg} />

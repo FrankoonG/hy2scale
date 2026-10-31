@@ -85,3 +85,8 @@
 .prule-default .term{flex:1}
 .prule-default{align-items:start}
 .prule-default .prule-k{padding-top:8px}
+
+/* YAML view */
+.yaml-wrap{display:flex;flex-direction:column;gap:10px}
+.yaml-editor{height:min(60vh,560px);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--surface)}
+.yaml-editor .cm-editor{height:100%}
