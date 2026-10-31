@@ -472,7 +472,7 @@
   "openvpn.keyRotated": "密钥已更换",
   "openvpn.shape": "流量整形",
   "openvpn.shapeHint": "填充每个新连接的下行数据包。",
-  "openvpn.clientSec": "客户端配置",
+  "openvpn.clientSec": "配置文件选项",
   "openvpn.fullTunnel": "全部流量走隧道",
   "openvpn.routes": "隧道路由",
   "openvpn.routesHint": "经隧道的网段，每行一个。",

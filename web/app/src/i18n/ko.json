@@ -472,7 +472,7 @@
   "openvpn.keyRotated": "키를 바꿨습니다",
   "openvpn.shape": "트래픽 셰이핑",
   "openvpn.shapeHint": "새 흐름마다 하향 패킷을 채웁니다.",
-  "openvpn.clientSec": "클라이언트 프로필",
+  "openvpn.clientSec": "프로필 옵션",
   "openvpn.fullTunnel": "모든 트래픽을 터널로",
   "openvpn.routes": "터널 경로",
   "openvpn.routesHint": "터널을 거치는 네트워크, 한 줄에 하나.",
