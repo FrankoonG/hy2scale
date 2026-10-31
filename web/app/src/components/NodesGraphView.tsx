@@ -15,6 +15,7 @@ import {
   IconCopy, IconMaximize2, IconChevronLeft, IconChevronRight, IconScan, IconZoomIn, IconZoomOut,
 } from '@hy2scale/ui';
 import { copyToClipboard } from '@/utils/clipboard';
+import { exportPng, imageFileName } from '@/utils/exportImage';
 import { latencyTier, pathLatencyClass } from '@/utils/latency';
 import {
   buildGraph, findPaths, fmtLatency, isTransit, nodeRadiusFor, R_HUB_INNER, R_HUB_OUTER, R_SINGLE,
@@ -1007,6 +1008,46 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     }
   };
 
+  // Save the graph as a PNG: the content at 1:1 with a margin, no grid or
+  // edit handles, on the canvas background.
+  const svgRef = useRef<SVGSVGElement>(null);
+  const saveImage = async () => {
+    const svg = svgRef.current;
+    const g = svg?.querySelector(':scope > g');
+    if (!svg || !g || !wrapRef.current) return;
+    const parts = [...g.querySelectorAll(':scope > .hy-topo-edges, :scope > .hy-topo-labels, :scope > .hy-topo-nodes')] as SVGGraphicsElement[];
+    const bs = parts.map((p) => p.getBBox()).filter((b) => b.width || b.height);
+    if (!bs.length) return;
+    const pad = 32;
+    const x0 = Math.min(...bs.map((b) => b.x)) - pad;
+    const y0 = Math.min(...bs.map((b) => b.y)) - pad;
+    const w = Math.max(...bs.map((b) => b.x + b.width)) - x0 + pad;
+    const h = Math.max(...bs.map((b) => b.y + b.height)) - y0 + pad;
+    try {
+      await exportPng(svg, {
+        width: w,
+        height: h,
+        background: getComputedStyle(wrapRef.current).backgroundColor,
+        fileName: imageFileName(`${selfName || 'hy2scale'}-nodes`),
+        adjust: (clone) => {
+          const root = clone as SVGSVGElement;
+          root.style.width = `${w}px`;
+          root.style.height = `${h}px`;
+          root.style.position = 'static';
+          const cg = root.querySelector(':scope > g') as SVGGElement | null;
+          if (!cg) return;
+          const tr = `translate(${-x0}px, ${-y0}px)`;
+          cg.style.transform = tr;
+          cg.style.opacity = '1';
+          cg.setAttribute('transform', `translate(${-x0},${-y0})`);
+          cg.querySelectorAll(':scope > line, :scope > .hy-topo-handle-layer').forEach((e) => e.remove());
+        },
+      });
+    } catch (err: any) {
+      toast.error(String(err?.message || err));
+    }
+  };
+
   const canvasMenu: CanvasMenuProps = {
     presets: PRESET_IDS.map((id) => ({ key: 'p:' + id, label: presetLabel(id) })),
     customs: (list || []).map((c) => ({ key: 'c:' + c.id, label: canvasLabel(c) })),
@@ -1025,6 +1066,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     onRename,
     onReset,
     onDelete,
+    onSaveImage: saveImage,
   };
 
   // ---------------------------------------------------------------- flow chevrons
@@ -1382,7 +1424,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       onClick={onCanvasClick}
       onDoubleClick={onCanvasDoubleClick}
     >
-      <svg className="hy-topo-graph-svg" aria-hidden="true">
+      <svg ref={svgRef} className="hy-topo-graph-svg" aria-hidden="true">
         <g transform={`translate(${view.x},${view.y}) scale(${k})`} style={{ opacity: ready ? 1 : 0, transition: 'opacity 180ms ease-out' }}>
           {grid}
           <g className="hy-topo-edges">{edgeEls}</g>

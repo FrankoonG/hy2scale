@@ -388,12 +388,13 @@ export default function InterfacesPage() {
     <ResponsiveActions
       selectedCount={selection.count}
       onClearSelection={selection.clear}
-      more={
+      // In the topology this lives in the style menu.
+      more={view === 'topo' ? undefined : (
         <MenuCheck checked={showHidden} onChange={setShowHidden} testId="show-hidden"
           count={hiddenCount > 0 ? hiddenCount : undefined}>
           {t('iface.showHidden')}
         </MenuCheck>
-      }
+      )}
     >
       {selActions()}
       <span title={capReason || undefined} className="inline-flex" data-testid="add-child-wrap">
@@ -472,6 +473,9 @@ export default function InterfacesPage() {
           hostName={hostName}
           egressWarning={egressWarning}
           onOpenDetail={(name, anchor) => { setDetailFrom(anchor); setDetail(name); }}
+          showHidden={showHidden}
+          onShowHidden={setShowHidden}
+          hiddenCount={hiddenCount}
         />
         {modals}
       </div>
