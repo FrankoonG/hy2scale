@@ -54,6 +54,7 @@ export type { TableProps, Column, SelectionState } from './components/Table';
 export { TreeTable, TreeCell } from './components/TreeTable';
 export type { TreeTableProps, TreeColumn, TreeNode, TreeRowMeta, TreeCellProps } from './components/TreeTable';
 export type { SortDir, SortState } from './components/TableKit';
+export { Pager } from './components/TableKit';
 export { DetailGrid, FieldLabel, KeyValueList, KeyValue } from './components/DetailGrid';
 export type { DetailGridProps, DetailItem, KeyValueListProps, KeyValueProps } from './components/DetailGrid';
 export { Progress } from './components/Progress';

@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
-import { Card, Button, Input, Select, SegmentedControl, MenuCheck, useStoredState, boolCodec, type SegmentedItem } from '@hy2scale/ui';
+import { Card, Button, Input, Select, SegmentedControl, MenuCheck, Pager, useStoredState, boolCodec, type SegmentedItem } from '@hy2scale/ui';
 import * as api from '@/api';
 import type { LogEntry } from '@/api';
 import { useNodeStore } from '@/store/node';
@@ -13,6 +13,8 @@ const POLL_MS = 2000;
 type Level = 'all' | 'warn' | 'error';
 
 const WRAP_KEY = 'hy-logs-wrap';
+const SIZE_KEY = 'hy-logs-page-size';
+const PAGE_SIZES = [100, 200, 500, 1000];
 
 const pad = (n: number) => String(n).padStart(2, '0');
 const fmtTime = (ms: number) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
@@ -55,6 +57,9 @@ export default function LogsPage() {
   const atBottom = useRef(true);
   const [follow, setFollow] = useState(true);
   const [unseen, setUnseen] = useState(0);
+  const [pageSize, setPageSize] = useStoredState(SIZE_KEY, 200);
+  // null = the newest page, which follows new lines
+  const [page, setPage] = useState<number | null>(null);
 
   // Poll for lines newer than the last one seen.
   useEffect(() => {
@@ -119,21 +124,42 @@ export default function LogsPage() {
     && (!src || e.src === src)
     && (!q || e.msg.toLowerCase().includes(q))), [live, level, src, q]);
 
+  // Pages run oldest to newest; the newest page is shown by default.
+  const size = PAGE_SIZES.includes(pageSize) ? pageSize : 200;
+  const pages = Math.max(1, Math.ceil(shown.length / size));
+  const curPage = page === null ? pages : Math.min(page, pages);
+  const onLastPage = curPage === pages;
+  const pageRows = shown.slice((curPage - 1) * size, curPage * size);
+  // a new filter starts again on the newest lines
+  useEffect(() => { setPage(null); }, [level, src, q, size]);
+  const goPage = (p: number) => {
+    setPage(p >= pages ? null : p);
+    atBottom.current = p >= pages;
+    setFollow(p >= pages);
+    if (p >= pages) setUnseen(0);
+  };
+
   // Stay pinned to the newest line unless the user scrolled up.
   useLayoutEffect(() => {
     const el = viewRef.current;
-    if (el && follow) el.scrollTop = el.scrollHeight;
-  }, [shown, follow, wrap]);
+    if (el && follow && onLastPage) el.scrollTop = el.scrollHeight;
+  }, [pageRows, follow, wrap, onLastPage]);
+  // another page opens at its top
+  useLayoutEffect(() => {
+    const el = viewRef.current;
+    if (el && !onLastPage) el.scrollTop = 0;
+  }, [curPage, onLastPage]);
 
   const onScroll = () => {
     const el = viewRef.current;
     if (!el) return;
-    const bottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    const bottom = onLastPage && el.scrollHeight - el.scrollTop - el.clientHeight < 24;
     atBottom.current = bottom;
     if (bottom !== follow) setFollow(bottom);
     if (bottom) setUnseen(0);
   };
   const toLatest = () => {
+    setPage(null);
     const el = viewRef.current;
     if (el) el.scrollTop = el.scrollHeight;
     atBottom.current = true;
@@ -158,7 +184,7 @@ export default function LogsPage() {
 
   let prevDay = '';
   const rows: ReactNode[] = [];
-  for (const e of shown) {
+  for (const e of pageRows) {
     const day = dayOf(e.ts);
     if (day !== prevDay) {
       rows.push(<div key={`d${e.seq}`} className="log-day">{fmtDay(e.ts)}</div>);
@@ -202,18 +228,20 @@ export default function LogsPage() {
       >
         <div className="logs-body">
           <div ref={viewRef} className={clsx('logs-view', wrap && 'wrap')} onScroll={onScroll} data-testid="logs-view">
-            {truncatedHead && <div className="log-note">{t('logs.olderDropped')}</div>}
+            {truncatedHead && curPage === 1 && <div className="log-note">{t('logs.olderDropped')}</div>}
             {failed && <div className="log-note bad">{t('logs.loadFailed')}: {failed}</div>}
             {!loaded && !failed && <div className="log-note">{t('app.loading')}</div>}
             {loaded && !shown.length && <div className="log-note">{t('logs.empty')}</div>}
             {rows}
           </div>
-          {!follow && (
+          {(!follow || !onLastPage) && (
             <button type="button" className="logs-latest" onClick={toLatest} data-testid="logs-latest">
               {unseen > 0 ? t('logs.newLines', { count: unseen }) : t('logs.latest')}
             </button>
           )}
         </div>
+        <Pager total={shown.length} size={size} onSize={setPageSize} sizes={PAGE_SIZES}
+          pager={{ page: curPage, pages, setPage: goPage }} />
       </Card>
     </div>
   );

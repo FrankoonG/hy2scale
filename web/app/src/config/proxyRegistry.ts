@@ -8,7 +8,7 @@ import type { SSConfig, ProxyConfig } from '@/api';
  *  2. Add i18n keys if the label needs translation
  *  3. Backend: add the proxy key to the conflict detection list in app.go rebuildUserIndex()
  *
- * That's it — UserDetailModal (links), UserModal (proxy password tab),
+ * That's it — UserInfoModal (proxies tab), UserModal (proxy password tab),
  * and conflict detection all derive from this registry automatically.
  */
 
