@@ -569,6 +569,10 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		// (they can have outbound connections visible if nested is enabled)
 		result = append(result, tn)
 	}
+	for i := range result {
+		result[i].Egress, result[i].Attrs = cleanEgress(result[i].Egress), cleanAttrs(result[i].Attrs)
+		result[i].Children = cleanTreeEgress(result[i].Children)
+	}
 	writeJSON(w, result)
 }
 

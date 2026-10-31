@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card, Input, SegmentedControl } from '@hy2scale/ui';
 import { streamTool, type PingLine, type ToolAvail } from '@/api/tools';
+import { IPFlag } from '@/components/CountryFlag';
 import { Field, RunButton, RttBars, Stats, Unavailable, ms, useToolRun } from './common';
 
 type Proto = 'icmp' | 'tcp';
@@ -75,7 +76,7 @@ export default function PingTab({ avail }: { avail?: ToolAvail }) {
       </Card>
 
       {(rows.length > 0 || target) && (
-        <Card title={target ? (target.host === target.ip ? target.ip : t('tools.resolved', { host: target.host, ip: target.ip })) : undefined}>
+        <Card title={target ? <span data-testid="tool-target"><IPFlag addr={target.ip} />{target.host === target.ip ? target.ip : t('tools.resolved', { host: target.host, ip: target.ip })}</span> : undefined}>
           <Stats items={[
             [t('tools.sent'), s.sent],
             [t('tools.received'), s.recv],

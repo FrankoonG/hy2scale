@@ -10,7 +10,8 @@ type Attrs map[string]json.RawMessage
 // Well-known attribute keys (conventions between applications).
 const (
 	// AttrEgress: the node's egress — per address family the public address
-	// and its country ({"ipv4":{"ip","ok","country"},"ipv6":…}).
+	// ({"ipv4":{"ip","ok"},"ipv6":…}, null = family not provided). 1.4.0
+	// pre-releases also sent a "country" per family; readers ignore it.
 	AttrEgress = "egress"
 )
 

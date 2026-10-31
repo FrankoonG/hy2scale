@@ -25,6 +25,7 @@ import (
 	hyclient "github.com/apernet/hysteria/core/v2/client"
 	hyserver "github.com/apernet/hysteria/core/v2/server"
 	"github.com/FrankoonG/hy2scale/internal/history"
+	"github.com/FrankoonG/hy2scale/core/audit"
 	"github.com/FrankoonG/hy2scale/core/netfilter"
 	"github.com/FrankoonG/hy2scale/core/rules"
 	"github.com/FrankoonG/hy2scale/core/server"
@@ -135,6 +136,8 @@ type Config struct {
 	Interfaces []InterfaceConfig     `yaml:"interfaces,omitempty" json:"interfaces,omitempty"`
 	Egress     *EgressConfig         `yaml:"egress,omitempty" json:"egress,omitempty"`
 	PublicIP   *PublicIPConfig       `yaml:"public_ip,omitempty" json:"public_ip,omitempty"`
+	// Storage: logs and audit records kept on disk (storage.go); nil = both off.
+	Storage *StorageConfig `yaml:"storage,omitempty" json:"storage,omitempty"`
 	UIListen    string                `yaml:"ui_listen,omitempty" json:"ui_listen,omitempty"`
 	UIBasePath  string                `yaml:"ui_base_path,omitempty" json:"ui_base_path,omitempty"`
 	WebUsername string                `yaml:"web_username,omitempty" json:"web_username,omitempty"`
@@ -255,6 +258,8 @@ type App struct {
 	Sessions     *SessionManager
 
 	ifaces *ifaceManager  // child interfaces, public address detection
+
+	st *stores // logs and audit records on disk (storage.go)
 }
 
 func New(dataDir string) (*App, error) {
@@ -301,6 +306,7 @@ func New(dataDir string) (*App, error) {
 	a.node.SetRestrictedDial(a.restrictedDial)
 	a.tree = relay.NewTree(a.node, a.treeConfig)
 	a.tree.SetLimits(NestedLimits(cfg))
+	a.initStorage()
 	return a, nil
 }
 
@@ -331,6 +337,7 @@ func (a *App) ObjectCounts() map[string]int {
 	m["hy2_auth_stash"] = server.Stashed()
 	m["hy2_addr_stash"] = server.Stashed() // auth and address share one stash entry
 	m["sessions"] = a.Sessions.Count()
+	m["audit_open_flows"] = audit.OpenFlows()
 	return m
 }
 
@@ -383,6 +390,9 @@ func (a *App) Run(ctx context.Context) error {
 	go a.node.RunAttrs(ctx)
 	go a.tree.Run(ctx)
 	a.exit.Start(ctx)
+
+	// Stored logs and audit records (writers, retention)
+	a.runStorage(ctx)
 
 	// Start rate ticker, latency prober, and traffic flusher
 	go a.node.StartRateTicker(ctx)
@@ -1990,6 +2000,7 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 		var err error
 		user, err = a.LookupUser(username, password, "socks5")
 		if err != nil {
+			auditRefused(audit.InSOCKS5, username, conn, err)
 			conn.Write([]byte{0x01, 0x01}) // auth failed
 			return
 		}
@@ -2036,6 +2047,9 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 		exitPaths = pc.ExitPaths
 	}
 
+	af := beginUserFlow(audit.InSOCKS5, "tcp", username, conn.RemoteAddr(), addr)
+	dctx := audit.NewContext(withRestrict(context.Background(), a.userRestrict(username)), af)
+
 	// IP destination: reply first so the client sends its hello, recover the
 	// host name from it (sniff_override.go), then dial. A failed dial can no
 	// longer be reported and just closes the connection.
@@ -2044,24 +2058,29 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 	if wantSniff(addr) {
 		conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		peeked, waited := peekHello(conn, nil)
-		remote, err = a.dialSniffedTCP(withRestrict(context.Background(), a.userRestrict(username)), a.exitRoute(exitVia, exitPaths, exitMode), nil,
+		remote, err = a.dialSniffedTCP(dctx, a.exitRoute(dctx, exitVia, exitPaths, exitMode), nil,
 			addr, peeked, waited, isLoopbackAddr(conn.RemoteAddr()))
 		if err != nil {
+			af.End(err)
 			return
 		}
 		defer remote.Close()
+		defer af.End(nil) // early returns; relayUser ends it otherwise
 		if len(peeked) > 0 {
 			if _, werr := remote.Write(peeked); werr != nil {
 				return
 			}
+			af.Add(int64(len(peeked)), 0)
 		}
 	} else {
-		remote, err = a.dialRoutedTCP(withRestrict(context.Background(), a.userRestrict(username)), exitVia, exitPaths, exitMode, addr)
+		remote, err = a.dialRoutedTCP(dctx, exitVia, exitPaths, exitMode, addr)
 		if err != nil {
+			af.End(err)
 			conn.Write([]byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 			return
 		}
 		defer remote.Close()
+		defer af.End(nil)
 		conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 	}
 
@@ -2070,7 +2089,7 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 	if ta, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
 		remoteIP = ta.IP.String()
 	}
-	a.relayUser(conn, remote, username, remoteIP, "socks5", true)
+	a.relayUser(conn, remote, username, remoteIP, "socks5", true, af)
 }
 
 // bufferedBytes drains what br has read past the request header.
@@ -2201,6 +2220,7 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 		}
 		u, err := a.LookupUser(creds[0], creds[1], "http")
 		if err != nil {
+			auditRefused(audit.InHTTP, creds[0], conn, err)
 			conn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"proxy\"\r\n\r\n"))
 			return
 		}
@@ -2264,14 +2284,17 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 	}
 
 	// Dial remote
+	af := beginUserFlow(audit.InHTTP, "tcp", username, conn.RemoteAddr(), addr)
+	dctx := audit.NewContext(withRestrict(context.Background(), a.userRestrict(username)), af)
 	var remote net.Conn
 	if connectSniff {
-		remote, err = a.dialSniffedTCP(withRestrict(context.Background(), a.userRestrict(username)), a.exitRoute(exitVia, exitPaths, exitMode), nil,
+		remote, err = a.dialSniffedTCP(dctx, a.exitRoute(dctx, exitVia, exitPaths, exitMode), nil,
 			addr, connectPeeked, connectWaited, isLoopbackAddr(conn.RemoteAddr()))
 	} else {
-		remote, err = a.dialRoutedTCP(withRestrict(context.Background(), a.userRestrict(username)), exitVia, exitPaths, exitMode, addr)
+		remote, err = a.dialRoutedTCP(dctx, exitVia, exitPaths, exitMode, addr)
 	}
 	if err != nil {
+		af.End(err)
 		// After the early 200 a 502 can no longer be sent; just close.
 		if !connectSniff {
 			conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
@@ -2279,6 +2302,7 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 		return
 	}
 	defer remote.Close()
+	defer af.End(nil) // early returns; relayUser ends it otherwise
 
 	if method == "CONNECT" {
 		if !connectSniff {
@@ -2287,20 +2311,22 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 			if _, werr := remote.Write(connectPeeked); werr != nil {
 				return
 			}
+			af.Add(int64(len(connectPeeked)), 0)
 		}
 	} else {
 		// Forward the original request to the remote
-		fmt.Fprintf(remote, "%s %s %s\r\n", method, target, parts[2])
+		var req strings.Builder
+		fmt.Fprintf(&req, "%s %s %s\r\n", method, target, parts[2])
 		for k, v := range headers {
 			if k != "proxy-authorization" && k != "proxy-connection" {
-				fmt.Fprintf(remote, "%s: %s\r\n", k, v)
+				fmt.Fprintf(&req, "%s: %s\r\n", k, v)
 			}
 		}
-		fmt.Fprintf(remote, "\r\n")
+		req.WriteString("\r\n")
 		// Forward any remaining buffered data
-		if buffered := bufferedBytes(br); len(buffered) > 0 {
-			remote.Write(buffered)
-		}
+		req.Write(bufferedBytes(br))
+		n, _ := io.WriteString(remote, req.String())
+		af.Add(int64(n), 0)
 	}
 
 	// Device row with live accounting
@@ -2308,7 +2334,7 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 	if ta, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
 		remoteIP = ta.IP.String()
 	}
-	a.relayUser(conn, remote, username, remoteIP, "http", true)
+	a.relayUser(conn, remote, username, remoteIP, "http", true, af)
 }
 
 // copyCtx copies data respecting context cancellation.
@@ -2351,25 +2377,29 @@ type nodeOutbound struct {
 func (o *nodeOutbound) TCP(_ context.Context, authID, peerAddr, actualAddr string, isBridged bool) (net.Conn, error) {
 	// hy2 users follow their exit route like every other protocol, and get
 	// a device row with live accounting.
+	af := beginUserFlowStr(audit.InHy2, "tcp", strings.TrimPrefix(authID, "user:"), peerAddr, actualAddr)
 	if err := o.app.hy2UserUsable(authID); err != nil {
+		af.Fail(audit.ResultRefused, err)
+		af.End(err)
 		return nil, err
 	}
-	c, err := o.hy2UserTCP(authID, actualAddr, isBridged)
+	c, err := o.hy2UserTCP(audit.NewContext(o.ctx, af), authID, actualAddr, isBridged)
 	if err != nil {
+		af.End(err)
 		return nil, err
 	}
-	return o.app.meterHy2(authID, peerAddr, c), nil
+	return o.app.meterHy2(authID, peerAddr, c, af), nil
 }
 
 // hy2UserTCP dials an hy2 user's stream: its exit route, or here.
-func (o *nodeOutbound) hy2UserTCP(authID, actualAddr string, isBridged bool) (net.Conn, error) {
-	ctx := withRestrict(o.ctx, o.app.userRestrict(strings.TrimPrefix(authID, "user:")))
+func (o *nodeOutbound) hy2UserTCP(ctx context.Context, authID, actualAddr string, isBridged bool) (net.Conn, error) {
+	ctx = withRestrict(ctx, o.app.userRestrict(strings.TrimPrefix(authID, "user:")))
 	via, paths, mode, viaUser := o.app.hy2UserRoute(authID)
 	route := func(addr string) (string, []string, string, error) {
 		if viaUser {
 			return via, paths, mode, nil
 		}
-		return o.app.routeFor("", nil, "", addr)
+		return o.app.routeFor(ctx, "", nil, "", addr)
 	}
 	if !isBridged && wantSniff(actualAddr) {
 		return o.sniffedTCP(ctx, route, actualAddr), nil
@@ -2399,23 +2429,27 @@ func (o *nodeOutbound) localTCPCtx(ctx context.Context, actualAddr string, isBri
 }
 
 func (o *nodeOutbound) UDP(_ context.Context, authID, peerAddr, reqAddr string) (hyserver.UDPConn, error) {
+	af := beginUserFlowStr(audit.InHy2, "udp", strings.TrimPrefix(authID, "user:"), peerAddr, reqAddr)
 	if err := o.app.hy2UserUsable(authID); err != nil {
+		af.Fail(audit.ResultRefused, err)
+		af.End(err)
 		return nil, err
 	}
 	var c net.Conn
 	var err error
-	ctx := withRestrict(o.ctx, o.app.userRestrict(strings.TrimPrefix(authID, "user:")))
+	ctx := audit.NewContext(withRestrict(o.ctx, o.app.userRestrict(strings.TrimPrefix(authID, "user:"))), af)
 	if via, paths, mode, ok := o.app.hy2UserRoute(authID); ok {
 		c, err = o.app.dialExitUDPPaths(ctx, via, paths, mode, reqAddr)
-	} else if via, paths, mode, rerr := o.app.routeFor("", nil, "", reqAddr); rerr == nil && via != "" {
+	} else if via, paths, mode, rerr := o.app.routeFor(ctx, "", nil, "", reqAddr); rerr == nil && via != "" {
 		c, err = o.app.dialExitUDPPaths(ctx, via, paths, mode, reqAddr)
 	} else {
 		c, err = o.app.dialDirect(ctx, "udp", rewriteLocalAddr(reqAddr))
 	}
 	if err != nil {
+		af.End(err)
 		return nil, err
 	}
-	return &server.UDPAdapter{Conn: o.app.meterHy2(authID, peerAddr, c), Addr: reqAddr}, nil
+	return &server.UDPAdapter{Conn: o.app.meterHy2(authID, peerAddr, c, af), Addr: reqAddr}, nil
 }
 
 // hy2UserUsable refuses a new stream of an hy2 user that expired or used up

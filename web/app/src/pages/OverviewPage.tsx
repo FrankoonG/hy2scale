@@ -572,7 +572,7 @@ export default function OverviewPage() {
     return (
       <>
         <span className={clsx(!e.ok && 'ov-warn-text')}>{e.name}</span>
-        {pub?.ok && pub.ip ? <span className="ov-muted"> · <PublicIP ip={pub.ip} country={pub.country} /></span> : null}
+        {pub?.ok && pub.ip ? <span className="ov-muted"> · <PublicIP ip={pub.ip} /></span> : null}
       </>
     );
   };

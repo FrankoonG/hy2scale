@@ -1,6 +1,6 @@
 // Package publicip is the public-address add-on: it finds the public
-// address of every interface that reaches the internet (and its country)
-// through public services, and publishes the egress interfaces' as this
+// address of every interface that reaches the internet through public
+// services, and publishes the egress interfaces' as this
 // node's "egress" attribute (core/proto.AttrEgress). The core never calls
 // these services; it only carries the attribute.
 package publicip
@@ -16,7 +16,6 @@ import (
 	"github.com/FrankoonG/hy2scale/core/iface"
 	"github.com/FrankoonG/hy2scale/core/node"
 	"github.com/FrankoonG/hy2scale/core/proto"
-	"github.com/FrankoonG/hy2scale/internal/ipcountry"
 	"github.com/FrankoonG/hy2scale/internal/pubip"
 )
 
@@ -60,44 +59,12 @@ type Detector struct {
 	running map[pubKey]bool
 	lastLoc map[string]string // iface → its local addresses, to notice changes
 	kickCh  chan string
-
-	// The country of each public address, looked up by this node itself
-	// (peers receive it with the egress, never look it up).
-	countries    map[netip.Addr]countryEntry
-	countryRun   map[netip.Addr]bool
-	countryRetry map[netip.Addr]*time.Timer // pending retry after a failure
-}
-
-type countryEntry struct {
-	code  string
-	at    time.Time
-	fails int // consecutive failed lookups
-}
-
-const (
-	countryTTL      = 24 * time.Hour
-	countryRetryMin = time.Minute
-	countryRetryMax = 30 * time.Minute
-)
-
-// retryAfter: how long a failed lookup stands before trying again.
-func (e countryEntry) retryAfter() time.Duration {
-	d := countryRetryMin
-	for i := 1; i < e.fails && d < countryRetryMax; i++ {
-		d *= 2
-	}
-	if d > countryRetryMax {
-		d = countryRetryMax
-	}
-	return d
 }
 
 // New: the detector of the interfaces of m; Run starts it.
 func New(m *iface.Manager, h Host) *Detector {
 	return &Detector{m: m, host: h, ctx: context.Background(), results: map[pubKey]pubip.Result{}, running: map[pubKey]bool{},
-		lastLoc: map[string]string{}, kickCh: make(chan string, 64),
-		countries: map[netip.Addr]countryEntry{}, countryRun: map[netip.Addr]bool{},
-		countryRetry: map[netip.Addr]*time.Timer{}}
+		lastLoc: map[string]string{}, kickCh: make(chan string, 64)}
 }
 
 func (p *Detector) settings() (interval time.Duration, servers []string, method string) {
@@ -165,7 +132,7 @@ func (p *Detector) DetectNow(name string) {
 	for _, k := range p.targets() {
 		if k.iface == name {
 			wg.Add(1)
-			go func(k pubKey) { defer wg.Done(); p.detect(k, true) }(k)
+			go func(k pubKey) { defer wg.Done(); p.detect(k) }(k)
 		}
 	}
 	done := make(chan struct{})
@@ -192,14 +159,14 @@ func (p *Detector) Run(ctx context.Context, n *node.Node) {
 			return
 		case <-full.C:
 			for _, k := range p.targets() {
-				go p.detect(k, false)
+				go p.detect(k)
 			}
 			interval, _, _ = p.settings()
 			full.Reset(interval)
 		case name := <-p.kickCh:
 			for _, k := range p.targets() {
 				if name == "" || k.iface == name {
-					go p.detect(k, false)
+					go p.detect(k)
 				}
 			}
 		case <-poll.C:
@@ -210,7 +177,7 @@ func (p *Detector) Run(ctx context.Context, n *node.Node) {
 				p.lastLoc[k.iface] = loc
 				p.mu.Unlock()
 				if changed {
-					go p.detect(k, false)
+					go p.detect(k)
 				}
 			}
 		}
@@ -251,8 +218,8 @@ func (p *Detector) local(name string) []netip.Addr {
 	return out
 }
 
-// detect checks one interface and family; manual = an operator's refresh.
-func (p *Detector) detect(k pubKey, manual bool) {
+// detect checks one interface and family.
+func (p *Detector) detect(k pubKey) {
 	p.mu.Lock()
 	if p.running[k] {
 		p.mu.Unlock()
@@ -280,75 +247,6 @@ func (p *Detector) detect(k pubKey, manual bool) {
 	p.mu.Lock()
 	p.results[k] = res
 	p.mu.Unlock()
-	if res.IP.IsValid() {
-		go p.lookupCountry(k, res.IP, manual)
-	}
-}
-
-// lookupCountry finds the country of ip through the interface it was
-// detected on, unless a recent answer is cached. A failure is retried on
-// its own, backing off, while ip is still that interface's address; an
-// operator's refresh (manual) retries it at once.
-func (p *Detector) lookupCountry(k pubKey, ip netip.Addr, manual bool) {
-	ip = ip.Unmap()
-	p.mu.Lock()
-	e, ok := p.countries[ip]
-	fresh := ok && time.Since(e.at) < countryTTL
-	if ok && e.fails > 0 {
-		fresh = !manual && time.Since(e.at) < e.retryAfter()
-	}
-	if fresh || p.countryRun[ip] {
-		p.mu.Unlock()
-		return
-	}
-	p.countryRun[ip] = true
-	p.mu.Unlock()
-
-	ctx, cancel := context.WithTimeout(p.ctx, 30*time.Second)
-	defer cancel()
-	dial, resolve := p.funcs(k)
-	code, _ := ipcountry.Lookup(ctx, k.fam, ip, dial, resolve)
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	delete(p.countryRun, ip)
-	if t := p.countryRetry[ip]; t != nil {
-		t.Stop()
-		delete(p.countryRetry, ip)
-	}
-	// forget addresses not looked at for a while (dynamic addresses)
-	for a, x := range p.countries {
-		if a != ip && p.countryRetry[a] == nil && time.Since(x.at) > countryTTL+countryRetryMax {
-			delete(p.countries, a)
-		}
-	}
-	if code != "" {
-		p.countries[ip] = countryEntry{code: code, at: time.Now()}
-		return
-	}
-	// A known answer stays shown through a failed refresh. Only scheduled
-	// attempts lengthen the back-off, not an operator's refreshes.
-	n := countryEntry{code: e.code, at: time.Now(), fails: e.fails + 1}
-	if manual && e.fails > 0 {
-		n.fails = e.fails
-	}
-	p.countries[ip] = n
-	p.countryRetry[ip] = time.AfterFunc(n.retryAfter(), func() {
-		p.mu.Lock()
-		cur := p.results[k].IP.Unmap() == ip
-		delete(p.countryRetry, ip)
-		p.mu.Unlock()
-		if cur && p.ctx.Err() == nil {
-			p.lookupCountry(k, ip, false)
-		}
-	})
-}
-
-// country is the cached country code of ip ("" = unknown).
-func (p *Detector) country(ip netip.Addr) string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.countries[ip.Unmap()].code
 }
 
 // funcs: dial and resolve through the interface.
@@ -394,7 +292,6 @@ func (p *Detector) view(name string, fam int) *iface.PublicView {
 	}
 	if v.OK {
 		v.IP = r.IP.String()
-		v.Country = p.country(r.IP)
 		for _, l := range p.local(name) {
 			if l == r.IP {
 				v.Direct = true
@@ -424,8 +321,6 @@ type SelfEgress struct {
 type EgressPublic struct {
 	IP string `json:"ip"`
 	OK bool   `json:"ok"`
-	// Country is the ISO 3166-1 alpha-2 code this node found for IP.
-	Country string `json:"country,omitempty"`
 }
 
 // Self reports this node's egress.
@@ -437,7 +332,7 @@ func (p *Detector) Self() SelfEgress {
 		}
 		e := &EgressPublic{}
 		if v := p.view(name, fam); v != nil && v.OK {
-			e.IP, e.OK, e.Country = v.IP, true, v.Country
+			e.IP, e.OK = v.IP, true
 		}
 		return e
 	}

@@ -146,3 +146,17 @@
 .remote-upg-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:2px}
 .remote-progress{display:flex;flex-direction:column;gap:6px}
 @media(max-width:640px){.remote-auth-form,.remote-upg{grid-template-columns:minmax(0,1fr)}}
+/* GeoIP hover card of a flag */
+.hy-tooltip-wrap:has(> .cflag){vertical-align:-.1em;margin-right:.45em}
+.hy-tooltip-wrap>.cflag{margin-right:0}
+.geo-card{font-family:var(--font);white-space:normal;line-height:1.6;min-width:180px}
+.geo-card-ip{font-family:var(--mono);font-weight:600;color:var(--text);margin-bottom:4px}
+.geo-card-row{display:grid;grid-template-columns:auto 1fr;gap:12px}
+.geo-card-row>span:first-child{color:var(--text-muted)}
+.geo-card-row>span:last-child{color:var(--text);text-align:right}
+/* Settings → Storage */
+.geo-dbs{display:flex;flex-direction:column;gap:8px}
+.geo-db{display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--border-light);border-radius:var(--radius);font-size:13px}
+.geo-db-type{font-weight:600;color:var(--text)}
+.geo-attrib{font-size:12px}
+.storage-warn{font-size:13px;color:var(--c-orange)}

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/audit"
 	"github.com/FrankoonG/hy2scale/core/msess"
 	relay "github.com/FrankoonG/hy2scale/core/node"
 	"github.com/FrankoonG/hy2scale/core/proto"
@@ -137,6 +138,7 @@ func (e *Engine) dialExitWithMode(ctx context.Context, exitVia, exitMode, addr s
 // First successful connection wins; others are closed.
 // If exitPaths is empty or mode is aggregate, falls back to dialExitWithMode.
 func (e *Engine) dialExitWithPaths(ctx context.Context, exitVia string, exitPaths []string, exitMode, addr string) (net.Conn, error) {
+	af := e.auditExit(ctx, exitVia, exitPaths, exitMode)
 	// quality / aggregate: lossless multi-path session when the exit speaks
 	// msess (1.3.10+); otherwise the legacy dispatch below.
 	if conn, ok, err := e.dialMsess(ctx, exitVia, exitPaths, exitMode, addr); ok {
@@ -162,6 +164,7 @@ func (e *Engine) dialExitWithPaths(ctx context.Context, exitVia string, exitPath
 		return nil, fmt.Errorf("all exit paths disabled")
 	}
 	if len(active) == 1 {
+		af.SetExitPath(e.stripSelf(active[0]))
 		return e.dialExit(ctx, active[0], addr)
 	}
 	// Race paths concurrently with 2s stagger
@@ -211,6 +214,7 @@ func (e *Engine) dialExitWithPaths(ctx context.Context, exitVia string, exitPath
 		e.activePathMu.Lock()
 		e.activePaths[exitVia] = r.path
 		e.activePathMu.Unlock()
+		af.SetExitPath(e.stripSelf(r.path))
 		if r.path != active[0] {
 			log.Printf("[exit] failover: %s (primary %s unavailable)", r.path, active[0])
 		}
@@ -404,6 +408,7 @@ func (e *Engine) dialExitUDP(ctx context.Context, exitVia, addr string) (net.Con
 // dialExitUDP when only one path is active. The UDP equivalent of
 // dialExitWithPaths used by IKEv2 / L2TP transparent UDP proxies.
 func (e *Engine) dialExitUDPPaths(ctx context.Context, exitVia string, exitPaths []string, exitMode, addr string) (net.Conn, error) {
+	af := e.auditExit(ctx, exitVia, exitPaths, exitMode)
 	// quality / aggregate: packet session (exit keeps one UDP socket while
 	// the carrying path changes) when the exit speaks msess.
 	if conn, ok, err := e.dialMsessPacket(ctx, exitVia, exitPaths, exitMode, addr); ok {
@@ -423,6 +428,7 @@ func (e *Engine) dialExitUDPPaths(ctx context.Context, exitVia string, exitPaths
 		return nil, fmt.Errorf("all UDP exit paths disabled")
 	}
 	if len(active) == 1 {
+		af.SetExitPath(e.stripSelf(active[0]))
 		return e.dialExitUDP(ctx, active[0], addr)
 	}
 	type result struct {
@@ -460,6 +466,7 @@ func (e *Engine) dialExitUDPPaths(ctx context.Context, exitVia string, exitPaths
 			continue
 		}
 		raceCancel()
+		af.SetExitPath(e.stripSelf(r.path))
 		go func() {
 			for returned < len(active) {
 				late := <-ch
@@ -475,6 +482,36 @@ func (e *Engine) dialExitUDPPaths(ctx context.Context, exitVia string, exitPaths
 		return nil, lastErr
 	}
 	return nil, fmt.Errorf("all UDP exit paths exhausted")
+}
+
+// stripSelf removes a leading self label (name or node id) from an exit
+// path and the connection hints of its hops.
+func (e *Engine) stripSelf(path string) string {
+	parts := splitPath(path)
+	if len(parts) > 0 && (parts[0] == e.node.Name() || parts[0] == e.host.SelfID()) {
+		parts = parts[1:]
+	}
+	for i, p := range parts {
+		parts[i], _ = relay.SplitConnHint(p)
+	}
+	return strings.Join(parts, "/")
+}
+
+// auditExit records an exit through other nodes on the flow ctx carries
+// (an exit that is this node itself is recorded by the local dial).
+func (e *Engine) auditExit(ctx context.Context, exitVia string, exitPaths []string, exitMode string) *audit.Flow {
+	af := audit.FromContext(ctx)
+	if af == nil {
+		return nil
+	}
+	p := e.stripSelf(exitVia)
+	if p == "" && len(exitPaths) > 0 {
+		p = e.stripSelf(exitPaths[0])
+	}
+	if p != "" {
+		af.SetExitNode(p, exitMode)
+	}
+	return af
 }
 
 func splitOn(s string, sep byte) []string {

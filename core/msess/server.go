@@ -24,6 +24,9 @@ type ServerConfig struct {
 	DialPacketTarget func(ctx context.Context, addr string) (net.Conn, error)
 	MaxSessions      int // 0 = 20000
 	Logf             func(string, ...any)
+	// OpenContext: the parent context of a new session's target dial,
+	// given the subflow that opened it (nil = context.Background()).
+	OpenContext func(subflow net.Conn) context.Context
 }
 
 // Server terminates subflows at the exit and owns the target sockets.
@@ -131,7 +134,11 @@ func (sv *Server) open(conn net.Conn, br *bufio.Reader, h hello) {
 			}
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	base := context.Background()
+	if sv.cfg.OpenContext != nil {
+		base = sv.cfg.OpenContext(conn)
+	}
+	ctx, cancel := context.WithTimeout(base, 10*time.Second)
 	target, err := dialTarget(ctx, h.target)
 	cancel()
 	if err != nil {

@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/FrankoonG/hy2scale/internal/app"
 	relay "github.com/FrankoonG/hy2scale/core/node"
+	"github.com/FrankoonG/hy2scale/internal/app"
 	"github.com/FrankoonG/hy2scale/internal/web"
 )
 
@@ -76,10 +76,10 @@ func NewServer(a *app.App, addr, basePath string) *Server {
 		basePath:   bp,
 		username:   username,
 		passHash:   passHash,
-		oldNodeIDs:    make(map[string]string),
-		layoutSubs:    make(map[uint64]chan []app.GraphCanvas),
-		sessions: make(map[string]time.Time),
-		upgrade:  newUpgradeJob(),
+		oldNodeIDs: make(map[string]string),
+		layoutSubs: make(map[uint64]chan []app.GraphCanvas),
+		sessions:   make(map[string]time.Time),
+		upgrade:    newUpgradeJob(),
 	}
 }
 
@@ -115,8 +115,10 @@ func (s *Server) Start(ctx context.Context) error {
 	s.endpointRoutes(authed)
 	s.webRoutes(authed)
 	s.publicIPRoutes(authed)
+	s.geoipRoutes(authed)
 	s.shellRoutes(authed)
 	s.toolsRoutes(authed)
+	s.storageRoutes(authed)
 
 	apiMux.Handle("/api/", s.authMiddleware(authed))
 
@@ -149,6 +151,7 @@ func (s *Server) Start(ctx context.Context) error {
 		"logs":       true,
 		"settings":   true,
 		"tools":      true,
+		"audit":      true,
 	}
 
 	// Remote node proxy — no local auth, remote handles its own
@@ -298,4 +301,3 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 // --- Backup / Restore ---
-

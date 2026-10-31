@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+
+	"github.com/FrankoonG/hy2scale/core/audit"
 )
 
 // Routing of a user's flow (VPN, WireGuard, SOCKS5/HTTP/SS clients):
@@ -21,7 +23,7 @@ import (
 // dialRoutedTCP dials addr ("host:port", host an IP or a name) for a user
 // whose own exit is exitVia/exitPaths/exitMode ("" = direct).
 func (a *App) dialRoutedTCP(ctx context.Context, exitVia string, exitPaths []string, exitMode, addr string) (net.Conn, error) {
-	via, paths, mode, err := a.routeFor(exitVia, exitPaths, exitMode, addr)
+	via, paths, mode, err := a.routeFor(ctx, exitVia, exitPaths, exitMode, addr)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +36,7 @@ func (a *App) dialRoutedTCP(ctx context.Context, exitVia string, exitPaths []str
 // dialRoutedUDP is the UDP counterpart of dialRoutedTCP: one connected
 // datagram flow to addr.
 func (a *App) dialRoutedUDP(ctx context.Context, exitVia string, exitPaths []string, exitMode, addr string) (net.Conn, error) {
-	via, paths, mode, err := a.routeFor(exitVia, exitPaths, exitMode, addr)
+	via, paths, mode, err := a.routeFor(ctx, exitVia, exitPaths, exitMode, addr)
 	if err != nil {
 		return nil, err
 	}
@@ -44,8 +46,9 @@ func (a *App) dialRoutedUDP(ctx context.Context, exitVia string, exitPaths []str
 	return a.dialExitUDPPaths(ctx, via, paths, mode, addr)
 }
 
-// routeFor resolves the exit a user flow to addr takes ("" = direct).
-func (a *App) routeFor(exitVia string, exitPaths []string, exitMode, addr string) (string, []string, string, error) {
+// routeFor resolves the exit a user flow to addr takes ("" = direct); a
+// matching rule is recorded on the flow ctx carries.
+func (a *App) routeFor(ctx context.Context, exitVia string, exitPaths []string, exitMode, addr string) (string, []string, string, error) {
 	if exitVia != "" {
 		return exitVia, exitPaths, exitMode, nil
 	}
@@ -53,7 +56,8 @@ func (a *App) routeFor(exitVia string, exitPaths []string, exitMode, addr string
 	if err != nil {
 		return "", nil, "", fmt.Errorf("bad address %q: %w", addr, err)
 	}
-	if via, mode, paths, ok := a.rules.ExitFor(host); ok {
+	if via, mode, paths, name, ok := a.rules.RuleFor(host); ok {
+		audit.FromContext(ctx).SetRule(name)
 		return via, paths, mode, nil
 	}
 	return "", nil, "", nil

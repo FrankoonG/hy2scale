@@ -26,8 +26,8 @@ const (
 	// StreamPunch carries hole-punch signalling to the node at the end of a
 	// path; nodes on the way only forward it.
 	StreamPunch = "_relay_punch_:0"
-	// StreamEgress returns the node's egress (public address and country per
-	// family, JSON); StreamWhoami the address the stream's connection comes
+	// StreamEgress returns the node's egress (public address per family,
+	// JSON); StreamWhoami the address the stream's connection comes
 	// from.
 	StreamEgress = "_relay_egress_:0"
 	StreamWhoami = "_relay_whoami_:0"

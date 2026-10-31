@@ -15,6 +15,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/audit"
 	"github.com/FrankoonG/hy2scale/core/exit"
 	"github.com/FrankoonG/hy2scale/core/sniff"
 	"golang.org/x/crypto/chacha20poly1305"
@@ -192,6 +193,9 @@ func (a *App) handleSS(conn net.Conn, method string) {
 		exitPaths := u.ExitPaths
 		username := u.Username
 
+		af := beginUserFlow(audit.InSS, "tcp", username, conn.RemoteAddr(), addr)
+		dctx := audit.NewContext(withRestrict(a.appCtx, a.userRestrict(username)), af)
+
 		// IP destination: read frames until the client's hello is whole so
 		// the host name can be recovered (sniff_override.go). Most clients
 		// send the address alone in the first frame.
@@ -203,6 +207,7 @@ func (a *App) handleSS(conn net.Conn, method string) {
 				extra, started, ferr := readSSFrame(conn, sessionAEAD, nonce, overhead, deadline)
 				if ferr != nil {
 					if started {
+						af.End(ferr)
 						return // part of a frame is gone: the stream is unusable
 					}
 					var ne net.Error
@@ -211,15 +216,17 @@ func (a *App) handleSS(conn net.Conn, method string) {
 				}
 				remaining = append(remaining, extra...)
 			}
-			remote, err = a.dialSniffedTCP(withRestrict(a.appCtx, a.userRestrict(username)), a.exitRoute(exitVia, exitPaths, exitMode), nil,
+			remote, err = a.dialSniffedTCP(dctx, a.exitRoute(dctx, exitVia, exitPaths, exitMode), nil,
 				addr, remaining, waited, isLoopbackAddr(conn.RemoteAddr()))
 		} else {
-			remote, err = a.dialRoutedTCP(withRestrict(a.appCtx, a.userRestrict(username)), exitVia, exitPaths, exitMode, addr)
+			remote, err = a.dialRoutedTCP(dctx, exitVia, exitPaths, exitMode, addr)
 		}
 		if err != nil {
+			af.End(err)
 			return
 		}
 		defer remote.Close()
+		defer af.End(nil)
 
 		// Device row with live accounting; stop closes both ends.
 		remoteIP := ""
@@ -229,6 +236,7 @@ func (a *App) handleSS(conn net.Conn, method string) {
 		stop := func() { conn.Close(); remote.Close() }
 		sid := a.Sessions.Connect(username, remoteIP, "ss", stop)
 		m := a.newUserMeter(username, sid, stop)
+		m.flow = af
 		defer func() {
 			a.Sessions.Disconnect(sid, 0, 0)
 			m.done()
@@ -355,28 +363,32 @@ func (a *App) handleSSNone(conn net.Conn) {
 		}
 	}
 
+	af := beginUserFlow(audit.InSS, "tcp", username, conn.RemoteAddr(), addr)
+	dctx := audit.NewContext(withRestrict(a.appCtx, a.userRestrict(username)), af)
 	var remote net.Conn
 	if wantSniff(addr) {
 		peeked, waited := peekHello(conn, remaining)
 		remaining = peeked
-		remote, err = a.dialSniffedTCP(withRestrict(a.appCtx, a.userRestrict(username)), a.exitRoute(exitVia, exitPaths, exitMode), nil,
+		remote, err = a.dialSniffedTCP(dctx, a.exitRoute(dctx, exitVia, exitPaths, exitMode), nil,
 			addr, remaining, waited, isLoopbackAddr(conn.RemoteAddr()))
 	} else {
-		remote, err = a.dialRoutedTCP(withRestrict(a.appCtx, a.userRestrict(username)), exitVia, exitPaths, exitMode, addr)
+		remote, err = a.dialRoutedTCP(dctx, exitVia, exitPaths, exitMode, addr)
 	}
 	if err != nil {
+		af.End(err)
 		return
 	}
 	defer remote.Close()
 
 	if len(remaining) > 0 {
 		remote.Write(remaining)
+		af.Add(int64(len(remaining)), 0)
 	}
 	remoteIP := ""
 	if h, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
 		remoteIP = h
 	}
-	a.relayUser(conn, remote, username, remoteIP, "ss", true)
+	a.relayUser(conn, remote, username, remoteIP, "ss", true, af)
 }
 
 func keySize(method string) int {

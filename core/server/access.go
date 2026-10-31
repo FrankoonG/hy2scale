@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/audit"
 	"github.com/FrankoonG/hy2scale/core/exit"
 	relay "github.com/FrankoonG/hy2scale/core/node"
 	"github.com/FrankoonG/hy2scale/core/proto"
@@ -69,10 +70,10 @@ func (o *outbound) accessTCP(authID, peerAddr, addr string, g Grant) (net.Conn, 
 		return o.relayPipe(addr, peerAddr, ""), nil
 	case exit.IsBondStream(addr):
 		base, cr := proto.ParseRestrict(addr)
-		return acc.Meter(authID, peerAddr, o.bond(proto.WithRestrict(base, cr|r))), nil
+		return acc.Meter(authID, peerAddr, o.bond(proto.WithRestrict(base, cr|r), peerAddr, user)), nil
 	case proto.IsMsessAddr(addr):
 		base, cr := proto.ParseRestrict(addr)
-		return acc.Meter(authID, peerAddr, o.relayPipe(proto.WithRestrict(base, cr|r), peerAddr, "")), nil
+		return acc.Meter(authID, peerAddr, o.relayPipeAs(proto.WithRestrict(base, cr|r), peerAddr, "", user)), nil
 	}
 	chain, target, ok := proto.ParseVia(addr)
 	if !ok {
@@ -86,7 +87,7 @@ func (o *outbound) accessTCP(authID, peerAddr, addr string, g Grant) (net.Conn, 
 	if _, t, _ := proto.ParseVia(fwd); proto.IsRelayStream(t) && !proto.IsMsessAddr(t) {
 		return o.relayPipe(fwd, peerAddr, ""), nil // control stream (full mode): not metered
 	}
-	return acc.Meter(authID, peerAddr, o.relayPipe(fwd, peerAddr, "")), nil
+	return acc.Meter(authID, peerAddr, o.relayPipeAs(fwd, peerAddr, "", user)), nil
 }
 
 // accessUDP serves a via-encoded UDP request of a user with node access.
@@ -98,21 +99,37 @@ func (o *outbound) accessUDP(authID, peerAddr, chain, target string, g Grant) (h
 		return nil, err
 	}
 	nchain, ntarget, _ := proto.ParseVia(fwd)
+	af := audit.Begin(audit.InAccess, "udp")
+	af.SetUser(strings.TrimPrefix(authID, UserPrefix))
+	af.SetSrc(peerAddr, "")
+	af.SetDst(relay.AuditTarget(target))
+	af.SetExitNode(relay.ChainPath(nchain), "")
 	c, err := o.n.DialUDPVia(o.ctx, strings.Split(nchain, "/"), ntarget)
 	if err != nil {
+		af.End(err)
 		return nil, err
 	}
-	return &UDPAdapter{Conn: o.cfg.Access.Meter(authID, peerAddr, c), Addr: target}, nil
+	return &UDPAdapter{Conn: o.cfg.Access.Meter(authID, peerAddr, audit.Track(af, c, false)), Addr: target}, nil
 }
 
 // relayPipe hands a stream to the relay dispatcher as if it had arrived
 // from a peer (the local end reports the client's address); a management
 // stream carries authID.
 func (o *outbound) relayPipe(addr, peerAddr, authID string) net.Conn {
+	return o.relayPipeAs(addr, peerAddr, authID, "")
+}
+
+// relayPipeAs is relayPipe for the traffic of a node-access user (its flows
+// are recorded as that user's).
+func (o *outbound) relayPipeAs(addr, peerAddr, authID, user string) net.Conn {
 	c1, c2 := net.Pipe()
 	var local net.Conn = c1
 	if peerAddr != "" {
-		local = &PeerAddrConn{Conn: c1, Peer: peerAddr}
+		pc := &PeerAddrConn{Conn: c1, Peer: peerAddr}
+		if user != "" {
+			pc.Inbound, pc.User = audit.InAccess, user
+		}
+		local = pc
 	}
 	if authID != "" && o.cfg.WrapAPI != nil {
 		local = o.cfg.WrapAPI(local, authID)

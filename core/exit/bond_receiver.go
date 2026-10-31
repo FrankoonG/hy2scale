@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/audit"
 	"github.com/FrankoonG/hy2scale/core/proto"
 )
 
@@ -155,11 +156,14 @@ func (e *Engine) handleBondStream(bondAddr string, pathConn net.Conn) error {
 	}
 
 	if needsInit {
-		targetConn, err := e.dialLocal(WithRestrict(e.ctx, restrict), "tcp", realAddr)
+		af := e.node.BeginRelay(pathConn, "tcp", realAddr)
+		targetConn, err := e.dialLocal(audit.NewContext(WithRestrict(e.ctx, restrict), af), "tcp", realAddr)
 		if err != nil {
+			af.End(err)
 			bondReceivers.Delete(bondID)
 			return fmt.Errorf("bond receiver: dial target %s failed: %w", realAddr, err)
 		}
+		targetConn = audit.Track(af, targetConn, false)
 		recv.target = targetConn
 		log.Printf("[bond-rx] %d: session created, target=%s", bondID, realAddr)
 

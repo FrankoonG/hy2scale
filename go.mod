@@ -5,6 +5,7 @@ go 1.27.0
 require (
 	github.com/FrankoonG/hy2scale/core v0.0.0-00010101000000-000000000000
 	github.com/apernet/hysteria/core/v2 v2.13.0
+	github.com/oschwald/maxminddb-golang/v2 v2.8.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/xen0bit/veepin v0.0.0-00010101000000-000000000000
 	golang.org/x/crypto v0.57.0

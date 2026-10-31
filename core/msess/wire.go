@@ -7,6 +7,7 @@ package msess
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -207,4 +208,33 @@ func dataCRC(off uint64, data []byte) uint32 {
 	var o [8]byte
 	binary.BigEndian.PutUint64(o[:], off)
 	return crc32.Update(crc32.Update(0, castagnoli, o[:]), castagnoli, data)
+}
+
+// HelloInfo is what a relay hop can tell from a subflow's HELLO.
+type HelloInfo struct {
+	Kind   string // "open", "open-packet", "join", "probe"
+	SID    [16]byte
+	Target string // open kinds only
+}
+
+// DescribeHello decodes a HELLO (proto.MsessHello of a subflow address).
+func DescribeHello(b []byte) (HelloInfo, bool) {
+	h, err := readHello(bytes.NewReader(b))
+	if err != nil {
+		return HelloInfo{}, false
+	}
+	i := HelloInfo{SID: h.sid, Target: h.target}
+	switch h.kind {
+	case kindOpen:
+		i.Kind = "open"
+	case kindOpenPacket:
+		i.Kind = "open-packet"
+	case kindJoin:
+		i.Kind = "join"
+	case kindProbe:
+		i.Kind = "probe"
+	default:
+		return HelloInfo{}, false
+	}
+	return i, true
 }

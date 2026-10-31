@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/audit"
 	"github.com/FrankoonG/hy2scale/core/sniff"
 )
 
@@ -105,11 +106,24 @@ type RouteFunc func(addr string) (via string, paths []string, mode string, err e
 // host. The caller forwards peeked once the connection is up.
 func (e *Engine) DialSniffed(ctx context.Context, route RouteFunc, here func(context.Context, string) (net.Conn, error),
 	dst string, peeked []byte, waited, localClient bool) (net.Conn, error) {
+	c, err := e.dialSniffed(ctx, route, here, dst, peeked, waited, localClient)
+	if err != nil {
+		// a deferred dial reports its failure only here
+		audit.FromContext(ctx).Fail(audit.ResultError, err)
+	}
+	return c, err
+}
+
+func (e *Engine) dialSniffed(ctx context.Context, route RouteFunc, here func(context.Context, string) (net.Conn, error),
+	dst string, peeked []byte, waited, localClient bool) (net.Conn, error) {
 	if here == nil {
 		here = func(ctx context.Context, addr string) (net.Conn, error) { return e.dialLocal(ctx, "tcp", addr) }
 	}
 	name := sniffName(dst, peeked)
 	sniffMisses.note(dst, name != "", waited)
+	if name != "" {
+		audit.FromContext(ctx).SetDstHost(name)
+	}
 
 	target := dst
 	via, paths, mode, err := "", []string(nil), "", error(nil)

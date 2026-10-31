@@ -5,6 +5,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/audit"
 	"github.com/FrankoonG/hy2scale/core/exit"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
@@ -25,10 +26,10 @@ func wantSniff(dst string) bool { return exit.WantSniff(dst) }
 func isLoopbackAddr(addr net.Addr) bool { return exit.IsLoopbackAddr(addr) }
 
 // exitRoute is the route of a user flow: its own exit, else the matching
-// rule's exit, else here.
-func (a *App) exitRoute(exitVia string, exitPaths []string, exitMode string) flowRoute {
+// rule's exit, else here (ctx: the flow's, for its audit record).
+func (a *App) exitRoute(ctx context.Context, exitVia string, exitPaths []string, exitMode string) flowRoute {
 	return func(addr string) (string, []string, string, error) {
-		return a.routeFor(exitVia, exitPaths, exitMode, addr)
+		return a.routeFor(ctx, exitVia, exitPaths, exitMode, addr)
 	}
 }
 
@@ -87,6 +88,8 @@ func (a *App) dialAccepted(ctx context.Context, conn *gonet.TCPConn, ep tcpip.En
 	if err == nil && len(peeked) > 0 {
 		if _, err = remote.Write(peeked); err != nil {
 			remote.Close()
+		} else {
+			audit.FromContext(ctx).Add(int64(len(peeked)), 0)
 		}
 	}
 	if err != nil {
