@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Autocomplete, FormGroup, SortableList } from '@hy2scale/ui';
 import { useExitPaths } from '@/hooks/useExitPaths';
@@ -48,6 +48,8 @@ export function pathHasMultiConn(topology: TopologyNode[], path: string, selfId?
 
 export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
   const { t } = useTranslation();
+  // Several lists can share a form (policy rules): one radio group each.
+  const radioName = `exitMode-${useId()}`;
   const { exitPaths } = useExitPaths();
 
   // Items are the per-row form state. The earlier assumption — that
@@ -186,15 +188,15 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
       {/* Mode selection */}
       <div className="exit-mode-options">
         <label className="exit-mode-opt">
-          <input type="radio" name="exitMode" checked={mode === '' || !mode} onChange={() => setMode('')} disabled={hasMultiple} />
+          <input type="radio" name={radioName} checked={mode === '' || !mode} onChange={() => setMode('')} disabled={hasMultiple} />
           {t('exit.modeNone')}
         </label>
         <label className="exit-mode-opt">
-          <input type="radio" name="exitMode" checked={mode === 'quality'} onChange={() => setMode('quality')} disabled={singleOnly} />
+          <input type="radio" name={radioName} checked={mode === 'quality'} onChange={() => setMode('quality')} disabled={singleOnly} />
           {t('exit.modeStability')}
         </label>
         <label className="exit-mode-opt">
-          <input type="radio" name="exitMode" checked={mode === 'aggregate'} onChange={() => setMode('aggregate')} disabled={aggregateDisabled} />
+          <input type="radio" name={radioName} checked={mode === 'aggregate'} onChange={() => setMode('aggregate')} disabled={aggregateDisabled} />
           {t('exit.modeSpeed')}
         </label>
         {completion && (
@@ -205,8 +207,9 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
         )}
       </div>
 
-      {/* Path inputs. The radios keep name="exitMode" (UI regression driver);
-          they are controlled, so two lists on one page never share state. */}
+      {/* Path inputs. The radios' name starts with "exitMode" (UI regression
+          driver) and is unique per list: a shared name would make the browser
+          keep only one of them checked across all lists in a form. */}
       <SortableList
         items={items}
         onReorder={handleReorder}
