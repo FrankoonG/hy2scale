@@ -1,20 +1,17 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Button, FormGroup, Input, Modal, SegmentedControl, SortableList, Toggle, useConfirm, useToast } from '@hy2scale/ui';
+import { Button, FormGroup, Input, Modal, useConfirm, useToast } from '@hy2scale/ui';
 import {
   createCondition, createPolicySet, deleteCondition, deletePolicySet, updateCondition, updatePolicySet,
   getPolicyCapabilities, PolicyValidationError,
-  type CondRule, type ConditionSet, type PolicyConfig, type PolicyRule, type PolicySet,
+  type ConditionSet, type End, type PolicyConfig, type PolicySet, type Rule,
 } from '@/api/policy';
 import * as api from '@/api';
 import { useDialogInit } from '@/hooks/useFormInit';
-import CondEditor from './CondEditor';
-import TerminalEditor from './TerminalEditor';
-import { newId, type SetKind } from './shared';
+import FlowEditor from './FlowEditor';
+import { type SetKind } from './shared';
 import { RefsLine } from './RefsLine';
-
-type Rule = CondRule | PolicyRule;
 
 /** Dialog of one condition set or policy set: its name and ordered rules. */
 export default function SetModal({ open, onClose, animateFrom, kind, editing, cfg }: {
@@ -29,12 +26,14 @@ export default function SetModal({ open, onClose, animateFrom, kind, editing, cf
   const { data: caps } = useQuery({ queryKey: ['policyCaps'], queryFn: getPolicyCapabilities, enabled: open && kind === 'policy', retry: false });
   const [name, setName] = useState('');
   const [rules, setRules] = useState<Rule[]>([]);
+  const [def, setDef] = useState<End | undefined>(undefined);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<{ msg: string; path?: string } | null>(null);
 
   useDialogInit(open, `${kind}:${editing?.id ?? ''}`, () => {
     setName(editing?.name ?? '');
-    setRules(editing ? (editing.rules as Rule[]).map((r) => ({ ...r })) : []);
+    setRules(editing ? editing.rules.map((r) => ({ ...r })) : []);
+    setDef(editing?.default);
     setError(null);
   });
 
@@ -45,17 +44,12 @@ export default function SetModal({ open, onClose, animateFrom, kind, editing, cf
   };
   const callable = (cfg?.policies || []).filter((p) => !(isPolicy && p.id === editing?.id)).map((p) => ({ id: p.id, name: p.name }));
 
-  const addRule = () => setRules((rs) => [...rs, isPolicy
-    ? { id: newId(), enabled: true, then: { type: 'exit', paths: [''], mode: '' } } as PolicyRule
-    : { id: newId(), enabled: true, result: true } as CondRule]);
-  const update = (id: string, patch: Partial<Rule>) => setRules((rs) => rs.map((r) => (r.id === id ? { ...r, ...patch } as Rule : r)));
-
   const save = async () => {
     if (!name.trim()) { setError({ msg: t('policy.nameRequired') }); return; }
     setSaving(true);
     setError(null);
     try {
-      const body = { name: name.trim(), rules: rules as any };
+      const body = { name: name.trim(), rules, default: def };
       if (isPolicy) {
         const res = editing ? await updatePolicySet({ ...(editing as PolicySet), ...body }) : await createPolicySet(body);
         if (res?.warnings?.length) toast.info(res.warnings.join('; '));
@@ -105,48 +99,8 @@ export default function SetModal({ open, onClose, animateFrom, kind, editing, cf
         {editing?.refs && editing.refs.length > 0 && <RefsLine refs={editing.refs} />}
 
         <div className="pset-rules-title">{t('policy.rules')}</div>
-        <SortableList
-          items={rules}
-          onReorder={setRules}
-          removeLabel={t('app.delete')}
-          onRemove={(r) => setRules((rs) => rs.filter((x) => x.id !== r.id))}
-          onAdd={addRule}
-          addLabel={`+ ${t('policy.addRule')}`}
-          minItems={0}
-          testId="set-rules"
-          renderItem={(r) => (
-            <div className={r.enabled ? 'prule' : 'prule off'} data-testid="set-rule">
-              <div className="prule-head">
-                <Toggle size="sm" checked={r.enabled} onChange={(e) => update(r.id, { enabled: e.target.checked })} />
-                {isPolicy && (
-                  <Input className="prule-name" value={(r as PolicyRule).name || ''} placeholder={t('policy.ruleName')}
-                    onChange={(e) => update(r.id, { name: e.target.value || undefined } as Partial<PolicyRule>)} />
-                )}
-              </div>
-              <div className="prule-row">
-                <span className="prule-k">{t('policy.when')}</span>
-                <CondEditor value={r.when} onChange={(c) => update(r.id, { when: c })} ctx={condCtx} />
-              </div>
-              <div className="prule-row">
-                <span className="prule-k">{t('policy.then')}</span>
-                {isPolicy ? (
-                  <TerminalEditor value={(r as PolicyRule).then ?? { type: 'default' }} onChange={(x) => update(r.id, { then: x } as Partial<PolicyRule>)}
-                    policies={callable} ifaceAvailable={caps?.iface_terminal?.available ?? true} />
-                ) : (
-                  <SegmentedControl<'true' | 'false'>
-                    items={[{ key: 'true', label: t('policy.result.true') }, { key: 'false', label: t('policy.result.false') }]}
-                    value={(r as CondRule).result ? 'true' : 'false'}
-                    onChange={(k) => update(r.id, { result: k === 'true' } as Partial<CondRule>)}
-                  />
-                )}
-              </div>
-            </div>
-          )}
-        />
-        <div className="prule-default" data-testid="set-default">
-          <span className="prule-k">{t('policy.otherwise')}</span>
-          <span>{isPolicy ? t('policy.term.default') : t('policy.result.false')}</span>
-        </div>
+        <FlowEditor rules={rules} onRules={setRules} def={def} onDef={setDef}
+          ctx={{ kind, cond: condCtx, policies: callable, ifaceAvailable: caps?.iface_terminal?.available ?? true }} />
         {error && (
           <div className="pset-error" data-testid="set-error">
             {error.msg}{error.path && <span className="mono"> · {error.path}</span>}

@@ -50,14 +50,13 @@ export default function TestModal({ open, onClose, animateFrom, cfg }: {
   };
 
   const policyNames = new Map((cfg?.policies || []).map((p) => [p.id, p.name]));
-  // A rule by its name, else its position ("Rule 2"); the set's end as "Otherwise".
-  const ruleLabel = (policy: string, rule: string, name?: string) => {
-    if (!rule || rule === 'default') return t('policy.otherwise');
-    if (name) return name;
-    const i = (cfg?.policies.find((p) => p.id === policy)?.rules || []).findIndex((r) => r.id === rule);
-    return i >= 0 ? t('policy.ruleN', { n: i + 1 }) : rule;
+  // The deciding rule by its name, else its position ("Rule 2.1"); a
+  // default end as "Otherwise" (a nested flow's: "Rule 2 · Otherwise").
+  const ruleLabel = (h: PolicyTestResult['chain'][number]) => {
+    const pos = (h.path || []).join('.');
+    if (h.otherwise) return pos ? `${t('policy.ruleN', { n: pos })} · ${t('policy.otherwise')}` : t('policy.otherwise');
+    return h.rule_name || t('policy.ruleN', { n: pos || h.rule });
   };
-
   return (
     <Modal open={open} onClose={onClose} animateFrom={animateFrom} wide title={t('policy.test')}
       footer={<><span className="spacer" /><Button onClick={onClose}>{t('app.close')}</Button></>}>
@@ -111,7 +110,7 @@ export default function TestModal({ open, onClose, animateFrom, cfg }: {
                 <div key={i} className="ptest-hop">
                   <span className="ptest-depth">{h.depth}</span>
                   <b>{h.policy_name || policyNames.get(h.policy) || h.policy}</b>
-                  <span className="muted">· {ruleLabel(h.policy, h.rule, h.rule_name)}</span>
+                  <span className="muted">· {ruleLabel(h)}</span>
                 </div>
               ))}
             </div>
