@@ -33,8 +33,10 @@ type Record struct {
 	Dst         string `json:"dst,omitempty"`
 	DstHost     string `json:"dst_host,omitempty"`
 	DstIP       string `json:"dst_ip,omitempty"`
-	Rule        string `json:"rule,omitempty"`
-	Exit        string `json:"exit,omitempty"` // direct | node | blocked
+	Rule        string `json:"rule,omitempty"`     // policy chain ("set/rule > set/rule")
+	Policy      string `json:"policy,omitempty"`   // the policy set that gave the terminal (id)
+	Terminal    string `json:"terminal,omitempty"` // deny | exit | iface | default
+	Exit        string `json:"exit,omitempty"`     // direct | node | blocked
 	ExitPath    string `json:"exit_path,omitempty"`
 	ExitMode    string `json:"exit_mode,omitempty"`
 	EgressIface string `json:"egress_iface,omitempty"`
@@ -203,6 +205,17 @@ func (f *Flow) SetRule(name string) {
 		return
 	}
 	f.Set(func(r *Record) { r.Rule = name })
+}
+
+// SetPolicy records a policy decision: the chain text (also the rule),
+// the policy set that gave the terminal ("" = none) and the terminal type.
+func (f *Flow) SetPolicy(chain, policy, terminal string) {
+	if f == nil {
+		return
+	}
+	f.Set(func(r *Record) {
+		r.Rule, r.Policy, r.Terminal = chain, policy, terminal
+	})
 }
 
 // SetExitNode records an exit through other nodes.

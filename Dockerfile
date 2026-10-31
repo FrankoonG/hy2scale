@@ -53,7 +53,7 @@ RUN cd /tmp/iptables-1.8.3 && ./configure --prefix=/usr --sbindir=/sbin \
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates iproute2 libmnl libnftnl conntrack-tools
 # Install Alpine's iptables for nft mode (Docker compat)
-RUN apk add --no-cache iptables
+RUN apk add --no-cache iptables ipset
 # Overlay with compiled iptables-legacy 1.8.3 for kernel compat
 COPY --from=iptables-builder /out/sbin/xtables-legacy-multi /sbin/xtables-legacy-multi
 RUN ln -sf /sbin/xtables-legacy-multi /sbin/iptables-legacy \

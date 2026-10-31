@@ -17,6 +17,7 @@ import (
 
 	"github.com/FrankoonG/hy2scale/core/audit"
 	"github.com/FrankoonG/hy2scale/core/exit"
+	"github.com/FrankoonG/hy2scale/core/policy"
 	"github.com/FrankoonG/hy2scale/core/sniff"
 	"golang.org/x/crypto/chacha20poly1305"
 	"golang.org/x/crypto/hkdf"
@@ -187,11 +188,9 @@ func (a *App) handleSS(conn net.Conn, method string) {
 			return
 		}
 
-		// User identified! Route via their exit_via
-		exitVia := u.ExitVia
-		exitMode := u.ExitMode
-		exitPaths := u.ExitPaths
+		// User identified! Route along their selection
 		username := u.Username
+		rt := a.route(userSel(&u), a.userSrc(policy.KindSS, &u, conn.RemoteAddr()), "tcp", addr)
 
 		af := beginUserFlow(audit.InSS, "tcp", username, conn.RemoteAddr(), addr)
 		dctx := audit.NewContext(withRestrict(a.appCtx, a.userRestrict(username)), af)
@@ -216,13 +215,13 @@ func (a *App) handleSS(conn net.Conn, method string) {
 				}
 				remaining = append(remaining, extra...)
 			}
-			remote, err = a.dialSniffedTCP(dctx, a.exitRoute(dctx, exitVia, exitPaths, exitMode), nil,
-				addr, remaining, waited, isLoopbackAddr(conn.RemoteAddr()))
+			remote, err = a.dialSniffedTCP(dctx, rt, addr, remaining, waited, isLoopbackAddr(conn.RemoteAddr()))
 		} else {
-			remote, err = a.dialRoutedTCP(dctx, exitVia, exitPaths, exitMode, addr)
+			remote, err = rt.dial(dctx)
 		}
 		if err != nil {
 			af.End(err)
+			denyClose(conn, err)
 			return
 		}
 		defer remote.Close()
@@ -350,18 +349,16 @@ func (a *App) handleSSNone(conn net.Conn) {
 
 	// No user identification possible with "none" — use first enabled user or direct
 	cfg := a.store.Get()
-	var exitVia, username string
-	exitMode := ""
-	var exitPaths []string
-	for _, u := range cfg.Users {
-		if u.Enabled {
-			exitVia = u.ExitVia
-			exitMode = u.ExitMode
-			exitPaths = u.ExitPaths
-			username = u.Username
+	var username string
+	var user *UserConfig
+	for i := range cfg.Users {
+		if cfg.Users[i].Enabled {
+			user = &cfg.Users[i]
+			username = user.Username
 			break
 		}
 	}
+	rt := a.route(userSel(user), a.userSrc(policy.KindSS, user, conn.RemoteAddr()), "tcp", addr)
 
 	af := beginUserFlow(audit.InSS, "tcp", username, conn.RemoteAddr(), addr)
 	dctx := audit.NewContext(withRestrict(a.appCtx, a.userRestrict(username)), af)
@@ -369,13 +366,13 @@ func (a *App) handleSSNone(conn net.Conn) {
 	if wantSniff(addr) {
 		peeked, waited := peekHello(conn, remaining)
 		remaining = peeked
-		remote, err = a.dialSniffedTCP(dctx, a.exitRoute(dctx, exitVia, exitPaths, exitMode), nil,
-			addr, remaining, waited, isLoopbackAddr(conn.RemoteAddr()))
+		remote, err = a.dialSniffedTCP(dctx, rt, addr, remaining, waited, isLoopbackAddr(conn.RemoteAddr()))
 	} else {
-		remote, err = a.dialRoutedTCP(dctx, exitVia, exitPaths, exitMode, addr)
+		remote, err = rt.dial(dctx)
 	}
 	if err != nil {
 		af.End(err)
+		denyClose(conn, err)
 		return
 	}
 	defer remote.Close()

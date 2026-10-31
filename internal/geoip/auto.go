@@ -8,11 +8,14 @@ import (
 	"io"
 	"log"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/FrankoonG/hy2scale/core/sockmark"
 )
 
 // Automatic updates ("auto" mode): the databases are downloaded from the
@@ -116,6 +119,7 @@ func (a *autoState) init() {
 	a.sources = DefaultSources
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.Proxy = http.ProxyFromEnvironment
+	t.DialContext = sockmark.Dialer(net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
 	a.client = &http.Client{Transport: t}
 	a.now = time.Now
 }

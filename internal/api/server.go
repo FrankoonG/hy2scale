@@ -116,6 +116,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.webRoutes(authed)
 	s.publicIPRoutes(authed)
 	s.geoipRoutes(authed)
+	s.policySystemRoutes(authed)
 	s.shellRoutes(authed)
 	s.toolsRoutes(authed)
 	s.storageRoutes(authed)

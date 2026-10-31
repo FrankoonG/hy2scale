@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/FrankoonG/hy2scale/core/sockmark"
 )
 
 // Egress: the interface this node's direct flows leave through, one per
@@ -130,6 +132,7 @@ func KernelDial(ctx context.Context, iface string, fam int, network, addr string
 	if bind {
 		d.Control = bindControl(iface)
 	}
+	d.Control = sockmark.Chain(d.Control)
 	return d.DialContext(ctx, FamilyNet(network, fam), addr)
 }
 
@@ -312,7 +315,7 @@ func PlainDial(ctx context.Context, network, addr string) (net.Conn, error) {
 
 // PlainDialCtl: PlainDial with a socket Control hook (nil = none).
 func PlainDialCtl(ctx context.Context, network, addr string, ctl func(string, string, syscall.RawConn) error) (net.Conn, error) {
-	d := net.Dialer{Timeout: 10 * time.Second, Control: ctl}
+	d := net.Dialer{Timeout: 10 * time.Second, Control: sockmark.Chain(ctl)}
 	if strings.HasPrefix(network, "udp") {
 		d.Timeout = 5 * time.Second
 	}

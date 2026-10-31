@@ -93,9 +93,7 @@ func (a *App) ConfiguredExitPaths() []string {
 	for _, u := range cfg.Users {
 		add(u.ExitVia, u.ExitPaths)
 	}
-	for _, r := range cfg.Rules {
-		add(r.ExitVia, r.ExitPaths)
-	}
+	add("", policyExitPaths(&cfg))
 	for _, p := range cfg.Proxies {
 		add(p.ExitVia, p.ExitPaths)
 	}

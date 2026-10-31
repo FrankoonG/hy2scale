@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"github.com/FrankoonG/hy2scale/core/policy"
 	"log"
 	"net"
 	"strings"
@@ -145,13 +146,15 @@ func (o *outbound) TCP(reqAddr string) (net.Conn, error) {
 		}
 		return o.cfg.Users.TCP(o.ctx, authID, peerAddr, addr, bridged)
 	}
+	// the flow's source, for the policy of a target dialled here
+	pctx := policy.WithSource(o.ctx, policy.Source{Kind: policy.KindRelay, Node: authID, Addr: peerAddr})
 	// A target that arrived with restrictions, tagged by the node that
 	// admitted the flow.
 	if base, r := proto.ParseRestrict(addr); r != 0 && !relay.IsRelayStream(addr) {
 		if exit.IsBondStream(base) {
 			return o.bond(addr, peerAddr, ""), nil
 		}
-		return o.relayLocal(exit.WithRestrict(o.ctx, r), base, bridged, peerAddr)
+		return o.relayLocal(exit.WithRestrict(pctx, r), base, bridged, peerAddr)
 	}
 	if relay.IsRelayStream(addr) {
 		c1, c2 := net.Pipe()
@@ -168,7 +171,7 @@ func (o *outbound) TCP(reqAddr string) (net.Conn, error) {
 	if exit.IsBondStream(addr) {
 		return o.bond(addr, peerAddr, ""), nil
 	}
-	return o.relayLocal(o.ctx, addr, bridged, peerAddr)
+	return o.relayLocal(pctx, addr, bridged, peerAddr)
 }
 
 // relayLocal dials a node's plain target from here, recorded as the relay
@@ -272,7 +275,8 @@ func (o *outbound) UDP(reqAddr string) (hyserver.UDPConn, error) {
 	}
 	base, r := proto.ParseRestrict(reqAddr)
 	af := o.n.BeginRelay(src, "udp", base)
-	conn, err := o.ex.DialLocalUDP(audit.NewContext(exit.WithRestrict(o.ctx, r), af), exit.RewriteLocalAddr(base))
+	pctx := policy.WithSource(o.ctx, policy.Source{Kind: policy.KindRelay, Node: authID, Addr: peerAddr})
+	conn, err := o.ex.DialLocalUDP(audit.NewContext(exit.WithRestrict(pctx, r), af), exit.RewriteLocalAddr(base))
 	if err != nil {
 		af.End(err)
 		return nil, err

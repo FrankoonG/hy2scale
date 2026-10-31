@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/sockmark"
 	"github.com/xen0bit/veepin/dataplane"
 )
 
@@ -84,7 +85,7 @@ func (m *Mux) Share(port int, kind Kind) (*Share, error) {
 	defer m.mu.Unlock()
 	s := m.socks[port]
 	if s == nil {
-		c, err := net.ListenUDP("udp", &net.UDPAddr{Port: port})
+		c, err := sockmark.ListenUDP("udp", &net.UDPAddr{Port: port})
 		if err != nil {
 			return nil, err
 		}

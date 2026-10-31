@@ -153,6 +153,8 @@ export interface UserConfig {
   exit_via: string;
   exit_paths?: string[];
   exit_mode?: '' | 'quality' | 'aggregate';
+  /** Policy set id; non-empty = the policy set is chosen instead of the exit group. */
+  exit_policy?: string;
   traffic_limit: number;
   traffic_used: number;
   /** Automatic reset of traffic_used at 00:00 node time; '' = never. */
@@ -200,6 +202,8 @@ export interface ProxyConfig {
   exit_via?: string;
   exit_paths?: string[];
   exit_mode?: '' | 'quality' | 'aggregate';
+  /** Policy set id; non-empty = the policy set is chosen instead of the exit group. */
+  exit_policy?: string;
 }
 
 // ===== Shadowsocks =====
@@ -210,6 +214,8 @@ export interface SSConfig {
   exit_via?: string;
   exit_paths?: string[];
   exit_mode?: string;
+  /** Policy set id; non-empty = the policy set is chosen instead of the exit group. */
+  exit_policy?: string;
 }
 
 // ===== L2TP =====
@@ -227,6 +233,8 @@ export interface L2TPConfig {
   exit_via?: string;
   exit_paths?: string[];
   exit_mode?: string;
+  /** Policy set id; non-empty = the policy set is chosen instead of the exit group. */
+  exit_policy?: string;
 }
 
 // ===== IKEv2 =====
@@ -246,6 +254,7 @@ export interface IKEv2Config {
   psk_user_mode?: boolean;
   default_exit: string;
   default_exit_mode?: string;
+  default_exit_policy?: string;
   default_exit_paths?: string[];
   dns: string;
   proxy_port?: number;
@@ -280,6 +289,8 @@ export interface WireGuardConfig {
   exit_via?: string;
   exit_paths?: string[];
   exit_mode?: string;
+  /** Policy set id; non-empty = the policy set is chosen instead of the exit group. */
+  exit_policy?: string;
 }
 
 export interface WireGuardPeer {
@@ -291,20 +302,11 @@ export interface WireGuardPeer {
   exit_via?: string;
   exit_paths?: string[];
   exit_mode?: string;
+  /** Policy set id; non-empty = the policy set is chosen instead of the exit group. */
+  exit_policy?: string;
 }
 
 // ===== Rules =====
-export interface RoutingRule {
-  id: string;
-  name: string;
-  type: 'ip' | 'domain';
-  targets: string[];
-  exit_via: string;
-  exit_paths?: string[];
-  exit_mode?: '' | 'quality' | 'aggregate';
-  enabled: boolean;
-  priority?: number;    // higher wins on CIDR overlap; default 0
-}
 
 // ===== TLS =====
 export interface CertInfo {

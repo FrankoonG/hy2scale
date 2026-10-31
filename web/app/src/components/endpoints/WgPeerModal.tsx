@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { Modal, Button, Input, FormGroup, FormStack, IconButton, IconWandSparkles, useToast } from '@hy2scale/ui';
-import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
+import { exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
+import ExitChoice from '@/components/policy/ExitChoice';
 import { useDialogInit } from '@/hooks/useFormInit';
 import * as api from '@/api';
 import type { WireGuardPeer } from '@/api';
@@ -29,6 +30,7 @@ export default function WgPeerModal({ open, onClose, animateFrom, editing, sugge
   const [allowedIPs, setAllowedIPs] = useState('');
   const [keepalive, setKeepalive] = useState('');
   const [exitPath, setExitPath] = useState<ExitPathValue>({ paths: [''], mode: '' });
+  const [exitPolicy, setExitPolicy] = useState('');
   const [saving, setSaving] = useState(false);
 
   const generateKey = async (quiet = false) => {
@@ -44,10 +46,12 @@ export default function WgPeerModal({ open, onClose, animateFrom, editing, sugge
       setName(editing.name); setPubKey(editing.public_key); setPrivKey(editing.private_key);
       setAllowedIPs(editing.allowed_ips); setKeepalive(String(editing.keepalive || ''));
       setExitPath(apiToExitPath(editing.exit_via, editing.exit_paths, editing.exit_mode));
+      setExitPolicy(editing.exit_policy || '');
     } else {
       setName(''); setPrivKey(''); setPubKey('');
       setKeepalive('25');
       setExitPath({ paths: [''], mode: '' });
+      setExitPolicy('');
       setAllowedIPs(suggestIPs());
       generateKey(true);
     }
@@ -61,7 +65,7 @@ export default function WgPeerModal({ open, onClose, animateFrom, editing, sugge
     setSaving(true);
     const data: WireGuardPeer = {
       name, public_key: pubKey, private_key: privKey,
-      allowed_ips: allowedIPs, keepalive: parseInt(keepalive) || 0, ...exitPathToApi(exitPath),
+      allowed_ips: allowedIPs, keepalive: parseInt(keepalive) || 0, ...exitPathToApi(exitPath), exit_policy: exitPolicy,
     } as any;
     try {
       if (editing) {
@@ -107,7 +111,7 @@ export default function WgPeerModal({ open, onClose, animateFrom, editing, sugge
         <FormGroup label={t('wg.peerAllowedIPs')} required>
           <Input value={allowedIPs} onChange={(e) => setAllowedIPs(e.target.value)} placeholder="10.0.0.2/32, fd00:9::2/128" />
         </FormGroup>
-        <ExitPathList value={exitPath} onChange={setExitPath} label={t('wg.peerExitVia')} />
+        <ExitChoice policy={exitPolicy} onPolicy={setExitPolicy} exit={exitPath} onExit={setExitPath} label={t('wg.peerExitVia')} />
         <FormGroup label={t('wg.peerKeepalive')}>
           <Input type="number" value={keepalive} onChange={(e) => setKeepalive(e.target.value)} placeholder="25" />
         </FormGroup>

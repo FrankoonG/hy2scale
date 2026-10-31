@@ -12,7 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/sockmark"
 	"github.com/FrankoonG/hy2scale/internal/vpnmux"
+	"github.com/xen0bit/veepin/dataplane"
 	"github.com/xen0bit/veepin/ikev2"
 	"github.com/xen0bit/veepin/l2tp"
 	"github.com/xen0bit/veepin/openvpn"
@@ -25,21 +27,22 @@ import (
 
 // IKEv2Config holds the IKEv2 server configuration.
 type IKEv2Config struct {
-	Enabled          bool     `yaml:"enabled" json:"enabled"`
-	Mode             string   `yaml:"mode" json:"mode"`                                                 // "mschapv2" or "psk"
-	Pool             string   `yaml:"pool" json:"pool"`                                                 // e.g. "10.10.10.1/24"
-	Pool6            string   `yaml:"pool6,omitempty" json:"pool6"`                                     // IPv6 pool, e.g. "fd00:10:10::1/64"; "" = default
-	CertID           string   `yaml:"cert_id" json:"cert_id"`                                           // CA cert ID (mschapv2): the server cert is signed from it
-	PSK              string   `yaml:"psk" json:"psk"`                                                   // pre-shared key (psk mode)
-	LocalID          string   `yaml:"local_id" json:"local_id"`                                         // server identity, default = node ID
-	RemoteID         string   `yaml:"remote_id" json:"remote_id"`                                       // unused since 1.4.0
-	PSKUserMode      bool     `yaml:"psk_user_mode" json:"psk_user_mode"`                               // PSK: the IKE identity names the user
-	DefaultExit      string   `yaml:"default_exit" json:"default_exit"`                                 // exit_via when user mode off
-	DefaultExitPaths []string `yaml:"default_exit_paths,omitempty" json:"default_exit_paths,omitempty"` // quality / aggregate candidates
-	DefaultExitMode  string   `yaml:"default_exit_mode,omitempty" json:"default_exit_mode,omitempty"`   // ""|"quality"|"aggregate"
-	DNS              string   `yaml:"dns" json:"dns"`                                                   // unused: the node DNS setting is pushed
-	ProxyPort        int      `yaml:"proxy_port" json:"proxy_port"`                                     // unused since 1.4.0
-	MTU              int      `yaml:"mtu" json:"mtu"`                                                   // tunnel MTU, default 1400
+	Enabled           bool     `yaml:"enabled" json:"enabled"`
+	Mode              string   `yaml:"mode" json:"mode"`                                                 // "mschapv2" or "psk"
+	Pool              string   `yaml:"pool" json:"pool"`                                                 // e.g. "10.10.10.1/24"
+	Pool6             string   `yaml:"pool6,omitempty" json:"pool6"`                                     // IPv6 pool, e.g. "fd00:10:10::1/64"; "" = default
+	CertID            string   `yaml:"cert_id" json:"cert_id"`                                           // CA cert ID (mschapv2): the server cert is signed from it
+	PSK               string   `yaml:"psk" json:"psk"`                                                   // pre-shared key (psk mode)
+	LocalID           string   `yaml:"local_id" json:"local_id"`                                         // server identity, default = node ID
+	RemoteID          string   `yaml:"remote_id" json:"remote_id"`                                       // unused since 1.4.0
+	PSKUserMode       bool     `yaml:"psk_user_mode" json:"psk_user_mode"`                               // PSK: the IKE identity names the user
+	DefaultExit       string   `yaml:"default_exit" json:"default_exit"`                                 // exit_via when user mode off
+	DefaultExitPaths  []string `yaml:"default_exit_paths,omitempty" json:"default_exit_paths,omitempty"` // quality / aggregate candidates
+	DefaultExitMode   string   `yaml:"default_exit_mode,omitempty" json:"default_exit_mode,omitempty"`   // ""|"quality"|"aggregate"
+	DefaultExitPolicy string   `yaml:"default_exit_policy,omitempty" json:"default_exit_policy"`         // a policy set id (overrides default_exit*)
+	DNS               string   `yaml:"dns" json:"dns"`                                                   // unused: the node DNS setting is pushed
+	ProxyPort         int      `yaml:"proxy_port" json:"proxy_port"`                                     // unused since 1.4.0
+	MTU               int      `yaml:"mtu" json:"mtu"`                                                   // tunnel MTU, default 1400
 }
 
 // L2TPConfig holds the L2TP/IPsec server configuration.
@@ -200,6 +203,7 @@ func (a *App) vpnPassword(proto string) func(string) (string, bool) {
 func (a *App) userRoute(name, proto string) vpnRoute {
 	r := vpnRoute{user: name}
 	if u := a.vpnUser(name, proto); u != nil {
+		r.userID, r.policy = u.ID, u.ExitPolicy
 		r.exitVia, r.exitPaths, r.exitMode = u.ExitVia, u.ExitPaths, u.ExitMode
 	}
 	return r
@@ -380,7 +384,7 @@ func (a *App) StartIKEv2(cfg IKEv2Config) error {
 		}
 		c := a.store.Get().IKEv2
 		if c != nil && c.Mode == "psk" && !c.PSKUserMode {
-			return vpnRoute{user: "__psk__", exitVia: c.DefaultExit, exitPaths: c.DefaultExitPaths, exitMode: c.DefaultExitMode}, true
+			return vpnRoute{user: "__psk__", policy: c.DefaultExitPolicy, exitVia: c.DefaultExit, exitPaths: c.DefaultExitPaths, exitMode: c.DefaultExitMode}, true
 		}
 		return a.userRoute(id, "ikev2"), true
 	}
@@ -530,11 +534,18 @@ func (a *App) StartOpenVPN(cfg OpenVPNConfig) error {
 			Cert:       certPEM,
 			Key:        keyPEM,
 			ListenPort: cfg.port(),
-			Pool:       cidr,
-			Pool6:      cidr6,
-			DNS:        a.vpnDNS(),
-			MTU:        cfg.mtuVal(),
-			Device:     n.device(),
+			ListenPacket: func(port int) (*dataplane.PacketConn, error) {
+				c, err := sockmark.ListenUDP("udp", &net.UDPAddr{Port: port})
+				if err != nil {
+					return nil, err
+				}
+				return dataplane.NewPacketConn(c), nil
+			},
+			Pool:   cidr,
+			Pool6:  cidr6,
+			DNS:    a.vpnDNS(),
+			MTU:    cfg.mtuVal(),
+			Device: n.device(),
 			VerifyUser: func(user, pass string) bool {
 				pw, ok := check(user)
 				return ok && pw == pass

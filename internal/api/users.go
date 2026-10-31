@@ -114,6 +114,10 @@ func (s *Server) addUserAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "username and password required", 400)
 		return
 	}
+	if err := s.app.CheckExitPolicy(u.ExitPolicy); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
 	if !validateTrafficReset(w, &u) {
 		return
 	}
@@ -163,6 +167,10 @@ func (s *Server) updateUserAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validateTrafficReset(w, &u) {
+		return
+	}
+	if err := s.app.CheckExitPolicy(u.ExitPolicy); err != nil {
+		http.Error(w, err.Error(), 400)
 		return
 	}
 	if len(u.ExitPaths) > 0 {

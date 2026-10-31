@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/FrankoonG/hy2scale/core/sockmark"
 )
 
 // refusedCapacity: HELLO_ACK message for a server at MaxSessions.
@@ -129,8 +131,7 @@ func (sv *Server) open(conn net.Conn, br *bufio.Reader, h hello) {
 		dialTarget = sv.cfg.DialPacketTarget
 		if dialTarget == nil {
 			dialTarget = func(ctx context.Context, addr string) (net.Conn, error) {
-				var d net.Dialer
-				return d.DialContext(ctx, "udp", addr)
+				return sockmark.DialContext(ctx, "udp", addr)
 			}
 		}
 	}

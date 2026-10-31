@@ -13,6 +13,7 @@ import (
 	"github.com/FrankoonG/hy2scale/core/audit"
 	"github.com/FrankoonG/hy2scale/core/msess"
 	relay "github.com/FrankoonG/hy2scale/core/node"
+	"github.com/FrankoonG/hy2scale/core/policy"
 	"github.com/FrankoonG/hy2scale/core/proto"
 )
 
@@ -44,7 +45,9 @@ func (e *Engine) initMsess() {
 	e.ms = &msessState{legacy: map[string]time.Time{}, noted: map[string]time.Time{}}
 	server := func(r proto.Restrict) *msess.Server {
 		return msess.NewServer(msess.ServerConfig{
-			OpenContext: func(c net.Conn) context.Context { return relay.WithSource(context.Background(), c) },
+			OpenContext: func(c net.Conn) context.Context {
+				return e.withPolicySource(relay.WithSource(context.Background(), c), c)
+			},
 			DialTarget: func(ctx context.Context, addr string) (net.Conn, error) {
 				return e.dialSessionTarget(ctx, r, "tcp", addr)
 			},
@@ -466,4 +469,15 @@ func (e *Engine) MsessStats() map[string]int {
 	st, rs := e.ms.server.Stats(), e.ms.restricted.Stats()
 	return map[string]int{"exit_sessions": st.Sessions + rs.Sessions, "exit_subflows": st.Subflows + rs.Subflows,
 		"exit_pending": st.Pending + rs.Pending, "probed_paths": e.ms.prober.Count()}
+}
+
+// withPolicySource records the source of a flow arriving on stream c (a
+// peer's subflow, or a node-access user's) for the policy of its target.
+func (e *Engine) withPolicySource(ctx context.Context, c net.Conn) context.Context {
+	src, peer := e.node.SourceOf(c)
+	s := policy.Source{Kind: policy.KindRelay, Node: peer, Addr: src}
+	if inb, user, ok := audit.IdentityOf(c); ok && inb == audit.InAccess {
+		s = policy.Source{Kind: policy.KindAccess, User: user, Addr: src}
+	}
+	return policy.WithSource(ctx, s)
 }

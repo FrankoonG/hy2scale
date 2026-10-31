@@ -32,10 +32,13 @@ type UserConfig struct {
 	ExitVia       string   `yaml:"exit_via" json:"exit_via"`
 	ExitPaths     []string `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
 	ExitMode      string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"` // ""|"quality"|"aggregate"
-	TrafficLimit  int64    `yaml:"traffic_limit" json:"traffic_limit"`             // bytes, 0=unlimited
-	TrafficUsed   int64    `yaml:"traffic_used" json:"traffic_used"`
-	ExpiryDate    string   `yaml:"expiry_date,omitempty" json:"expiry_date"`
-	Enabled       bool     `yaml:"enabled" json:"enabled"`
+	// ExitPolicy: a policy set id; when set, the exit fields above are
+	// ignored and the user's flows enter that set (core/policy).
+	ExitPolicy   string `yaml:"exit_policy,omitempty" json:"exit_policy"`
+	TrafficLimit int64  `yaml:"traffic_limit" json:"traffic_limit"` // bytes, 0=unlimited
+	TrafficUsed  int64  `yaml:"traffic_used" json:"traffic_used"`
+	ExpiryDate   string `yaml:"expiry_date,omitempty" json:"expiry_date"`
+	Enabled      bool   `yaml:"enabled" json:"enabled"`
 	// NodeAccess: with this user's hy2 credentials, a hy2scale node or an
 	// access client may use the nodes this node sees as exits (node access
 	// by user, core/proto/access.go).
@@ -104,10 +107,12 @@ type ProxyConfig struct {
 	TLSCert  string `yaml:"tls_cert,omitempty" json:"tls_cert,omitempty"` // TLS cert ID (enables TLS wrapping)
 	// Method is the AEAD cipher for the shadowsocks protocol. Ignored for
 	// other protocols. Empty → "aes-256-gcm".
-	Method   string `yaml:"method,omitempty" json:"method,omitempty"`
+	Method    string   `yaml:"method,omitempty" json:"method,omitempty"`
 	ExitVia   string   `yaml:"exit_via,omitempty" json:"exit_via,omitempty"`
 	ExitPaths []string `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
 	ExitMode  string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"`
+	// ExitPolicy: a policy set id (overrides the exit fields).
+	ExitPolicy string `yaml:"exit_policy,omitempty" json:"exit_policy"`
 }
 
 // ConfigStore manages dynamic configuration with persistence.
@@ -242,10 +247,10 @@ func LoadOrInitConfig(dataDir string) (Config, error) {
 		NodeID:   nodeID,
 		ExitNode: true,
 		Server: &ServerConfig{
-			Listen:  "0.0.0.0:5565",
+			Listen:   "0.0.0.0:5565",
 			Password: password,
-			TLSCert: filepath.Join(dataDir, "tls", "default.crt"),
-			TLSKey:  filepath.Join(dataDir, "tls", "default.key"),
+			TLSCert:  filepath.Join(dataDir, "tls", "default.crt"),
+			TLSKey:   filepath.Join(dataDir, "tls", "default.key"),
 		},
 		Peers: make(map[string]PeerConfig),
 		WireGuard: &WireGuardConfig{

@@ -68,6 +68,12 @@ func (s *Server) updateWireGuardConfig(w http.ResponseWriter, r *http.Request) {
 	if cfg.WireGuard != nil && len(wg.Peers) == 0 {
 		wg.Peers = cfg.WireGuard.Peers
 	}
+	for _, p := range wg.Peers {
+		if err := s.app.CheckExitPolicy(p.ExitPolicy); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+	}
 	s.app.Store().Update(func(c *app.Config) {
 		c.WireGuard = &wg
 	})
@@ -98,6 +104,10 @@ func (s *Server) addWGPeer(w http.ResponseWriter, r *http.Request) {
 	} else if peer.ExitVia != "" {
 		peer.ExitPaths = []string{peer.ExitVia}
 	}
+	if err := s.app.CheckExitPolicy(peer.ExitPolicy); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
 	if peer.Name == "" || peer.PublicKey == "" || peer.AllowedIPs == "" {
 		http.Error(w, "name, public_key, allowed_ips required", 400)
 		return
@@ -126,6 +136,10 @@ func (s *Server) updateWGPeer(w http.ResponseWriter, r *http.Request) {
 		updated.ExitVia = updated.ExitPaths[0]
 	} else if updated.ExitVia != "" {
 		updated.ExitPaths = []string{updated.ExitVia}
+	}
+	if err := s.app.CheckExitPolicy(updated.ExitPolicy); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
 	}
 	var oldPub string
 	var wgFieldsChanged bool

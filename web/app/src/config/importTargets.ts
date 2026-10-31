@@ -85,29 +85,6 @@ export const IMPORT_TARGETS = {
         () => api.createUser(data));
     },
   },
-  rules: {
-    sheet: 'rules',
-    headers: ['id', 'name', 'type', 'targets', 'exit_via', 'exit_mode', 'enabled'],
-    titleKey: 'import.importRules',
-    queryKey: 'rules',
-    exportRows: async () => (await api.getRules()).rules.map((r) => ({
-      id: r.id, name: r.name, type: r.type,
-      targets: r.targets.join('\n'),
-      exit_via: r.exit_paths?.join(',') || r.exit_via || '',
-      exit_mode: r.exit_mode || '', enabled: r.enabled ? 'yes' : 'no',
-    })),
-    importRow: (row, overwrite) => {
-      const p = paths(row.exit_via);
-      const data = {
-        id: row.id || undefined, name: row.name, type: row.type || 'ip',
-        targets: String(row.targets || '').split('\n').filter(Boolean),
-        exit_via: p[0] || '', exit_paths: p.length > 1 ? p : undefined,
-        exit_mode: row.exit_mode || undefined,
-        enabled: row.enabled !== 'no',
-      };
-      return upsert(overwrite, () => api.updateRule(data.id!, data), () => api.createRule(data));
-    },
-  },
   'wg-peers': {
     sheet: 'wg-peers',
     headers: ['name', 'public_key', 'allowed_ips', 'exit_via', 'keepalive'],

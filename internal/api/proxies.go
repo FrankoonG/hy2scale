@@ -57,6 +57,10 @@ func (s *Server) addProxy(w http.ResponseWriter, r *http.Request) {
 	if pc.Protocol == "" {
 		pc.Protocol = "socks5"
 	}
+	if err := s.app.CheckExitPolicy(pc.ExitPolicy); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
 	// Singleton-protocol fallback: SOCKS5 / HTTP tabs in the UI manage
 	// one proxy each, so a missing id is unambiguous — use protocol as
 	// the id. Without this, the very first save of a fresh node returns
@@ -90,6 +94,10 @@ func (s *Server) updateProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	if pc.Protocol == "" {
 		pc.Protocol = "socks5"
+	}
+	if err := s.app.CheckExitPolicy(pc.ExitPolicy); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
 	}
 	// Reject empty listen on update too — symmetric with addProxy. Without
 	// this check the operator could clear the field, save, and the proxy
@@ -234,6 +242,10 @@ func (s *Server) updateIKEv2Config(w http.ResponseWriter, r *http.Request) {
 	}
 	if ikev2.Mode != "mschapv2" && ikev2.Mode != "psk" {
 		http.Error(w, "mode must be 'mschapv2' or 'psk'", 400)
+		return
+	}
+	if err := s.app.CheckExitPolicy(ikev2.DefaultExitPolicy); err != nil {
+		http.Error(w, err.Error(), 400)
 		return
 	}
 	s.app.Store().Update(func(c *app.Config) {

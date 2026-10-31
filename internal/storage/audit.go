@@ -357,7 +357,7 @@ func (m *matcher) match(line []byte) (audit.Record, bool) {
 		return r, false
 	}
 	if m.qL != "" && !containsAny(m.qL, r.ID, r.Proto, r.Inbound, r.User, r.Src, r.SrcNode, r.Dst, r.DstHost,
-		r.DstIP, r.Rule, r.Exit, r.ExitPath, r.ExitMode, r.EgressIface, r.EgressSrc, r.Result, r.Error) {
+		r.DstIP, r.Rule, r.Policy, r.Terminal, r.Exit, r.ExitPath, r.ExitMode, r.EgressIface, r.EgressSrc, r.Result, r.Error) {
 		return r, false
 	}
 	return r, true
@@ -573,7 +573,7 @@ func top(m map[string]*Stat, n int) []Stat {
 
 // CSVColumns: the export columns, in order.
 var CSVColumns = []string{"id", "start", "end", "partial", "proto", "inbound", "user", "src", "src_node",
-	"dst", "dst_host", "dst_ip", "rule", "exit", "exit_path", "exit_mode", "egress_iface", "egress_src",
+	"dst", "dst_host", "dst_ip", "rule", "policy", "terminal", "exit", "exit_path", "exit_mode", "egress_iface", "egress_src",
 	"up", "down", "result", "error"}
 
 func csvRow(r *audit.Record) []string {
@@ -583,7 +583,7 @@ func csvRow(r *audit.Record) []string {
 		p = "true"
 	}
 	return []string{r.ID, i(r.Start), i(r.End), p, r.Proto, r.Inbound, r.User, r.Src, r.SrcNode,
-		r.Dst, r.DstHost, r.DstIP, r.Rule, r.Exit, r.ExitPath, r.ExitMode, r.EgressIface, r.EgressSrc,
+		r.Dst, r.DstHost, r.DstIP, r.Rule, r.Policy, r.Terminal, r.Exit, r.ExitPath, r.ExitMode, r.EgressIface, r.EgressSrc,
 		i(r.Up), i(r.Down), r.Result, r.Error}
 }
 

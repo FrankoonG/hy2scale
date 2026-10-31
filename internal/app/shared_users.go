@@ -65,7 +65,7 @@ func dropSharedDelete(c *Config, d SharedDelete) {
 // SharedPayload: the user as pushed to targets — no exit settings, no
 // counters, no share bookkeeping (the receiver keeps its own).
 func SharedPayload(u UserConfig) UserConfig {
-	u.ExitVia, u.ExitPaths, u.ExitMode = "", nil, ""
+	u.ExitVia, u.ExitPaths, u.ExitMode, u.ExitPolicy = "", nil, "", ""
 	u.TrafficUsed = 0
 	u.TrafficResetAt, u.TrafficResetFrom = "", ""
 	u.ShareTargets, u.ShareRev, u.ShareResetRev = nil, 0, 0
@@ -285,7 +285,7 @@ func (a *App) ApplySharedUser(managerID, managerName, userID string, rev, resetR
 		}
 		nu := in
 		nu.ID = cur.ID
-		nu.ExitVia, nu.ExitPaths, nu.ExitMode = cur.ExitVia, cur.ExitPaths, cur.ExitMode
+		nu.ExitVia, nu.ExitPaths, nu.ExitMode, nu.ExitPolicy = cur.ExitVia, cur.ExitPaths, cur.ExitMode, cur.ExitPolicy
 		nu.TrafficUsed = atomic.LoadInt64(&cur.TrafficUsed)
 		nu.TrafficResetAt, nu.TrafficResetFrom = cur.TrafficResetAt, cur.TrafficResetFrom
 		if nu.TrafficReset != cur.TrafficReset || nu.TrafficResetDay != cur.TrafficResetDay {

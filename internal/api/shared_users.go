@@ -532,7 +532,7 @@ func (s *Server) getSharedUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"exists": true, "id": u.ID, "username": u.Username, "enabled": u.Enabled,
 		"rev": u.SharedFrom.Rev, "traffic_used": u.TrafficUsed,
-		"exit_via": u.ExitVia, "exit_paths": u.ExitPaths, "exit_mode": u.ExitMode,
+		"exit_via": u.ExitVia, "exit_paths": u.ExitPaths, "exit_mode": u.ExitMode, "exit_policy": u.ExitPolicy,
 	})
 }
 
@@ -629,8 +629,12 @@ func (s *Server) updateSharedUserExit(w http.ResponseWriter, cur, u app.UserConf
 		return
 	}
 	u.ExitMode = mode
+	if err := s.app.CheckExitPolicy(u.ExitPolicy); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
 	merged := cur
-	merged.ExitVia, merged.ExitPaths, merged.ExitMode = u.ExitVia, u.ExitPaths, u.ExitMode
+	merged.ExitVia, merged.ExitPaths, merged.ExitMode, merged.ExitPolicy = u.ExitVia, u.ExitPaths, u.ExitMode, u.ExitPolicy
 	if err := s.app.UpdateUser(cur.ID, merged); err != nil {
 		http.Error(w, err.Error(), 500)
 		return

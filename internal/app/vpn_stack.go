@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/FrankoonG/hy2scale/core/policy"
 	"log"
 	"net"
 	"net/netip"
@@ -35,9 +36,17 @@ import (
 // vpnRoute is where one client's traffic goes.
 type vpnRoute struct {
 	user      string // device-row name; "" when the client has no user
+	userID    string // the user's internal id ("" = none)
+	policy    string // a policy set selection (overrides the exit fields)
 	exitVia   string
 	exitPaths []string
 	exitMode  string
+}
+
+func (r vpnRoute) sel() exitSel { return selOf(r.policy, r.exitVia, r.exitPaths, r.exitMode) }
+
+func (r vpnRoute) src(kind, addr string) flowSrc {
+	return flowSrc{kind: kind, user: r.userID, addr: addr}
 }
 
 type vpnNet struct {
@@ -311,7 +320,8 @@ func (a *App) installVPNForwarders(n *vpnNet, resolve func(srcIP string) (vpnRou
 				return
 			}
 			dctx := audit.NewContext(withRestrict(n.ctx, a.userRestrict(route.user)), af)
-			remote, ok := a.dialAccepted(dctx, conn, ep, a.exitRoute(dctx, route.exitVia, route.exitPaths, route.exitMode), dst)
+			rt := a.route(route.sel(), route.src(n.proto, net.JoinHostPort(srcIP, strconv.Itoa(int(id.RemotePort)))), "tcp", dst)
+			remote, ok := a.dialAccepted(dctx, conn, ep, rt, dst)
 			if !ok {
 				af.End(errors.New("dial failed"))
 				return
@@ -328,12 +338,13 @@ func (a *App) installVPNForwarders(n *vpnNet, resolve func(srcIP string) (vpnRou
 		// RST at once, so the client falls back to its other address family
 		// instead of waiting on an accepted connection that goes nowhere.
 		ctx, cancel := context.WithTimeout(audit.NewContext(n.ctx, af), 15*time.Second)
-		remote, err := a.dialVPNTCP(ctx, route, dst)
+		remote, err := a.dialVPNTCP(ctx, n.proto, route, net.JoinHostPort(srcIP, strconv.Itoa(int(id.RemotePort))), dst)
 		cancel()
 		if err != nil {
 			af.End(err)
 			debugLog("[%s] %s → %s via %q: %v", n.proto, srcIP, dst, route.exitVia, err)
-			r.Complete(true)
+			_, deny := policy.AsDeny(err)
+			r.Complete(!deny || isReject(err)) // a policy drop sends nothing
 			return
 		}
 		var wq waiter.Queue
@@ -376,8 +387,8 @@ func (a *App) installVPNForwarders(n *vpnNet, resolve func(srcIP string) (vpnRou
 
 // dialVPNTCP dials dst for a client: through its own exit, or (a direct
 // client) through the routing rule matching dst, else directly.
-func (a *App) dialVPNTCP(ctx context.Context, route vpnRoute, dst string) (net.Conn, error) {
-	return a.dialRoutedTCP(withRestrict(ctx, a.userRestrict(route.user)), route.exitVia, route.exitPaths, route.exitMode, dst)
+func (a *App) dialVPNTCP(ctx context.Context, kind string, route vpnRoute, src, dst string) (net.Conn, error) {
+	return a.dialRoutedTCP(withRestrict(ctx, a.userRestrict(route.user)), route.sel(), route.src(kind, src), dst)
 }
 
 // relayVPNUDP carries one client UDP flow. The netstack has no conntrack, so
@@ -386,7 +397,8 @@ func (a *App) relayVPNUDP(n *vpnNet, conn *gonet.UDPConn, route vpnRoute, srcIP 
 	defer conn.Close()
 	af := beginUserFlowStr(n.proto, "udp", route.user, net.JoinHostPort(srcIP, strconv.Itoa(srcPort)), dst)
 	ctx, cancel := context.WithTimeout(audit.NewContext(n.ctx, af), 15*time.Second)
-	remote, err := a.dialRoutedUDP(withRestrict(ctx, a.userRestrict(route.user)), route.exitVia, route.exitPaths, route.exitMode, dst)
+	remote, err := a.dialRoutedUDP(withRestrict(ctx, a.userRestrict(route.user)), route.sel(),
+		route.src(n.proto, net.JoinHostPort(srcIP, strconv.Itoa(srcPort))), dst)
 	cancel()
 	if err != nil {
 		af.End(err)
