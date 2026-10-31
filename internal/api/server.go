@@ -96,6 +96,8 @@ func (s *Server) Start(ctx context.Context) error {
 	// flow on a passthrough-trusted peer doesn't prompt for that
 	// peer's web password just to mint the token the new tab needs.
 	apiMux.HandleFunc("POST /api/relay-passthrough-token", s.relayPassthroughToken)
+	// Shared-user pushes from a manager node: relay trust only (own gate).
+	s.sharedPushRoutes(apiMux)
 	// Internal peer list (no auth, used for reverse nested discovery)
 	apiMux.HandleFunc("GET /api/internal/peers", s.internalPeers)
 	// Build-id probe (no auth) — a long-lived SPA tab polls this to detect
@@ -114,6 +116,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.webRoutes(authed)
 	s.publicIPRoutes(authed)
 	s.shellRoutes(authed)
+	s.toolsRoutes(authed)
 
 	apiMux.Handle("/api/", s.authMiddleware(authed))
 
@@ -145,6 +148,7 @@ func (s *Server) Start(ctx context.Context) error {
 		"endpoints":  true,
 		"logs":       true,
 		"settings":   true,
+		"tools":      true,
 	}
 
 	// Remote node proxy — no local auth, remote handles its own

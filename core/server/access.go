@@ -58,7 +58,7 @@ func (o *outbound) accessTCP(authID, peerAddr, addr string, g Grant) (net.Conn, 
 	case full && addr == proto.StreamAPI:
 		// management of this node (the relay-trust setting applies)
 		return o.relayPipe(addr, peerAddr, AccessAuthID(user)), nil
-	case full && addr == proto.StreamPunch:
+	case full && (addr == proto.StreamPunch || addr == proto.StreamSpeed):
 		return o.relayPipe(addr, peerAddr, ""), nil
 	case addr == proto.StreamHello:
 		c1, c2 := net.Pipe()
@@ -203,7 +203,8 @@ func (o *outbound) accessVia(peerAddr, chain, target string, g Grant) (string, e
 	base, cr := proto.ParseRestrict(target)
 	switch {
 	case proto.IsMsessAddr(base), exit.IsBondStream(base):
-	case full && (base == proto.StreamAPI || base == proto.StreamPunch || base == proto.StreamListPeer):
+	case full && (base == proto.StreamAPI || base == proto.StreamPunch || base == proto.StreamListPeer ||
+		base == proto.StreamSpeed):
 		return proto.BuildViaAddr(chain, base), nil
 	case proto.IsRelayStream(base):
 		return "", fmt.Errorf("target %s: %w", base, ErrAccessRefused)

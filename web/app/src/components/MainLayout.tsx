@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import {
   AppLayout, Sidebar, Topbar, useMediaQuery, useStoredState, boolCodec, type IconComponent,
   IconLayoutDashboard, IconWaypoints, IconEthernetPort, IconSplit, IconUsers, IconServer, IconPlug,
-  IconShieldCheck, IconScrollText, IconSettings, IconList, IconNetwork,
+  IconShieldCheck, IconScrollText, IconSettings, IconList, IconNetwork, IconWrench,
 } from '@hy2scale/ui';
 import { useAuthStore } from '@/store/auth';
 import { useNodeStore } from '@/store/node';
@@ -25,20 +25,21 @@ const icons: Record<string, IconComponent> = {
   proxies: IconServer,             // inbound proxy / VPN services
   endpoints: IconPlug,             // WireGuard endpoints
   tls: IconShieldCheck,            // certificates
+  tools: IconWrench,               // network tests and a terminal
   logs: IconScrollText,
   settings: IconSettings,
 };
 
-// Sidebar groups. Logs and Settings are pinned to the bottom, above the collapse toggle.
+// Sidebar groups. Tools, Logs and Settings are pinned to the bottom, above the collapse toggle.
 const navGroups: { key: string; label?: string; items: string[] }[] = [
   { key: 'main', items: ['overview'] },
   { key: 'network', label: 'nav.groupNetwork', items: ['nodes', 'interfaces', 'rules'] },
   { key: 'access', label: 'nav.groupAccess', items: ['users', 'proxies', 'endpoints', 'tls'] },
 ];
-const bottomNav = ['logs', 'settings'];
+const bottomNav = ['tools', 'logs', 'settings'];
 const navPaths: Record<string, string> = {
   overview: '/overview', nodes: '/nodes', interfaces: '/interfaces', rules: '/rules',
-  users: '/users', proxies: '/proxies', endpoints: '/endpoints', tls: '/tls', logs: '/logs', settings: '/settings',
+  users: '/users', proxies: '/proxies', endpoints: '/endpoints', tls: '/tls', tools: '/tools', logs: '/logs', settings: '/settings',
 };
 const navKeys = Object.keys(navPaths);
 

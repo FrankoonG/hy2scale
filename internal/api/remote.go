@@ -21,6 +21,7 @@ import (
 
 	relay "github.com/FrankoonG/hy2scale/core/node"
 	"github.com/FrankoonG/hy2scale/internal/buildsig"
+	"github.com/FrankoonG/hy2scale/internal/tools"
 )
 
 // relayCtxKey carries the hyserver authID of the QUIC connection that
@@ -144,6 +145,7 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 		"tls": true, "settings": true, "remote": true,
 		"scale": true, "users": true, "rules": true, "assets": true,
 		"interfaces": true, "overview": true, "endpoints": true, "logs": true,
+		"tools": true,
 	}
 	chainLen := 0
 	for _, seg := range segments {
@@ -196,6 +198,17 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 	// Proxy base: what the remote's __BASE__ should point to
 	proxyBase := s.basePath + "/remote/" + strings.Join(chain, "/")
 
+	// A WebSocket (the terminal) passes through as an upgrade. The browser
+	// sent its Origin to this node, so it is checked here; the remote gets
+	// none.
+	upgrade := tools.IsWebSocketUpgrade(r)
+	if upgrade && !tools.SameOrigin(r) {
+		http.Error(w, "cross-origin websocket refused", 403)
+		return
+	}
+
+	// The timeout bounds the dial only; the stream lives as long as the
+	// client's request (an upgraded connection: until either side closes).
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	conn, code, err := s.dialRemoteAPI(ctx, chain)
@@ -204,6 +217,12 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+	if !upgrade {
+		// a client that drops a long answer (NDJSON, SSE) ends the stream
+		// at once instead of on the next chunk
+		stop := context.AfterFunc(r.Context(), func() { conn.Close() })
+		defer stop()
+	}
 
 	// Construct proxied request. Use a fresh header so we don't forward the
 	// local API token (remote node authenticates independently) or Hop-by-Hop
@@ -231,6 +250,14 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 	outReq.Header.Set("X-Hy2scale-Proxy", "true")
 	outReq.Close = true // force Connection: close in serialization
 	outReq.ContentLength = r.ContentLength
+	if upgrade {
+		outReq.Close = false
+		outReq.Header.Del("Origin")
+		outReq.Header.Set("Connection", "Upgrade")
+		outReq.Header.Set("Upgrade", r.Header.Get("Upgrade"))
+		tools.SpliceUpgrade(w, outReq, conn)
+		return
+	}
 
 	if err := outReq.Write(conn); err != nil {
 		http.Error(w, "write to remote failed: "+err.Error(), 502)

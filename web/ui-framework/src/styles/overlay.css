@@ -1,7 +1,9 @@
 /* Modal, toast, confirm, tooltip, dropdown. */
 /* ====== Modal ====== */
 .hy-modal-overlay{position:fixed;inset:0;background:var(--overlay);display:flex;align-items:center;justify-content:center;z-index:200}
-.hy-modal{background:var(--surface);border:1px solid var(--modal-border);border-radius:12px;width:100%;max-width:520px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow-modal)}
+.hy-modal-overlay.hy-modal-layer{background:none}
+.hy-modal-backdrop{position:absolute;inset:0;background:var(--overlay)}
+.hy-modal{position:relative;background:var(--surface);border:1px solid var(--modal-border);border-radius:12px;width:100%;max-width:520px;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow-modal)}
 .hy-modal.wide{max-width:680px}
 .hy-modal-header{display:flex;align-items:center;padding:20px 24px 16px;border-bottom:1px solid var(--border-light)}
 .hy-modal-header h2{font-size:16px;font-weight:600;flex:1}

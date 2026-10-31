@@ -199,6 +199,10 @@ type Config struct {
 	// operator-facing UI. Map key is the remote IP (no port), value is the
 	// NodeID the peer announced on its most recent connection from that IP.
 	KnownInboundIDs map[string]string `yaml:"known_inbound_ids,omitempty" json:"known_inbound_ids,omitempty"`
+
+	// SharedDeletes: shared users still to delete on target nodes (a target
+	// removed, or the user deleted here, while the target was unreachable).
+	SharedDeletes []SharedDelete `yaml:"shared_deletes,omitempty" json:"-"`
 }
 
 // DNSResolverConfig: see exit.ResolverConfig.
@@ -389,6 +393,7 @@ func (a *App) Run(ctx context.Context) error {
 	go func() { defer a.persisters.Done(); a.runHistoryRecorder(ctx) }()
 
 	a.rebuildUserIndex()
+	go a.runTrafficResets(ctx)
 
 	// Apply nested discovery
 	for peerName, pc := range cfg.Peers {
@@ -898,6 +903,9 @@ func (a *App) LookupUser(username, password, proxy string) (*UserConfig, error) 
 }
 
 func (a *App) AddUser(u UserConfig) error {
+	if u.TrafficReset != "" && u.TrafficResetFrom == "" {
+		u.TrafficResetFrom = TrafficNow().Format(time.RFC3339)
+	}
 	err := a.store.Update(func(c *Config) {
 		for _, existing := range c.Users {
 			if existing.Username == u.Username {
@@ -925,6 +933,20 @@ func (a *App) UpdateUser(id string, u UserConfig) error {
 				oldProxyDisabled = existing.ProxyDisabled
 				oldUsername = existing.Username
 				u.TrafficUsed = existing.TrafficUsed
+				// server-managed fields
+				u.TrafficResetAt = existing.TrafficResetAt
+				u.TrafficResetFrom = existing.TrafficResetFrom
+				if u.TrafficReset != existing.TrafficReset || u.TrafficResetDay != existing.TrafficResetDay {
+					// a new period counts from now: no reset for boundaries already passed
+					u.TrafficResetFrom = ""
+					if u.TrafficReset != "" {
+						u.TrafficResetFrom = TrafficNow().Format(time.RFC3339)
+					}
+				}
+				u.ShareTargets = existing.ShareTargets
+				u.ShareRev = existing.ShareRev
+				u.ShareResetRev = existing.ShareResetRev
+				u.SharedFrom = existing.SharedFrom
 				c.Users[i] = u
 				return
 			}
@@ -953,6 +975,10 @@ func (a *App) RemoveUser(id string) error {
 	err := a.store.Update(func(c *Config) {
 		for i, u := range c.Users {
 			if u.ID == id {
+				// a user shared out is deleted on its targets too
+				for _, t := range u.ShareTargets {
+					addSharedDelete(c, SharedDelete{Target: t, UserID: u.ID})
+				}
 				c.Users = append(c.Users[:i], c.Users[i+1:]...)
 				return
 			}
@@ -980,14 +1006,20 @@ func (a *App) ToggleUser(id string, enabled bool) error {
 }
 
 func (a *App) ResetUserTraffic(id string) error {
+	a.usersMu.RLock()
 	err := a.store.Update(func(c *Config) {
 		for i, u := range c.Users {
 			if u.ID == id {
-				c.Users[i].TrafficUsed = 0
+				if live, ok := a.userIndex[u.Username]; ok {
+					atomic.StoreInt64(&live.TrafficUsed, 0)
+				}
+				atomic.StoreInt64(&c.Users[i].TrafficUsed, 0)
+				c.Users[i].TrafficResetAt = TrafficNow().Format(time.RFC3339)
 				return
 			}
 		}
 	})
+	a.usersMu.RUnlock()
 	if err == nil {
 		a.rebuildUserIndex()
 	}

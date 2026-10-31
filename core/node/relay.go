@@ -610,6 +610,8 @@ type Node struct {
 	apiHandler func(stream net.Conn)
 	// punchHandler serves StreamPunch (hole-punch signalling).
 	punchHandler func(stream net.Conn)
+	// speedHandler serves StreamSpeed (throughput test).
+	speedHandler func(stream net.Conn)
 
 	// apiStreamWrap is the app-layer hook that wraps an inbound API stream
 	// so the api server can recover the peer-relay auth ID (used by the
@@ -1481,6 +1483,13 @@ func (n *Node) HandleStream(ctx context.Context, reqAddr string, stream net.Conn
 
 	case StreamPunch:
 		if h := n.punchHandler; h != nil {
+			h(stream)
+		} else {
+			stream.Close()
+		}
+
+	case proto.StreamSpeed:
+		if h := n.speedHandler; h != nil {
 			h(stream)
 		} else {
 			stream.Close()
@@ -3123,6 +3132,12 @@ func (n *Node) SetListPeersFunc(fn func() []byte) {
 // web-UI proxy tunneling).
 func (n *Node) SetAPIHandler(handler func(stream net.Conn)) {
 	n.apiHandler = handler
+}
+
+// SetSpeedHandler registers the handler of incoming StreamSpeed streams
+// (throughput tests toward this node).
+func (n *Node) SetSpeedHandler(handler func(stream net.Conn)) {
+	n.speedHandler = handler
 }
 
 // SetAPIStreamWrap registers the app-layer wrapper that tags a peer-relay

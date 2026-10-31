@@ -20,8 +20,9 @@ import (
 //	  legacy bond stream;
 //	a real target, a msess subflow or a bond stream at the gateway itself;
 //
-// in mode full also StreamAPI (management) and StreamPunch, directly and as
-// the target of a via chain, and StreamListPeer through a chain.
+// in mode full also StreamAPI (management), StreamPunch and StreamSpeed,
+// directly and as the target of a via chain, and StreamListPeer through a
+// chain.
 //
 // The gateway validates every chain before forwarding: nodes further away
 // see the gateway's own identity and cannot tell such traffic apart. What

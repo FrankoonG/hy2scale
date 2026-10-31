@@ -1,14 +1,14 @@
 import { api } from './client';
 import type {
   NodeConfig, Stats, TopologyNode, ClientEntry, PathStatus,
-  UserConfig, Session, ProxyConfig, SSConfig, L2TPConfig,
+  UserConfig, TrafficReset, Session, ProxyConfig, SSConfig, L2TPConfig,
   IKEv2Config, OpenVPNConfig, WireGuardConfig, WireGuardPeer,
   RoutingRule, CertInfo, UISettings, PortConflict, PasswordConflicts,
   UpgradeStatus, UpgradeCheckResult, NodeEgress, NodeEgressFamily,
   PublicIPSettings,
 } from './types';
 
-export type { NodeConfig, Stats, TopologyNode, ClientEntry, PathStatus, UserConfig, Session, ProxyConfig, SSConfig, L2TPConfig, IKEv2Config, OpenVPNConfig, WireGuardConfig, WireGuardPeer, RoutingRule, CertInfo, UISettings, PortConflict, PasswordConflicts, UpgradeStatus, UpgradeCheckResult, NodeEgress, NodeEgressFamily };
+export type { NodeConfig, Stats, TopologyNode, ClientEntry, PathStatus, UserConfig, TrafficReset, Session, ProxyConfig, SSConfig, L2TPConfig, IKEv2Config, OpenVPNConfig, WireGuardConfig, WireGuardPeer, RoutingRule, CertInfo, UISettings, PortConflict, PasswordConflicts, UpgradeStatus, UpgradeCheckResult, NodeEgress, NodeEgressFamily };
 
 // Auth
 export const login = (username: string, password: string) =>
