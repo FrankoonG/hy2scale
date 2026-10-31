@@ -15,11 +15,6 @@ import (
 	"unsafe"
 )
 
-// Run runs an iptables command, checking for duplicates first.
-// For -I (insert) and -A (append), it checks with -C first.
-// iptCmd resolves the iptables command. If the container's iptables doesn't work
-// but host root is mounted at /host, use chroot to run the host's iptables.
-// This handles iKuai routers where container iptables is incompatible with the kernel.
 // IptVariant detects the correct iptables command at startup.
 // On standard Linux with nftables: "iptables" (maps to iptables-nft)
 // On iKuai or legacy systems: "iptables-legacy"
@@ -42,43 +37,10 @@ var IptVariant = sync.OnceValue(func() string {
 	return "iptables"
 })
 
-var iptUseChroot = sync.OnceValue(func() bool {
-	// Test if native iptables works
-	variant := IptVariant()
-	if out, err := exec.Command(variant, "-L", "-n").CombinedOutput(); err == nil {
-		debugLog("[iptables] native %s works", variant)
-		return false
-	} else {
-		debugLog("[iptables] native %s failed: %v: %s", variant, err, string(out))
-	}
-	// Check if host root is mounted and its iptables works
-	if _, err := os.Stat("/host/usr/sbin/iptables"); err == nil {
-		if out, err := exec.Command("chroot", "/host", "/usr/sbin/iptables", "-L", "-n").CombinedOutput(); err == nil {
-			log.Printf("[iptables] using chroot /host for iptables (host kernel compat)")
-			return true
-		} else {
-			debugLog("[iptables] chroot /host iptables failed: %v: %s", err, string(out))
-		}
-	} else {
-		debugLog("[iptables] /host/usr/sbin/iptables not found (host root not mounted)")
-	}
-	return false
-})
-
 func Exec(prog string, args ...string) *exec.Cmd {
 	// Platform adapter: iKuai, OpenWrt, etc. may provide custom iptables binary
 	if cmd := platformIPTExec(prog, args); cmd != nil {
 		return cmd
-	}
-	if iptUseChroot() {
-		hostProg := prog
-		switch prog {
-		case "iptables-legacy":
-			hostProg = "/usr/sbin/iptables"
-		case "iptables":
-			hostProg = "/usr/sbin/iptables"
-		}
-		return exec.Command("chroot", append([]string{"/host", hostProg}, args...)...)
 	}
 	return exec.Command(prog, args...)
 }
@@ -107,7 +69,7 @@ func Run(prog string, args ...string) {
 	}
 }
 
-// testIptablesAvailable checks if iptables-legacy DNAT works (native or chroot).
+// testIptablesAvailable checks if the nat table can be listed.
 func testIptablesAvailable() bool {
 	cmd := Exec(IptVariant(), "-t", "nat", "-L", "-n")
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -119,7 +81,8 @@ func testIptablesAvailable() bool {
 }
 
 // Available caches iptables detection at startup.
-// If standard iptables fails, tries platform-specific fix before falling back to gvisor.
+// If standard iptables fails, the platform's own fix is tried (iKuai: the
+// bundled iptables); without either, the node runs without iptables.
 var Available = sync.OnceValue(func() bool {
 	if testIptablesAvailable() {
 		return true

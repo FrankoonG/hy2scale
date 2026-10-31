@@ -89,7 +89,7 @@ func platformFixIPTables() bool {
 		log.Printf("[platform] %s iptables fix successful", activePlatform.Name())
 		return true
 	}
-	log.Printf("[platform] %s iptables fix failed, will fall back to gvisor compat", activePlatform.Name())
+	log.Printf("[platform] %s iptables fix failed, running without iptables", activePlatform.Name())
 	return false
 }
 

@@ -1272,8 +1272,16 @@ func (f hopConnFactory) New(addr net.Addr) (net.PacketConn, error) {
 
 // Port hopping, server side: hysteria listens on one port; the other ports
 // of the listen spec are redirected to it in a nat chain of our own. Every
-// server start rewrites the chain (an empty spec removes it).
+// server start rewrites the chain (an empty spec removes it). Only packets
+// addressed to this host enter the chain: on a node that also routes (a
+// router, a Docker host), UDP that other hosts send out to the same port
+// numbers is forwarded untouched.
 const hopChain = "HY2SCALE-HOP"
+
+var (
+	hopJump      = []string{"-p", "udp", "-m", "addrtype", "--dst-type", "LOCAL", "-j", hopChain}
+	hopJumpPlain = []string{"-p", "udp", "-j", hopChain} // before 1.4.0, and where addrtype is missing
+)
 
 func setPortHopRedirect(listen string) {
 	host, ports, err := net.SplitHostPort(stripAddrBind(listen))
@@ -1312,7 +1320,7 @@ func setPortHopRedirect(listen string) {
 		}
 		target := []string{"-j", "REDIRECT", "--to-ports", primary}
 		if ip != nil && !ip.IsUnspecified() {
-			target = []string{"-j", "DNAT", "--to-destination", net.JoinHostPort(host, primary)}
+			target = []string{"-d", ip.String(), "-j", "DNAT", "--to-destination", net.JoinHostPort(host, primary)}
 		}
 		hopRedirectSet(v6, extra, target)
 	}
@@ -1338,7 +1346,11 @@ func hopRedirectSet(v6 bool, extra []udphop.PortRange, target []string) {
 		log.Printf("[server] port hopping: %s nat table unavailable: %v %s", ipt, err, out)
 		return
 	}
-	netfilter.Run(ipt, "-t", "nat", "-I", "PREROUTING", "-p", "udp", "-j", hopChain)
+	hopUnjump(ipt)
+	if out, err := netfilter.Exec(ipt, append([]string{"-t", "nat", "-I", "PREROUTING"}, hopJump...)...).CombinedOutput(); err != nil {
+		log.Printf("[server] port hopping: %s has no addrtype match (%v %s); redirecting the hop ports of every destination", ipt, err, out)
+		netfilter.Run(ipt, append([]string{"-t", "nat", "-I", "PREROUTING"}, hopJumpPlain...)...)
+	}
 	for _, r := range extra {
 		dport := fmt.Sprintf("%d:%d", r.Start, r.End)
 		args := append([]string{"-t", "nat", "-A", hopChain, "-p", "udp", "--dport", dport}, target...)
@@ -1348,11 +1360,20 @@ func hopRedirectSet(v6 bool, extra []udphop.PortRange, target []string) {
 	}
 }
 
+// hopUnjump removes every PREROUTING jump into the hop chain (either form,
+// however many times it was added).
+func hopUnjump(ipt string) {
+	for _, j := range [][]string{hopJump, hopJumpPlain} {
+		for i := 0; i < 8 && netfilter.Exec(ipt, append([]string{"-t", "nat", "-D", "PREROUTING"}, j...)...).Run() == nil; i++ {
+		}
+	}
+}
+
 // hopRedirectClear removes the hop chain of one family, if present.
 func hopRedirectClear(v6 bool) {
 	ipt := netfilter.Prog(v6)
 	if netfilter.Exec(ipt, "-t", "nat", "-L", hopChain, "-n").Run() == nil {
-		netfilter.Exec(ipt, "-t", "nat", "-D", "PREROUTING", "-p", "udp", "-j", hopChain).Run()
+		hopUnjump(ipt)
 		netfilter.Exec(ipt, "-t", "nat", "-F", hopChain).Run()
 		netfilter.Exec(ipt, "-t", "nat", "-X", hopChain).Run()
 	}
