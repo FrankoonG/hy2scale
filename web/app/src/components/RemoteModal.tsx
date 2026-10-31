@@ -88,6 +88,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
   useEffect(() => () => { alive.current = false; }, []);
 
   const setAuth = useCallback((a: Auth | null) => {
+    setNow(Date.now());
     setAuthState(a);
     writeAuth(chain, a);
     setPhase(a ? 'in' : 'out');

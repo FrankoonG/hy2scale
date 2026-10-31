@@ -11,8 +11,8 @@ ARG BIN=source
 FROM node:20-alpine AS frontend
 WORKDIR /web
 COPY web/ .
-RUN cd ui-framework && npm ci && npm run build
-RUN cd app && npm ci && npm run build
+RUN cd ui-framework && npm ci --ignore-scripts && npm run build
+RUN cd app && npm ci --ignore-scripts && npm run build
 
 FROM golang:1.27-alpine AS builder
 WORKDIR /src

@@ -35,7 +35,7 @@ var keys = map[string]string{
 
 // ExtraKey is an additional trusted key "id:base64", set only at build time
 // (-ldflags -X) for test builds. Release builds never set it, so it changes
-// nothing on an official node.
+// nothing on an official node; it cannot stand in for a release key id.
 var ExtraKey string
 
 // Manifest is what a release signature covers.
@@ -102,8 +102,8 @@ var platform = sync.OnceValue(func() string {
 })
 
 func trusted(id string) ed25519.PublicKey {
-	b64 := keys[id]
-	if i := strings.IndexByte(ExtraKey, ':'); i > 0 && ExtraKey[:i] == id {
+	b64, ok := keys[id]
+	if i := strings.IndexByte(ExtraKey, ':'); !ok && i > 0 && ExtraKey[:i] == id {
 		b64 = ExtraKey[i+1:]
 	}
 	k, err := base64.StdEncoding.DecodeString(b64)
@@ -139,6 +139,9 @@ func Check(sig []byte, sum []byte) Result {
 	var m Manifest
 	if err := json.Unmarshal(mb, &m); err != nil {
 		return bad("unreadable manifest")
+	}
+	if m.Name != "hy2scale" {
+		return bad("signed for " + m.Name)
 	}
 	if !strings.EqualFold(m.SHA256, hex.EncodeToString(sum)) {
 		return bad("the binary is not the signed one")
