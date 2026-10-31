@@ -224,7 +224,7 @@ export default function InterfacesTopoView({
     const p = x.public?.[fam];
     if (!p) return <span className="iface-muted">—</span>;
     if (!p.ok) return <span className="iface-bad">{t('iface.unavailable')}</span>;
-    return <PublicIP className={clsx('iface-topo-ellip', egClass(x.name, fam) && 'iface-topo-pubip')} ip={p.ip} country={p.country} />;
+    return <PublicIP className={clsx('iface-topo-ellip', egClass(x.name, fam) && 'iface-topo-pubip')} ip={p.ip} />;
   };
 
   const renderCard = (c: CardL) => {
@@ -316,7 +316,7 @@ export default function InterfacesTopoView({
     const p = x?.public?.[fam];
     const warn = x ? egressWarning(x, fam) : '';
     let v: ReactNode;
-    if (p?.ok) v = <PublicIP className="iface-topo-ellip" ip={p.ip} country={p.country} />;
+    if (p?.ok) v = <PublicIP className="iface-topo-ellip" ip={p.ip} />;
     else if (p) v = <span className="iface-bad">{t('iface.unavailable')}</span>;
     else v = <span className="iface-muted iface-topo-ellip">{egress[fam]}</span>;
     return (

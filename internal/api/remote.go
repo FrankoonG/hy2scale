@@ -145,7 +145,7 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 		"tls": true, "settings": true, "remote": true,
 		"scale": true, "users": true, "rules": true, "assets": true,
 		"interfaces": true, "overview": true, "endpoints": true, "logs": true,
-		"tools": true,
+		"tools": true, "audit": true,
 	}
 	chainLen := 0
 	for _, seg := range segments {

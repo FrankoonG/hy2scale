@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import {
   AppLayout, Sidebar, Topbar, useMediaQuery, useStoredState, boolCodec, type IconComponent,
   IconLayoutDashboard, IconWaypoints, IconEthernetPort, IconSplit, IconUsers, IconServer, IconPlug,
-  IconShieldCheck, IconScrollText, IconSettings, IconList, IconNetwork, IconWrench,
+  IconShieldCheck, IconScrollText, IconSettings, IconList, IconNetwork, IconWrench, IconClipboardList,
 } from '@hy2scale/ui';
 import { useAuthStore } from '@/store/auth';
 import { useNodeStore } from '@/store/node';
@@ -14,6 +14,7 @@ import { usePageViewStore, isTopoPage } from '@/store/pageView';
 import BrandLogo from '@/components/login/BrandLogo';
 import { playAppEnter, takeHandoff } from '@/hooks/authTransition';
 import { SELF_KEY } from '@/utils/nodeKeys';
+import { useStoredFeatures } from '@/components/FeatureGate';
 
 // Sidebar icons: one per page, matching what the page manages.
 const icons: Record<string, IconComponent> = {
@@ -26,20 +27,21 @@ const icons: Record<string, IconComponent> = {
   endpoints: IconPlug,             // WireGuard endpoints
   tls: IconShieldCheck,            // certificates
   tools: IconWrench,               // network tests and a terminal
+  audit: IconClipboardList,        // flow records
   logs: IconScrollText,
   settings: IconSettings,
 };
 
-// Sidebar groups. Tools, Logs and Settings are pinned to the bottom, above the collapse toggle.
+// Sidebar groups. Tools, Audit, Logs and Settings are pinned to the bottom, above the collapse toggle.
 const navGroups: { key: string; label?: string; items: string[] }[] = [
   { key: 'main', items: ['overview'] },
   { key: 'network', label: 'nav.groupNetwork', items: ['nodes', 'interfaces', 'rules'] },
   { key: 'access', label: 'nav.groupAccess', items: ['users', 'proxies', 'endpoints', 'tls'] },
 ];
-const bottomNav = ['tools', 'logs', 'settings'];
+const bottomNav = ['tools', 'audit', 'logs', 'settings'];
 const navPaths: Record<string, string> = {
   overview: '/overview', nodes: '/nodes', interfaces: '/interfaces', rules: '/rules',
-  users: '/users', proxies: '/proxies', endpoints: '/endpoints', tls: '/tls', tools: '/tools', logs: '/logs', settings: '/settings',
+  users: '/users', proxies: '/proxies', endpoints: '/endpoints', tls: '/tls', tools: '/tools', audit: '/audit', logs: '/logs', settings: '/settings',
 };
 const navKeys = Object.keys(navPaths);
 
@@ -59,6 +61,8 @@ export default function MainLayout({ children }: { children: ReactNode }) {
   const toggleCollapsed = () => setCollapsedPref((v) => !v);
 
   const forcePasswordChange = useAuthStore((s) => s.forcePasswordChange);
+  // Logs and audit stay greyed out while this node does not keep them.
+  const stored = useStoredFeatures();
   const activePage = navKeys.find((k) => location.pathname.startsWith(navPaths[k])) || 'overview';
   const views = usePageViewStore((s) => s.views);
   const toggleView = usePageViewStore((s) => s.toggle);
@@ -83,7 +87,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
       key,
       label: t(`nav.${key}` as any),
       icon: <Icon />,
-      disabled: forcePasswordChange && key !== 'settings',
+      disabled: (forcePasswordChange && key !== 'settings') || ((key === 'logs' || key === 'audit') && stored.loaded && !stored[key]),
     };
   };
   const sidebarSections = navGroups.map((g) => ({

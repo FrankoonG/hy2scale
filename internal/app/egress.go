@@ -2,11 +2,13 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/audit"
 	"github.com/FrankoonG/hy2scale/core/iface"
 )
 
@@ -16,7 +18,16 @@ import (
 // dialDirect dials addr ("host:port") from this node through the egress;
 // the restrictions carried by ctx apply.
 func (a *App) dialDirect(ctx context.Context, network, addr string) (net.Conn, error) {
-	return a.ifaces.Dial(ctx, network, addr)
+	c, err := a.ifaces.Dial(ctx, network, addr)
+	if af := audit.FromContext(ctx); af != nil {
+		switch {
+		case err == nil:
+			audit.MarkDirect(af, c)
+		case errors.Is(err, iface.ErrInternalDenied):
+			af.Block(err.Error())
+		}
+	}
+	return c, err
 }
 
 // egressLookup resolves a name through the egress.

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card, Input, Toggle } from '@hy2scale/ui';
 import { streamTool, type MtrHop, type MtrLine, type ToolAvail } from '@/api/tools';
+import { IPFlag } from '@/components/CountryFlag';
 import { Field, RunButton, Unavailable, ms, useToolRun } from './common';
 
 export default function MtrTab({ avail }: { avail?: ToolAvail }) {
@@ -48,7 +49,7 @@ export default function MtrTab({ avail }: { avail?: ToolAvail }) {
 
       {(hops.length > 0 || target) && (
         <Card
-          title={target ? (target.host === target.ip ? target.ip : t('tools.resolved', { host: target.host, ip: target.ip })) : undefined}
+          title={target ? <span data-testid="tool-target"><IPFlag addr={target.ip} />{target.host === target.ip ? target.ip : t('tools.resolved', { host: target.host, ip: target.ip })}</span> : undefined}
           actions={round > 0 ? <span className="muted">{t('tools.round', { n: round })}</span> : undefined}
           noPadding
         >
@@ -77,7 +78,7 @@ export default function MtrTab({ avail }: { avail?: ToolAvail }) {
                         {none ? '???' : (
                           <>
                             {h.name && h.name !== h.ip && <span>{h.name} </span>}
-                            <span className={h.name && h.name !== h.ip ? 'mono muted' : 'mono'}>{h.ip}</span>
+                            <span className={h.name && h.name !== h.ip ? 'mono muted' : 'mono'}><IPFlag addr={h.ip} />{h.ip}</span>
                           </>
                         )}
                       </td>

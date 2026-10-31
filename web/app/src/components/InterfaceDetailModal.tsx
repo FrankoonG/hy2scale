@@ -52,7 +52,7 @@ export default function InterfaceDetailModal({
     if (!shown) items.push([t('iface.address'), '—']);
     for (const fam of FAMS) {
       const p = x.public?.[fam];
-      if (p) items.push([t('iface.publicFam', { fam: FAM_LABEL[fam] }), p.ok ? <PublicIP ip={p.ip} country={p.country} /> : <span className="iface-bad">{t('iface.unavailable')}</span>]);
+      if (p) items.push([t('iface.publicFam', { fam: FAM_LABEL[fam] }), p.ok ? <PublicIP ip={p.ip} /> : <span className="iface-bad">{t('iface.unavailable')}</span>]);
     }
     items.push([t('iface.mac'), x.mac || '—']);
     items.push([t('iface.mtu'), x.kind === 'child' && !x.mtu

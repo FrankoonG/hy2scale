@@ -5,16 +5,19 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/audit"
 	"golang.org/x/crypto/curve25519"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
@@ -368,16 +371,20 @@ func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 			return
 		}
 		debugLog("[wg-fwd] %s -> %s via=%q paths=%v mode=%q", srcIP, dstAddr, exitVia, exitPaths, exitMode)
+		af := beginUserFlowStr(audit.InWireGuard, "tcp", wgPeerName(key), net.JoinHostPort(srcIP, strconv.Itoa(int(id.RemotePort))), dstAddr)
+		dctx := audit.NewContext(a.appCtx, af)
 
 		var wgConn *gonet.TCPConn
 		var remote net.Conn
 		if sniffAfterAccept(dstAddr) {
 			var ep tcpip.Endpoint
 			if wgConn, ep = acceptForwarded(r, "[wg-fwd]", srcIP, dstAddr); wgConn == nil {
+				af.End(errors.New("connection not accepted"))
 				return
 			}
 			var ok bool
-			if remote, ok = a.dialAccepted(a.appCtx, wgConn, ep, a.exitRoute(exitVia, exitPaths, exitMode), dstAddr); !ok {
+			if remote, ok = a.dialAccepted(dctx, wgConn, ep, a.exitRoute(dctx, exitVia, exitPaths, exitMode), dstAddr); !ok {
+				af.End(errors.New("dial failed"))
 				return
 			}
 		} else {
@@ -385,11 +392,12 @@ func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 			// goroutine): a destination the exit cannot reach is refused with
 			// a RST at once, so the client falls back to its other address
 			// family.
-			ctx, cancel := context.WithTimeout(a.appCtx, 15*time.Second)
+			ctx, cancel := context.WithTimeout(dctx, 15*time.Second)
 			var err error
 			remote, err = a.dialRoutedTCP(ctx, exitVia, exitPaths, exitMode, dstAddr)
 			cancel()
 			if err != nil {
+				af.End(err)
 				log.Printf("[wg-fwd] %s -> %s failed: %v", srcIP, dstAddr, err)
 				r.Complete(true)
 				return
@@ -397,6 +405,7 @@ func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 			var wq waiter.Queue
 			ep, tcpErr := r.CreateEndpoint(&wq)
 			if tcpErr != nil {
+				af.End(errors.New(tcpErr.String()))
 				remote.Close()
 				r.Complete(true)
 				return
@@ -405,6 +414,7 @@ func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 			wgConn = gonet.NewTCPConn(&wq, ep)
 		}
 
+		remote = audit.Track(af, remote, false)
 		go func() {
 			defer wgConn.Close()
 			defer remote.Close()
@@ -445,17 +455,20 @@ func installUDPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 			srcIP := id.RemoteAddress.String()
 
 			// Look up exit routing for this WireGuard peer
-			_, exitVia, exitPaths, exitMode, ok := a.wgPeerRoute(srcIP)
+			key, exitVia, exitPaths, exitMode, ok := a.wgPeerRoute(srcIP)
 			if !ok {
 				return
 			}
-			ctx, cancel := context.WithTimeout(a.appCtx, 15*time.Second)
+			af := beginUserFlowStr(audit.InWireGuard, "udp", wgPeerName(key), net.JoinHostPort(srcIP, strconv.Itoa(int(id.RemotePort))), dstAddr)
+			ctx, cancel := context.WithTimeout(audit.NewContext(a.appCtx, af), 15*time.Second)
 			remote, derr := a.dialRoutedUDP(ctx, exitVia, exitPaths, exitMode, dstAddr)
 			cancel()
 			if derr != nil {
+				af.End(derr)
 				debugLog("[wg-fwd] UDP %s -> %s exit=%q dial: %v", srcIP, dstAddr, exitVia, derr)
 				return
 			}
+			remote = audit.Track(af, remote, false)
 			defer remote.Close()
 			// Idle reap: gvisor netstack has no conntrack, so this forwarder
 			// owns the lifetime of each UDP flow. The deadline must be

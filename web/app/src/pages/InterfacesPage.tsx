@@ -209,7 +209,7 @@ export default function InterfacesPage() {
     if (!p.ok) c = <span className="iface-bad" title={p.error || undefined} data-testid={`pub-${fam}-bad`}>{t('iface.unavailable')}</span>;
     else c = (
       <>
-        <PublicIP className="iface-pub-ip" testId={`pub-${fam}`} ip={p.ip} country={p.country}
+        <PublicIP className="iface-pub-ip" testId={`pub-${fam}`} ip={p.ip}
           title={p.checked ? t('iface.checkedAt', { time: new Date(p.checked * 1000).toLocaleString() }) : undefined} />
         {p.direct && <span className="iface-tag faint" data-testid="tag-direct">{t('iface.direct')}</span>}
       </>

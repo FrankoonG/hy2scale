@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/audit"
 	"github.com/FrankoonG/hy2scale/core/msess"
 	relay "github.com/FrankoonG/hy2scale/core/node"
 	"github.com/FrankoonG/hy2scale/core/proto"
@@ -43,11 +44,12 @@ func (e *Engine) initMsess() {
 	e.ms = &msessState{legacy: map[string]time.Time{}, noted: map[string]time.Time{}}
 	server := func(r proto.Restrict) *msess.Server {
 		return msess.NewServer(msess.ServerConfig{
+			OpenContext: func(c net.Conn) context.Context { return relay.WithSource(context.Background(), c) },
 			DialTarget: func(ctx context.Context, addr string) (net.Conn, error) {
-				return e.dialLocal(WithRestrict(ctx, r), "tcp", RewriteLocalAddr(addr))
+				return e.dialSessionTarget(ctx, r, "tcp", addr)
 			},
 			DialPacketTarget: func(ctx context.Context, addr string) (net.Conn, error) {
-				return e.dialLocal(WithRestrict(ctx, r), "udp", RewriteLocalAddr(addr))
+				return e.dialSessionTarget(ctx, r, "udp", addr)
 			},
 			Logf: log.Printf,
 		})
@@ -62,6 +64,19 @@ func (e *Engine) initMsess() {
 		}
 		e.ms.server.Handle(c)
 	})
+}
+
+// dialSessionTarget dials the target of a session arriving here (this node
+// is its exit); the flow is recorded as the relay flow of the peer whose
+// subflow opened it.
+func (e *Engine) dialSessionTarget(ctx context.Context, r proto.Restrict, network, addr string) (net.Conn, error) {
+	af := e.node.BeginRelayCtx(ctx, network, addr)
+	c, err := e.dialLocal(audit.NewContext(WithRestrict(ctx, r), af), network, RewriteLocalAddr(addr))
+	if err != nil {
+		af.End(err)
+		return nil, err
+	}
+	return audit.Track(af, c, false), nil
 }
 
 func (m *msessState) isLegacy(exit string) bool {
@@ -161,6 +176,7 @@ func (e *Engine) dialMsessKind(ctx context.Context, exitVia string, exitPaths []
 	e.activePathMu.Lock()
 	e.activePaths[exitVia] = active
 	e.activePathMu.Unlock()
+	audit.FromContext(ctx).SetExitPath(e.stripSelf(active))
 	return c, true, nil
 }
 

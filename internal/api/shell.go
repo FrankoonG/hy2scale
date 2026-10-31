@@ -78,8 +78,10 @@ func (s *Server) downloadBackup(w http.ResponseWriter, r *http.Request) {
 		if rel == "." {
 			return nil
 		}
-		// The stored upgrade binary is not configuration.
-		if rel == "bin" && info.IsDir() {
+		// The stored upgrade binary is not configuration, nor are the
+		// uploaded GeoIP databases (large, and re-uploadable) or the kept
+		// logs and audit records.
+		if notBackedUp[rel] && info.IsDir() {
 			return filepath.SkipDir
 		}
 		hdr, err := tar.FileInfoHeader(info, "")
@@ -102,6 +104,10 @@ func (s *Server) downloadBackup(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// notBackedUp: top-level data directories that backups leave out and
+// restores skip.
+var notBackedUp = map[string]bool{"bin": true, "geoip": true, "logs": true, "audit": true}
+
 func (s *Server) uploadRestore(w http.ResponseWriter, r *http.Request) {
 	dataDir := s.app.DataDir()
 
@@ -120,7 +126,8 @@ func (s *Server) uploadRestore(w http.ResponseWriter, r *http.Request) {
 		target := filepath.Join(dataDir, filepath.Clean(hdr.Name))
 		// Never the stored upgrade binary: a restore must not change what
 		// runs (judged by where the entry lands, whatever its spelling).
-		if rel, err := filepath.Rel(dataDir, target); err != nil || rel == "bin" || strings.HasPrefix(filepath.ToSlash(rel), "bin/") {
+		// Nor what backups leave out.
+		if rel, err := filepath.Rel(dataDir, target); err != nil || notBackedUp[strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]] {
 			continue
 		}
 		// Security: ensure target is within dataDir

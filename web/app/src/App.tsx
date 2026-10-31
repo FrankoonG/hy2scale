@@ -18,6 +18,8 @@ import TLSPage from '@/pages/TLSPage';
 import SettingsPage from '@/pages/SettingsPage';
 import LogsPage from '@/pages/LogsPage';
 import ToolsPage from '@/pages/ToolsPage';
+import AuditPage from '@/pages/AuditPage';
+import FeatureGate from '@/components/FeatureGate';
 
 function AuthenticatedRoutes() {
   const setNode = useNodeStore((s) => s.setNode);
@@ -88,7 +90,8 @@ function AuthenticatedRoutes() {
         <Route path="/rules" element={<RulesPage />} />
         <Route path="/tls" element={<TLSPage />} />
         <Route path="/tools" element={<ToolsPage />} />
-        <Route path="/logs" element={<LogsPage />} />
+        <Route path="/audit" element={<FeatureGate feature="audit"><AuditPage /></FeatureGate>} />
+        <Route path="/logs" element={<FeatureGate feature="logs"><LogsPage /></FeatureGate>} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/overview" replace />} />
       </Routes>

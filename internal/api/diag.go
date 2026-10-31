@@ -93,16 +93,49 @@ func (s *Server) diagRuntime(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleLogs returns recent process log lines kept in memory.
-// ?after=SEQ returns only newer lines; ?limit caps the count (newest kept).
+// handleLogs returns log lines kept by this node (Settings → Storage).
+// ?after=SEQ returns only newer lines (from memory); ?limit caps the count
+// (newest kept). ?before=SEQ pages back instead: up to limit lines older
+// than SEQ, from memory and then from disk, oldest first, with "more" set
+// when still older lines exist. While logs are off: {"enabled":false,
+// "entries":[]}.
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
-	after, _ := strconv.ParseUint(r.URL.Query().Get("after"), 10, 64)
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if !logbuf.Default.Enabled() {
+		writeJSON(w, map[string]any{"enabled": false, "entries": []logbuf.Entry{}})
+		return
+	}
+	v := r.URL.Query()
+	limit, _ := strconv.Atoi(v.Get("limit"))
 	if limit <= 0 || limit > 5000 {
 		limit = 5000
 	}
+	if bs := v.Get("before"); bs != "" {
+		before, err := strconv.ParseUint(bs, 10, 64)
+		if err != nil {
+			http.Error(w, "before: a sequence number expected", 400)
+			return
+		}
+		last := logbuf.Default.Last()
+		entries := logbuf.Default.Before(before, limit)
+		more := false
+		if len(entries) < limit {
+			b := before
+			if len(entries) > 0 {
+				b = entries[0].Seq
+			}
+			older, m := s.app.LogStore().Before(b, limit-len(entries))
+			entries = append(older, entries...)
+			more = m
+		} else if len(entries) > 0 {
+			older, _ := s.app.LogStore().Before(entries[0].Seq, 1)
+			more = len(older) > 0 || logbuf.Default.Oldest() < entries[0].Seq
+		}
+		writeJSON(w, map[string]any{"enabled": true, "entries": entries, "last": last, "gap": false, "more": more})
+		return
+	}
+	after, _ := strconv.ParseUint(v.Get("after"), 10, 64)
 	entries, last, gap := logbuf.Default.Since(after, limit)
-	writeJSON(w, map[string]any{"entries": entries, "last": last, "gap": gap})
+	writeJSON(w, map[string]any{"enabled": true, "entries": entries, "last": last, "gap": gap})
 }
 
 // diagPeerHistory — rolled-up time-bucketed metrics (1m / 1h / 1d

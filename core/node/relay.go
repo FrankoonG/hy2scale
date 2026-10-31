@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/audit"
 	"github.com/FrankoonG/hy2scale/core/proto"
 	hyclient "github.com/apernet/hysteria/core/v2/client"
 	coreErrs "github.com/apernet/hysteria/core/v2/errors"
@@ -634,6 +635,11 @@ type Node struct {
 
 	// Stream bridge manager for connection persistence across QUIC reconnects
 	bridgeTags *bridgeTags // old peers' via tags (rebind guard)
+
+	// inAddrs: inbound peers by connection address (audit source);
+	// sessTargets: targets of sessions opened through this hop (audit).
+	inAddrs     inboundAddrs
+	sessTargets sessTargets
 }
 
 // PeerRates returns per-peer traffic rates.
@@ -1579,6 +1585,9 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 	// verifyExtraConn reads). Close the stream and return without
 	// touching peer state.
 	if flags[0] == 0 {
+		if ra := stream.RemoteAddr(); ra != nil {
+			n.inAddrs.set(ra.String(), name) // an extra connection of that peer
+		}
 		stream.Close()
 		return
 	}
@@ -1742,6 +1751,12 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 		n.peers[name] = p
 	}
 	n.mu.Unlock()
+	regAddr := ""
+	if ra := stream.RemoteAddr(); ra != nil {
+		regAddr = ra.String()
+		n.inAddrs.set(regAddr, name)
+	}
+	defer n.inAddrs.del(regAddr, name)
 
 	// Watchdog: tie the peer entry's lifetime to the register stream.
 	//
@@ -1838,11 +1853,14 @@ func (n *Node) handleVia(ctx context.Context, peerName, targetAddr string, strea
 		defer n.bridgeTags.close(tag)
 	}
 
+	af := n.BeginTransit(stream, peerName, actualAddr)
 	exitConn, err := n.dialChain(ctx, peerName, actualAddr)
 	if err != nil {
+		af.End(err)
 		stream.Close()
 		return
 	}
+	exitConn = audit.Track(af, exitConn, false)
 	defer exitConn.Close()
 	defer stream.Close()
 	done := make(chan struct{})
@@ -1983,6 +2001,8 @@ func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclie
 		var wrapped net.Conn = stream
 		if addr == StreamAPI && n.apiStreamWrap != nil {
 			wrapped = n.apiStreamWrap(stream, "system")
+		} else if audit.Enabled() && (strings.HasPrefix(addr, proto.ViaPrefix) || strings.HasPrefix(addr, proto.StreamMsess)) {
+			wrapped = &NamedConn{Conn: stream, Peer: peerName} // audit source of its flows
 		}
 		n.HandleStream(ctx, addr, wrapped)
 		return
@@ -1992,17 +2012,27 @@ func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclie
 	var err error
 
 	// Check if addr is a via request (multi-hop forwarding)
+	var af *audit.Flow
+	src := &NamedConn{Peer: peerName}
 	if viaPeer, targetAddr, ok := parseVia(addr); ok {
+		af = n.BeginTransit(src, viaPeer, targetAddr)
 		target, err = n.dialChain(ctx, viaPeer, targetAddr)
 	} else if base, r := proto.ParseRestrict(addr); r != 0 {
-		target, err = n.dialRestricted(ctx, "tcp", base, r)
+		af = n.BeginRelay(src, "tcp", base)
+		target, err = n.dialRestricted(audit.NewContext(ctx, af), "tcp", base, r)
 	} else {
+		af = n.BeginRelay(src, "tcp", addr)
 		target, err = net.DialTimeout("tcp", addr, 10*time.Second)
+		if err == nil {
+			audit.MarkDirect(af, target)
+		}
 	}
 	if err != nil {
+		af.End(err)
 		n.nakDial(peerName, client, id)
 		return
 	}
+	target = audit.Track(af, target, false)
 	defer target.Close()
 
 	stream, err := client.TCP(streamDataPrefix + id + streamDataSuffix)
@@ -2045,20 +2075,33 @@ func (n *Node) nakDial(peerName string, client hyclient.Client, id string) {
 func (n *Node) dialUDPAndStream(ctx context.Context, peerName string, client hyclient.Client, id, addr string) {
 	var udpConn net.Conn
 	var err error
+	var af *audit.Flow
+	src := &NamedConn{Peer: peerName}
 	if chain, target, ok := parseVia(addr); ok {
 		// Multi-hop UDP through us as an inbound first hop: continue down
 		// the chain like nodeOutbound.UDP does for outbound hops. Dialing
 		// the via string literally made every such chain drop all UDP.
+		if t := AuditTarget(target); t != "" {
+			af = n.BeginRelay(src, "udp", t)
+			af.SetExitNode(ChainPath(chain), "")
+		}
 		udpConn, err = n.DialUDPVia(ctx, strings.Split(chain, "/"), target)
 	} else if base, r := proto.ParseRestrict(addr); r != 0 {
-		udpConn, err = n.dialRestricted(ctx, "udp", base, r)
+		af = n.BeginRelay(src, "udp", base)
+		udpConn, err = n.dialRestricted(audit.NewContext(ctx, af), "udp", base, r)
 	} else {
+		af = n.BeginRelay(src, "udp", addr)
 		udpConn, err = net.DialTimeout("udp", addr, 5*time.Second)
+		if err == nil {
+			audit.MarkDirect(af, udpConn)
+		}
 	}
 	if err != nil {
+		af.End(err)
 		n.nakDial(peerName, client, id)
 		return
 	}
+	udpConn = audit.Track(af, udpConn, false)
 	defer udpConn.Close()
 
 	stream, err := client.TCP(streamDataPrefix + id + streamDataSuffix)

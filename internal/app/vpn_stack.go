@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/audit"
 	"github.com/xen0bit/veepin/dataplane"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -302,19 +303,23 @@ func (a *App) installVPNForwarders(n *vpnNet, resolve func(srcIP string) (vpnRou
 			return
 		}
 		dst := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
+		af := beginUserFlowStr(n.proto, "tcp", route.user, net.JoinHostPort(srcIP, strconv.Itoa(int(id.RemotePort))), dst)
 		if sniffAfterAccept(dst) {
 			conn, ep := acceptForwarded(r, "["+n.proto+"]", srcIP, dst)
 			if conn == nil {
+				af.End(errors.New("connection not accepted"))
 				return
 			}
-			remote, ok := a.dialAccepted(withRestrict(n.ctx, a.userRestrict(route.user)), conn, ep, a.exitRoute(route.exitVia, route.exitPaths, route.exitMode), dst)
+			dctx := audit.NewContext(withRestrict(n.ctx, a.userRestrict(route.user)), af)
+			remote, ok := a.dialAccepted(dctx, conn, ep, a.exitRoute(dctx, route.exitVia, route.exitPaths, route.exitMode), dst)
 			if !ok {
+				af.End(errors.New("dial failed"))
 				return
 			}
 			go func() {
 				defer conn.Close()
 				defer remote.Close()
-				a.relayUser(conn, remote, route.user, srcIP, n.proto, true)
+				a.relayUser(conn, remote, route.user, srcIP, n.proto, true, af)
 			}()
 			return
 		}
@@ -322,10 +327,11 @@ func (a *App) installVPNForwarders(n *vpnNet, resolve func(srcIP string) (vpnRou
 		// goroutine): a destination the exit cannot reach is refused with a
 		// RST at once, so the client falls back to its other address family
 		// instead of waiting on an accepted connection that goes nowhere.
-		ctx, cancel := context.WithTimeout(n.ctx, 15*time.Second)
+		ctx, cancel := context.WithTimeout(audit.NewContext(n.ctx, af), 15*time.Second)
 		remote, err := a.dialVPNTCP(ctx, route, dst)
 		cancel()
 		if err != nil {
+			af.End(err)
 			debugLog("[%s] %s → %s via %q: %v", n.proto, srcIP, dst, route.exitVia, err)
 			r.Complete(true)
 			return
@@ -333,6 +339,7 @@ func (a *App) installVPNForwarders(n *vpnNet, resolve func(srcIP string) (vpnRou
 		var wq waiter.Queue
 		ep, terr := r.CreateEndpoint(&wq)
 		if terr != nil {
+			af.End(errors.New(terr.String()))
 			remote.Close()
 			r.Complete(true)
 			return
@@ -343,7 +350,7 @@ func (a *App) installVPNForwarders(n *vpnNet, resolve func(srcIP string) (vpnRou
 		go func() {
 			defer conn.Close()
 			defer remote.Close()
-			a.relayUser(conn, remote, route.user, srcIP, n.proto, true)
+			a.relayUser(conn, remote, route.user, srcIP, n.proto, true, af)
 		}()
 	})
 	n.stack.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpFwd.HandlePacket)
@@ -362,7 +369,7 @@ func (a *App) installVPNForwarders(n *vpnNet, resolve func(srcIP string) (vpnRou
 			return
 		}
 		conn := gonet.NewUDPConn(&wq, ep)
-		go a.relayVPNUDP(n, conn, route, srcIP, dst)
+		go a.relayVPNUDP(n, conn, route, srcIP, int(id.RemotePort), dst)
 	})
 	n.stack.SetTransportProtocolHandler(udp.ProtocolNumber, udpFwd.HandlePacket)
 }
@@ -375,16 +382,19 @@ func (a *App) dialVPNTCP(ctx context.Context, route vpnRoute, dst string) (net.C
 
 // relayVPNUDP carries one client UDP flow. The netstack has no conntrack, so
 // the flow lives until it has been idle in both directions.
-func (a *App) relayVPNUDP(n *vpnNet, conn *gonet.UDPConn, route vpnRoute, srcIP, dst string) {
+func (a *App) relayVPNUDP(n *vpnNet, conn *gonet.UDPConn, route vpnRoute, srcIP string, srcPort int, dst string) {
 	defer conn.Close()
-	ctx, cancel := context.WithTimeout(n.ctx, 15*time.Second)
+	af := beginUserFlowStr(n.proto, "udp", route.user, net.JoinHostPort(srcIP, strconv.Itoa(srcPort)), dst)
+	ctx, cancel := context.WithTimeout(audit.NewContext(n.ctx, af), 15*time.Second)
 	remote, err := a.dialRoutedUDP(withRestrict(ctx, a.userRestrict(route.user)), route.exitVia, route.exitPaths, route.exitMode, dst)
 	cancel()
 	if err != nil {
+		af.End(err)
 		debugLog("[%s] udp %s → %s via %q: %v", n.proto, srcIP, dst, route.exitVia, err)
 		return
 	}
 	defer remote.Close()
+	defer af.End(nil)
 
 	idle := vpnUDPIdle(dst)
 	refresh := func() {
@@ -403,6 +413,7 @@ func (a *App) relayVPNUDP(n *vpnNet, conn *gonet.UDPConn, route vpnRoute, srcIP,
 				return
 			}
 			refresh()
+			af.Add(int64(k), 0)
 			if _, e := remote.Write(buf[:k]); e != nil {
 				return
 			}
@@ -415,6 +426,7 @@ func (a *App) relayVPNUDP(n *vpnNet, conn *gonet.UDPConn, route vpnRoute, srcIP,
 			break
 		}
 		refresh()
+		af.Add(0, int64(k))
 		if _, e := conn.Write(buf[:k]); e != nil {
 			break
 		}

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/audit"
 	"github.com/FrankoonG/hy2scale/core/exit"
 	relay "github.com/FrankoonG/hy2scale/core/node"
 	"github.com/FrankoonG/hy2scale/core/proto"
@@ -148,9 +149,9 @@ func (o *outbound) TCP(reqAddr string) (net.Conn, error) {
 	// admitted the flow.
 	if base, r := proto.ParseRestrict(addr); r != 0 && !relay.IsRelayStream(addr) {
 		if exit.IsBondStream(base) {
-			return o.bond(addr), nil
+			return o.bond(addr, peerAddr, ""), nil
 		}
-		return o.local(exit.WithRestrict(o.ctx, r), base, bridged)
+		return o.relayLocal(exit.WithRestrict(o.ctx, r), base, bridged, peerAddr)
 	}
 	if relay.IsRelayStream(addr) {
 		c1, c2 := net.Pipe()
@@ -165,9 +166,21 @@ func (o *outbound) TCP(reqAddr string) (net.Conn, error) {
 		return c2, nil
 	}
 	if exit.IsBondStream(addr) {
-		return o.bond(addr), nil
+		return o.bond(addr, peerAddr, ""), nil
 	}
-	return o.local(o.ctx, addr, bridged)
+	return o.relayLocal(o.ctx, addr, bridged, peerAddr)
+}
+
+// relayLocal dials a node's plain target from here, recorded as the relay
+// flow of the peer at peerAddr.
+func (o *outbound) relayLocal(ctx context.Context, addr string, bridged bool, peerAddr string) (net.Conn, error) {
+	af := o.n.BeginRelay(&PeerAddrConn{Peer: peerAddr}, "tcp", addr)
+	c, err := o.local(audit.NewContext(ctx, af), addr, bridged)
+	if err != nil {
+		af.End(err)
+		return nil, err
+	}
+	return audit.Track(af, c, false), nil
 }
 
 // grant: the node access of a user's stream, or why it is refused.
@@ -185,10 +198,18 @@ func (o *outbound) grant(authID string) (Grant, error) {
 	return g, nil
 }
 
-func (o *outbound) bond(addr string) net.Conn {
+func (o *outbound) bond(addr, peerAddr, user string) net.Conn {
 	c1, c2 := net.Pipe()
+	var c net.Conn = c1
+	if peerAddr != "" {
+		pc := &PeerAddrConn{Conn: c1, Peer: peerAddr}
+		if user != "" {
+			pc.Inbound, pc.User = audit.InAccess, user
+		}
+		c = pc
+	}
 	go func() {
-		if err := o.ex.HandleBondStream(addr, c1); err != nil {
+		if err := o.ex.HandleBondStream(addr, c); err != nil {
 			log.Printf("[bond-rx] handle error: %v", err)
 			c1.Close()
 		}
@@ -234,20 +255,29 @@ func (o *outbound) UDP(reqAddr string) (hyserver.UDPConn, error) {
 		}
 		return o.cfg.Users.UDP(o.ctx, authID, peerAddr, reqAddr)
 	}
+	src := &PeerAddrConn{Peer: peerAddr}
 	// Multi-hop UDP: the chain loses one hop here.
 	if chain, target, ok := relay.ParseVia(reqAddr); ok {
+		var af *audit.Flow
+		if t := relay.AuditTarget(target); t != "" {
+			af = o.n.BeginRelay(src, "udp", t)
+			af.SetExitNode(relay.ChainPath(chain), "")
+		}
 		c, err := o.n.DialUDPVia(o.ctx, strings.Split(chain, "/"), target)
 		if err != nil {
+			af.End(err)
 			return nil, err
 		}
-		return &UDPAdapter{Conn: c, Addr: target}, nil
+		return &UDPAdapter{Conn: audit.Track(af, c, false), Addr: target}, nil
 	}
 	base, r := proto.ParseRestrict(reqAddr)
-	conn, err := o.ex.DialLocalUDP(exit.WithRestrict(o.ctx, r), exit.RewriteLocalAddr(base))
+	af := o.n.BeginRelay(src, "udp", base)
+	conn, err := o.ex.DialLocalUDP(audit.NewContext(exit.WithRestrict(o.ctx, r), af), exit.RewriteLocalAddr(base))
 	if err != nil {
+		af.End(err)
 		return nil, err
 	}
-	return &realUDP{conn: conn, addr: reqAddr}, nil
+	return &realUDP{conn: audit.Track(af, conn, false), addr: reqAddr}, nil
 }
 
 // UDPAdapter serves a connected datagram flow (to Addr) as an hy2 UDP
@@ -282,11 +312,19 @@ func (u *realUDP) WriteTo(b []byte, addr string) (int, error) { return u.conn.Wr
 func (u *realUDP) Close() error { return u.conn.Close() }
 
 // PeerAddrConn is a relay stream whose RemoteAddr is the client's address
-// (the stream itself is a pipe).
+// (the stream itself is a pipe). Inbound/User: the node-access client the
+// stream belongs to (audit identity; "" = a node's stream).
 type PeerAddrConn struct {
 	net.Conn
-	Peer string
+	Peer          string
+	Inbound, User string
 }
+
+// AuditIdentity: the client identity the stream carries (audit.Carrier).
+func (c *PeerAddrConn) AuditIdentity() (string, string) { return c.Inbound, c.User }
+
+// Unwrap: the pipe.
+func (c *PeerAddrConn) Unwrap() net.Conn { return c.Conn }
 
 type strAddr string
 

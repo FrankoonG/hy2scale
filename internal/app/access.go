@@ -150,7 +150,7 @@ func (g accessGrants) Hello(peerAddr string) *proto.Hello {
 }
 
 func (g accessGrants) Meter(authID, peerAddr string, c net.Conn) net.Conn {
-	return g.a.meterHy2As(authID, peerAddr, "hy2-node", c)
+	return g.a.meterHy2As(authID, peerAddr, "hy2-node", c, nil) // recorded by the relay layer
 }
 
 // ---------------------------------------------------------------- client side

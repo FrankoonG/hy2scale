@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -25,6 +26,10 @@ const (
 )
 
 // Buffer is a bounded ring of entries; safe for concurrent use.
+//
+// Keeping can be switched off (SetEnabled): nothing is kept then. Until the
+// first SetEnabled call the buffer keeps lines (start-up, before the
+// configuration is read); switching off clears them.
 type Buffer struct {
 	mu      sync.Mutex
 	ring    []Entry
@@ -32,7 +37,15 @@ type Buffer struct {
 	n       int
 	seq     uint64
 	partial []byte
+	state   atomic.Int32 // stateBoot | stateOn | stateOff
+	sink    func(Entry)  // also given every kept entry (under mu; must not block)
 }
+
+const (
+	stateBoot int32 = iota
+	stateOn
+	stateOff
+)
 
 // New returns a buffer that keeps the last capacity lines.
 func New(capacity int) *Buffer {
@@ -45,8 +58,108 @@ func New(capacity int) *Buffer {
 // Default is the process-wide buffer.
 var Default = New(5000)
 
+// SetEnabled switches keeping on or off. Off drops what is kept; on after
+// start-up hands the lines kept so far to the sink.
+func (b *Buffer) SetEnabled(on bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	prev := b.state.Load()
+	if !on {
+		b.state.Store(stateOff)
+		b.start, b.n, b.partial = 0, 0, nil
+		for i := range b.ring {
+			b.ring[i] = Entry{}
+		}
+		return
+	}
+	b.state.Store(stateOn)
+	if prev == stateBoot && b.sink != nil {
+		for i := 0; i < b.n; i++ {
+			b.sink(b.ring[(b.start+i)%len(b.ring)])
+		}
+	}
+}
+
+// Enabled reports whether lines are kept (true during start-up).
+func (b *Buffer) Enabled() bool { return b.state.Load() != stateOff }
+
+// SetSink installs fn to receive every entry kept from now on (nil = none).
+// fn runs under the buffer's lock and must not block.
+func (b *Buffer) SetSink(fn func(Entry)) {
+	b.mu.Lock()
+	b.sink = fn
+	b.mu.Unlock()
+}
+
+// SetSeq continues numbering after seq (the last entry kept on disk), so
+// sequence numbers stay unique across restarts. During start-up the
+// entries kept so far are renumbered to follow it; later it only moves the
+// counter forward.
+func (b *Buffer) SetSeq(seq uint64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.state.Load() != stateBoot {
+		if seq > b.seq {
+			b.seq = seq
+		}
+		return
+	}
+	for i := 0; i < b.n; i++ {
+		b.ring[(b.start+i)%len(b.ring)].Seq += seq
+	}
+	b.seq += seq
+}
+
+// Clear drops every kept entry (numbering continues).
+func (b *Buffer) Clear() {
+	b.mu.Lock()
+	b.start, b.n, b.partial = 0, 0, nil
+	for i := range b.ring {
+		b.ring[i] = Entry{}
+	}
+	b.mu.Unlock()
+}
+
+// Last is the sequence number of the newest entry.
+func (b *Buffer) Last() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.seq
+}
+
+// Oldest is the sequence number of the oldest kept entry (0 = none).
+func (b *Buffer) Oldest() uint64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.n == 0 {
+		return 0
+	}
+	return b.ring[b.start].Seq
+}
+
+// Before returns up to limit entries with Seq < before, oldest first (the
+// newest ones below before).
+func (b *Buffer) Before(before uint64, limit int) []Entry {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []Entry
+	for i := b.n - 1; i >= 0 && (limit <= 0 || len(out) < limit); i-- {
+		e := b.ring[(b.start+i)%len(b.ring)]
+		if e.Seq < before {
+			out = append(out, e)
+		}
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out
+}
+
 // Write splits p into lines; an unterminated tail waits for the next write.
 func (b *Buffer) Write(p []byte) (int, error) {
+	if b.state.Load() == stateOff {
+		return len(p), nil
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	data := p
@@ -106,6 +219,9 @@ func (b *Buffer) add(line string) {
 		b.n++
 	}
 	b.ring[idx] = e
+	if b.sink != nil && b.state.Load() == stateOn {
+		b.sink(e)
+	}
 }
 
 func levelOf(line string) string {

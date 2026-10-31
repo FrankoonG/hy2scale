@@ -13,9 +13,10 @@ import WebTab from './settings/WebTab';
 import AccountTab from './settings/AccountTab';
 import UpgradeTab from './settings/UpgradeTab';
 import MaintenanceTab from './settings/MaintenanceTab';
+import StorageTab from './settings/StorageTab';
 import AboutTab from './settings/AboutTab';
 
-type SettingsTab = 'network' | 'dns' | 'nested' | 'web' | 'account' | 'upgrade' | 'maintenance' | 'about';
+type SettingsTab = 'network' | 'dns' | 'nested' | 'web' | 'storage' | 'account' | 'upgrade' | 'maintenance' | 'about';
 
 export default function SettingsPage() {
   const { t } = useTranslation();
@@ -40,6 +41,7 @@ export default function SettingsPage() {
     ['dns', t('settings.dnsTab')],
     ['nested', t('settings.nestedTab')],
     ['web', t('settings.web')],
+    ['storage', t('settings.storage')],
     ['account', t('settings.account')],
     ['upgrade', t('settings.upgrade')],
     ['maintenance', t('settings.maintenance')],
@@ -53,6 +55,7 @@ export default function SettingsPage() {
       case 'dns': return <DnsTab sys={sys} />;
       case 'nested': return <NestedTab sys={sys} />;
       case 'web': return <WebTab web={web} />;
+      case 'storage': return <StorageTab />;
       case 'account': return <AccountTab pw={pw} forcePasswordChange={forcePasswordChange} />;
       case 'upgrade': return <UpgradeTab />;
       case 'maintenance': return <MaintenanceTab />;

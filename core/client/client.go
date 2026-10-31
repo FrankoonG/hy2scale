@@ -204,8 +204,7 @@ func (s *Session) Attrs(ctx context.Context) (proto.Attrs, error) {
 	return a, json.Unmarshal(b, &a)
 }
 
-// Egress returns the gateway's egress (public address and country per
-// family, JSON).
+// Egress returns the gateway's egress (public address per family, JSON).
 func (s *Session) Egress(ctx context.Context) (json.RawMessage, error) {
 	st, err := s.c.TCP(proto.StreamEgress)
 	if err != nil {

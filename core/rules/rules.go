@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/audit"
 	"github.com/FrankoonG/hy2scale/core/exit"
 	"github.com/FrankoonG/hy2scale/core/netfilter"
 )
@@ -156,6 +157,15 @@ func (e *Engine) ExitFor(host string) (via, mode string, paths []string, ok bool
 	return via, mode, paths, via != ""
 }
 
+// RuleFor is ExitFor plus the name of the rule.
+func (e *Engine) RuleFor(host string) (via, mode string, paths []string, name string, ok bool) {
+	info := e.lookupRule(host)
+	if info == nil || info.exitVia == "" {
+		return "", "", nil, "", false
+	}
+	return info.exitVia, info.exitMode, info.exitPaths, info.name, true
+}
+
 // Apply enables a routing rule.
 func (e *Engine) Apply(r Rule) {
 	e.mu.Lock()
@@ -172,6 +182,7 @@ func (e *Engine) Remove(id string) {
 
 type ruleExitInfo struct {
 	ruleID    string
+	name      string
 	target    string // IP, CIDR, a-b range, or "name:<domain>"
 	priority  int
 	exitVia   string
@@ -246,7 +257,11 @@ func (e *Engine) applyDomainRule(r Rule) {
 }
 
 func (e *Engine) registerTargetExit(r Rule, target string) {
-	e.destToExit.Store(r.ID+"|"+target, ruleExitInfo{ruleID: r.ID, target: target, priority: r.Priority,
+	name := r.Name
+	if name == "" {
+		name = r.ID
+	}
+	e.destToExit.Store(r.ID+"|"+target, ruleExitInfo{ruleID: r.ID, name: name, target: target, priority: r.Priority,
 		exitVia: r.ExitVia, exitMode: r.ExitMode, exitPaths: r.ExitPaths})
 }
 
@@ -268,13 +283,22 @@ func (e *Engine) removeRuleLocked(id string) {
 // Priority among the rules whose targets contain it, then the most specific
 // target, then the lowest rule ID — the same answer for every flow.
 func (e *Engine) lookupExitFull(host string) (string, string, []string) {
+	best := e.lookupRule(host)
+	if best == nil {
+		return "", "", nil
+	}
+	return best.exitVia, best.exitMode, best.exitPaths
+}
+
+// lookupRule: the rule that owns host (nil = none).
+func (e *Engine) lookupRule(host string) *ruleExitInfo {
 	host = strings.Trim(host, "[]")
 	ip := net.ParseIP(host)
 	name := ""
 	if ip == nil {
 		name = strings.ToLower(strings.TrimSuffix(host, "."))
 		if name == "" {
-			return "", "", nil
+			return nil
 		}
 	}
 	var best *ruleExitInfo
@@ -297,10 +321,7 @@ func (e *Engine) lookupExitFull(host string) (string, string, []string) {
 		}
 		return true
 	})
-	if best == nil {
-		return "", "", nil
-	}
-	return best.exitVia, best.exitMode, best.exitPaths
+	return best
 }
 
 // targetSpecificity reports how narrowly target (IP, CIDR or a-b range, of
@@ -413,20 +434,34 @@ func (e *Engine) handleConn(parentCtx context.Context, conn net.Conn) {
 		return
 	}
 	host, _, _ := net.SplitHostPort(origDst)
-	exitVia, exitMode, exitPaths := e.lookupExitFull(host)
+	var exitVia, exitMode string
+	var exitPaths []string
+	af := audit.Begin(audit.InRules, "tcp")
+	if info := e.lookupRule(host); info != nil {
+		exitVia, exitMode, exitPaths = info.exitVia, info.exitMode, info.exitPaths
+		af.SetRule(info.name)
+	}
+	af.SetSrc(conn.RemoteAddr().String(), "")
+	af.SetDst(origDst)
+	ctx = audit.NewContext(ctx, af)
 	var remote net.Conn
 	if exitVia == "" {
 		// no rule owns it any more (removed while the flow was in flight)
 		remote, err = dialTCPMarked(origDst, ruleBypassMark)
+		if err == nil {
+			audit.MarkDirect(af, remote)
+		}
 	} else {
 		// Fail closed: a rule-matched flow only ever leaves through its exit.
 		remote, err = e.ex.Dial(ctx, exit.Route{Exit: exitVia, Paths: exitPaths, Mode: exitMode}, "tcp", origDst)
 	}
 	if err != nil {
+		af.End(err)
 		log.Printf("[rules] %s via %q: %v", origDst, exitVia, err)
 		return
 	}
 	debugLog("[rules] %s connected via %q", origDst, exitVia)
+	remote = audit.Track(af, remote, false)
 	defer remote.Close()
 	done := make(chan struct{})
 	go func() {
@@ -463,6 +498,8 @@ type udpFlow struct {
 	remote net.Conn
 	queue  [][]byte
 	closed bool
+
+	af *audit.Flow // audit record (nil = not recorded)
 }
 
 func (f *udpFlow) touch() { f.last.Store(time.Now().UnixNano()) }
@@ -471,6 +508,7 @@ func (f *udpFlow) touch() { f.last.Store(time.Now().UnixNano()) }
 // still in flight.
 func (f *udpFlow) send(b []byte) {
 	f.touch()
+	f.af.Add(int64(len(b)), 0)
 	f.mu.Lock()
 	r := f.remote
 	if r == nil && !f.closed && len(f.queue) < ruleUDPQueue {
@@ -590,9 +628,13 @@ func (e *Engine) serveUDPProxy(ctx context.Context, ln *net.UDPConn) {
 // startUDPFlow sets up the client side of a new flow and dials its exit in
 // the background. Returns false when the flow cannot be served.
 func (e *Engine) startUDPFlow(ctx context.Context, f *udpFlow, tproxied bool, ln *net.UDPConn, done func()) bool {
+	f.af = audit.Begin(audit.InRules, "udp")
+	f.af.SetSrc(f.client.String(), "")
+	f.af.SetDst(f.dst.String())
 	if tproxied {
 		local, err := dialUDPAs(f.dst, f.client)
 		if err != nil {
+			f.af.End(err)
 			log.Printf("[rules] UDP %s → %s: reply socket: %v", f.client, f.dst, err)
 			return false
 		}
@@ -614,17 +656,28 @@ func (e *Engine) startUDPFlow(ctx context.Context, f *udpFlow, tproxied bool, ln
 		f.reply = func(b []byte) error { _, err := ln.WriteToUDP(b, client); return err }
 	}
 	go func() {
+		var ferr error
+		defer func() { f.af.End(ferr) }()
 		defer done()
-		exitVia, exitMode, exitPaths := e.lookupExitFull(f.dst.IP.String())
+		var exitVia, exitMode string
+		var exitPaths []string
+		if info := e.lookupRule(f.dst.IP.String()); info != nil {
+			exitVia, exitMode, exitPaths = info.exitVia, info.exitMode, info.exitPaths
+			f.af.SetRule(info.name)
+		}
 		var remote net.Conn
 		var err error
 		if exitVia == "" {
 			remote, err = dialUDPMarked(f.dst.String(), ruleBypassMark)
+			if err == nil {
+				audit.MarkDirect(f.af, remote)
+			}
 		} else {
 			// Fail closed: never dialled from this node when the exit is down.
-			remote, err = e.ex.Dial(ctx, exit.Route{Exit: exitVia, Paths: exitPaths, Mode: exitMode}, "udp", f.dst.String())
+			remote, err = e.ex.Dial(audit.NewContext(ctx, f.af), exit.Route{Exit: exitVia, Paths: exitPaths, Mode: exitMode}, "udp", f.dst.String())
 		}
 		if err != nil {
+			ferr = err
 			log.Printf("[rules] UDP %s → %s via %q: %v", f.client, f.dst, exitVia, err)
 			return
 		}
@@ -654,6 +707,7 @@ func (e *Engine) startUDPFlow(ctx context.Context, f *udpFlow, tproxied bool, ln
 				return
 			}
 			f.touch()
+			f.af.Add(0, int64(n))
 			f.reply(b[:n])
 		}
 	}()
