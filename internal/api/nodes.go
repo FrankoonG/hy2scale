@@ -41,12 +41,8 @@ func (s *Server) coreRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/punch/status", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, s.app.PunchStatuses()) })
 	m.HandleFunc("GET /api/system/interfaces", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, s.app.BindableInterfaces()) })
 	s.registerInterfaceRoutes(m)
-	// Rules
-	m.HandleFunc("GET /api/rules", s.getRules)
-	m.HandleFunc("POST /api/rules", s.addRule)
-	m.HandleFunc("PUT /api/rules/{id}", s.updateRule)
-	m.HandleFunc("DELETE /api/rules/{id}", s.deleteRule)
-	m.HandleFunc("PUT /api/rules/{id}/toggle", s.toggleRule)
+	// Policy (condition / policy sets, direct entry)
+	s.policyRoutes(m)
 	// Port check
 	m.HandleFunc("POST /api/check-ports", s.checkPorts)
 	// DNS resolver diagnostic — sanity-check that ResolveViaExit returns

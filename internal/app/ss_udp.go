@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/FrankoonG/hy2scale/core/audit"
+	"github.com/FrankoonG/hy2scale/core/policy"
+	"github.com/FrankoonG/hy2scale/core/sockmark"
 	"golang.org/x/crypto/hkdf"
 )
 
@@ -82,7 +84,7 @@ func (a *App) runSSUDP(ctx context.Context, listenAddr, method string) {
 		log.Printf("[ss-udp] resolve %s: %v", listenAddr, err)
 		return
 	}
-	conn, err := net.ListenUDP("udp", lAddr)
+	conn, err := sockmark.ListenUDP("udp", lAddr)
 	if err != nil {
 		log.Printf("[ss-udp] listen %s: %v", listenAddr, err)
 		return
@@ -253,7 +255,7 @@ func (a *App) handleSSUDPPacket(
 		flow.mu.Lock()
 		if flow.upstream == nil {
 			af := beginUserFlow(audit.InSS, "udp", u.Username, src, dst)
-			remote, derr := a.dialRoutedUDP(audit.NewContext(withRestrict(ctx, a.userRestrict(u.Username)), af), u.ExitVia, u.ExitPaths, u.ExitMode, dst)
+			remote, derr := a.dialRoutedUDP(audit.NewContext(withRestrict(ctx, a.userRestrict(u.Username)), af), userSel(&u), a.userSrc(policy.KindSS, &u, src), dst)
 			if derr != nil {
 				af.End(derr)
 				flow.mu.Unlock()

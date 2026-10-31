@@ -20,7 +20,7 @@ type Range = '1h' | '24h' | '7d' | '30d' | 'all';
 const RANGE_MS: Record<Range, number> = { '1h': 3600e3, '24h': 86400e3, '7d': 7 * 86400e3, '30d': 30 * 86400e3, all: 0 };
 const PAGE = 200;
 const REFRESH_MS = 10_000;
-const INBOUNDS = ['socks5', 'http', 'ss', 'hy2', 'ikev2', 'l2tp', 'openvpn', 'wireguard', 'rules', 'access', 'relay'];
+const INBOUNDS = ['local', 'forward', 'socks5', 'http', 'ss', 'hy2', 'ikev2', 'l2tp', 'openvpn', 'wireguard', 'access', 'relay'];
 
 const pad = (n: number) => String(n).padStart(2, '0');
 function fmtTime(ms: number): string {

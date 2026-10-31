@@ -22,6 +22,8 @@ import (
 	"net/netip"
 	"strings"
 	"time"
+
+	"github.com/FrankoonG/hy2scale/core/sockmark"
 )
 
 // DialFunc dials a connection. network is always one of tcp4, tcp6, udp4,
@@ -93,8 +95,7 @@ func Detect(ctx context.Context, family int, dial DialFunc, resolve ResolveFunc,
 		return res
 	}
 	if dial == nil {
-		var d net.Dialer
-		dial = d.DialContext
+		dial = sockmark.Dialer(net.Dialer{}).DialContext
 	}
 	if resolve == nil {
 		resolve = net.DefaultResolver.LookupNetIP

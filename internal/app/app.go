@@ -22,18 +22,19 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/audit"
+	"github.com/FrankoonG/hy2scale/core/exit"
+	"github.com/FrankoonG/hy2scale/core/netfilter"
+	relay "github.com/FrankoonG/hy2scale/core/node"
+	"github.com/FrankoonG/hy2scale/core/policy"
+	"github.com/FrankoonG/hy2scale/core/proto"
+	"github.com/FrankoonG/hy2scale/core/server"
+	"github.com/FrankoonG/hy2scale/core/sockmark"
+	"github.com/FrankoonG/hy2scale/internal/history"
+	"github.com/FrankoonG/hy2scale/internal/udphop"
+	"github.com/FrankoonG/hy2scale/internal/vpnmux"
 	hyclient "github.com/apernet/hysteria/core/v2/client"
 	hyserver "github.com/apernet/hysteria/core/v2/server"
-	"github.com/FrankoonG/hy2scale/internal/history"
-	"github.com/FrankoonG/hy2scale/core/audit"
-	"github.com/FrankoonG/hy2scale/core/netfilter"
-	"github.com/FrankoonG/hy2scale/core/rules"
-	"github.com/FrankoonG/hy2scale/core/server"
-	"github.com/FrankoonG/hy2scale/core/proto"
-	"github.com/FrankoonG/hy2scale/core/exit"
-	relay "github.com/FrankoonG/hy2scale/core/node"
-	"github.com/FrankoonG/hy2scale/internal/vpnmux"
-	"github.com/FrankoonG/hy2scale/internal/udphop"
 )
 
 type ClientEntry struct {
@@ -129,7 +130,12 @@ type Config struct {
 	IKEv2      *IKEv2Config          `yaml:"ikev2,omitempty" json:"ikev2,omitempty"`
 	WireGuard  *WireGuardConfig      `yaml:"wireguard,omitempty" json:"wireguard,omitempty"`
 	OpenVPN    *OpenVPNConfig        `yaml:"openvpn,omitempty" json:"openvpn,omitempty"`
-	Rules      []RoutingRule         `yaml:"rules,omitempty" json:"rules,omitempty"`
+	// Rules: the pre-policy routing rules, read once for migration into
+	// Policy (policy.go) and then dropped.
+	Rules []RoutingRule `yaml:"rules,omitempty" json:"rules,omitempty"`
+	// Policy: condition sets, policy sets, the direct entry and system
+	// capture (core/policy; docs/v1.4.0-policy.md).
+	Policy *PolicyConfig `yaml:"policy,omitempty" json:"policy,omitempty"`
 	// Interfaces: child interfaces on physical NICs; Egress: where direct
 	// flows leave (nil = never chosen: the system routes, as before 1.4.0);
 	// PublicIP: public address detection. See ifaces.go / egress.go.
@@ -229,7 +235,7 @@ type App struct {
 	store        *ConfigStore
 	node         *relay.Node
 	exit         *exit.Engine
-	rules        *rules.Engine // routing rules (and capture)
+	pol          *policy.Engine // condition / policy sets (policy.go)
 	tree         *relay.Tree // nested discovery
 	primaryDial  sync.Map    // client identity (Addr) → address its primary connection dials
 	tls          *TLSStore
@@ -303,9 +309,11 @@ func New(dataDir string) (*App, error) {
 	a.refreshEgress()
 	a.installChildListen()
 	a.exit = exit.New(a.node, exitHost{a})
-	a.rules = rules.New(rulesHost{a}, a.exit)
+	a.pol = policy.NewEngine()
+	a.initPolicy()
 	a.acc = newAccessState()
 	a.node.SetRestrictedDial(a.restrictedDial)
+	a.node.SetPlainDial(a.relayPlainDial)
 	a.tree = relay.NewTree(a.node, a.treeConfig)
 	a.tree.SetLimits(NestedLimits(cfg))
 	a.initStorage()
@@ -500,8 +508,9 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}
 
-	// Rule table always; capture only with host networking + NET_ADMIN
-	a.rules.Start(ctx)
+	// System traffic capture (policy_capture.go)
+	a.startPolicyCapture()
+	defer a.policyCaptureRecover()
 
 	// Start clients (block disabled ones from inbound too)
 	for _, cl := range cfg.Clients {
@@ -512,7 +521,7 @@ func (a *App) Run(ctx context.Context) error {
 	}
 
 	<-ctx.Done()
-	a.rules.Stop()
+	a.stopPolicyCapture()
 	a.ifaces.Close() // DHCP release
 	return ctx.Err()
 }
@@ -1429,7 +1438,7 @@ func (a *App) startServer(ctx context.Context, sc *ServerConfig) error {
 		return err
 	}
 	listenAddr := extractPrimaryAddr(sc.Listen)
-	conn, err := net.ListenPacket("udp", listenAddr)
+	conn, err := sockmark.ListenPacket("udp", listenAddr)
 	if err != nil {
 		return err
 	}
@@ -1455,6 +1464,7 @@ func (a *App) newHy2Server(ctx context.Context, conn net.PacketConn, cert tls.Ce
 	return server.New(ctx, a.node, a.exit, server.Config{
 		Conn: conn, Cert: cert, Auth: auth, Events: events,
 		Users:    &nodeOutbound{app: a, node: a.node, ctx: ctx},
+		LocalTCP: a.relayLocalTCP,
 		Access:   accessGrants{a},
 		MaxChain: func() int { return a.tree.Limits().MaxDepth },
 		WrapAPI: func(c net.Conn, authID string) net.Conn {
@@ -2032,22 +2042,16 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 		return
 	}
 
-	// Route: proxy config overrides user config
-	exitVia := ""
+	// Route: a listener selection overrides the user's
 	username := ""
-	exitMode := ""
-	var exitPaths []string
+	sel := userSel(user)
 	if user != nil {
-		exitVia = user.ExitVia
-		exitMode = user.ExitMode
-		exitPaths = user.ExitPaths
 		username = user.Username
 	}
-	if pc != nil && pc.ExitVia != "" {
-		exitVia = pc.ExitVia
-		exitMode = pc.ExitMode
-		exitPaths = pc.ExitPaths
+	if ps := proxySel(pc); ps.set() {
+		sel = ps
 	}
+	rt := a.route(sel, a.userSrc(policy.KindSOCKS5, user, conn.RemoteAddr()), "tcp", addr)
 
 	af := beginUserFlow(audit.InSOCKS5, "tcp", username, conn.RemoteAddr(), addr)
 	dctx := audit.NewContext(withRestrict(context.Background(), a.userRestrict(username)), af)
@@ -2060,10 +2064,10 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 	if wantSniff(addr) {
 		conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		peeked, waited := peekHello(conn, nil)
-		remote, err = a.dialSniffedTCP(dctx, a.exitRoute(dctx, exitVia, exitPaths, exitMode), nil,
-			addr, peeked, waited, isLoopbackAddr(conn.RemoteAddr()))
+		remote, err = a.dialSniffedTCP(dctx, rt, addr, peeked, waited, isLoopbackAddr(conn.RemoteAddr()))
 		if err != nil {
 			af.End(err)
+			denyClose(conn, err)
 			return
 		}
 		defer remote.Close()
@@ -2075,9 +2079,16 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 			af.Add(int64(len(peeked)), 0)
 		}
 	} else {
-		remote, err = a.dialRoutedTCP(dctx, exitVia, exitPaths, exitMode, addr)
+		remote, err = rt.dial(dctx)
 		if err != nil {
 			af.End(err)
+			if d, deny := policy.AsDeny(err); deny {
+				if d.Reject {
+					// 0x02: connection not allowed by ruleset
+					conn.Write([]byte{0x05, 0x02, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+				}
+				return
+			}
 			conn.Write([]byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 			return
 		}
@@ -2230,19 +2241,10 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 		username = u.Username
 	}
 
-	// Resolve exit routing: proxy config overrides user config
-	exitVia := ""
-	exitMode := ""
-	var exitPaths []string
-	if user != nil {
-		exitVia = user.ExitVia
-		exitMode = user.ExitMode
-		exitPaths = user.ExitPaths
-	}
-	if pc != nil && pc.ExitVia != "" {
-		exitVia = pc.ExitVia
-		exitMode = pc.ExitMode
-		exitPaths = pc.ExitPaths
+	// Resolve exit routing: a listener selection overrides the user's
+	sel := userSel(user)
+	if ps := proxySel(pc); ps.set() {
+		sel = ps
 	}
 
 	var addr string
@@ -2288,17 +2290,23 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 	// Dial remote
 	af := beginUserFlow(audit.InHTTP, "tcp", username, conn.RemoteAddr(), addr)
 	dctx := audit.NewContext(withRestrict(context.Background(), a.userRestrict(username)), af)
+	rt := a.route(sel, a.userSrc(policy.KindHTTP, user, conn.RemoteAddr()), "tcp", addr)
 	var remote net.Conn
 	if connectSniff {
-		remote, err = a.dialSniffedTCP(dctx, a.exitRoute(dctx, exitVia, exitPaths, exitMode), nil,
-			addr, connectPeeked, connectWaited, isLoopbackAddr(conn.RemoteAddr()))
+		remote, err = a.dialSniffedTCP(dctx, rt, addr, connectPeeked, connectWaited, isLoopbackAddr(conn.RemoteAddr()))
 	} else {
-		remote, err = a.dialRoutedTCP(dctx, exitVia, exitPaths, exitMode, addr)
+		remote, err = rt.dial(dctx)
 	}
 	if err != nil {
 		af.End(err)
 		// After the early 200 a 502 can no longer be sent; just close.
-		if !connectSniff {
+		if connectSniff {
+			denyClose(conn, err)
+		} else if d, deny := policy.AsDeny(err); deny {
+			if d.Reject {
+				conn.Write([]byte("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"))
+			}
+		} else {
 			conn.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
 		}
 		return
@@ -2385,7 +2393,7 @@ func (o *nodeOutbound) TCP(_ context.Context, authID, peerAddr, actualAddr strin
 		af.End(err)
 		return nil, err
 	}
-	c, err := o.hy2UserTCP(audit.NewContext(o.ctx, af), authID, actualAddr, isBridged)
+	c, err := o.hy2UserTCP(audit.NewContext(o.ctx, af), authID, peerAddr, actualAddr, isBridged)
 	if err != nil {
 		af.End(err)
 		return nil, err
@@ -2393,41 +2401,18 @@ func (o *nodeOutbound) TCP(_ context.Context, authID, peerAddr, actualAddr strin
 	return o.app.meterHy2(authID, peerAddr, c, af), nil
 }
 
-// hy2UserTCP dials an hy2 user's stream: its exit route, or here.
-func (o *nodeOutbound) hy2UserTCP(ctx context.Context, authID, actualAddr string, isBridged bool) (net.Conn, error) {
+// hy2UserTCP dials an hy2 user's stream along its selection (route.go).
+func (o *nodeOutbound) hy2UserTCP(ctx context.Context, authID, peerAddr, actualAddr string, isBridged bool) (net.Conn, error) {
 	ctx = withRestrict(ctx, o.app.userRestrict(strings.TrimPrefix(authID, "user:")))
-	via, paths, mode, viaUser := o.app.hy2UserRoute(authID)
-	route := func(addr string) (string, []string, string, error) {
-		if viaUser {
-			return via, paths, mode, nil
-		}
-		return o.app.routeFor(ctx, "", nil, "", addr)
-	}
+	rt := o.app.hy2Route(authID, peerAddr, "tcp", actualAddr)
 	if !isBridged && wantSniff(actualAddr) {
-		return o.sniffedTCP(ctx, route, actualAddr), nil
+		// dialled once the client's first bytes are in, with the host name
+		// they carry (the client is on another host); sniff_override.go
+		return newDeferredDialConn(func(peeked []byte, waited bool) (net.Conn, error) {
+			return o.app.dialSniffedTCP(ctx, rt, actualAddr, peeked, waited, false)
+		}), nil
 	}
-	if v, p, m, err := route(actualAddr); err == nil && v != "" {
-		return o.app.dialExitWithPaths(ctx, v, p, m, actualAddr)
-	}
-	return o.localTCPCtx(ctx, actualAddr, isBridged)
-}
-
-// sniffedTCP returns the connection for a stream to an IP: dialled once the
-// client's first bytes are in, with the host name they carry (the client is
-// on another host). See sniff_override.go.
-func (o *nodeOutbound) sniffedTCP(ctx context.Context, route flowRoute, actualAddr string) net.Conn {
-	here := func(ctx context.Context, addr string) (net.Conn, error) {
-		return o.app.dialDirect(ctx, "tcp", rewriteLocalAddr(addr))
-	}
-	return newDeferredDialConn(func(peeked []byte, waited bool) (net.Conn, error) {
-		return o.app.dialSniffedTCP(ctx, route, here, actualAddr, peeked, waited, false)
-	})
-}
-
-// localTCPCtx dials a stream's target from this node under ctx (which may
-// carry restrictions).
-func (o *nodeOutbound) localTCPCtx(ctx context.Context, actualAddr string, isBridged bool) (net.Conn, error) {
-	return server.LocalTCP(ctx, o.app.exit, actualAddr, isBridged)
+	return rt.dial(ctx)
 }
 
 func (o *nodeOutbound) UDP(_ context.Context, authID, peerAddr, reqAddr string) (hyserver.UDPConn, error) {
@@ -2440,13 +2425,7 @@ func (o *nodeOutbound) UDP(_ context.Context, authID, peerAddr, reqAddr string) 
 	var c net.Conn
 	var err error
 	ctx := audit.NewContext(withRestrict(o.ctx, o.app.userRestrict(strings.TrimPrefix(authID, "user:"))), af)
-	if via, paths, mode, ok := o.app.hy2UserRoute(authID); ok {
-		c, err = o.app.dialExitUDPPaths(ctx, via, paths, mode, reqAddr)
-	} else if via, paths, mode, rerr := o.app.routeFor(ctx, "", nil, "", reqAddr); rerr == nil && via != "" {
-		c, err = o.app.dialExitUDPPaths(ctx, via, paths, mode, reqAddr)
-	} else {
-		c, err = o.app.dialDirect(ctx, "udp", rewriteLocalAddr(reqAddr))
-	}
+	c, err = o.app.hy2Route(authID, peerAddr, "udp", reqAddr).dial(ctx)
 	if err != nil {
 		af.End(err)
 		return nil, err
@@ -2470,20 +2449,22 @@ func (a *App) hy2UserUsable(authID string) error {
 	return nil
 }
 
-// hy2UserRoute returns the exit route of an hy2-authenticated user
-// ("user:<name>"); ok=false when the user exits here.
-func (a *App) hy2UserRoute(authID string) (via string, paths []string, mode string, ok bool) {
-	name, isUser := strings.CutPrefix(authID, "user:")
-	if !isUser {
-		return
-	}
+// hy2Route is the routing of an hy2-authenticated user's ("user:<name>")
+// flow to addr.
+func (a *App) hy2Route(authID, peerAddr, network, addr string) *routed {
+	name := strings.TrimPrefix(authID, "user:")
 	a.usersMu.RLock()
-	u, found := a.userIndex[name]
-	a.usersMu.RUnlock()
-	if !found || u.ExitVia == "" {
-		return
+	u := a.userIndex[name]
+	var sel exitSel
+	src := flowSrc{kind: policy.KindHy2, addr: peerAddr}
+	if u != nil {
+		sel = userSel(u)
+		src.user = u.ID
 	}
-	return u.ExitVia, u.ExitPaths, u.ExitMode, true
+	a.usersMu.RUnlock()
+	r := a.route(sel, src, network, addr)
+	r.rewrite = true
+	return r
 }
 
 // hy2Auth handles authentication for the hy2 server.

@@ -602,6 +602,9 @@ type Node struct {
 	inst     string
 	// restrictedDial dials a target under restrictions (access.go)
 	restrictedDial func(ctx context.Context, network, addr string, r proto.Restrict) (net.Conn, error)
+	// plainDial dials a peer's plain reverse-dial target (access.go;
+	// nil = a marked system dial)
+	plainDial func(ctx context.Context, network, addr string) (net.Conn, error)
 
 	// IP tunnel handler for TUN-based raw packet forwarding
 
@@ -2001,8 +2004,8 @@ func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclie
 		var wrapped net.Conn = stream
 		if addr == StreamAPI && n.apiStreamWrap != nil {
 			wrapped = n.apiStreamWrap(stream, "system")
-		} else if audit.Enabled() && (strings.HasPrefix(addr, proto.ViaPrefix) || strings.HasPrefix(addr, proto.StreamMsess)) {
-			wrapped = &NamedConn{Conn: stream, Peer: peerName} // audit source of its flows
+		} else if strings.HasPrefix(addr, proto.ViaPrefix) || strings.HasPrefix(addr, proto.StreamMsess) {
+			wrapped = &NamedConn{Conn: stream, Peer: peerName} // audit / policy source of its flows
 		}
 		n.HandleStream(ctx, addr, wrapped)
 		return
@@ -2019,10 +2022,10 @@ func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclie
 		target, err = n.dialChain(ctx, viaPeer, targetAddr)
 	} else if base, r := proto.ParseRestrict(addr); r != 0 {
 		af = n.BeginRelay(src, "tcp", base)
-		target, err = n.dialRestricted(audit.NewContext(ctx, af), "tcp", base, r)
+		target, err = n.dialRestricted(relaySource(audit.NewContext(ctx, af), peerName), "tcp", base, r)
 	} else {
 		af = n.BeginRelay(src, "tcp", addr)
-		target, err = net.DialTimeout("tcp", addr, 10*time.Second)
+		target, err = n.dialPlain(relaySource(audit.NewContext(ctx, af), peerName), "tcp", addr, 10*time.Second)
 		if err == nil {
 			audit.MarkDirect(af, target)
 		}
@@ -2088,10 +2091,10 @@ func (n *Node) dialUDPAndStream(ctx context.Context, peerName string, client hyc
 		udpConn, err = n.DialUDPVia(ctx, strings.Split(chain, "/"), target)
 	} else if base, r := proto.ParseRestrict(addr); r != 0 {
 		af = n.BeginRelay(src, "udp", base)
-		udpConn, err = n.dialRestricted(audit.NewContext(ctx, af), "udp", base, r)
+		udpConn, err = n.dialRestricted(relaySource(audit.NewContext(ctx, af), peerName), "udp", base, r)
 	} else {
 		af = n.BeginRelay(src, "udp", addr)
-		udpConn, err = net.DialTimeout("udp", addr, 5*time.Second)
+		udpConn, err = n.dialPlain(relaySource(audit.NewContext(ctx, af), peerName), "udp", addr, 5*time.Second)
 		if err == nil {
 			audit.MarkDirect(af, udpConn)
 		}

@@ -47,8 +47,10 @@ func (h exitHost) PathLossGrace() time.Duration {
 	return time.Duration(h.a.store.Get().PathLossGraceS) * time.Second
 }
 
+// DialLocal: a decided flow's own local dial, else a relay transit flow
+// leaving here, routed through the direct entry (route.go).
 func (h exitHost) DialLocal(ctx context.Context, network, addr string) (net.Conn, error) {
-	return h.a.dialDirect(ctx, network, addr)
+	return h.a.dialRelayLocal(ctx, network, addr)
 }
 
 func (h exitHost) Lookup(ctx context.Context, name string) ([]net.IP, error) {

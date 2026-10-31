@@ -300,13 +300,8 @@ func (a *App) collectPaths(cfg Config) []string {
 			add(prx.ExitVia)
 		}
 	}
-	for _, r := range cfg.Rules {
-		for _, p := range r.ExitPaths {
-			add(p)
-		}
-		if r.ExitVia != "" {
-			add(r.ExitVia)
-		}
+	for _, p := range policyExitPaths(&cfg) {
+		add(p)
 	}
 	if cfg.WireGuard != nil {
 		for _, wp := range cfg.WireGuard.Peers {

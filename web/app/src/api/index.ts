@@ -3,12 +3,12 @@ import type {
   NodeConfig, Stats, TopologyNode, ClientEntry, PathStatus,
   UserConfig, TrafficReset, Session, ProxyConfig, SSConfig, L2TPConfig,
   IKEv2Config, OpenVPNConfig, WireGuardConfig, WireGuardPeer,
-  RoutingRule, CertInfo, UISettings, PortConflict, PasswordConflicts,
+  CertInfo, UISettings, PortConflict, PasswordConflicts,
   UpgradeStatus, UpgradeCheckResult, NodeEgress, NodeEgressFamily,
   PublicIPSettings,
 } from './types';
 
-export type { NodeConfig, Stats, TopologyNode, ClientEntry, PathStatus, UserConfig, TrafficReset, Session, ProxyConfig, SSConfig, L2TPConfig, IKEv2Config, OpenVPNConfig, WireGuardConfig, WireGuardPeer, RoutingRule, CertInfo, UISettings, PortConflict, PasswordConflicts, UpgradeStatus, UpgradeCheckResult, NodeEgress, NodeEgressFamily };
+export type { NodeConfig, Stats, TopologyNode, ClientEntry, PathStatus, UserConfig, TrafficReset, Session, ProxyConfig, SSConfig, L2TPConfig, IKEv2Config, OpenVPNConfig, WireGuardConfig, WireGuardPeer, CertInfo, UISettings, PortConflict, PasswordConflicts, UpgradeStatus, UpgradeCheckResult, NodeEgress, NodeEgressFamily };
 
 // Auth
 export const login = (username: string, password: string) =>
@@ -160,17 +160,6 @@ export const getWGPeerConfig = (name: string, endpoint?: string) =>
   api<Response>(`/wireguard/peers/${encodeURIComponent(name)}/config${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ''}`);
 export const getWGQR = (text: string) =>
   api<Response>(`/wireguard/qr?text=${encodeURIComponent(text)}`);
-
-// Rules
-export const getRules = () => api<{ available: boolean; capture?: 'tproxy' | 'dnat' | 'none'; rules: RoutingRule[] }>('/rules');
-export const createRule = (data: Partial<RoutingRule>) =>
-  api('/rules', { method: 'POST', body: JSON.stringify(data) });
-export const updateRule = (id: string, data: Partial<RoutingRule>) =>
-  api(`/rules/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) });
-export const deleteRule = (id: string) =>
-  api(`/rules/${encodeURIComponent(id)}`, { method: 'DELETE' });
-export const toggleRule = (id: string, enabled: boolean) =>
-  api(`/rules/${encodeURIComponent(id)}/toggle`, { method: 'PUT', body: JSON.stringify({ enabled }) });
 
 // TLS
 export const getCerts = () => api<CertInfo[]>('/tls');

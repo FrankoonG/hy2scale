@@ -157,7 +157,7 @@ func (e *Engine) handleBondStream(bondAddr string, pathConn net.Conn) error {
 
 	if needsInit {
 		af := e.node.BeginRelay(pathConn, "tcp", realAddr)
-		targetConn, err := e.dialLocal(audit.NewContext(WithRestrict(e.ctx, restrict), af), "tcp", realAddr)
+		targetConn, err := e.dialLocal(audit.NewContext(WithRestrict(e.withPolicySource(e.ctx, pathConn), restrict), af), "tcp", realAddr)
 		if err != nil {
 			af.End(err)
 			bondReceivers.Delete(bondID)

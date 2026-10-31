@@ -9,6 +9,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/FrankoonG/hy2scale/core/sockmark"
 	"golang.org/x/sys/unix"
 )
 
@@ -98,7 +99,7 @@ var childListen func(iface string, raddr net.IP) (pc net.PacketConn, ok bool, er
 // listen opens the UDP socket a connection to raddr uses.
 func (b addrBind) listen(raddr net.IP) (net.PacketConn, error) {
 	if b.none() {
-		return net.ListenUDP("udp", nil)
+		return sockmark.ListenUDP("udp", nil)
 	}
 	if b.iface != "" && childListen != nil {
 		if pc, ok, err := childListen(b.iface, raddr); ok {
@@ -152,6 +153,7 @@ func (b addrBind) listenAt(raddr net.IP, port int, network string) (*net.UDPConn
 			return nil
 		}
 	}
+	lc.Control = sockmark.Chain(lc.Control)
 	pc, err := lc.ListenPacket(context.Background(), network, laddr.String())
 	if err != nil {
 		return nil, err

@@ -182,7 +182,7 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
   }
 
   return (
-    <FormGroup label={label || t('users.exitVia')}>
+    <FormGroup label={label ?? t('users.exitVia')}>
       {/* Mode selection */}
       <div className="exit-mode-options">
         <label className="exit-mode-opt">

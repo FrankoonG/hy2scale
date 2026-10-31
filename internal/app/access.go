@@ -217,5 +217,5 @@ func (a *App) verifyAccessConn(ctx context.Context, c hyclient.Client, expected 
 
 // restrictedDial dials a target this node reached with a restriction tag.
 func (a *App) restrictedDial(ctx context.Context, network, addr string, r proto.Restrict) (net.Conn, error) {
-	return a.dialDirect(withRestrict(ctx, r), network, rewriteLocalAddr(addr))
+	return a.dialRelayLocal(withRestrict(ctx, r), network, rewriteLocalAddr(addr))
 }

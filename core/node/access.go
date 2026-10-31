@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/FrankoonG/hy2scale/core/policy"
+	"github.com/FrankoonG/hy2scale/core/sockmark"
 	"net"
 	"time"
 
@@ -153,6 +155,26 @@ func (n *Node) InstanceID() string {
 		return n.nodeID + "-" + n.inst
 	}
 	return n.inst
+}
+
+// SetPlainDial registers how this node dials a peer's plain reverse-dial
+// target (nil = a marked system dial). Set once at startup.
+func (n *Node) SetPlainDial(f func(ctx context.Context, network, addr string) (net.Conn, error)) {
+	n.plainDial = f
+}
+
+func (n *Node) dialPlain(ctx context.Context, network, addr string, timeout time.Duration) (net.Conn, error) {
+	if n.plainDial == nil {
+		return sockmark.DialTimeout(network, addr, timeout)
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return n.plainDial(ctx, network, addr)
+}
+
+// relaySource records a peer's flow source for the policy of its target.
+func relaySource(ctx context.Context, peer string) context.Context {
+	return policy.WithSource(ctx, policy.Source{Kind: policy.KindRelay, Node: peer})
 }
 
 func (n *Node) dialRestricted(ctx context.Context, network, addr string, r proto.Restrict) (net.Conn, error) {

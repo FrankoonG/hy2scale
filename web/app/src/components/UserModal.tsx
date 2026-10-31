@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { Modal, Button, Input, PasswordInput, Toggle, Select, FormGroup, FormGrid, Tabs, TabPanel, useToast } from '@hy2scale/ui';
-import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from './ExitPathList';
+import { exitPathToApi, apiToExitPath, type ExitPathValue } from './ExitPathList';
+import ExitChoice from './policy/ExitChoice';
 import * as api from '@/api';
 import type { UserConfig, TrafficReset } from '@/api';
 import { PROXY_REGISTRY } from '@/config/proxyRegistry';
@@ -48,6 +49,7 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
   // every proxy.
   const [proxyDisabled, setProxyDisabled] = useState<Set<string>>(new Set());
   const [exitPath, setExitPath] = useState<ExitPathValue>({ paths: [''], mode: '' });
+  const [exitPolicy, setExitPolicy] = useState('');
   const [trafficLimit, setTrafficLimit] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
   const [resetPeriod, setResetPeriod] = useState<TrafficReset>('');
@@ -66,6 +68,7 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
       setUsername(''); setPassword(''); setProxyPasswords({});
       setProxyDisabled(new Set());
       setExitPath({ paths: [''], mode: '' });
+      setExitPolicy('');
       setTrafficLimit(''); setExpiryDate(''); setEnabled(true);
       setResetPeriod(''); setResetDay(1);
       setNodeAccess(false); setAccessMode('restricted'); setAllowInternal(false);
@@ -76,6 +79,7 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
     setProxyPasswords(editing.proxy_passwords || {});
     setProxyDisabled(new Set(editing.proxy_disabled || []));
     setExitPath(apiToExitPath(editing.exit_via, editing.exit_paths, editing.exit_mode));
+    setExitPolicy(editing.exit_policy || '');
     setTrafficLimit(editing.traffic_limit > 0 ? String(editing.traffic_limit / 1073741824) : '');
     setExpiryDate(editing.expiry_date || '');
     setResetPeriod(editing.traffic_reset || '');
@@ -113,6 +117,7 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
       proxy_passwords: Object.keys(filteredProxyPw).length > 0 ? filteredProxyPw : undefined,
       proxy_disabled: proxyDisabledArr.length > 0 ? proxyDisabledArr : undefined,
       ...exitData,
+      exit_policy: exitPolicy,
       traffic_limit: trafficLimit ? parseFloat(trafficLimit) * 1073741824 : 0,
       expiry_date: expiryDate || undefined,
       traffic_reset: resetPeriod,
@@ -190,7 +195,7 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
                 </FormGroup>
               </FormGrid>
 
-              <ExitPathList value={exitPath} onChange={setExitPath} />
+              <ExitChoice policy={exitPolicy} onPolicy={setExitPolicy} exit={exitPath} onExit={setExitPath} />
 
               <FormGrid>
                 <FormGroup label={t('users.trafficLimit')}>

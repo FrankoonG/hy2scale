@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { Card, Badge, Progress, KeyValue, SegmentedControl, IconChevronRight, IconCircleAlert } from '@hy2scale/ui';
 import * as api from '@/api';
+import { getPolicy, getPolicyStatus } from '@/api/policy';
 import type { TopologyNode, DiagPeerHistory, DiagHistoryBucket } from '@/api';
 import type { IfaceEntry, IfaceFamilyKey } from '@/api/types';
 import { useNodeStore } from '@/store/node';
@@ -441,7 +442,8 @@ export default function OverviewPage() {
   const { data: wg } = useQuery({ queryKey: ['wireguard'], queryFn: api.getWireGuard, refetchInterval: 5000 });
   const { data: ovpn } = useQuery({ queryKey: ['openvpn'], queryFn: api.getOpenVPN, refetchInterval: 5000 });
   const { data: ifaces } = useQuery({ queryKey: ['ifaces'], queryFn: api.listInterfaces, refetchInterval: 10000 });
-  const { data: rules } = useQuery({ queryKey: ['rules'], queryFn: api.getRules, refetchInterval: 15000 });
+  const { data: policy } = useQuery({ queryKey: ['policy'], queryFn: getPolicy, refetchInterval: 15000, retry: false });
+  const { data: capture } = useQuery({ queryKey: ['policyStatus'], queryFn: getPolicyStatus, refetchInterval: 15000, retry: false });
   const { data: certs = [] } = useQuery({ queryKey: ['certs'], queryFn: api.getCerts, refetchInterval: 60000 });
 
   const live = useLiveSamples(stats, statsTick);
@@ -526,8 +528,8 @@ export default function OverviewPage() {
   };
   const eg4 = egressInfo('ipv4');
   const eg6 = egressInfo('ipv6');
-  const rulesList = rules?.rules || [];
-  const rulesOn = rulesList.filter((r) => r.enabled).length;
+  const directName = policy?.direct ? policy.policies.find((p) => p.id === policy.direct)?.name : '';
+  const captureOn = [capture?.local.active && t('policy.layerLocal'), capture?.forward.active && t('policy.layerForward')].filter(Boolean).join(' · ');
 
   // ---- certificates ----
   const certInfo = useMemo(() => {
@@ -793,12 +795,12 @@ export default function OverviewPage() {
           <div className="hy-kv">
             <KV label={t('iface.egressOn', { fam: 'IPv4' })} onClick={() => navigate('/interfaces')}>{ifaces ? egressLine('ipv4', eg4) : '—'}</KV>
             <KV label={t('iface.egressOn', { fam: 'IPv6' })} onClick={() => navigate('/interfaces')}>{ifaces ? egressLine('ipv6', eg6) : '—'}</KV>
-            <KV label={t('nav.rules')} onClick={() => navigate('/rules')}>
-              {rules ? (rules.available === false ? <span className="ov-muted">{t('overview.unavailable')}</span> : t('overview.enabledOf', { on: rulesOn, total: rulesList.length })) : '—'}
+            <KV label={t('policy.policies')} onClick={() => navigate('/rules')}>
+              {policy ? `${policy.policies.length} · ${t('policy.direct')}: ${directName || t('policy.term.default')}` : '—'}
             </KV>
-            {rules?.available !== false && rules?.capture && (
-              <KV label={t('overview.capture')} onClick={() => navigate('/rules')}>{rules.capture.toUpperCase()}</KV>
-            )}
+            <KV label={t('overview.capture')} onClick={() => navigate('/rules')}>
+              {captureOn || <span className="ov-muted">{t('policy.inactive')}</span>}
+            </KV>
           </div>
         </Card>
 

@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Card, Button, Input, Select, Toggle, FormGroup, FormGrid, FormStack, Hint, useToast } from '@hy2scale/ui';
-import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
+import { exitPathToApi, apiToExitPath, type ExitPathValue } from '@/components/ExitPathList';
+import ExitChoice from '@/components/policy/ExitChoice';
 import * as api from '@/api';
 import { useServerFormInit } from '@/hooks/useFormInit';
 import VPNStatus from './VPNStatus';
@@ -26,6 +27,7 @@ export default function IKEv2Tab() {
   const [localId, setLocalId] = useState('');
   const [mtu, setMtu] = useState('1400');
   const [exitPath, setExitPath] = useState<ExitPathValue>({ paths: [''], mode: '' });
+  const [exitPolicy, setExitPolicy] = useState('');
   const [loading, setLoading] = useState(false);
 
   // Seed once from the first fetch; refetches must not revert unsaved edits.
@@ -42,6 +44,7 @@ export default function IKEv2Tab() {
       setLocalId(ikev2.local_id || '');
       setMtu(String(ikev2.mtu || 1400));
       setExitPath(apiToExitPath(ikev2.default_exit, ikev2.default_exit_paths, ikev2.default_exit_mode));
+      setExitPolicy(ikev2.default_exit_policy || '');
     }
   });
 
@@ -59,6 +62,7 @@ export default function IKEv2Tab() {
         default_exit: (exitData as any).exit_via || '',
         default_exit_paths: (exitData as any).exit_paths,
         default_exit_mode: (exitData as any).exit_mode,
+        default_exit_policy: mode === 'psk' ? exitPolicy : undefined,
       } as any);
       toast.success(t('ikev2.saved'));
       resync();
@@ -129,7 +133,7 @@ export default function IKEv2Tab() {
               <Hint>{t('ikev2.pskUserModeDesc')}</Hint>
             ) : (
               <>
-                <ExitPathList value={exitPath} onChange={setExitPath} label={t('ikev2.defaultExit')} />
+                <ExitChoice policy={exitPolicy} onPolicy={setExitPolicy} exit={exitPath} onExit={setExitPath} label={t('ikev2.defaultExit')} />
                 <Hint>{t('ikev2.pskDesc')}</Hint>
               </>
             )}

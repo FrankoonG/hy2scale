@@ -1,96 +1,98 @@
-import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useQuery } from '@tanstack/react-query';
-import { Card, ExpandButton, Table, Tabs, TabPanel, useSelection, useModalState, type Column } from '@hy2scale/ui';
-import { ExitViaCell, exitViaSortValue } from '@/components/ExitViaCell';
-import { useImportExport } from '@/components/ImportExport';
-import ResponsiveActions from '@/components/ResponsiveActions';
-import RuleModal from '@/components/RuleModal';
-import { BulkButtons, EditSelectedButton, pickSelected } from '@/components/SelectionActions';
-import { useBulkAction } from '@/hooks/useBulkAction';
-import { ListScope } from '@/hooks/useDeselectOnBlankClick';
-import type { RoutingRule } from '@/api';
-import * as api from '@/api';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Badge, Button, Card, Table, useModalState, type Column } from '@hy2scale/ui';
+import { dismissPolicyNotice, getPolicy, type ConditionSet, type PolicySet } from '@/api/policy';
+import SetModal from '@/components/policy/SetModal';
+import DirectModal from '@/components/policy/DirectModal';
+import TestModal from '@/components/policy/TestModal';
+import { refsText } from '@/components/policy/RefsLine';
+import type { SetKind } from '@/components/policy/shared';
 
-type RuleType = 'ip' | 'domain';
-
+/**
+ * Rules: policy sets (where connections go, or whether they may) and
+ * condition sets (reusable true / false), plus the direct entry.
+ */
 export default function RulesPage() {
   const { t } = useTranslation();
-  const ie = useImportExport('rules');
-  const { data } = useQuery({ queryKey: ['rules'], queryFn: api.getRules });
-  const rules = data?.rules || [];
+  const qc = useQueryClient();
+  const { data: cfg } = useQuery({ queryKey: ['policy'], queryFn: getPolicy });
+  const edit = useModalState<{ kind: SetKind; set: PolicySet | ConditionSet | null }>();
+  const direct = useModalState();
+  const test = useModalState();
 
-  const [tab, setTab] = useState<RuleType>('ip');
-  const currentRules = rules.filter((r) => r.type === tab);
+  const policies = cfg?.policies || [];
+  const conditions = cfg?.conditions || [];
 
-  const selection = useSelection(currentRules.map((r) => r.id));
-  const selected = pickSelected(currentRules, selection.selected, (r) => r.id);
-  const edit = useModalState<RoutingRule | null>();
-  const bulk = useBulkAction(['rules']);
-
-  const bulkToggle = (enabled: boolean) => bulk(selection.selected, (id) => api.toggleRule(id, enabled),
-    { label: enabled ? t('app.bulkEnable') : t('app.bulkDisable') });
-  const bulkDelete = () => bulk(selection.selected, (id) => api.deleteRule(id), {
-    label: t('app.bulkDelete'),
-    confirm: { title: t('app.bulkDelete'), message: t('app.bulkDeleteConfirm', { count: selection.count }), confirmText: t('app.delete'), danger: true },
-  });
-
-  const captureNote = data?.capture === 'dnat' ? 'rules.localOnlyCapture'
-    : data?.capture === 'none' ? 'rules.noCapture' : '';
-
-  const columns: Column<RoutingRule>[] = [
-    { key: 'name', title: t('rules.name'), sortValue: (r) => r.name || null, render: (r) => <strong>{r.name || '—'}</strong> },
+  const policyCols: Column<PolicySet>[] = [
     {
-      key: 'targets', title: t('rules.targets'), sortValue: (r) => r.targets[0] ?? null,
-      render: (r) => <span className="mono rule-targets">{r.targets.slice(0, 3).join(', ')}{r.targets.length > 3 ? ` +${r.targets.length - 3}` : ''}</span>,
+      key: 'name', title: t('policy.name'), sortValue: (p) => p.name,
+      render: (p) => (
+        <span className="pset-name">
+          <strong>{p.name}</strong>
+          {cfg?.direct === p.id && <Badge variant="blue">{t('policy.directEntryBadge')}</Badge>}
+        </span>
+      ),
     },
-    { key: 'exit', title: t('rules.exitVia'), sortValue: (r) => exitViaSortValue(r.exit_via, r.exit_paths), render: (r) => <ExitViaCell exitVia={r.exit_via} exitPaths={r.exit_paths} exitMode={r.exit_mode} /> },
+    { key: 'rules', title: t('policy.rules'), sortValue: (p) => p.rules.length, render: (p) => p.rules.length },
+    { key: 'refs', title: t('policy.usedBy'), render: (p) => <span className="muted">{refsText(p.refs, t)}</span> },
+  ];
+  const condCols: Column<ConditionSet>[] = [
+    { key: 'name', title: t('policy.name'), sortValue: (c) => c.name, render: (c) => <strong>{c.name}</strong> },
+    { key: 'rules', title: t('policy.rules'), sortValue: (c) => c.rules.length, render: (c) => c.rules.length },
+    { key: 'refs', title: t('policy.usedBy'), render: (c) => <span className="muted">{refsText(c.refs, t)}</span> },
   ];
 
+  const dismiss = async () => {
+    await dismissPolicyNotice().catch(() => {});
+    qc.invalidateQueries({ queryKey: ['policy'] });
+  };
+
   return (
-    <div className="hy-page">
-      <Tabs
-        items={[
-          { key: 'ip', label: t('rules.ipRules') },
-          { key: 'domain', label: t('rules.domainRules') },
-        ]}
-        activeKey={tab}
-        onChange={(k) => setTab(k as RuleType)}
-      />
+    <div className="hy-page rules-page" data-testid="rules-page">
+      {cfg?.migrated_notice && (
+        <div className="hy-warn-banner policy-notice" data-testid="policy-notice">
+          <span>{t('policy.migratedNotice')}</span>
+          <Button size="sm" onClick={dismiss}>{t('app.close')}</Button>
+        </div>
+      )}
 
-      <TabPanel fill activeKey={tab} keys={['ip', 'domain']}>
-        {captureNote && <div className="hy-warn-banner">{t(captureNote)}</div>}
-        <Card
-          fill={1}
-          title={tab === 'ip' ? t('rules.ipRules') : t('rules.domainRules')}
-          count={currentRules.length}
-          actions={
-            <ResponsiveActions selectedCount={selection.count} onClearSelection={selection.clear}>
-              <BulkButtons selected={selected} isEnabled={(r) => r.enabled} onToggle={bulkToggle} onDelete={bulkDelete} />
-              <EditSelectedButton selected={selected} onEdit={(r, e) => edit.show(r, e)} />
-              <ExpandButton variant="primary" label={t('rules.newRule')} moreLabel={t('app.moreActions')}
-                onClick={(e) => edit.show(null, e)} actions={ie.actions} />
-            </ResponsiveActions>
-          }
-          noPadding
-        >
-          <ListScope selection={selection}>
-            <Table
-              id={`rules.${tab}`}
-              columns={columns}
-              data={currentRules}
-              rowKey={(r) => r.id}
-              rowClassName={(r) => !r.enabled ? 'disabled-row' : undefined}
-              emptyText={t('rules.noRules')}
-              selection={selection}
-            />
-          </ListScope>
-        </Card>
-      </TabPanel>
+      <Card
+        title={t('policy.policies')}
+        count={policies.length}
+        noPadding
+        actions={(
+          <div className="button-row">
+            <Button onClick={(e) => direct.show(undefined, e)} data-testid="rules-direct">{t('policy.direct')}</Button>
+            <Button onClick={(e) => test.show(undefined, e)} data-testid="rules-test">{t('policy.test')}</Button>
+            <Button variant="primary" onClick={(e) => edit.show({ kind: 'policy', set: null }, e)} data-testid="rules-new-policy">
+              + {t('policy.newPolicy')}
+            </Button>
+          </div>
+        )}
+      >
+        <Table id="policy.policies" columns={policyCols} data={policies} rowKey={(p) => p.id} paginate={false}
+          emptyText={t('policy.noPolicies')}
+          onRowClick={(p, _i, o) => edit.show({ kind: 'policy', set: p }, o)} />
+      </Card>
 
-      {/* Type follows the active tab */}
-      <RuleModal {...edit.modalProps} type={tab} editing={edit.data ?? null} />
-      {ie.modal}
+      <Card
+        title={t('policy.conditions')}
+        count={conditions.length}
+        noPadding
+        actions={(
+          <Button variant="primary" onClick={(e) => edit.show({ kind: 'condition', set: null }, e)} data-testid="rules-new-condition">
+            + {t('policy.newCondition')}
+          </Button>
+        )}
+      >
+        <Table id="policy.conditions" columns={condCols} data={conditions} rowKey={(c) => c.id} paginate={false}
+          emptyText={t('policy.noConditions')}
+          onRowClick={(c, _i, o) => edit.show({ kind: 'condition', set: c }, o)} />
+      </Card>
+
+      <SetModal {...edit.modalProps} kind={edit.data?.kind ?? 'policy'} editing={edit.data?.set ?? null} cfg={cfg} />
+      <DirectModal {...direct.modalProps} cfg={cfg} />
+      <TestModal {...test.modalProps} cfg={cfg} />
     </div>
   );
 }

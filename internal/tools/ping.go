@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/FrankoonG/hy2scale/core/sockmark"
 )
 
 // PingOptions of one ping run. Probes go out one after another: each waits
@@ -199,7 +201,7 @@ func icmpProbe(s *icmpSock, dst net.IPAddr, o PingOptions) func(int) (Event, err
 func tcpProbe(ctx context.Context, dst net.IPAddr, o PingOptions) func(int) (Event, error) {
 	addr := net.JoinHostPort(dst.String(), strconv.Itoa(o.Port))
 	return func(seq int) (Event, error) {
-		d := net.Dialer{Timeout: o.Timeout}
+		d := sockmark.Dialer(net.Dialer{Timeout: o.Timeout})
 		t0 := time.Now()
 		c, err := d.DialContext(ctx, "tcp", addr)
 		rtt := time.Since(t0)

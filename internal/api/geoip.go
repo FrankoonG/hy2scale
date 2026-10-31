@@ -11,6 +11,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/netip"
 	"path/filepath"
 	"strings"
 
@@ -35,6 +36,10 @@ func (s *Server) geoipRoutes(m *http.ServeMux) {
 		geoStore = geoip.New(dir)
 		geoStore.SetSources(geoip.SourcesFromEnv())
 		geoStore.Load()
+		app.SetPolicyGeoIP(func(ip netip.Addr) (string, uint) {
+			r := geoStore.Lookup(ip, "en")
+			return r.Country, r.ASN
+		})
 		if s.app.Store().Get().GeoIPMode() == geoip.ModeAuto {
 			geoStore.EnableAuto(geoip.BootDelay())
 		}
