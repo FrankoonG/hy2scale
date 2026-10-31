@@ -1,0 +1,66 @@
+/* App shell: layout, sidebar, top bar, utilities. */
+/* ====== Layout ====== */
+.hy-layout{display:flex;min-height:100vh;min-height:100dvh}
+.hy-main{flex:1;display:flex;flex-direction:column;min-width:0;margin-left:var(--sidebar-w);transition:margin-left .2s ease}
+/* Collapsed sidebar: the rail width drives both the sidebar and the main margin. */
+.hy-layout.sb-collapsed{--sidebar-w:64px}
+.hy-content{flex:1;display:flex;flex-direction:column;padding:24px}
+.hy-content>.page-enter{display:flex;flex-direction:column}
+/* Full-bleed pages (topology views): fill the viewport under the top bar. */
+.hy-content.full{padding:0;height:calc(100vh - 56px);height:calc(100dvh - 56px);min-height:0}
+.hy-content.full>.page-enter{flex:1;min-height:0}
+
+/* Page root: a stack of panels. Panels take the width they are given and
+   the height of their content; the page itself scrolls. */
+.hy-page{display:flex;flex-direction:column;gap:20px}
+
+/* ====== Sidebar ====== */
+.hy-sidebar{width:var(--sidebar-w);background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden;position:fixed;left:0;top:0;height:100vh;z-index:100}
+.hy-sidebar-logo{padding:20px 16px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border-light)}
+.hy-sidebar-logo img{width:28px;height:28px;border-radius:var(--radius-sm)}
+.hy-sidebar-logo span{font-size:16px;font-weight:700;letter-spacing:-.3px}
+.hy-sidebar-nav{flex:1;padding:8px;display:flex;flex-direction:column;gap:2px}
+.hy-sidebar-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:var(--radius-sm);cursor:pointer;color:var(--text-secondary);font-size:13px;font-weight:500;transition:all .15s;white-space:nowrap;text-decoration:none;border:none;background:none;text-align:left;width:100%;position:relative}
+.hy-sidebar-item:hover{background:var(--primary-light);color:var(--primary)}
+.hy-sidebar-item.active{background:var(--primary-light);color:var(--primary);font-weight:600}
+.hy-sidebar-item svg{width:18px;height:18px;flex-shrink:0;opacity:.7}
+.hy-sidebar-item.active svg{opacity:1}
+.hy-sidebar-item.disabled{opacity:.35;pointer-events:none}
+/* Active indicator bar */
+.hy-sidebar-item::before{content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);width:3px;height:0;background:var(--primary);border-radius:2px;transition:height .3s ease}
+.hy-sidebar-item.active::before{height:60%}
+.hy-sidebar-footer{padding:12px 16px;border-top:1px solid var(--border-light)}
+/* Grouped nav, bottom block and the collapsed icon rail. */
+.hy-sidebar{transition:width .2s ease}
+.hy-sidebar-logo{min-width:220px;transition:padding .2s ease}
+.hy-sidebar-logo>*:not(:first-child){transition:opacity .15s}
+.hy-sidebar-nav{min-height:0;overflow-x:hidden;overflow-y:auto}
+.hy-sidebar-group{display:flex;flex-direction:column;gap:2px}
+.hy-sidebar-section{position:relative;height:30px;padding:12px 12px 0;font-size:11px;line-height:16px;font-weight:600;letter-spacing:.4px;text-transform:uppercase;color:var(--text-muted);white-space:nowrap;overflow:hidden;transition:color .15s}
+.hy-sidebar-section::after{content:'';position:absolute;left:12px;right:12px;top:20px;border-top:1px solid var(--border);opacity:0;transition:opacity .15s}
+.hy-sidebar-item{overflow:hidden}
+.hy-sidebar-label{overflow:hidden;text-overflow:clip;transition:opacity .15s}
+.hy-sidebar-bottom{display:flex;flex-direction:column;gap:2px;padding:8px;border-top:1px solid var(--border-light)}
+.hy-sidebar-toggle{justify-content:center}
+/* The collapse toggle sits apart from the pinned pages above it. */
+.hy-sidebar-divider{height:1px;margin:6px -8px;background:var(--text-muted);opacity:.35}
+.hy-sidebar.collapsed .hy-sidebar-logo{padding-left:18px}
+.hy-sidebar.collapsed .hy-sidebar-logo>*:not(:first-child){opacity:0}
+.hy-sidebar.collapsed .hy-sidebar-section{color:transparent}
+.hy-sidebar.collapsed .hy-sidebar-section::after{opacity:1}
+.hy-sidebar.collapsed .hy-sidebar-item:not(.hy-sidebar-toggle){padding-left:15px}
+.hy-sidebar.collapsed .hy-sidebar-label{opacity:0}
+
+/* ====== Topbar ====== */
+.hy-topbar{position:sticky;top:0;z-index:50;height:56px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 24px;gap:12px}
+.hy-topbar-left{display:flex;align-items:center;gap:12px}
+.hy-topbar h1{font-size:15px;font-weight:600}
+.hy-topbar-right{display:flex;align-items:center;gap:12px;margin-left:auto}
+.hy-hamburger{display:none;align-items:center;justify-content:center;width:32px;height:32px;margin-left:-6px;border:none;border-radius:var(--radius-sm);background:transparent;color:var(--text-secondary);cursor:pointer;flex-shrink:0;padding:0}
+.hy-hamburger:hover{background:var(--primary-light);color:var(--primary)}
+.hy-hamburger:active{background:var(--bg)}
+.hy-hamburger svg{width:22px;height:22px}
+
+
+/* ====== Misc ====== */
+.spacer{flex:1}

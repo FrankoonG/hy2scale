@@ -1,0 +1,3354 @@
+// Package node provides decentralized peer-to-peer traffic forwarding
+// through Hysteria 2 tunnels.
+//
+// Every node is equal — each can run both an hy2 server (accepting peers)
+// and multiple hy2 clients (connecting to peers). Peers can route traffic
+// through each other's network.
+//
+// Peer discovery is local by default (only directly connected peers).
+// Nested discovery (seeing a peer's peers) is opt-in per peer.
+package node
+
+import (
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/FrankoonG/hy2scale/core/audit"
+	"github.com/FrankoonG/hy2scale/core/proto"
+	hyclient "github.com/apernet/hysteria/core/v2/client"
+	coreErrs "github.com/apernet/hysteria/core/v2/errors"
+)
+
+// localExitGW caches the Docker gateway for local exit address rewriting.
+var localExitGW = sync.OnceValue(func() string {
+	if gw := os.Getenv("LOCAL_EXIT_GATEWAY"); gw != "" {
+		log.Printf("[relay] using LOCAL_EXIT_GATEWAY=%s", gw)
+		return gw
+	}
+	ips, err := net.LookupHost("host.docker.internal")
+	if err == nil && len(ips) > 0 {
+		log.Printf("[relay] detected Docker gateway: %s", ips[0])
+		return ips[0]
+	}
+	return ""
+})
+
+// rewriteLocalAddr replaces the destination host with the Docker gateway
+// when running inside Docker. This prevents services on the host from
+// seeing connections from their own IP (Docker NAT hairpin issue).
+func (n *Node) rewriteLocalAddr(addr string) string {
+	gw := localExitGW()
+	if gw == "" {
+		return addr
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	rewritten := net.JoinHostPort(gw, port)
+	log.Printf("[relay] rewriting exit %s → %s", addr, rewritten)
+	return rewritten
+}
+
+// ErrRemoteDial: the remote peer answered that its own dial failed (NAK);
+// retrying the same request won't help.
+var ErrRemoteDial = errors.New("relay: remote dial failed")
+
+// ErrNotHy2scale indicates the remote is a plain hy2 server without relay protocol.
+var ErrNotHy2scale = fmt.Errorf("relay: remote is not hy2scale")
+
+// Stream addresses: see core/proto.
+const (
+	streamRegister      = proto.StreamRegister
+	streamCtrlS2C       = proto.StreamCtrlS2C
+	streamListPeers     = proto.StreamListPeer
+	streamPing          = proto.StreamPing
+	streamLatencyReport = proto.StreamLatency
+	streamViaPrefix     = proto.ViaPrefix
+	streamDataPrefix    = proto.DataPrefix
+	streamDataSuffix    = proto.DataSuffix
+	streamIPTunPrefix   = proto.IPTunPrefix
+	streamNakPrefix     = proto.NakPrefix
+	StreamMsess         = proto.StreamMsess
+	msessHelloTag       = proto.MsessHelloTag
+	StreamAPI           = proto.StreamAPI
+	StreamPunch         = proto.StreamPunch
+	streamEgress        = proto.StreamEgress
+	streamWhoami        = proto.StreamWhoami
+	StreamHello         = proto.StreamHello
+)
+
+// IsRelayStream returns true if addr is a relay internal stream.
+func IsRelayStream(addr string) bool { return proto.IsRelayStream(addr) }
+
+// MsessAddr is the subflow address carrying hello.
+func MsessAddr(hello []byte) string { return proto.MsessAddr(hello) }
+
+// IsMsessAddr: addr opens a msess subflow (with or without a HELLO).
+func IsMsessAddr(addr string) bool { return proto.IsMsessAddr(addr) }
+
+// msessStream hands a subflow to the msess handler with the address-carried
+// HELLO (if any) in front of the stream data.
+func msessStream(addr string, stream net.Conn) net.Conn {
+	b := proto.MsessHello(addr)
+	if b == nil {
+		return stream // none, or malformed: the handler rejects a missing HELLO
+	}
+	return &prefixedConn{Conn: stream, head: b}
+}
+
+// prefixedConn replays head before reading from the stream.
+type prefixedConn struct {
+	net.Conn
+	head []byte
+}
+
+func (c *prefixedConn) Read(p []byte) (int, error) {
+	if len(c.head) > 0 {
+		n := copy(p, c.head)
+		c.head = c.head[n:]
+		return n, nil
+	}
+	return c.Conn.Read(p)
+}
+
+// isLocalRelayStream returns true if addr is a relay stream that can be handled
+// locally via HandleStream in a reverse-dial context. Excludes transport-level
+// streams (register, ctrl, data delivery) that are part of connection setup.
+func isLocalRelayStream(addr string) bool {
+	if addr == streamRegister || addr == streamCtrlS2C {
+		return false
+	}
+	if strings.HasPrefix(addr, streamDataPrefix) || strings.HasPrefix(addr, streamNakPrefix) {
+		return false
+	}
+	return IsRelayStream(addr)
+}
+
+// PeerInfo describes a connected peer (see core/proto).
+type PeerInfo = proto.PeerInfo
+
+// NodeVersion is the version string sent during peer registration.
+// Set by the app package at init time.
+var NodeVersion = "1.0.0"
+
+// ProtocolVersion is an integer identifying the inter-node wire format
+// generation. Bumped (independently of NodeVersion semver) whenever a
+// breaking peer-protocol change ships. Older instances that see a
+// remote peer with a HIGHER ProtocolVersion treat it as opaque:
+// hide nested sub-peers entirely (they may use frames we can't parse)
+// and mark direct peers as unsupported. Newer instances accept any
+// older peer and just downgrade behavior locally to the older feature
+// set. v1.3.x ships protocol v3 — v1 = pre-1.0, v2 = 1.0–1.2.
+const ProtocolVersion = 3
+
+// NodeTunCapable is advertised to peers as TunCapable. Always false since
+// 1.4.0 (no TUN rules): pre-1.4.0 peers then carry their TUN rules to us
+// per flow instead of opening IP tunnel streams.
+var NodeTunCapable bool
+
+// MinCompatVersion is the minimum peer version we can work with.
+// Peers below this version are marked incompatible: relay blocked, nested disabled.
+const MinCompatVersion = "1.3.0"
+
+// isCompatible checks if a peer version meets minimum requirements.
+func isCompatible(version string) bool {
+	if version == "" || version == "1.0.0" {
+		return false // old peers that don't send version
+	}
+	return VersionAtLeast(version, MinCompatVersion)
+}
+
+// VersionAtLeast compares dotted numeric versions ("1.10.0" > "1.3.0").
+// Non-numeric suffixes ("-rc1") are ignored per component.
+func VersionAtLeast(version, min string) bool {
+	a, b := strings.Split(version, "."), strings.Split(min, ".")
+	for i := 0; i < len(a) || i < len(b); i++ {
+		var x, y int
+		if i < len(a) {
+			x = leadingInt(a[i])
+		}
+		if i < len(b) {
+			y = leadingInt(b[i])
+		}
+		if x != y {
+			return x > y
+		}
+	}
+	return true
+}
+
+func leadingInt(s string) int {
+	v := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			break
+		}
+		v = v*10 + int(c-'0')
+	}
+	return v
+}
+
+// peerMeta is extensible metadata exchanged after basic handshake.
+// New fields can be added freely — old peers ignore unknown fields.
+type peerMeta struct {
+	Version    string `json:"v,omitempty"`
+	TunCapable bool   `json:"tun,omitempty"` // true if node can handle exit TUN (has NET_ADMIN + /dev/net/tun)
+	// PV is the wire-protocol generation. Absent on pre-1.3.x peers
+	// (treat as 0 — accept everything for backward compatibility).
+	PV int `json:"pv,omitempty"`
+	// NodeID is the remote's stable cluster-unique identifier. Sent in
+	// register metadata so the receiver can disambiguate "two physical
+	// connections to the SAME logical peer" (mutual dial → bidirectional
+	// slot) from "a name collision impostor" (mechanism A territory).
+	// Empty on pre-1.3.x peers — receiver falls back to legacy
+	// single-slot replace behavior in that case.
+	NodeID string `json:"id,omitempty"`
+	// DialNak: this node resolves a reverse-dial waiter on a
+	// `_relay_nak_<id>` stream (1.3.10+). Remotes only send NAKs to peers
+	// that advertised it; older requesters get an immediately-closed data
+	// stream instead so they stop waiting.
+	DialNak bool `json:"dn,omitempty"`
+	// Eg: this node serves streamEgress / streamWhoami.
+	Eg bool `json:"eg,omitempty"`
+	// Rt: this node applies restriction tags on targets (core/proto).
+	Rt bool `json:"rt,omitempty"`
+	// At: this node serves StreamAttrs.
+	At bool `json:"at,omitempty"`
+}
+
+// localMeta is what this node advertises in the register handshake.
+func (n *Node) localMeta() peerMeta {
+	return peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable, PV: ProtocolVersion, NodeID: n.nodeID, DialNak: true, Eg: true, Rt: true, At: true}
+}
+
+// writeMeta sends a length-prefixed JSON metadata blob.
+func writeMeta(w io.Writer, m peerMeta) {
+	data, _ := json.Marshal(m)
+	var lenBuf [2]byte
+	binary.BigEndian.PutUint16(lenBuf[:], uint16(len(data)))
+	w.Write(lenBuf[:])
+	w.Write(data)
+}
+
+// readMeta reads a length-prefixed JSON metadata blob with timeout.
+// Returns zero-value peerMeta if the remote is old (doesn't send metadata).
+func readMeta(r net.Conn, timeout time.Duration) peerMeta {
+	r.SetReadDeadline(time.Now().Add(timeout))
+	defer r.SetReadDeadline(time.Time{})
+	var lenBuf [2]byte
+	if _, err := io.ReadFull(r, lenBuf[:]); err != nil {
+		return peerMeta{}
+	}
+	n := binary.BigEndian.Uint16(lenBuf[:])
+	if n == 0 || n > 4096 {
+		return peerMeta{}
+	}
+	data := make([]byte, n)
+	if _, err := io.ReadFull(r, data); err != nil {
+		return peerMeta{}
+	}
+	var m peerMeta
+	json.Unmarshal(data, &m)
+	return m
+}
+
+// --- Node ---
+
+type peer struct {
+	info      PeerInfo
+	client    hyclient.Client // primary outbound client (first IP)
+	// Reverse-control stream for inbound peers used to be stored here as
+	// ctrlW, but it's now name-keyed on Node.ctrlS2C so the binding
+	// survives peer-struct replacement on re-register. Read via
+	// Node.peerCtrlS2C(name).
+	writeMu   sync.Mutex
+	waiting   map[string]chan net.Conn
+	txBytes   atomic.Uint64
+	rxBytes   atomic.Uint64
+	failCount atomic.Int32 // consecutive ping failures (reset on success or active traffic)
+	// Snapshot of tx/rx at last completed probe; used to spot peers whose
+	// probe stream is starved by their data stream (saturated bottleneck
+	// link) so we don't disconnect a link that is, by every other metric,
+	// healthy and actively transferring.
+	lastProbeTx atomic.Uint64
+	lastProbeRx atomic.Uint64
+	ctx         context.Context // canceled when peer disconnects
+	cancel      context.CancelFunc
+	dialNak     bool // peer resolves reverse-dial waiters on _relay_nak_ streams
+	primaryDown atomic.Bool // last probe of the primary connection failed
+
+	// Multi-IP: additional outbound QUIC connections
+	extraConns   []hyclient.Client // extra clients (index 0 = second IP, etc.)
+	connAddrs    []string          // address per extra connection (parallel to extraConns)
+	connStatuses []string          // per-IP status: "online", "offline", "mismatch", "native"
+	connSeq      atomic.Uint64    // round-robin counter for stream distribution
+
+	// ─── Diagnostic counters (exposed via /api/diag/peer-*) ───
+	// Application-level proxies for the QUIC-class signals we wish we'd
+	// had during the cn-xinchang +82ms drift investigation. The hysteria
+	// `Client` interface is strictly TCP/UDP/Close and exposes no raw
+	// quic-go retransmit / RTT-srtt / pacer-bandwidth — but the *shape*
+	// of those problems is observable at the application layer:
+	//   - QUIC degraded → ping streams open slowly or time out
+	//   - QUIC stream pressure → streamBridge rebind-check spikes
+	//   - Standing CC queue → latency_ms creeps up over time
+	// All counters reset only on peer disconnect (peer struct teardown).
+	// Cumulative since the QUIC session began.
+	pingOK       atomic.Uint64 // ping stream completed within timeout (also a stream-open success)
+	pingFail     atomic.Uint64 // ping stream timed out / errored (also a stream-open failure)
+	rebindChecks atomic.Uint64 // [via] rebind-probe arrivals routed at this peer
+	// Per-peer ring of recent latency samples. SetLatency is the only
+	// writer and it's called from a handful of goroutines (probe loop,
+	// inbound report handler), so a small mutex is fine — no need for
+	// a lock-free design at this rate (<1 sample/sec/peer).
+	latencyMu   sync.Mutex
+	latencyHist []LatencySample
+}
+
+// LatencySample is one entry in the per-peer time series. ms < 0 means
+// the probe failed; the operator can render those as gaps. Capped to
+// LatencyHistoryCap entries — older samples slide off the head.
+type LatencySample struct {
+	At time.Time `json:"at"`
+	Ms int       `json:"ms"`
+}
+
+// LatencyHistoryCap bounds the per-peer ring. With ~5 s probe cadence
+// this gives ~10 minutes of history per peer, ~1.5 KB/peer at most —
+// trivial even with dozens of peers.
+const LatencyHistoryCap = 120
+
+// recordLatency appends a sample to the peer's ring and trims to cap.
+func (p *peer) recordLatency(ms int) {
+	p.latencyMu.Lock()
+	defer p.latencyMu.Unlock()
+	p.latencyHist = append(p.latencyHist, LatencySample{At: time.Now(), Ms: ms})
+	if len(p.latencyHist) > LatencyHistoryCap {
+		// Drop oldest in-place; cheap copy at this size.
+		drop := len(p.latencyHist) - LatencyHistoryCap
+		p.latencyHist = append(p.latencyHist[:0], p.latencyHist[drop:]...)
+	}
+}
+
+// latencyHistorySnapshot returns a defensive copy of the ring.
+func (p *peer) latencyHistorySnapshot() []LatencySample {
+	p.latencyMu.Lock()
+	defer p.latencyMu.Unlock()
+	out := make([]LatencySample, len(p.latencyHist))
+	copy(out, p.latencyHist)
+	return out
+}
+
+// pickClient returns the next QUIC client using round-robin across healthy connections.
+func (p *peer) pickClient() hyclient.Client {
+	if len(p.extraConns) == 0 {
+		return p.client
+	}
+	healthy := p.healthyClients()
+	idx := int(p.connSeq.Add(1)) % len(healthy)
+	return healthy[idx]
+}
+
+// healthyClients: primary + online extras; a primary whose last probe
+// failed is left out while any extra is online (it kept getting new
+// streams otherwise until QUIC's idle timeout finally killed it).
+func (p *peer) healthyClients() []hyclient.Client {
+	var extras []hyclient.Client
+	for i, c := range p.extraConns {
+		status := "online"
+		if i < len(p.connStatuses) {
+			status = p.connStatuses[i]
+		}
+		if status == "online" && c != nil {
+			extras = append(extras, c)
+		}
+	}
+	if p.primaryDown.Load() && len(extras) > 0 {
+		return extras
+	}
+	return append([]hyclient.Client{p.client}, extras...)
+}
+
+// pickClientIdx returns a specific QUIC client by index.
+// Index 0 = primary, 1+ = extra connections.
+func (p *peer) pickClientIdx(idx int) hyclient.Client {
+	if len(p.extraConns) == 0 {
+		return p.client
+	}
+	healthy := p.healthyClients()
+	if idx >= len(healthy) {
+		idx = idx % len(healthy)
+	}
+	return healthy[idx]
+}
+
+// relayOpenTimeout bounds opening a relay stream on one of several QUIC
+// connections to a peer. The far node answers a relay stream at once, so no
+// answer for this long means the connection died — something its probe
+// notices only up to 7 s later, while a stream opened on it hangs until
+// QUIC gives up (~25 s).
+const relayOpenTimeout = 3 * time.Second
+
+type tcpResult struct {
+	conn net.Conn
+	err  error
+}
+
+// openStream opens addr on cl. For a relay stream to a peer reached over
+// several connections it moves on to the next healthy connection when cl
+// doesn't answer within relayOpenTimeout (marking cl down until its next
+// probe); a late answer is closed. Target dials, which answer only after the
+// far end dialed the target, and single-connection peers wait as before.
+func (n *Node) openStream(name string, p *peer, cl hyclient.Client, addr string) (net.Conn, error) {
+	if !IsRelayStream(addr) {
+		return cl.TCP(addr)
+	}
+	tried := map[hyclient.Client]bool{}
+	var lastErr error
+	for cl != nil {
+		tried[cl] = true
+		var next hyclient.Client
+		for _, c := range p.healthyClients() {
+			if !tried[c] {
+				next = c
+				break
+			}
+		}
+		if next == nil {
+			return cl.TCP(addr)
+		}
+		ch := make(chan tcpResult, 1)
+		go func(c hyclient.Client) {
+			conn, err := c.TCP(addr)
+			ch <- tcpResult{conn, err}
+		}(cl)
+		select {
+		case r := <-ch:
+			if r.err == nil {
+				return r.conn, nil
+			}
+			lastErr = r.err // a closed connection fails at once
+		case <-time.After(relayOpenTimeout):
+			n.markConnDown(name, cl)
+			go func() {
+				if r := <-ch; r.conn != nil {
+					r.conn.Close()
+				}
+			}()
+			lastErr = fmt.Errorf("relay: no answer from %s within %s", name, relayOpenTimeout)
+		}
+		cl = next
+	}
+	return nil, lastErr
+}
+
+// markConnDown takes cl out of new-stream selection until the prober sees it
+// answer again.
+func (n *Node) markConnDown(name string, cl hyclient.Client) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	p, ok := n.peers[name]
+	if !ok {
+		return
+	}
+	log.Printf("[relay] %s: a connection did not answer a stream open; skipped until its next probe", name)
+	if cl == p.client {
+		p.primaryDown.Store(true)
+		return
+	}
+	for i, c := range p.extraConns {
+		if c == cl && i < len(p.connStatuses) {
+			p.connStatuses[i] = "offline"
+		}
+	}
+}
+
+// ConnCount returns the total number of active QUIC connections for this peer.
+func (p *peer) ConnCount() int {
+	if p.client == nil {
+		return 0
+	}
+	return 1 + len(p.extraConns)
+}
+
+// AddConn adds or replaces an extra QUIC connection for a secondary IP address.
+func (p *peer) AddConn(client hyclient.Client, addr, status string) {
+	// Replace existing entry with same addr
+	for i, a := range p.connAddrs {
+		if a == addr {
+			if p.extraConns[i] == client {
+				p.connStatuses[i] = status // re-attach of the same connection
+				return
+			}
+			if p.extraConns[i] != nil {
+				p.extraConns[i].Close()
+			}
+			p.extraConns[i] = client
+			p.connStatuses[i] = status
+			return
+		}
+	}
+	p.extraConns = append(p.extraConns, client)
+	p.connAddrs = append(p.connAddrs, addr)
+	p.connStatuses = append(p.connStatuses, status)
+}
+
+// PeerTraffic holds per-peer traffic info.
+type PeerTraffic struct {
+	Name   string
+	TxRate uint64
+	RxRate uint64
+}
+
+// Node is a unified relay endpoint. It can accept peers (hy2 server side)
+// and connect to peers (hy2 client side) simultaneously.
+// Stats holds traffic counters.
+type Stats struct {
+	TxBytes    uint64 // total uploaded
+	RxBytes    uint64 // total downloaded
+	TxRate     uint64 // bytes/sec upload (snapshot)
+	RxRate     uint64 // bytes/sec download (snapshot)
+	Conns      int    // active stream count
+	ExitClients int   // peers using this node as exit
+}
+
+type Node struct {
+	name   string
+	nodeID string // cluster-unique stable identifier; sent in peerMeta.NodeID
+	exit   bool
+	mu     sync.RWMutex
+	// peers holds the PRIMARY connection to each named peer. When a peer
+	// has only one direction (the common case), it lives here regardless
+	// of direction. When a peer is mutually dialed (both outbound and
+	// inbound to the same NodeID), the routing-preferred direction —
+	// typically outbound — lives here and the other direction lives in
+	// peersAlt under the same name. Every existing reader of n.peers
+	// gets the routing-preferred slot transparently; callers that need
+	// the secondary channel use PeersAlt() / peerSlots().
+	peers    map[string]*peer
+	peersAlt map[string]*peer
+	seq      atomic.Uint64
+
+	nestedMu sync.RWMutex
+	nested   map[string]bool
+
+	blockedMu sync.RWMutex
+	blocked   map[string]bool
+
+	// ctrlS2C is the reverse-control stream registry for inbound peers,
+	// keyed by peer NAME (which is stable across re-register events).
+	// Stored on the Node rather than on the peer struct because the
+	// peer struct gets replaced on every re-register, and an s2c
+	// stream that bound to the pre-replace struct is invisible to
+	// dial-side readers that look up the post-replace struct (the
+	// "0↔3MB throughput oscillation" bug — see
+	// docs/s2c-ctrl-race-bug.md).
+	ctrlS2CMu sync.Mutex
+	ctrlS2C   map[string]net.Conn
+
+	// Traffic counters
+	txBytes   atomic.Uint64
+	rxBytes   atomic.Uint64
+	prevTx    uint64
+	prevRx    uint64
+	txRate    atomic.Uint64
+	rxRate    atomic.Uint64
+	conns     atomic.Int64
+
+	// Per-peer rate snapshots (updated by rate ticker)
+	peerRateMu sync.RWMutex
+	peerRates  map[string]PeerTraffic
+
+	// Per-qualified-path byte counters, keyed by "p1/p2/.../pN" — the same
+	// format cfg.Peers uses. Populated by DialVia whenever
+	// the outgoing chain has more than one hop, and also whenever handleVia
+	// continues a chain on behalf of a remote. Lets the UI attribute
+	// relayed traffic to the specific nested descendant it's destined for,
+	// not just to the first-hop direct peer.
+	pathBytesMu sync.RWMutex
+	pathBytes   map[string]*pathCounters
+	pathRateMu  sync.RWMutex
+	pathRates   map[string]PeerTraffic
+
+	// Per-peer latency (updated by background prober)
+	latencyMu      sync.RWMutex
+	latencies      map[string]int
+	addrLatencies  map[string]map[string]int // peer → addr → ms
+	peersOfCache map[string][]PeerInfo // cached PeersOf results from prober
+	// last SetPeersOfCache write per key; entries the prober owns (direct
+	// peers) have none and never expire
+	peersOfCacheSeen map[string]time.Time
+	conflicts        map[string]string // client addr → conflicting name
+
+	// Injected handler: returns rich peer list JSON (with children) for nested discovery.
+	// If nil, falls back to flat n.Peers() JSON.
+	listPeersFunc func() []byte
+	attrs         attrStore // node attributes (attrs.go)
+	msessHandler  func(stream net.Conn)
+	// instance id for node access by user (access.go)
+	instOnce sync.Once
+	inst     string
+	// restrictedDial dials a target under restrictions (access.go)
+	restrictedDial func(ctx context.Context, network, addr string, r proto.Restrict) (net.Conn, error)
+	// plainDial dials a peer's plain reverse-dial target (access.go;
+	// nil = a marked system dial)
+	plainDial func(ctx context.Context, network, addr string) (net.Conn, error)
+
+	// IP tunnel handler for TUN-based raw packet forwarding
+
+	// API proxy handler for remote web-UI tunneling. Set by the app layer at
+	// startup so the relay can deliver _relay_api_ streams directly to the
+	// local HTTP API listener without routing through rewriteLocalAddr.
+	apiHandler func(stream net.Conn)
+	// punchHandler serves StreamPunch (hole-punch signalling).
+	punchHandler func(stream net.Conn)
+	// speedHandler serves StreamSpeed (throughput test).
+	speedHandler func(stream net.Conn)
+
+	// apiStreamWrap is the app-layer hook that wraps an inbound API stream
+	// so the api server can recover the peer-relay auth ID (used by the
+	// RelayAdminPassthrough gate). Set by the app layer; called by
+	// dialAndStream when a `_relay_api_:0` arrives via the s2c-ctrl
+	// dial-request path (inbound-only peer) — in that path nodeOutbound.TCP
+	// doesn't see the stream, so the app-side wrap there can't fire and we
+	// have to wrap here instead. Empty authID falls through to no-wrap so
+	// callers that pass through a plain peer connection are still safe.
+	apiStreamWrap func(stream net.Conn, authID string) net.Conn
+
+	// Inbound-identity callback. Fires inside handleRegister AFTER the meta
+	// exchange but BEFORE the peer is registered in n.peers. Lets the app
+	// layer detect "same source addr, different NodeID" — the inbound
+	// equivalent of the outbound rename signal carried by AttachTo's onID
+	// callback. See docs/peer-identity-sync-bugs.md Bug B for the design
+	// rationale: source remoteAddrIP is the stable handle (symmetric to how
+	// cfg.Clients[].Addr is the stable handle on the outbound side).
+	onInboundIdentity func(declaredName, nodeID, remoteAddrIP string)
+
+	// Stream bridge manager for connection persistence across QUIC reconnects
+	bridgeTags *bridgeTags // old peers' via tags (rebind guard)
+
+	// inAddrs: inbound peers by connection address (audit source);
+	// sessTargets: targets of sessions opened through this hop (audit).
+	inAddrs     inboundAddrs
+	sessTargets sessTargets
+}
+
+// PeerRates returns per-peer traffic rates.
+func (n *Node) PeerRates() map[string]PeerTraffic {
+	n.peerRateMu.RLock()
+	defer n.peerRateMu.RUnlock()
+	out := make(map[string]PeerTraffic, len(n.peerRates))
+	for k, v := range n.peerRates {
+		out[k] = v
+	}
+	return out
+}
+
+// pathCounters holds the tx/rx byte totals for a single qualified nested path.
+type pathCounters struct {
+	tx atomic.Uint64
+	rx atomic.Uint64
+}
+
+// getOrCreatePathCounters returns the counter record for the given qualified
+// path (e.g. "au/au-r1/au-r1-a"), creating it lazily on first use.
+func (n *Node) getOrCreatePathCounters(key string) *pathCounters {
+	n.pathBytesMu.RLock()
+	rec, ok := n.pathBytes[key]
+	n.pathBytesMu.RUnlock()
+	if ok {
+		return rec
+	}
+	n.pathBytesMu.Lock()
+	if rec, ok = n.pathBytes[key]; ok {
+		n.pathBytesMu.Unlock()
+		return rec
+	}
+	rec = &pathCounters{}
+	n.pathBytes[key] = rec
+	n.pathBytesMu.Unlock()
+	return rec
+}
+
+// PathRates returns per-qualified-path traffic rates, keyed identically to
+// cfg.Peers (e.g. "au", "au/au-r1", "au/au-r1/au-r1-a"). Only paths with
+// more than one hop are populated — single-hop flows are covered by the
+// per-peer counter returned from PeerRates.
+func (n *Node) PathRates() map[string]PeerTraffic {
+	n.pathRateMu.RLock()
+	defer n.pathRateMu.RUnlock()
+	out := make(map[string]PeerTraffic, len(n.pathRates))
+	for k, v := range n.pathRates {
+		out[k] = v
+	}
+	return out
+}
+
+// SetLatency stores a latency measurement for a peer (called by prober or inbound report).
+func (n *Node) SetLatency(peerName string, ms int) {
+	n.latencyMu.Lock()
+	if ms > 0 || n.latencies[peerName] <= 0 {
+		// Only update if new value is valid, or no previous good value exists
+		n.latencies[peerName] = ms
+	}
+	n.latencyMu.Unlock()
+	// Append to per-peer ring regardless of source (outbound prober call
+	// site OR inbound _relay_latency_ report). The history then captures
+	// the same time series the topology API reads from `n.latencies`,
+	// just retained over time so an operator can see when a peer's
+	// ping started creeping up.
+	n.mu.RLock()
+	pp, ok := n.peers[peerName]
+	n.mu.RUnlock()
+	if ok {
+		pp.recordLatency(ms)
+	}
+}
+
+// GetLatency returns stored latency for a peer. For multi-addr peers, returns
+// average of all addr latencies. -1 if unknown.
+func (n *Node) GetLatency(peerName string) int {
+	n.latencyMu.RLock()
+	defer n.latencyMu.RUnlock()
+	// If per-addr latencies exist, return average
+	if al, ok := n.addrLatencies[peerName]; ok && len(al) > 0 {
+		sum, count := 0, 0
+		for _, ms := range al {
+			if ms > 0 {
+				sum += ms
+				count++
+			}
+		}
+		if count > 0 {
+			return sum / count
+		}
+	}
+	if ms, ok := n.latencies[peerName]; ok {
+		return ms
+	}
+	return -1
+}
+
+// GetAddrLatencies returns per-address latency for a multi-addr peer.
+func (n *Node) GetAddrLatencies(peerName string) map[string]int {
+	n.latencyMu.RLock()
+	defer n.latencyMu.RUnlock()
+	if al, ok := n.addrLatencies[peerName]; ok {
+		out := make(map[string]int, len(al))
+		for k, v := range al {
+			out[k] = v
+		}
+		return out
+	}
+	return nil
+}
+
+// setAddrLatency stores latency for a specific address of a peer.
+func (n *Node) setAddrLatency(peerName, addr string, ms int) {
+	n.latencyMu.Lock()
+	defer n.latencyMu.Unlock()
+	if n.addrLatencies[peerName] == nil {
+		n.addrLatencies[peerName] = make(map[string]int)
+	}
+	n.addrLatencies[peerName][addr] = ms
+}
+
+// probeExtraConns pings each extra QUIC connection and stores per-addr latency.
+func (n *Node) probeExtraConns(name string, p *peer) {
+	if len(p.extraConns) == 0 {
+		return
+	}
+	for i, ec := range p.extraConns {
+		if ec == nil {
+			continue
+		}
+		addr := ""
+		if i < len(p.connAddrs) {
+			addr = p.connAddrs[i] // extras only, parallel to extraConns (see AddConn)
+		}
+		if addr == "" {
+			continue
+		}
+		rtt := n.pingClient(ec)
+		if rtt >= 0 {
+			n.setAddrLatency(name, addr, int(rtt.Milliseconds()))
+			// Update status to online
+			if i < len(p.connStatuses) {
+				p.connStatuses[i] = "online"
+			}
+		} else {
+			n.setAddrLatency(name, addr, -1)
+			if i < len(p.connStatuses) {
+				p.connStatuses[i] = "offline"
+			}
+		}
+	}
+}
+
+// SetPeersOfCache sets the cached peer list for a given peer name.
+// Called by the API sub-peers updater to share nested topology data.
+func (n *Node) SetPeersOfCache(peerName string, peers []PeerInfo) {
+	n.peerRateMu.Lock()
+	defer n.peerRateMu.Unlock()
+	if n.peersOfCache == nil {
+		n.peersOfCache = make(map[string][]PeerInfo)
+	}
+	n.peersOfCache[peerName] = peers
+	if n.peersOfCacheSeen == nil {
+		n.peersOfCacheSeen = make(map[string]time.Time)
+	}
+	n.peersOfCacheSeen[peerName] = time.Now()
+}
+
+// ExpirePeersOfCache drops entries SetPeersOfCache hasn't refreshed for
+// maxAge: qualified paths the topology no longer shows. Without it every
+// path ever observed stayed, and the history recorder kept rings for all of
+// them (production: 9000+ keys for a 92-path topology). Prober-owned
+// direct-peer entries are left alone.
+func (n *Node) ExpirePeersOfCache(maxAge time.Duration) {
+	n.peerRateMu.Lock()
+	defer n.peerRateMu.Unlock()
+	now := time.Now()
+	for k, t := range n.peersOfCacheSeen {
+		if now.Sub(t) > maxAge {
+			delete(n.peersOfCache, k)
+			delete(n.peersOfCacheSeen, k)
+		}
+	}
+}
+
+// PeersOfCached returns cached peer list from the last prober cycle.
+func (n *Node) PeersOfCached(peerName string) ([]PeerInfo, bool) {
+	n.peerRateMu.RLock()
+	defer n.peerRateMu.RUnlock()
+	if n.peersOfCache == nil {
+		return nil, false
+	}
+	peers, ok := n.peersOfCache[peerName]
+	return peers, ok
+}
+
+// PeersOfCacheKeys snapshots every qualified-path key currently held in
+// peersOfCache (both bare direct-peer names and the slash-joined deep keys
+// the api server's walkAndCache populates). Callers that want to enumerate
+// the full set of topology-visible paths beyond cfg.Peers — e.g. the
+// PathInfoExpand history recorder, which used to miss any qualified path
+// the operator hadn't explicitly toggled even though the topology graph
+// rendered it — read this list and union it with their own roots.
+func (n *Node) PeersOfCacheKeys() []string {
+	n.peerRateMu.RLock()
+	defer n.peerRateMu.RUnlock()
+	keys := make([]string, 0, len(n.peersOfCache))
+	for k := range n.peersOfCache {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// StartLatencyProber periodically pings outbound peers and caches their peer lists.
+func (n *Node) StartLatencyProber(ctx context.Context) {
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			n.mu.RLock()
+			peers := make([]*peer, 0, len(n.peers))
+			names := make([]string, 0, len(n.peers))
+			for name, p := range n.peers {
+				peers = append(peers, p)
+				names = append(names, name)
+			}
+			n.mu.RUnlock()
+			for i, p := range peers {
+				go func(name string, p *peer) {
+					if p.client != nil {
+						// Outbound peer: ping + nested discovery
+						rtt := n.PingPeer(name)
+						if rtt >= 0 {
+							n.SetLatency(name, int(rtt.Milliseconds()))
+							p.failCount.Store(0)
+							p.pingOK.Add(1)
+						} else {
+							n.SetLatency(name, -1)
+							p.pingFail.Add(1)
+							// If the peer pushed/pulled bytes since the last probe,
+							// the link is alive — the ping just got queued behind
+							// data on a saturated QUIC connection (e.g. long upload
+							// through a rate-limited downstream hop). Treat as
+							// "probe starved by congestion", reset failCount, do
+							// not disconnect. Active byte counters are a stronger
+							// liveness signal than a stuck control stream.
+							curTx := p.txBytes.Load()
+							curRx := p.rxBytes.Load()
+							prevTx := p.lastProbeTx.Load()
+							prevRx := p.lastProbeRx.Load()
+							if curTx > prevTx || curRx > prevRx {
+								p.failCount.Store(0)
+								log.Printf("[relay] %s: ping failed but link active (Δtx=%d Δrx=%d) — congestion, not disconnect",
+									name, curTx-prevTx, curRx-prevRx)
+							} else {
+								fails := p.failCount.Add(1)
+								if fails >= 3 && p.cancel != nil {
+									log.Printf("[relay] %s: %d consecutive ping failures (no traffic), disconnecting for reconnect", name, fails)
+									p.cancel()
+								}
+							}
+						}
+						// Snapshot tx/rx for next probe's congestion-vs-dead disambiguation.
+						p.lastProbeTx.Store(p.txBytes.Load())
+						p.lastProbeRx.Store(p.rxBytes.Load())
+						// Probe extra connections for per-addr latency
+						n.probeExtraConns(name, p)
+					}
+					// Cache nested sub-peers for both outbound AND inbound peers
+					if n.IsNestedEnabled(name) {
+						if subPeers, err := n.PeersOf(name); err == nil {
+							n.peerRateMu.Lock()
+							n.peersOfCache[name] = subPeers
+							delete(n.peersOfCacheSeen, name) // prober-owned: never expires
+							n.peerRateMu.Unlock()
+						}
+					} else {
+						// Nested disabled: remove stale cache
+						n.peerRateMu.Lock()
+						delete(n.peersOfCache, name)
+						delete(n.peersOfCacheSeen, name)
+						n.peerRateMu.Unlock()
+					}
+				}(names[i], p)
+			}
+		}
+	}
+}
+
+// Name returns the node's name.
+func (n *Node) Name() string { return n.name }
+
+// SetName updates the node's name.
+func (n *Node) SetName(name string) { n.name = name }
+
+// SetNodeID is called by the app layer at startup (and whenever the
+// NodeID is regenerated/rebound) so register handshakes can transmit
+// our stable identifier. Empty until set — keep the first call early
+// in App init, before any connectLoop fires.
+func (n *Node) SetNodeID(id string) { n.nodeID = id }
+
+// NodeID returns the local stable identifier configured via SetNodeID.
+func (n *Node) NodeID() string { return n.nodeID }
+
+// peerSlots returns both slots for `name` under a single read lock. Used
+// by code that wants to consult both directions (e.g. topology API).
+// Caller MUST hold n.mu.RLock or call this without holding n.mu.
+func (n *Node) peerSlots(name string) (primary, alt *peer) {
+	n.mu.RLock()
+	primary = n.peers[name]
+	alt = n.peersAlt[name]
+	n.mu.RUnlock()
+	return
+}
+
+// PeersAlt returns a snapshot of the secondary-slot peer infos. Pairs
+// with Peers() for the primary side. Topology API merges the two so a
+// mutually-dialed peer surfaces as both top-level outbound and inbound
+// child of self in the rendered tree.
+func (n *Node) PeersAlt() []PeerInfo {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	n.latencyMu.RLock()
+	defer n.latencyMu.RUnlock()
+	result := make([]PeerInfo, 0, len(n.peersAlt))
+	conflictNames := make(map[string]bool)
+	for _, name := range n.conflicts {
+		conflictNames[name] = true
+	}
+	for name, p := range n.peersAlt {
+		info := p.info
+		if ms, ok := n.latencies[name]; ok {
+			info.LatencyMs = ms
+		}
+		if conflictNames[name] {
+			info.Conflict = true
+		}
+		if c := p.ConnCount(); c > 1 {
+			info.Conns = c
+		}
+		n.withAttrs(name, &info)
+		result = append(result, info)
+	}
+	return result
+}
+
+// IsExit returns whether this node is an exit node.
+func (n *Node) IsExit() bool { return n.exit }
+
+// SetExit updates the exit node flag.
+func (n *Node) SetExit(exit bool) { n.exit = exit }
+
+// GetStats returns current traffic statistics.
+func (n *Node) GetStats() Stats {
+	n.mu.RLock()
+	exitCount := 0
+	for _, p := range n.peers {
+		if p.info.Direction == "inbound" {
+			exitCount++
+		}
+	}
+	n.mu.RUnlock()
+	return Stats{
+		TxBytes:     n.txBytes.Load(),
+		RxBytes:     n.rxBytes.Load(),
+		TxRate:      n.txRate.Load(),
+		RxRate:      n.rxRate.Load(),
+		Conns:       int(n.conns.Load()),
+		ExitClients: exitCount,
+	}
+}
+
+// StartRateTicker updates per-second rate counters. Call in a goroutine.
+func (n *Node) StartRateTicker(ctx context.Context) {
+	prevPeerTx := make(map[string]uint64)
+	prevPeerRx := make(map[string]uint64)
+	prevPathTx := make(map[string]uint64)
+	prevPathRx := make(map[string]uint64)
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			tx := n.txBytes.Load()
+			rx := n.rxBytes.Load()
+			n.txRate.Store(tx - n.prevTx)
+			n.rxRate.Store(rx - n.prevRx)
+			n.prevTx = tx
+			n.prevRx = rx
+
+			// Per-peer rates
+			rates := make(map[string]PeerTraffic)
+			n.mu.RLock()
+			for name, p := range n.peers {
+				ptx := p.txBytes.Load()
+				prx := p.rxBytes.Load()
+				rates[name] = PeerTraffic{
+					Name:   name,
+					TxRate: ptx - prevPeerTx[name],
+					RxRate: prx - prevPeerRx[name],
+				}
+				prevPeerTx[name] = ptx
+				prevPeerRx[name] = prx
+			}
+			n.mu.RUnlock()
+			n.peerRateMu.Lock()
+			n.peerRates = rates
+			n.peerRateMu.Unlock()
+
+			// Per-qualified-path rates
+			pathRates := make(map[string]PeerTraffic)
+			n.pathBytesMu.RLock()
+			for key, rec := range n.pathBytes {
+				ptx := rec.tx.Load()
+				prx := rec.rx.Load()
+				pathRates[key] = PeerTraffic{
+					Name:   key,
+					TxRate: ptx - prevPathTx[key],
+					RxRate: prx - prevPathRx[key],
+				}
+				prevPathTx[key] = ptx
+				prevPathRx[key] = prx
+			}
+			n.pathBytesMu.RUnlock()
+			n.pathRateMu.Lock()
+			n.pathRates = pathRates
+			n.pathRateMu.Unlock()
+		}
+	}
+}
+
+// NewNode creates a node.
+func NewNode(name string, exitNode bool) *Node {
+	return &Node{
+		name:      name,
+		exit:      exitNode,
+		peers:     make(map[string]*peer),
+		peersAlt:  make(map[string]*peer),
+		nested:    make(map[string]bool),
+		blocked:   make(map[string]bool),
+		ctrlS2C:   make(map[string]net.Conn),
+		peerRates: make(map[string]PeerTraffic),
+		pathBytes: make(map[string]*pathCounters),
+		pathRates: make(map[string]PeerTraffic),
+		latencies:     make(map[string]int),
+		addrLatencies: make(map[string]map[string]int),
+		peersOfCache:     make(map[string][]PeerInfo),
+		peersOfCacheSeen: make(map[string]time.Time),
+		bridgeTags: newBridgeTags(),
+	}
+}
+
+// --- Outbound: connect to a remote node's hy2 server ---
+
+// AttachTo connects to a remote node via an hy2 client, registers, and
+// handles dial requests from the remote. Blocks until ctx or connection ends.
+// AttachTo connects to a remote node via an hy2 client, registers, and
+// handles dial requests from the remote. Blocks until ctx or connection ends.
+// Returns the remote's actual node ID via the onID callback (if non-nil).
+// AttachNative registers a plain hy2 server (no relay protocol) as a peer.
+// Only DialTCP works (direct proxy). No nested discovery, no control stream.
+func (n *Node) AttachNative(ctx context.Context, peerName string, client hyclient.Client) error {
+	childCtx, cancel := context.WithCancel(ctx)
+	p := &peer{
+		info:    PeerInfo{Name: peerName, Direction: "outbound", Native: true},
+		client:  client,
+		waiting: make(map[string]chan net.Conn),
+		ctx:     childCtx,
+		cancel:  cancel,
+	}
+	n.mu.Lock()
+	n.peers[peerName] = p
+	n.mu.Unlock()
+	defer func() {
+		cancel()
+		n.mu.Lock()
+		delete(n.peers, peerName)
+		n.mu.Unlock()
+	}()
+	<-childCtx.Done()
+	return childCtx.Err()
+}
+
+func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Client, onID func(string)) error {
+	// Register with remote
+	regStream, err := client.TCP(streamRegister)
+	if err != nil {
+		// If the error looks like a proxy failure (native hy2 tried to TCP-proxy
+		// the relay stream address), it's a native server. Otherwise it's a
+		// transient network error that should be retried.
+		// hy2scale always answers relay streams with a pipe, so a server
+		// that rejected the request as an outbound dial (DialError) is a
+		// plain hysteria2 server whatever its resolver said — SERVFAIL /
+		// timeouts used to fall through to the retry loop forever.
+		var dialErr coreErrs.DialError
+		if errors.As(err, &dialErr) {
+			return ErrNotHy2scale
+		}
+		errStr := err.Error()
+		if strings.Contains(errStr, "NXDOMAIN") ||
+			strings.Contains(errStr, "connection refused") ||
+			strings.Contains(errStr, "no such host") ||
+			strings.Contains(errStr, "connect:") {
+			return ErrNotHy2scale
+		}
+		return fmt.Errorf("relay: register: %w", err)
+	}
+	defer regStream.Close()
+
+	var flags byte
+	if n.exit {
+		flags |= 0x01
+	}
+	flags |= 0x02 // bit 1: supports metadata exchange
+	regStream.Write([]byte{flags})
+	writeString(regStream, n.name)
+
+	// Read back the remote's actual node ID
+	remoteID, err := readString(regStream)
+	if err != nil {
+		return ErrNotHy2scale
+	}
+	actualName := peerName
+	if remoteID != "" {
+		actualName = remoteID
+	}
+	// Read remote metadata (2s timeout — old servers don't send it)
+	remoteMeta := readMeta(regStream, 2*time.Second)
+	if remoteMeta.Version == "" {
+		remoteMeta.Version = "1.0.0" // old peers don't send version
+	}
+	// Send our metadata (remote reads it only if it sent the flag)
+	writeMeta(regStream, n.localMeta())
+
+	if onID != nil {
+		onID(actualName)
+	}
+	// Check if onID flagged a conflict — abort registration to avoid overwriting real peer
+	n.mu.RLock()
+	hasConflict := false
+	for _, cname := range n.conflicts {
+		if cname == actualName {
+			hasConflict = true
+			break
+		}
+	}
+	n.mu.RUnlock()
+	if hasConflict {
+		return fmt.Errorf("relay: peer %s has name conflict (claims %q)", peerName, actualName)
+	}
+
+	// Open s2c ctrl for dial requests from remote
+	s2cCtrl, err := client.TCP(streamCtrlS2C)
+	if err != nil {
+		return fmt.Errorf("relay: s2c ctrl: %w", err)
+	}
+	defer s2cCtrl.Close()
+	writeString(s2cCtrl, n.name)
+
+	// Register peer with remote's actual name
+	compat := isCompatible(remoteMeta.Version)
+	if !compat {
+		log.Printf("[%s] peer %s version %s is incompatible (min %s)", n.name, actualName, remoteMeta.Version, MinCompatVersion)
+	}
+	unsupported := remoteMeta.PV > ProtocolVersion
+	if unsupported {
+		log.Printf("[%s] peer %s wire protocol v%d is newer than ours (v%d) — direct only, sub-peers hidden", n.name, actualName, remoteMeta.PV, ProtocolVersion)
+	}
+	childCtx, childCancel := context.WithCancel(ctx)
+	p := &peer{
+		info:    PeerInfo{Name: actualName, Direction: "outbound", Version: remoteMeta.Version, NodeID: remoteMeta.NodeID, Incompatible: !compat, TunCapable: remoteMeta.TunCapable, PV: remoteMeta.PV, Unsupported: unsupported, EgressCapable: remoteMeta.Eg, RestrictTags: remoteMeta.Rt, AttrsCapable: remoteMeta.At},
+		client:  client,
+		waiting: make(map[string]chan net.Conn),
+		ctx:     childCtx,
+		cancel:  childCancel,
+		dialNak: remoteMeta.DialNak,
+	}
+	// Slot-aware install — symmetric to the inbound register handler
+	// above. See comments there for the full decision matrix.
+	const incomingDir = "outbound"
+	incomingID := remoteMeta.NodeID
+	n.mu.Lock()
+	existingPri, hasPri := n.peers[actualName]
+	existingAlt, hasAlt := n.peersAlt[actualName]
+
+	// (1) Impostor check
+	if hasPri && existingPri.info.NodeID != "" && incomingID != "" && existingPri.info.NodeID != incomingID {
+		n.mu.Unlock()
+		log.Printf("[%s] dial: %s NodeID mismatch (existing=%s, incoming=%s) — rejecting impostor",
+			n.name, actualName, existingPri.info.NodeID, incomingID)
+		return fmt.Errorf("relay: peer %s NodeID mismatch", actualName)
+	}
+	if hasAlt && existingAlt.info.NodeID != "" && incomingID != "" && existingAlt.info.NodeID != incomingID {
+		n.mu.Unlock()
+		log.Printf("[%s] dial: %s NodeID mismatch on alt (existing=%s, incoming=%s) — rejecting impostor",
+			n.name, actualName, existingAlt.info.NodeID, incomingID)
+		return fmt.Errorf("relay: peer %s NodeID mismatch on alt", actualName)
+	}
+
+	slot := "primary"
+	var oldPeer *peer
+	var carryFrom *peer // for extraConns transfer (multi-IP)
+	if hasPri {
+		samePriID := existingPri.info.NodeID == incomingID && incomingID != ""
+		if existingPri.info.Direction == incomingDir {
+			// Real outbound reconnect → replace primary, carry extra conns
+			oldPeer = existingPri
+			carryFrom = existingPri
+			slot = "primary"
+		} else if samePriID {
+			// Mutual dial: existing primary is inbound, incoming is outbound
+			// from same instance. Outbound is routing-preferred — make IT
+			// the primary and demote the old inbound to alt.
+			log.Printf("[%s] dial: %s mutual dial detected (existing %s, incoming %s, NodeID=%s) — outbound takes primary, inbound→alt",
+				n.name, actualName, existingPri.info.Direction, incomingDir, incomingID)
+			// Move existing inbound primary to alt slot.
+			if hasAlt && existingAlt.info.Direction == incomingDir {
+				// Pre-existing outbound at alt (alt-slot reconnect) — replace it.
+				oldPeer = existingAlt
+				carryFrom = existingAlt
+			}
+			// Demote old primary (inbound) to alt — keep it alive (don't cancel),
+			// since the inbound channel is still working.
+			n.peersAlt[actualName] = existingPri
+			slot = "primary"
+		} else {
+			// Legacy fallback — at least one side has no NodeID.
+			log.Printf("[%s] dial: %s replacing existing peer (dir=%s→%s, legacy NodeID fallback)",
+				n.name, actualName, existingPri.info.Direction, incomingDir)
+			oldPeer = existingPri
+			carryFrom = existingPri
+			slot = "primary"
+		}
+	}
+	// Carry over extra IP connections from the slot we're about to overwrite.
+	if carryFrom != nil && len(carryFrom.extraConns) > 0 {
+		p.extraConns = carryFrom.extraConns
+		p.connAddrs = carryFrom.connAddrs
+		p.connStatuses = carryFrom.connStatuses
+	}
+	if slot == "alt" {
+		n.peersAlt[actualName] = p
+	} else {
+		n.peers[actualName] = p
+	}
+	n.mu.Unlock()
+	// Close old PRIMARY QUIC client to force-terminate stale streams.
+	// Extra connections are preserved above.
+	if oldPeer != nil {
+		if oldPeer.cancel != nil {
+			oldPeer.cancel()
+		}
+		if oldPeer.client != nil {
+			oldPeer.client.Close()
+		}
+	}
+	defer func() {
+		childCancel()
+		n.mu.Lock()
+		// Mirror the inbound watchdog cleanup: only delete if we're still
+		// the current entry, look in both slots, and promote alt → primary
+		// when removing from primary.
+		if cur, ok := n.peers[actualName]; ok && cur == p {
+			delete(n.peers, actualName)
+			if alt, ok := n.peersAlt[actualName]; ok {
+				n.peers[actualName] = alt
+				delete(n.peersAlt, actualName)
+			}
+		} else if cur, ok := n.peersAlt[actualName]; ok && cur == p {
+			delete(n.peersAlt, actualName)
+		}
+		n.mu.Unlock()
+	}()
+
+	// Serve dial requests from remote
+	errCh := make(chan error, 1)
+	go func() {
+		for {
+			id, addr, err := readRequest(s2cCtrl)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			go n.dialAndStream(ctx, actualName, client, id, addr)
+		}
+	}()
+
+	// Periodically report our latency to the remote so it knows inbound latency.
+	// Bound to childCtx: the parent ctx outlives this connection, so a
+	// reporter on it leaked one goroutine per reconnect.
+	go func() {
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-childCtx.Done():
+				return
+			case <-t.C:
+				ms := n.GetLatency(actualName)
+				if ms <= 0 {
+					continue
+				}
+				stream, err := client.TCP(streamLatencyReport)
+				if err != nil {
+					continue
+				}
+				writeString(stream, n.name)
+				var lb [2]byte
+				if ms > 65535 {
+					ms = 65535
+				}
+				binary.BigEndian.PutUint16(lb[:], uint16(ms))
+				stream.Write(lb[:])
+				stream.Close()
+			}
+		}
+	}()
+
+	select {
+	case err := <-errCh:
+		return fmt.Errorf("relay: peer %s disconnected: %w", peerName, err)
+	case <-childCtx.Done():
+		return fmt.Errorf("relay: peer %s: health check triggered disconnect", peerName)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// --- Inbound: accept peers connecting to our hy2 server ---
+
+// HandleStream routes relay streams from the hy2 server's Outbound.TCP.
+func (n *Node) HandleStream(ctx context.Context, reqAddr string, stream net.Conn) {
+	switch reqAddr {
+	case streamRegister:
+		n.handleRegister(ctx, stream)
+
+	case streamCtrlS2C:
+		name, err := readString(stream)
+		if err != nil {
+			stream.Close()
+			return
+		}
+		// Bind by NAME, not by peer-struct pointer. The previous
+		// "set p.ctrlW on the peer-struct that happens to be in
+		// n.peers[name] at lookup time" was racy two ways:
+		//   1) The s2c stream sometimes arrived before handleRegister
+		//      finished installing the peer (n.peers[name] absent →
+		//      binding silently dropped → ctrlW nil forever on the
+		//      eventually-installed struct).
+		//   2) A subsequent re-register (line "re-registering …")
+		//      replaces the *peer at n.peers[name]; the old struct
+		//      still has the s2c stream but no caller reads that
+		//      struct anymore — every reader fetches via n.peers[name].
+		// Both windows produced permanent "control not ready" errors
+		// on the new peer struct until the NEXT reconnect happened to
+		// win the race. That broke multi-hop chains through inbound
+		// peers and showed up in production as the 0↔3MB throughput
+		// oscillation pattern on long downloads. See
+		// docs/s2c-ctrl-race-bug.md.
+		// Replace the binding by NAME without force-closing the previous
+		// stream. The previous stream is owned by an earlier handler
+		// goroutine that's still parked on its own <-ctx.Done(); it will
+		// exit naturally when that stream's QUIC connection dies (its
+		// cleanup branch below sees the map points elsewhere and skips
+		// the delete). Force-closing it here propagates a premature EOF
+		// up to the peer's s2cCtrl reader at relay.go:1098, which makes
+		// AttachTo's errCh fire and tears down the *entire QUIC
+		// connection* to that peer — the cascade behind the v1.3.6
+		// "connection ~1 min disconnect/reconnect" regression observed
+		// in production after the 2026-05-16 upgrade. Letting the old
+		// stream sit idle until its own ctx ends is cheap and avoids
+		// the cascade entirely.
+		n.ctrlS2CMu.Lock()
+		n.ctrlS2C[name] = stream
+		n.ctrlS2CMu.Unlock()
+		// ctx is the hy2 server's lifetime context, not this connection's,
+		// so waiting on it alone parked one goroutine + stream per inbound
+		// reconnect forever. The remote never writes after its name, so a
+		// Read only returns when the stream is dead — same watchdog as
+		// handleRegister. Nothing is force-closed while the stream lives.
+		dead := make(chan struct{})
+		go func() {
+			var b [64]byte
+			for {
+				if _, err := stream.Read(b[:]); err != nil {
+					close(dead)
+					return
+				}
+			}
+		}()
+		select {
+		case <-dead:
+		case <-ctx.Done():
+		}
+		stream.Close()
+		// Cleanup: only delete if we're still the current entry. A
+		// concurrent newer s2c stream from a reconnect may have
+		// already replaced us; in that case the newer entry must
+		// survive.
+		n.ctrlS2CMu.Lock()
+		if n.ctrlS2C[name] == stream {
+			delete(n.ctrlS2C, name)
+		}
+		n.ctrlS2CMu.Unlock()
+
+	case streamLatencyReport:
+		n.handleLatencyReport(stream)
+
+	case streamPing:
+		stream.Write([]byte{1})
+		stream.Close()
+
+	case streamListPeers:
+		n.handleListPeers(stream)
+
+	case StreamAPI:
+		if n.apiHandler != nil {
+			n.apiHandler(stream)
+		} else {
+			stream.Close()
+		}
+
+	case streamEgress:
+		// nodes that predate StreamAttrs ask for the egress attribute alone
+		if e, ok := n.Attrs()[proto.AttrEgress]; ok {
+			stream.Write(e)
+		}
+		stream.Close()
+
+	case proto.StreamAttrs:
+		stream.Write(n.attrsJSON())
+		stream.Close()
+
+	case streamWhoami:
+		stream.Write([]byte(stream.RemoteAddr().String()))
+		stream.Close()
+
+	case StreamHello:
+		// node access by user: answered by the app for user connections
+		stream.Close()
+
+	case StreamPunch:
+		if h := n.punchHandler; h != nil {
+			h(stream)
+		} else {
+			stream.Close()
+		}
+
+	case proto.StreamSpeed:
+		if h := n.speedHandler; h != nil {
+			h(stream)
+		} else {
+			stream.Close()
+		}
+
+	default:
+		// IP tunnel streams (TUN rules, before 1.4.0): no longer served; we
+		// never advertise TunCapable, so peers only send one by mistake
+		if strings.HasPrefix(reqAddr, streamIPTunPrefix) {
+			stream.Close()
+			return
+		}
+		if nodeName, targetAddr, ok := parseVia(reqAddr); ok {
+			n.handleVia(ctx, nodeName, targetAddr, stream)
+			return
+		}
+		if strings.HasPrefix(reqAddr, streamDataPrefix) {
+			id := strings.TrimSuffix(reqAddr[len(streamDataPrefix):], streamDataSuffix)
+			n.deliverDataStream(id, stream)
+			return
+		}
+		if strings.HasPrefix(reqAddr, streamNakPrefix) {
+			stream.Close()
+			id := strings.TrimSuffix(reqAddr[len(streamNakPrefix):], streamDataSuffix)
+			n.deliverDataStream(id, nil)
+			return
+		}
+		if msAddr, _, _ := ParseBridgeAddr(reqAddr); IsMsessAddr(msAddr) {
+			msAddr, r := proto.ParseRestrict(msAddr)
+			if h := n.msessHandler; h != nil {
+				h(restrictConn(msessStream(msAddr, stream), r))
+			} else {
+				stream.Close()
+			}
+			return
+		}
+		// An old peer re-attaching a stream it lost: refused (see bridge.go).
+		if strings.HasPrefix(reqAddr, bridgeRebindAddr) {
+			log.Printf("[bridge] rebind refused: %s", strings.TrimSuffix(reqAddr[len(bridgeRebindAddr):], ":0"))
+			stream.Close()
+			return
+		}
+	}
+}
+
+func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
+	var flags [1]byte
+	if _, err := io.ReadFull(stream, flags[:]); err != nil {
+		log.Printf("[%s] register: read flags failed: %v", n.name, err)
+		stream.Close()
+		return
+	}
+	name, err := readString(stream)
+	if err != nil {
+		log.Printf("[%s] register: read name failed: %v", n.name, err)
+		stream.Close()
+		return
+	}
+	log.Printf("[%s] register: inbound %s (flags=0x%02x)", n.name, name, flags[0])
+
+	// Send back our name
+	writeString(stream, n.name)
+
+	// Verification probe: verifyExtraConn (app.go) opens a register stream
+	// on each extra-IP QUIC client to confirm the remote is the expected
+	// node. It writes flags=0x00 (no exit, no metadata) and only reads our
+	// node name back. Without this guard, the slot-replace logic below
+	// treats every such probe as a real peer re-register, cancels the
+	// existing peer's context, installs a placeholder peer (Version=1.0.0,
+	// TunCapable=false, no NodeID — all defaults from skipped meta), and
+	// when the probe stream closes the watchdog deletes the entry — wiping
+	// the legitimate inbound peer from n.peers.
+	//
+	// Each extra IP issues such a probe on initial connect and on every
+	// reconnect, so on a peer with 4-5 extras these probes spray in
+	// bursts (visible in production logs as repeated lines like
+	//   register: AUB re-registering (replacing stale inbound ctrl,
+	//   ver 1.3.7→1.0.0, tun true→false)
+	// every few seconds). Production effect: bridges and streams that
+	// were wrapped with wrapIdleTimeoutCtx(peerCtx, ...) on the previous
+	// peer-struct ctx tear down the next time the peer entry is wiped,
+	// surfacing to operators as "inbound peer ~1-2 min long-lived TCP
+	// drops" on the receiving (server) side. See
+	// docs/v137-inbound-120s-drop-investigation.md.
+	//
+	// Probe semantics: we've already written our name (the only data
+	// verifyExtraConn reads). Close the stream and return without
+	// touching peer state.
+	if flags[0] == 0 {
+		if ra := stream.RemoteAddr(); ra != nil {
+			n.inAddrs.set(ra.String(), name) // an extra connection of that peer
+		}
+		stream.Close()
+		return
+	}
+
+	// Metadata exchange: only if client set the metadata flag (bit 1)
+	var remoteMeta peerMeta
+	if flags[0]&0x02 != 0 {
+		// Send our metadata, then read client's
+		writeMeta(stream, n.localMeta())
+		remoteMeta = readMeta(stream, 2*time.Second)
+	}
+	if remoteMeta.Version == "" {
+		remoteMeta.Version = "1.0.0" // old peers don't send version
+	}
+
+	// Reject blocked peers (disabled nodes)
+	if n.IsPeerBlocked(name) {
+		log.Printf("[%s] register: %s is blocked, rejecting", n.name, name)
+		stream.Close()
+		return
+	}
+
+	// Inbound-identity hook: let the app layer detect "same source IP, new
+	// NodeID" so cfg.Peers / cfg.Proxies.ExitVia / cfg.Users.ExitVia can be
+	// rewritten symmetrically to the outbound AttachTo path. Source IP is
+	// the stable handle for inbound peers (no operator-configured Addr like
+	// outbound). See docs/peer-identity-sync-bugs.md Bug B.
+	if n.onInboundIdentity != nil && remoteMeta.NodeID != "" {
+		remoteIP := ""
+		if ra := stream.RemoteAddr(); ra != nil {
+			// stream.RemoteAddr() returns host:port; we want just the host.
+			s := ra.String()
+			if h, _, splitErr := net.SplitHostPort(s); splitErr == nil {
+				remoteIP = h
+			} else {
+				remoteIP = s
+			}
+		}
+		// Don't block register on the callback — fire async-style by inlining
+		// (the callback is expected to complete quickly: it's a config-store
+		// Update on a single map lookup).
+		n.onInboundIdentity(name, remoteMeta.NodeID, remoteIP)
+	}
+
+	compat := isCompatible(remoteMeta.Version)
+	if !compat {
+		log.Printf("[%s] inbound peer %s version %s is incompatible (min %s)", n.name, name, remoteMeta.Version, MinCompatVersion)
+	}
+	unsupported := remoteMeta.PV > ProtocolVersion
+	if unsupported {
+		log.Printf("[%s] inbound peer %s wire protocol v%d is newer than ours (v%d) — direct only, sub-peers hidden", n.name, name, remoteMeta.PV, ProtocolVersion)
+	}
+	peerCtx, peerCancel := context.WithCancel(ctx)
+	p := &peer{
+		info: PeerInfo{
+			Name:         name,
+			ExitNode:     flags[0]&0x01 != 0,
+			Direction:    "inbound",
+			Version:      remoteMeta.Version,
+			NodeID:       remoteMeta.NodeID,
+			Incompatible: !compat,
+			TunCapable:   remoteMeta.TunCapable,
+			PV:           remoteMeta.PV,
+			Unsupported:  unsupported,
+			EgressCapable: remoteMeta.Eg,
+			RestrictTags:  remoteMeta.Rt,
+			AttrsCapable:  remoteMeta.At,
+		},
+		waiting: make(map[string]chan net.Conn),
+		dialNak: remoteMeta.DialNak,
+		ctx:     peerCtx,
+		cancel:  peerCancel,
+	}
+
+	// Slot-aware register decision:
+	//
+	// Goal — let the same logical peer (same NodeID) hold TWO simultaneous
+	// physical channels (outbound + inbound) so a mutual-dial deployment
+	// stops flapping in `register: replacing existing peer` loops.
+	//
+	// Decisions, in order:
+	//   1) NodeID mismatch on either occupied slot → impostor; reject the
+	//      register, leave existing slots untouched. (Mechanism A
+	//      symmetric to the outbound path.)
+	//   2) Primary occupied, SAME direction as incoming → real reconnect;
+	//      replace primary (preserves the 30-min ghost-ctrl bug fix).
+	//   3) Primary occupied, DIFFERENT direction, NodeIDs match → mutual
+	//      dial detected; install in alt slot.
+	//   4) Primary occupied, DIFFERENT direction, but at least one
+	//      NodeID is empty → legacy peer; fall back to replacing primary
+	//      (preserves pre-1.3.x single-slot behavior).
+	//   5) Alt occupied, SAME direction → alt-slot reconnect; replace alt.
+	//   6) Otherwise → install primary (new peer).
+	const incomingDir = "inbound"
+	incomingID := remoteMeta.NodeID
+	n.mu.Lock()
+	existingPri, hasPri := n.peers[name]
+	existingAlt, hasAlt := n.peersAlt[name]
+
+	// (1) Impostor check — both sides have NodeIDs and they differ.
+	if hasPri && existingPri.info.NodeID != "" && incomingID != "" && existingPri.info.NodeID != incomingID {
+		n.mu.Unlock()
+		log.Printf("[%s] register: %s NodeID mismatch (existing=%s, incoming=%s) — rejecting impostor",
+			n.name, name, existingPri.info.NodeID, incomingID)
+		stream.Close()
+		return
+	}
+	if hasAlt && existingAlt.info.NodeID != "" && incomingID != "" && existingAlt.info.NodeID != incomingID {
+		n.mu.Unlock()
+		log.Printf("[%s] register: %s NodeID mismatch on alt (existing=%s, incoming=%s) — rejecting impostor",
+			n.name, name, existingAlt.info.NodeID, incomingID)
+		stream.Close()
+		return
+	}
+
+	slot := "primary"      // where p will be installed
+	var oldPeer *peer      // entry being replaced (cancelled below)
+	if hasPri {
+		samePriID := existingPri.info.NodeID == incomingID && incomingID != ""
+		if existingPri.info.Direction == incomingDir {
+			// (2) Same direction at primary → real reconnect.
+			log.Printf("[%s] register: %s re-registering (replacing stale %s ctrl, ver %s→%s, tun %v→%v)",
+				n.name, name, incomingDir, existingPri.info.Version, remoteMeta.Version,
+				existingPri.info.TunCapable, remoteMeta.TunCapable)
+			oldPeer = existingPri
+			slot = "primary"
+		} else if samePriID {
+			// (3) Different direction, same instance → bidirectional alt.
+			log.Printf("[%s] register: %s mutual dial detected (existing %s, incoming %s, NodeID=%s) — installing in alt slot",
+				n.name, name, existingPri.info.Direction, incomingDir, incomingID)
+			slot = "alt"
+			if hasAlt && existingAlt.info.Direction == incomingDir {
+				// (5) Alt-slot reconnect under the same direction.
+				log.Printf("[%s] register: %s alt-slot %s re-registering",
+					n.name, name, incomingDir)
+				oldPeer = existingAlt
+			}
+		} else {
+			// (4) Legacy fallback — at least one side has no NodeID.
+			log.Printf("[%s] register: %s replacing existing peer (dir=%s→%s, legacy NodeID fallback)",
+				n.name, name, existingPri.info.Direction, incomingDir)
+			oldPeer = existingPri
+			slot = "primary"
+		}
+	} else if hasAlt && existingAlt.info.Direction == incomingDir {
+		// Edge case: only alt is occupied with same direction (e.g.
+		// primary went away). Replace the alt. New peer will be alt.
+		log.Printf("[%s] register: %s alt-only re-registering",
+			n.name, name)
+		oldPeer = existingAlt
+		slot = "alt"
+	}
+	// Otherwise: empty slots → install as primary (new peer, no log).
+
+	if oldPeer != nil && oldPeer.cancel != nil {
+		oldPeer.cancel()
+	}
+	if slot == "alt" {
+		n.peersAlt[name] = p
+	} else {
+		n.peers[name] = p
+	}
+	n.mu.Unlock()
+	regAddr := ""
+	if ra := stream.RemoteAddr(); ra != nil {
+		regAddr = ra.String()
+		n.inAddrs.set(regAddr, name)
+	}
+	defer n.inAddrs.del(regAddr, name)
+
+	// Watchdog: tie the peer entry's lifetime to the register stream.
+	//
+	// Before this watchdog, `ctx` passed in from hy2's Outbound.TCP was
+	// the server-lifetime context — it never cancelled on peer disconnect,
+	// so this goroutine would block on <-peerCtx.Done() forever and the
+	// n.peers[name] entry would persist until either (a) the same peer
+	// re-registered (existing.cancel() above replaces it) or (b) the node
+	// restarted. Result: ghost inbound peers (latency=-1, conn=false) in
+	// topology, routes referencing them that hang in 30s dialExit retry
+	// loops, and masked capacity/health decisions elsewhere.
+	//
+	// The register stream is held open for the lifetime of the peer's
+	// QUIC connection. When the remote disconnects (clean shutdown, QUIC
+	// idle timeout, health-check kill, or crash) the stream closes; a
+	// blocking Read returns an error, which is our signal to cancel
+	// peerCtx and remove n.peers[name].
+	go func() {
+		var buf [1]byte
+		_, _ = stream.Read(buf[:])
+		peerCancel()
+	}()
+
+	<-peerCtx.Done()
+	stream.Close() // defensive — may already be closed by the remote or by existing.cancel()
+
+	n.mu.Lock()
+	// Only delete if we're still the current entry (not replaced by
+	// another registration). Look in BOTH slots — a peer that was
+	// installed in alt (bidirectional case) stays in alt for its
+	// lifetime; the watchdog has to clean the right map.
+	if current, ok := n.peers[name]; ok && current == p {
+		delete(n.peers, name)
+		// If alt is also occupied, promote it to primary so callers that
+		// only consult the primary slot keep working through the
+		// surviving channel.
+		if alt, ok := n.peersAlt[name]; ok {
+			n.peers[name] = alt
+			delete(n.peersAlt, name)
+		}
+	} else if current, ok := n.peersAlt[name]; ok && current == p {
+		delete(n.peersAlt, name)
+	}
+	n.mu.Unlock()
+}
+
+// handleLatencyReport reads a latency report from an inbound peer.
+// Format: peer name (string) + latency ms (uint16 big-endian)
+func (n *Node) handleLatencyReport(stream net.Conn) {
+	defer stream.Close()
+	name, err := readString(stream)
+	if err != nil {
+		return
+	}
+	var lb [2]byte
+	if _, err := io.ReadFull(stream, lb[:]); err != nil {
+		return
+	}
+	ms := int(binary.BigEndian.Uint16(lb[:]))
+	n.SetLatency(name, ms)
+}
+
+func (n *Node) handleListPeers(stream net.Conn) {
+	defer stream.Close()
+	if n.listPeersFunc != nil {
+		stream.Write(n.listPeersFunc())
+		return
+	}
+	peers := n.Peers()
+	data, _ := json.Marshal(peers)
+	stream.Write(data)
+}
+
+
+func (n *Node) handleVia(ctx context.Context, peerName, targetAddr string, stream net.Conn) {
+	actualAddr, tag, tagged := ParseBridgeAddr(targetAddr)
+	// An old (pre-1.3.10) peer re-opening a via chain to re-attach a stream
+	// it lost reuses that stream's tag. Dialing it as new would feed the rest
+	// of the old byte stream to a fresh target connection: refuse it, and the
+	// old peer closes the connection. msess subflows need no guard (their
+	// framing detects a spliced stream).
+	if tagged && !IsMsessAddr(actualAddr) {
+		if !n.bridgeTags.open(tag) {
+			// Diagnostic counter — exposed via /api/diag/peer-rebinds.
+			n.mu.RLock()
+			if pp, ok := n.peers[peerName]; ok {
+				pp.rebindChecks.Add(1)
+			}
+			n.mu.RUnlock()
+			log.Printf("[via] rebind refused: %s (peer %s)", tag, peerName)
+			stream.Close()
+			return
+		}
+		defer n.bridgeTags.close(tag)
+	}
+
+	af := n.BeginTransit(stream, peerName, actualAddr)
+	exitConn, err := n.dialChain(ctx, peerName, actualAddr)
+	if err != nil {
+		af.End(err)
+		stream.Close()
+		return
+	}
+	exitConn = audit.Track(af, exitConn, false)
+	defer exitConn.Close()
+	defer stream.Close()
+	done := make(chan struct{})
+	go func() { relayCopy(exitConn, stream); close(done) }()
+	relayCopy(stream, exitConn)
+	// Force-close both so the goroutine blocked on stream.Read unblocks;
+	// otherwise <-done hangs while the peer stream stays alive under QUIC
+	// keepalive after the next hop died (seen as stuck handleVia sessions
+	// on flappy links).
+	stream.Close()
+	exitConn.Close()
+	<-done
+}
+
+// relayCopy is an optimized io.Copy for relay hops with a smaller buffer
+// to minimize latency for interactive traffic. 8KB is enough for most packets
+// while avoiding the 32KB default that delays small writes.
+func relayCopy(dst, src net.Conn) {
+	buf := make([]byte, 8192)
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			if _, werr := dst.Write(buf[:n]); werr != nil {
+				break
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+}
+
+// deliverDataStream hands a reverse-dialed stream (nil = remote NAK) to the
+// waiter registered under id. The send happens under writeMu (ch is
+// buffered) so awaitDial's remove-then-drain can never miss a late stream.
+func (n *Node) deliverDataStream(id string, stream net.Conn) {
+	for i := 0; i <= 50; i++ {
+		if i > 0 {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if n.tryDeliver(id, stream) {
+			return
+		}
+	}
+	if stream != nil {
+		stream.Close()
+	}
+}
+
+func (n *Node) tryDeliver(id string, stream net.Conn) bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	for _, p := range n.peers {
+		p.writeMu.Lock()
+		ch, ok := p.waiting[id]
+		if ok {
+			delete(p.waiting, id)
+			ch <- stream
+			p.writeMu.Unlock()
+			return true
+		}
+		p.writeMu.Unlock()
+	}
+	return false
+}
+
+// dialWaitMax bounds every reverse-dial wait. Callers often pass
+// context.Background(), and a remote that fails its dial without NAK
+// support (pre-1.3.10) never answers — before this bound each such dial
+// pinned a goroutine, the client conn and a waiting-map entry forever.
+const dialWaitMax = 30 * time.Second
+
+// awaitDial waits for the reverse-dialed stream registered under id.
+func (n *Node) awaitDial(ctx context.Context, p *peer, id string, ch chan net.Conn, what string) (net.Conn, error) {
+	t := time.NewTimer(dialWaitMax)
+	defer t.Stop()
+	var err error
+	select {
+	case conn := <-ch:
+		if conn == nil {
+			return nil, fmt.Errorf("%w: %s", ErrRemoteDial, what)
+		}
+		return conn, nil
+	case <-ctx.Done():
+		err = ctx.Err()
+	case <-p.ctx.Done():
+		err = fmt.Errorf("relay: %s: peer disconnected", what)
+	case <-t.C:
+		err = fmt.Errorf("relay: %s: no answer in %s", what, dialWaitMax)
+	}
+	p.writeMu.Lock()
+	delete(p.waiting, id)
+	p.writeMu.Unlock()
+	select { // a stream delivered just before the delete
+	case c := <-ch:
+		if c != nil {
+			c.Close()
+		}
+	default:
+	}
+	return nil, err
+}
+
+func (n *Node) dialAndStream(ctx context.Context, peerName string, client hyclient.Client, id, addr string) {
+	// Block requests from incompatible peers
+	n.mu.RLock()
+	if p, ok := n.peers[peerName]; ok && n.isPeerBlocked(p) {
+		n.mu.RUnlock()
+		return
+	}
+	n.mu.RUnlock()
+
+	// UDP dial request: addr starts with "udp:"
+	if strings.HasPrefix(addr, "udp:") {
+		n.dialUDPAndStream(ctx, peerName, client, id, addr[4:])
+		return
+	}
+
+	// Relay internal stream: handle locally via HandleStream — the same dispatch
+	// used for direct inbound QUIC streams. Any future relay stream added to
+	// HandleStream automatically works for both outbound and inbound peers.
+	// Excludes transport-level streams (register, ctrl, data delivery).
+	if isLocalRelayStream(addr) {
+		stream, err := client.TCP(streamDataPrefix + id + streamDataSuffix)
+		if err != nil {
+			return
+		}
+		// The dial-request came through the peer's s2c-ctrl stream, which
+		// is only open after handleRegister authenticated the peer with
+		// the system password. So tagging the API stream as "system"-auth
+		// is sound: any caller able to push a dial request here already
+		// proved system-level trust. Without this wrap the api server's
+		// relayConnContext sees a plain conn, relayCtxKey stays nil, and
+		// the RelayAdminPassthrough endpoint gates with 404 — making
+		// remote-connect from an inbound-only neighbour redirect to
+		// /login instead of riding the trust the operator already
+		// configured.
+		var wrapped net.Conn = stream
+		if addr == StreamAPI && n.apiStreamWrap != nil {
+			wrapped = n.apiStreamWrap(stream, "system")
+		} else if strings.HasPrefix(addr, proto.ViaPrefix) || strings.HasPrefix(addr, proto.StreamMsess) {
+			wrapped = &NamedConn{Conn: stream, Peer: peerName} // audit / policy source of its flows
+		}
+		n.HandleStream(ctx, addr, wrapped)
+		return
+	}
+
+	var target net.Conn
+	var err error
+
+	// Check if addr is a via request (multi-hop forwarding)
+	var af *audit.Flow
+	src := &NamedConn{Peer: peerName}
+	if viaPeer, targetAddr, ok := parseVia(addr); ok {
+		af = n.BeginTransit(src, viaPeer, targetAddr)
+		target, err = n.dialChain(ctx, viaPeer, targetAddr)
+	} else if base, r := proto.ParseRestrict(addr); r != 0 {
+		af = n.BeginRelay(src, "tcp", base)
+		target, err = n.dialRestricted(relaySource(audit.NewContext(ctx, af), peerName), "tcp", base, r)
+	} else {
+		af = n.BeginRelay(src, "tcp", addr)
+		target, err = n.dialPlain(relaySource(audit.NewContext(ctx, af), peerName), "tcp", addr, 10*time.Second)
+		if err == nil {
+			audit.MarkDirect(af, target)
+		}
+	}
+	if err != nil {
+		af.End(err)
+		n.nakDial(peerName, client, id)
+		return
+	}
+	target = audit.Track(af, target, false)
+	defer target.Close()
+
+	stream, err := client.TCP(streamDataPrefix + id + streamDataSuffix)
+	if err != nil {
+		return
+	}
+	defer stream.Close()
+
+	n.conns.Add(1)
+	defer n.conns.Add(-1)
+
+	done := make(chan struct{})
+	go func() { relayCopy(target, stream); close(done) }()
+	relayCopy(stream, target)
+	stream.Close()
+	target.Close()
+	<-done
+}
+
+// nakDial tells the requester that reverse-dial <id> failed. 1.3.10+
+// requesters get an explicit NAK; older ones get an immediately-closed data
+// stream, which ends their wait (they see a dial that EOFs at once) instead
+// of the silent return that used to leave them waiting forever.
+func (n *Node) nakDial(peerName string, client hyclient.Client, id string) {
+	n.mu.RLock()
+	p, ok := n.peers[peerName]
+	nak := ok && p.dialNak
+	n.mu.RUnlock()
+	addr := streamDataPrefix + id + streamDataSuffix
+	if nak {
+		addr = streamNakPrefix + id + streamDataSuffix
+	}
+	if s, err := client.TCP(addr); err == nil {
+		s.Close()
+	}
+}
+
+// dialUDPAndStream handles a remote UDP dial request.
+// Dials UDP to addr, then relays datagrams over a QUIC stream with 2-byte length framing.
+func (n *Node) dialUDPAndStream(ctx context.Context, peerName string, client hyclient.Client, id, addr string) {
+	var udpConn net.Conn
+	var err error
+	var af *audit.Flow
+	src := &NamedConn{Peer: peerName}
+	if chain, target, ok := parseVia(addr); ok {
+		// Multi-hop UDP through us as an inbound first hop: continue down
+		// the chain like nodeOutbound.UDP does for outbound hops. Dialing
+		// the via string literally made every such chain drop all UDP.
+		if t := AuditTarget(target); t != "" {
+			af = n.BeginRelay(src, "udp", t)
+			af.SetExitNode(ChainPath(chain), "")
+		}
+		udpConn, err = n.DialUDPVia(ctx, strings.Split(chain, "/"), target)
+	} else if base, r := proto.ParseRestrict(addr); r != 0 {
+		af = n.BeginRelay(src, "udp", base)
+		udpConn, err = n.dialRestricted(relaySource(audit.NewContext(ctx, af), peerName), "udp", base, r)
+	} else {
+		af = n.BeginRelay(src, "udp", addr)
+		udpConn, err = n.dialPlain(relaySource(audit.NewContext(ctx, af), peerName), "udp", addr, 5*time.Second)
+		if err == nil {
+			audit.MarkDirect(af, udpConn)
+		}
+	}
+	if err != nil {
+		af.End(err)
+		n.nakDial(peerName, client, id)
+		return
+	}
+	udpConn = audit.Track(af, udpConn, false)
+	defer udpConn.Close()
+
+	stream, err := client.TCP(streamDataPrefix + id + streamDataSuffix)
+	if err != nil {
+		return
+	}
+	defer stream.Close()
+
+	n.conns.Add(1)
+	defer n.conns.Add(-1)
+
+	// stream → UDP: read framed datagrams from stream, send to UDP
+	go func() {
+		defer udpConn.Close()
+		defer stream.Close()
+		var lenBuf [2]byte
+		for {
+			if _, err := io.ReadFull(stream, lenBuf[:]); err != nil {
+				return
+			}
+			dlen := int(binary.BigEndian.Uint16(lenBuf[:]))
+			buf := make([]byte, dlen)
+			if _, err := io.ReadFull(stream, buf); err != nil {
+				return
+			}
+			udpConn.Write(buf)
+		}
+	}()
+
+	// UDP → stream: read datagrams from UDP, write framed to stream
+	buf := make([]byte, 65535)
+	for {
+		udpConn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		n, err := udpConn.Read(buf)
+		if err != nil {
+			return
+		}
+		var lenBuf [2]byte
+		binary.BigEndian.PutUint16(lenBuf[:], uint16(n))
+		if _, err := stream.Write(lenBuf[:]); err != nil {
+			return
+		}
+		if _, err := stream.Write(buf[:n]); err != nil {
+			return
+		}
+	}
+}
+
+// --- Peer queries ---
+
+// Peers returns directly connected peers.
+func (n *Node) Peers() []PeerInfo {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	n.latencyMu.RLock()
+	defer n.latencyMu.RUnlock()
+	result := make([]PeerInfo, 0, len(n.peers))
+	// Build set of conflicting peer names
+	conflictNames := make(map[string]bool)
+	for _, name := range n.conflicts {
+		conflictNames[name] = true
+	}
+	for name, p := range n.peers {
+		info := p.info
+		if ms, ok := n.latencies[name]; ok {
+			info.LatencyMs = ms
+		}
+		if conflictNames[name] {
+			info.Conflict = true
+		}
+		if c := p.ConnCount(); c > 1 {
+			info.Conns = c
+		}
+		n.withAttrs(name, &info)
+		result = append(result, info)
+	}
+	return result
+}
+
+// PeersOfRaw returns the raw JSON from a peer's streamListPeers response.
+// Used by the API server to get rich tree data (with children).
+func (n *Node) PeersOfRaw(peerName string) ([]byte, error) {
+	n.mu.RLock()
+	p, ok := n.peers[peerName]
+	n.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
+	}
+
+	type result struct {
+		data []byte
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		var data []byte
+		var err error
+		if p.client != nil {
+			stream, serr := p.client.TCP(streamListPeers)
+			if serr != nil {
+				ch <- result{nil, serr}
+				return
+			}
+			defer stream.Close()
+			data, err = io.ReadAll(stream)
+		} else {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			conn, cerr := n.DialTCP(ctx, peerName, streamListPeers)
+			if cerr != nil {
+				ch <- result{nil, cerr}
+				return
+			}
+			defer conn.Close()
+			data, err = io.ReadAll(conn)
+		}
+		if err != nil {
+			ch <- result{nil, err}
+			return
+		}
+		ch <- result{data, nil}
+	}()
+	select {
+	case r := <-ch:
+		return r.data, r.err
+	case <-time.After(3 * time.Second):
+		return nil, fmt.Errorf("relay: peer %q query timeout", peerName)
+	}
+}
+
+// PeersOf returns a peer's peers (flat list). Used by the prober for cache.
+func (n *Node) PeersOf(peerName string) ([]PeerInfo, error) {
+	// Return empty for incompatible peers (no nested discovery)
+	n.mu.RLock()
+	if p, ok := n.peers[peerName]; ok && n.isPeerBlocked(p) {
+		n.mu.RUnlock()
+		return nil, nil
+	}
+	n.mu.RUnlock()
+	data, err := n.PeersOfRaw(peerName)
+	if err != nil {
+		return nil, err
+	}
+	var peers []PeerInfo
+	if err := json.Unmarshal(data, &peers); err != nil {
+		return nil, err
+	}
+	return peers, nil
+}
+
+// PeersOfVia returns a peer's peers through a multi-hop path.
+// path = ["vm", "au"] means: query au's peers by routing through vm.
+func (n *Node) PeersOfVia(ctx context.Context, path []string) ([]PeerInfo, error) {
+	if len(path) == 0 {
+		return nil, fmt.Errorf("relay: empty path")
+	}
+	if len(path) == 1 {
+		return n.PeersOf(path[0])
+	}
+	// Route through the chain to the target's list-peers stream
+	conn, err := n.DialVia(ctx, path, streamListPeers)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	data, err := io.ReadAll(conn)
+	if err != nil {
+		return nil, err
+	}
+	var peers []PeerInfo
+	if err := json.Unmarshal(data, &peers); err != nil {
+		return nil, err
+	}
+	return peers, nil
+}
+
+// SetNestedDiscovery enables/disables nested peer discovery for a peer.
+func (n *Node) SetNestedDiscovery(peerName string, enabled bool) {
+	n.nestedMu.Lock()
+	n.nested[peerName] = enabled
+	n.nestedMu.Unlock()
+}
+
+// IsNestedEnabled returns whether nested discovery is enabled for a peer.
+func (n *Node) IsNestedEnabled(peerName string) bool {
+	n.nestedMu.RLock()
+	defer n.nestedMu.RUnlock()
+	return n.nested[peerName]
+}
+
+// DisconnectPeer forcibly disconnects a peer (both inbound and outbound).
+// Closes the QUIC client to kill all active streams through this peer,
+// ensuring no connections hang in a black hole after reconnection.
+func (n *Node) DisconnectPeer(name string) {
+	n.mu.Lock()
+	p, ok := n.peers[name]
+	if ok {
+		if p.cancel != nil {
+			p.cancel()
+		}
+		// Close QUIC client(s) to force-terminate all active streams.
+		// Without this, streams on the dead QUIC connection hang forever
+		// because quic-go's Read() doesn't return on Close().
+		if p.client != nil {
+			p.client.Close()
+		}
+		for _, c := range p.extraConns {
+			if c != nil {
+				c.Close()
+			}
+		}
+	}
+	delete(n.peers, name)
+	n.mu.Unlock()
+}
+
+// IsPeerTunCapable checks if a peer supports exit-side TUN.
+// For multi-hop paths ("A/B/C") it walks each segment: first hop must be a
+// direct peer, then each subsequent segment is looked up in the sub-peer
+// cache under the qualified parent path ("A", then "A/B", ...). This
+// disambiguates cases where a nested peer shares a name with a direct peer
+// of the local node (e.g. HUB has a direct "2400" AND another "2400" exists
+// as a child of some intermediate peer).
+func (n *Node) IsPeerTunCapable(peerName string) bool {
+	parts := strings.Split(peerName, "/")
+	// Strip leading self name (e.g. "AUB/tz-cm-temp" on node AUB → ["tz-cm-temp"])
+	if len(parts) > 0 && parts[0] == n.name {
+		parts = parts[1:]
+	}
+	if len(parts) == 0 {
+		return NodeTunCapable
+	}
+
+	// First hop must be a direct peer.
+	firstHop := parts[0]
+	n.mu.RLock()
+	p, ok := n.peers[firstHop]
+	n.mu.RUnlock()
+	if !ok {
+		return false // first hop not connected yet
+	}
+	if len(parts) == 1 {
+		return p.info.TunCapable
+	}
+
+	// Multi-hop: walk children via qualified-path cache.
+	n.peerRateMu.RLock()
+	defer n.peerRateMu.RUnlock()
+
+	path := firstHop
+	for i := 1; i < len(parts); i++ {
+		seg := parts[i]
+		children, ok := n.peersOfCache[path]
+		if !ok {
+			// No cache yet under this exact qualified path — fall back to the
+			// bare-name cache of the immediate parent as a best-effort (may be
+			// ambiguous but still better than returning false blindly).
+			parentParts := strings.Split(path, "/")
+			bareParent := parentParts[len(parentParts)-1]
+			children, ok = n.peersOfCache[bareParent]
+			if !ok {
+				return false
+			}
+		}
+		var found *PeerInfo
+		for j := range children {
+			if children[j].Name == seg {
+				c := children[j]
+				found = &c
+				break
+			}
+		}
+		if found == nil {
+			return false
+		}
+		if i == len(parts)-1 {
+			return found.TunCapable
+		}
+		path = path + "/" + seg
+	}
+	return false
+}
+
+// BlockPeer prevents a peer from registering (inbound connections rejected).
+func (n *Node) BlockPeer(name string) {
+	n.blockedMu.Lock()
+	n.blocked[name] = true
+	n.blockedMu.Unlock()
+}
+
+// UnblockPeer allows a peer to register again.
+func (n *Node) UnblockPeer(name string) {
+	n.blockedMu.Lock()
+	delete(n.blocked, name)
+	n.blockedMu.Unlock()
+}
+
+// IsPeerBlocked checks if a peer is blocked.
+func (n *Node) IsPeerBlocked(name string) bool {
+	n.blockedMu.RLock()
+	defer n.blockedMu.RUnlock()
+	return n.blocked[name]
+}
+
+// HasPeer checks if a peer is connected.
+func (n *Node) HasPeer(name string) bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	_, ok := n.peers[name]
+	return ok
+}
+
+// AddPeerConn adds an extra QUIC connection to an existing peer.
+// RemovePeerConn detaches the extra connection for addr (the caller owns
+// and closes the client).
+func (n *Node) RemovePeerConn(name, addr string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	p, ok := n.peers[name]
+	if !ok {
+		return
+	}
+	for i, a := range p.connAddrs {
+		if a == addr {
+			p.connAddrs = append(p.connAddrs[:i:i], p.connAddrs[i+1:]...)
+			p.extraConns = append(p.extraConns[:i:i], p.extraConns[i+1:]...)
+			if i < len(p.connStatuses) {
+				p.connStatuses = append(p.connStatuses[:i:i], p.connStatuses[i+1:]...)
+			}
+			return
+		}
+	}
+}
+
+func (n *Node) AddPeerConn(name string, client hyclient.Client, addr, status string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	p, ok := n.peers[name]
+	if !ok {
+		return
+	}
+	p.AddConn(client, addr, status)
+}
+
+// IPStatus represents per-IP connection info.
+type IPStatus struct {
+	Addr      string `json:"addr"`
+	Status    string `json:"status"` // "online", "offline", "mismatch", "native"
+	LatencyMs int    `json:"latency_ms,omitempty"`
+}
+
+// PeerIPStatuses returns per-IP status for a peer.
+func (n *Node) PeerIPStatuses(name string) []IPStatus {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	p, ok := n.peers[name]
+	if !ok {
+		return nil
+	}
+	// Extra connections only: connAddrs / connStatuses / extraConns are
+	// parallel and never hold the primary (the API prepends the primary
+	// from config). The old code read connAddrs[0] as "primary", so every
+	// extra's status was shifted by one and extras were never probed —
+	// a dead extra stayed "online" and kept receiving new streams.
+	var result []IPStatus
+	for i, addr := range p.connAddrs {
+		status := "online"
+		if i < len(p.connStatuses) {
+			status = p.connStatuses[i]
+		}
+		result = append(result, IPStatus{Addr: addr, Status: status})
+	}
+	return result
+}
+
+// PeerConnCount returns the number of QUIC connections to a peer.
+func (n *Node) PeerConnCount(name string) int {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	p, ok := n.peers[name]
+	if !ok {
+		return 0
+	}
+	return p.ConnCount()
+}
+
+// ConnectedPeerNames returns names of all connected peers (outbound with active client).
+func (n *Node) ConnectedPeerNames() []string {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	var names []string
+	for name, p := range n.peers {
+		// Include both outbound (has client) and inbound (has ctrlW) peers.
+		// ctrlW is now name-keyed on the Node, not stored on the peer struct.
+		if p.client != nil || n.peerCtrlS2C(name) != nil {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// IsInbound returns true if the peer is connected inbound (no client).
+func (n *Node) IsInbound(name string) bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	p, ok := n.peers[name]
+	return ok && p.client == nil
+}
+
+// PeerHealthSnapshot is one row of /api/diag/peer-health (the
+// ping-ok/fail axis — application-level proxy for QUIC-tunnel health
+// since the hysteria `Client` interface doesn't expose raw quic-go
+// retransmit / pacer-bandwidth fields).
+type PeerHealthSnapshot struct {
+	Name      string `json:"name"`
+	Direction string `json:"direction"` // "outbound" / "inbound"
+	PingOK    uint64 `json:"ping_ok"`
+	PingFail  uint64 `json:"ping_fail"`
+	FailCount int32  `json:"fail_count"` // consecutive failures (existing field)
+	TxBytes   uint64 `json:"tx_bytes"`
+	RxBytes   uint64 `json:"rx_bytes"`
+}
+
+// PeerRebindSnapshot is one row of /api/diag/peer-rebinds — counts
+// of [via] rebind-probe arrivals at this peer's tunnel since session
+// start. Spikes correlate with chronic per-stream disruption on a
+// QUIC connection that hasn't fully dropped.
+type PeerRebindSnapshot struct {
+	Name         string `json:"name"`
+	Direction    string `json:"direction"`
+	RebindChecks uint64 `json:"rebind_checks"`
+}
+
+// PeerLatencySnapshot is one row of /api/diag/peer-latency — the
+// rolling time series of recent latency samples per peer. Ring is
+// LatencyHistoryCap entries (~10 min at 5 s probe cadence).
+type PeerLatencySnapshot struct {
+	Name      string          `json:"name"`
+	Direction string          `json:"direction"`
+	LatencyMs int             `json:"latency_ms"` // most recent point value
+	History   []LatencySample `json:"history"`
+}
+
+// directionOf returns "outbound" / "inbound" for the diag endpoints.
+// Caller must hold n.mu at least RLock.
+func (n *Node) directionOf(p *peer) string {
+	if p.client != nil {
+		return "outbound"
+	}
+	return "inbound"
+}
+
+// HealthSnapshots returns the QUIC-health proxy axis for every peer.
+func (n *Node) HealthSnapshots() []PeerHealthSnapshot {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	out := make([]PeerHealthSnapshot, 0, len(n.peers))
+	for name, p := range n.peers {
+		out = append(out, PeerHealthSnapshot{
+			Name:      name,
+			Direction: n.directionOf(p),
+			PingOK:    p.pingOK.Load(),
+			PingFail:  p.pingFail.Load(),
+			FailCount: p.failCount.Load(),
+			TxBytes:   p.txBytes.Load(),
+			RxBytes:   p.rxBytes.Load(),
+		})
+	}
+	return out
+}
+
+// RebindSnapshots returns the rebind-check counter axis for every peer.
+func (n *Node) RebindSnapshots() []PeerRebindSnapshot {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	out := make([]PeerRebindSnapshot, 0, len(n.peers))
+	for name, p := range n.peers {
+		out = append(out, PeerRebindSnapshot{
+			Name:         name,
+			Direction:    n.directionOf(p),
+			RebindChecks: p.rebindChecks.Load(),
+		})
+	}
+	return out
+}
+
+// LatencySnapshots returns the latency-time-series axis for every
+// peer. Includes the current point value (matching what the topology
+// API surfaces) plus the rolling history ring.
+func (n *Node) LatencySnapshots() []PeerLatencySnapshot {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	out := make([]PeerLatencySnapshot, 0, len(n.peers))
+	for name, p := range n.peers {
+		ms := -1
+		if v, ok := n.latencies[name]; ok {
+			ms = v
+		}
+		out = append(out, PeerLatencySnapshot{
+			Name:      name,
+			Direction: n.directionOf(p),
+			LatencyMs: ms,
+			History:   p.latencyHistorySnapshot(),
+		})
+	}
+	return out
+}
+
+// NativeMap returns a map of peer names to their native status.
+func (n *Node) NativeMap() map[string]bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	m := make(map[string]bool)
+	for name, p := range n.peers {
+		m[name] = p.info.Native
+	}
+	return m
+}
+
+// PingPeer measures round-trip latency to a peer. Returns -1 if unreachable.
+// Non-blocking: uses a 3-second timeout.
+func (n *Node) PingPeer(name string) time.Duration {
+	n.mu.RLock()
+	p, ok := n.peers[name]
+	n.mu.RUnlock()
+	if !ok || p.client == nil {
+		return -1
+	}
+	ch := make(chan time.Duration, 1)
+	go func() {
+		start := time.Now()
+		if p.info.Native {
+			// Native hy2: any server answer to a TCP request proves the
+			// QUIC path. Port 0 fails locally on the server at once (no DNS,
+			// no packet leaves it) and comes back as a DialError. Fetching
+			// 1.1.1.1:80 through it made the peer flap every ~20 s wherever
+			// that host is unreachable.
+			stream, err := p.client.TCP("127.0.0.1:0")
+			var de coreErrs.DialError
+			if err != nil && !errors.As(err, &de) {
+				ch <- -1
+				return
+			}
+			if stream != nil {
+				stream.Close()
+			}
+			ch <- time.Since(start)
+			return
+		}
+		// Probe the primary connection itself (pickClient would round-robin
+		// across addresses and hide a dead primary); fall back to listPeers
+		// for compat with <1.3.
+		rtt := pingStream(p.client, streamPing)
+		if rtt < 0 {
+			rtt = pingStream(p.client, streamListPeers)
+		}
+		p.primaryDown.Store(rtt < 0)
+		ch <- rtt
+	}()
+	select {
+	case d := <-ch:
+		return d
+	case <-time.After(2 * time.Second):
+		// On a dead link the probe goroutine stays blocked in the stream
+		// open until QUIC gives up (~25 s), so its own primaryDown update
+		// comes far too late — record the failure here.
+		if !p.info.Native {
+			p.primaryDown.Store(true)
+		}
+		return -1
+	}
+}
+
+// pingStream opens a stream, reads 1 byte, and returns the round-trip duration.
+func pingStream(c hyclient.Client, addr string) time.Duration {
+	if c == nil {
+		return -1
+	}
+	start := time.Now()
+	stream, err := c.TCP(addr)
+	if err != nil {
+		return -1
+	}
+	buf := make([]byte, 1)
+	stream.Read(buf)
+	stream.Close()
+	return time.Since(start)
+}
+
+// pingClient measures RTT to a specific QUIC client connection. Returns -1 if unreachable.
+func (n *Node) pingClient(c hyclient.Client) time.Duration {
+	if c == nil {
+		return -1
+	}
+	ch := make(chan time.Duration, 1)
+	go func() {
+		rtt := pingStream(c, streamPing)
+		if rtt < 0 {
+			rtt = pingStream(c, streamListPeers)
+		}
+		ch <- rtt
+	}()
+	select {
+	case d := <-ch:
+		return d
+	case <-time.After(2 * time.Second):
+		return -1
+	}
+}
+
+// --- Counted connection wrapper ---
+
+type countedConn struct {
+	net.Conn
+	tx, rx         *atomic.Uint64
+	peerTx, peerRx *atomic.Uint64
+	// Optional counter sets, one per qualified nested-path PREFIX with
+	// ≥2 hops. For a stream dialed through "au/au-r1/au-r1-a" we update
+	// the counters for both "au/au-r1" AND "au/au-r1/au-r1-a" — so the
+	// graph view's per-hop realtime-speed badges all increment together
+	// instead of only the final-hop counter.
+	pathTxs, pathRxs []*atomic.Uint64
+	conns            *atomic.Int64
+	closed           atomic.Bool
+}
+
+func (c *countedConn) Close() error {
+	if c.closed.CompareAndSwap(false, true) {
+		c.conns.Add(-1)
+	}
+	return c.Conn.Close()
+}
+
+func (c *countedConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if n > 0 {
+		add := uint64(n)
+		c.rx.Add(add)
+		if c.peerRx != nil {
+			c.peerRx.Add(add)
+		}
+		for _, p := range c.pathRxs {
+			p.Add(add)
+		}
+	}
+	return n, err
+}
+
+func (c *countedConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	if n > 0 {
+		add := uint64(n)
+		c.tx.Add(add)
+		if c.peerTx != nil {
+			c.peerTx.Add(add)
+		}
+		for _, p := range c.pathTxs {
+			p.Add(add)
+		}
+	}
+	return n, err
+}
+
+// NoHalfClose: a relay stream can't carry a half-close — hysteria's Close
+// also cancels the read side, and the exit's copyTwoWay tears both
+// directions down on the first EOF. See app.halfCloseWriteOrClose.
+func (c *countedConn) NoHalfClose() bool { return true }
+
+func (n *Node) wrapConn(peerName string, conn net.Conn) net.Conn {
+	return n.wrapConnPath(peerName, "", conn)
+}
+
+// wrapConnPath wraps an outbound stream for byte accounting. `peerName` is
+// always the direct (first-hop) peer. `pathKey`, when non-empty, is the full
+// qualified chain (e.g. "au/au-r1-a") — used by the Nodes-page UI to show
+// traffic attributed to the specific nested descendant rather than only to
+// the first-hop peer. Pass "" for single-hop dials.
+func (n *Node) wrapConnPath(peerName, pathKey string, conn net.Conn) net.Conn {
+	n.mu.RLock()
+	p := n.peers[peerName]
+	n.mu.RUnlock()
+	cc := &countedConn{Conn: conn, tx: &n.txBytes, rx: &n.rxBytes, conns: &n.conns}
+	if p != nil {
+		cc.peerTx = &p.txBytes
+		cc.peerRx = &p.rxBytes
+	}
+	// Attach a counter for every nested-path PREFIX of length ≥ 2 along
+	// the qualified path. The single-hop direct-peer prefix is already
+	// covered by peerTx/peerRx above, so we start prefix accumulation
+	// from the 2-hop slice. e.g. "au/au-r1/au-r1-a" → counters for both
+	// "au/au-r1" and "au/au-r1/au-r1-a", so the graph's realtime-speed
+	// badges on every intermediate hop animate together.
+	if pathKey != "" {
+		segs := strings.Split(pathKey, "/")
+		for i := 2; i <= len(segs); i++ {
+			rec := n.getOrCreatePathCounters(strings.Join(segs[:i], "/"))
+			cc.pathTxs = append(cc.pathTxs, &rec.tx)
+			cc.pathRxs = append(cc.pathRxs, &rec.rx)
+		}
+	}
+	n.conns.Add(1)
+	return cc
+}
+
+// --- Dial ---
+
+// ParseVia decodes a via-encoded multi-hop relay target address.
+// Returns (chain, targetAddr, true) when reqAddr has the via-prefix.
+// `chain` is the slash-joined remaining hops (e.g. "aub/cn/2400");
+// `targetAddr` is the final destination ("host:port"). The receiving
+// peer should split `chain` on "/" and forward via its first hop with
+// the remainder re-encoded. Exported so the application's UDP
+// outbound callback (nodeOutbound.UDP in internal/app/app.go) can
+// implement multi-hop UDP routing, mirroring TCP's handleVia.
+func ParseVia(reqAddr string) (chain, targetAddr string, ok bool) {
+	return proto.ParseVia(reqAddr)
+}
+
+// BuildViaAddr constructs a via-encoded relay address used as the
+// "target" passed to a first-hop DialUDP / DialTCP. `remaining` is the
+// slash-joined chain of hops AFTER the immediate first hop; `addr` is
+// the final target ("host:port"). The first hop's handler parses with
+// ParseVia and forwards down the chain.
+func BuildViaAddr(remaining, addr string) string { return proto.BuildViaAddr(remaining, addr) }
+
+// DialUDPVia opens a multi-hop UDP relay connection. `path` is the
+// chain of peer names [hop1, hop2, ..., exit]; `addr` is the final
+// destination ("host:port"). For single-hop, this is DialUDP. For
+// multi-hop, the target address is via-encoded and each intermediate
+// hop's nodeOutbound.UDP re-encodes and forwards to the next hop —
+// the UDP analog of TCP's DialVia.
+func (n *Node) DialUDPVia(ctx context.Context, path []string, addr string) (net.Conn, error) {
+	if len(path) == 0 {
+		return nil, fmt.Errorf("relay: empty path")
+	}
+	if len(path) == 1 {
+		return n.DialUDP(ctx, path[0], addr)
+	}
+	remaining := strings.Join(path[1:], "/")
+	return n.DialUDP(ctx, path[0], BuildViaAddr(remaining, addr))
+}
+
+// DialTCP dials addr through a directly connected peer's network.
+// DialUDP opens a UDP session through a peer's Hysteria2 QUIC connection.
+// Returns a net.Conn-compatible wrapper for a single destination address.
+func (n *Node) DialUDP(ctx context.Context, peerName string, addr string) (net.Conn, error) {
+	n.mu.RLock()
+	p, ok := n.peers[peerName]
+	n.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
+	}
+
+	// Outbound peer: use hy2 client's native UDP
+	if p.client != nil {
+		cl := p.pickClient()
+		uc, err := cl.UDP()
+		if err != nil {
+			return nil, fmt.Errorf("relay: UDP session: %w", err)
+		}
+		return &hyUDPConnWrapper{uc: uc, addr: addr}, nil
+	}
+
+	// Inbound peer: request UDP dial via control stream (same as TCP but with "udp:" prefix)
+	ctrlW := n.peerCtrlS2C(peerName)
+	if ctrlW == nil {
+		return nil, fmt.Errorf("relay: peer %q control not ready", peerName)
+	}
+
+	id := fmt.Sprintf("%d", n.seq.Add(1))
+	ch := make(chan net.Conn, 1)
+	p.writeMu.Lock()
+	p.waiting[id] = ch
+	err := writeRequest(ctrlW, id, "udp:"+addr)
+	if err != nil {
+		delete(p.waiting, id)
+	}
+	p.writeMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	conn, err := n.awaitDial(ctx, p, id, ch, fmt.Sprintf("UDP dial via %q", peerName))
+	if err != nil {
+		return nil, err
+	}
+	// Wrap the QUIC stream with datagram framing for UDP
+	return &streamUDPConn{stream: conn}, nil
+}
+
+// streamUDPConn wraps a QUIC stream with 2-byte length framing for UDP datagrams.
+type streamUDPConn struct {
+	stream net.Conn
+}
+
+func (c *streamUDPConn) Read(b []byte) (int, error) {
+	var lenBuf [2]byte
+	if _, err := io.ReadFull(c.stream, lenBuf[:]); err != nil {
+		return 0, err
+	}
+	dlen := int(binary.BigEndian.Uint16(lenBuf[:]))
+	if dlen > len(b) {
+		dlen = len(b)
+	}
+	return io.ReadFull(c.stream, b[:dlen])
+}
+
+func (c *streamUDPConn) Write(b []byte) (int, error) {
+	var lenBuf [2]byte
+	binary.BigEndian.PutUint16(lenBuf[:], uint16(len(b)))
+	if _, err := c.stream.Write(lenBuf[:]); err != nil {
+		return 0, err
+	}
+	return c.stream.Write(b)
+}
+
+func (c *streamUDPConn) Close() error                       { return c.stream.Close() }
+func (c *streamUDPConn) LocalAddr() net.Addr                { return c.stream.LocalAddr() }
+func (c *streamUDPConn) RemoteAddr() net.Addr               { return c.stream.RemoteAddr() }
+func (c *streamUDPConn) SetDeadline(t time.Time) error      { return c.stream.SetDeadline(t) }
+func (c *streamUDPConn) SetReadDeadline(t time.Time) error  { return c.stream.SetReadDeadline(t) }
+func (c *streamUDPConn) SetWriteDeadline(t time.Time) error { return c.stream.SetWriteDeadline(t) }
+
+// hyUDPConnWrapper adapts HyUDPConn to net.Conn for a single destination.
+type hyUDPConnWrapper struct {
+	uc   interface{ Send([]byte, string) error; Receive() ([]byte, string, error); Close() error }
+	addr string
+}
+
+func (w *hyUDPConnWrapper) Read(b []byte) (int, error) {
+	data, _, err := w.uc.Receive()
+	if err != nil {
+		return 0, err
+	}
+	n := copy(b, data)
+	return n, nil
+}
+
+func (w *hyUDPConnWrapper) Write(b []byte) (int, error) {
+	if err := w.uc.Send(b, w.addr); err != nil {
+		return 0, err
+	}
+	return len(b), nil
+}
+
+func (w *hyUDPConnWrapper) Close() error                       { return w.uc.Close() }
+func (w *hyUDPConnWrapper) LocalAddr() net.Addr                { return nil }
+func (w *hyUDPConnWrapper) RemoteAddr() net.Addr               { return nil }
+func (w *hyUDPConnWrapper) SetDeadline(t time.Time) error      { return nil }
+func (w *hyUDPConnWrapper) SetReadDeadline(t time.Time) error  { return nil }
+func (w *hyUDPConnWrapper) SetWriteDeadline(t time.Time) error { return nil }
+
+// ObjectCounts reports live relay-object counts for /api/diag/runtime.
+// Every entry here is something that has leaked in the past or could leak:
+// a steadily climbing value on an otherwise idle node is the signal.
+func (n *Node) ObjectCounts() map[string]int {
+	out := map[string]int{}
+	n.mu.RLock()
+	out["peers"] = len(n.peers)
+	out["peers_alt"] = len(n.peersAlt)
+	waiting := 0
+	for _, p := range n.peers {
+		p.writeMu.Lock()
+		waiting += len(p.waiting)
+		p.writeMu.Unlock()
+	}
+	out["dial_waiters"] = waiting
+	n.mu.RUnlock()
+	n.ctrlS2CMu.Lock()
+	out["ctrl_s2c"] = len(n.ctrlS2C)
+	n.ctrlS2CMu.Unlock()
+	out["bridge_tags_live"], out["bridge_tags_ended"] = n.bridgeTags.counts()
+	n.pathBytesMu.RLock()
+	out["path_counters"] = len(n.pathBytes)
+	n.pathBytesMu.RUnlock()
+	n.peerRateMu.RLock()
+	out["peers_of_cache"] = len(n.peersOfCache)
+	n.peerRateMu.RUnlock()
+	return out
+}
+
+// PeerCtx returns the context for a peer, canceled when the peer disconnects.
+// Used by idle timeout to detect dead relay streams immediately.
+
+// isPeerBlocked checks if a peer should be blocked from relay.
+// Must be called with n.mu held (at least RLock).
+func (n *Node) isPeerBlocked(p *peer) bool {
+	if p.info.Incompatible {
+		return true
+	}
+	// Check name conflict
+	for _, conflictName := range n.conflicts {
+		if conflictName == p.info.Name {
+			return true
+		}
+	}
+	return false
+}
+
+// SetPeerConflict records a name conflict for a client address.
+// The conflict is tracked separately from the peer entry to avoid
+// marking legitimate peers as conflicting.
+func (n *Node) SetPeerConflict(clientAddr string, conflictName string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.conflicts == nil {
+		n.conflicts = make(map[string]string)
+	}
+	if conflictName == "" {
+		delete(n.conflicts, clientAddr)
+	} else {
+		n.conflicts[clientAddr] = conflictName
+	}
+}
+
+// PeerConflicts returns a map of client addr → conflicting name.
+func (n *Node) PeerConflicts() map[string]string {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	if len(n.conflicts) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(n.conflicts))
+	for k, v := range n.conflicts {
+		result[k] = v
+	}
+	return result
+}
+
+func (n *Node) PeerCtx(peerName string) context.Context {
+	n.mu.RLock()
+	p, ok := n.peers[peerName]
+	n.mu.RUnlock()
+	if !ok || p.ctx == nil {
+		return context.Background()
+	}
+	return p.ctx
+}
+
+// DialTCPIdx dials TCP through a specific QUIC client index (for bond path pinning).
+// Index -1 means round-robin (same as DialTCP).
+func (n *Node) DialTCPIdx(ctx context.Context, peerName string, addr string, clientIdx int) (net.Conn, error) {
+	n.mu.RLock()
+	p, ok := n.peers[peerName]
+	n.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
+	}
+	if n.isPeerBlocked(p) {
+		return nil, fmt.Errorf("relay: peer %q is blocked (incompatible or conflict)", peerName)
+	}
+	if p.client != nil {
+		var cl hyclient.Client
+		if clientIdx >= 0 {
+			cl = p.pickClientIdx(clientIdx)
+		} else {
+			cl = p.pickClient()
+		}
+		conn, err := n.openStream(peerName, p, cl, addr)
+		if err != nil {
+			return nil, err
+		}
+		return n.wrapConn(peerName, conn), nil
+	}
+	return n.DialTCP(ctx, peerName, addr)
+}
+
+// peerCtrlS2C returns the name-keyed reverse-control stream for an
+// inbound peer (or nil if none has been bound yet). Always read via
+// this helper rather than a per-peer field — the binding is intentionally
+// detached from the peer struct so it survives re-register replacements.
+func (n *Node) peerCtrlS2C(peerName string) net.Conn {
+	n.ctrlS2CMu.Lock()
+	defer n.ctrlS2CMu.Unlock()
+	return n.ctrlS2C[peerName]
+}
+
+func (n *Node) DialTCP(ctx context.Context, peerName string, addr string) (net.Conn, error) {
+	n.mu.RLock()
+	p, ok := n.peers[peerName]
+	n.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
+	}
+	if n.isPeerBlocked(p) {
+		return nil, fmt.Errorf("relay: peer %q is blocked (incompatible or conflict)", peerName)
+	}
+
+	// Outbound peer: use round-robin across available QUIC connections
+	if p.client != nil {
+		conn, err := n.openStream(peerName, p, p.pickClient(), addr)
+		if err != nil {
+			return nil, err
+		}
+		return n.wrapConn(peerName, conn), nil
+	}
+
+	// Inbound peer: send dial request via control stream
+	ctrlW := n.peerCtrlS2C(peerName)
+	if ctrlW == nil {
+		return nil, fmt.Errorf("relay: peer %q control not ready", peerName)
+	}
+
+	id := fmt.Sprintf("%d", n.seq.Add(1))
+	ch := make(chan net.Conn, 1)
+	p.writeMu.Lock()
+	p.waiting[id] = ch
+	err := writeRequest(ctrlW, id, addr)
+	if err != nil {
+		delete(p.waiting, id)
+	}
+	p.writeMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	conn, err := n.awaitDial(ctx, p, id, ch, fmt.Sprintf("dial via %q", peerName))
+	if err != nil {
+		return nil, err
+	}
+	return n.wrapConn(peerName, conn), nil
+}
+
+// SetPunchHandler registers the handler for StreamPunch streams.
+func (n *Node) SetPunchHandler(h func(stream net.Conn)) { n.punchHandler = h }
+
+// SetMsessHandler registers the exit-side handler for StreamMsess subflows.
+func (n *Node) SetMsessHandler(h func(stream net.Conn)) {
+	n.msessHandler = h
+}
+
+// SetListPeersFunc registers a function that returns rich peer list JSON (with children).
+// Used by handleListPeers so both outbound and inbound nested discovery return identical data.
+
+// WhoAmI asks a direct peer which address our connection comes from.
+func (n *Node) WhoAmI(peerName string) (string, error) {
+	b, err := n.queryStream(peerName, streamWhoami, 128)
+	return string(b), err
+}
+
+// queryStream opens a relay stream to a direct peer and reads its reply.
+func (n *Node) queryStream(peerName, addr string, max int64) ([]byte, error) {
+	n.mu.RLock()
+	p, ok := n.peers[peerName]
+	n.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("relay: peer %q not connected", peerName)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var conn net.Conn
+	var err error
+	if p.client != nil {
+		conn, err = p.client.TCP(addr)
+	} else {
+		conn, err = n.DialTCP(ctx, peerName, addr)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	return io.ReadAll(io.LimitReader(conn, max))
+}
+
+func (n *Node) SetListPeersFunc(fn func() []byte) {
+	n.listPeersFunc = fn
+}
+
+// SetAPIHandler registers a handler for incoming _relay_api_ streams (remote
+// web-UI proxy tunneling).
+func (n *Node) SetAPIHandler(handler func(stream net.Conn)) {
+	n.apiHandler = handler
+}
+
+// SetSpeedHandler registers the handler of incoming StreamSpeed streams
+// (throughput tests toward this node).
+func (n *Node) SetSpeedHandler(handler func(stream net.Conn)) {
+	n.speedHandler = handler
+}
+
+// SetAPIStreamWrap registers the app-layer wrapper that tags a peer-relay
+// API stream with its auth ID so the api server can apply the
+// RelayAdminPassthrough bypass. Required so streams that arrive via the
+// s2c-ctrl dial-request path (inbound-only peer) carry the same
+// identification the direct nodeOutbound.TCP path already wraps for.
+func (n *Node) SetAPIStreamWrap(fn func(stream net.Conn, authID string) net.Conn) {
+	n.apiStreamWrap = fn
+}
+
+// SetOnInboundIdentity registers a callback that fires when an inbound peer
+// completes its register-stream meta exchange. The app layer uses this to
+// detect when an inbound peer that previously connected from the same source
+// IP now reports a different NodeID, and to propagate the rename through
+// cfg.Peers / cfg.Proxies.ExitVia / cfg.Users.ExitVia (the inbound
+// counterpart of AttachTo's outbound rename). See docs/peer-identity-sync-bugs.md
+// Bug B.
+func (n *Node) SetOnInboundIdentity(handler func(declaredName, nodeID, remoteAddrIP string)) {
+	n.onInboundIdentity = handler
+}
+
+// DialVia dials addr through a chain of peers.
+// path = ["au", "jp"] means: this node → au → jp → internet.
+func (n *Node) DialVia(ctx context.Context, path []string, addr string) (net.Conn, error) {
+	return n.DialViaIdx(ctx, path, addr, -1)
+}
+
+// DialViaIdx is DialVia over a chosen connection to the first hop
+// (clientIdx as in DialTCPIdx; -1 = round-robin). Later hops may carry a
+// ConnHint for the node that dials them.
+func (n *Node) DialViaIdx(ctx context.Context, path []string, addr string, clientIdx int) (net.Conn, error) {
+	if len(path) == 0 {
+		return nil, fmt.Errorf("relay: empty path")
+	}
+	if len(path) == 1 {
+		return n.DialTCPIdx(ctx, path[0], addr, clientIdx)
+	}
+
+	// Multi-hop: connect to first peer, ask it to route via remaining path
+	firstPeer := path[0]
+	n.mu.RLock()
+	p, ok := n.peers[firstPeer]
+	n.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("relay: peer %q not connected", firstPeer)
+	}
+
+	// Build nested via address
+	remaining := strings.Join(path[1:], "/")
+	viaAddr := streamViaPrefix + remaining + "_" + addr + ":0"
+	// Qualified path key for per-path counters — covers origin dials and
+	// bridge sub-dials alike, since handleVia also lands here for multi-
+	// hop continuations.
+	pathKey := StripConnHints(strings.Join(path, "/"))
+
+	if p.client != nil {
+		cl := p.pickClient()
+		if clientIdx >= 0 {
+			cl = p.pickClientIdx(clientIdx)
+		}
+		conn, err := n.openStream(firstPeer, p, cl, viaAddr)
+		if err != nil {
+			return nil, err
+		}
+		return n.wrapConnPath(firstPeer, pathKey, conn), nil
+	}
+
+	// Inbound peer: send via address as a dial request through control stream.
+	// The inbound peer receives viaAddr, its handleVia will parse and forward.
+	ctrlW := n.peerCtrlS2C(firstPeer)
+	if ctrlW == nil {
+		return nil, fmt.Errorf("relay: peer %q control not ready", firstPeer)
+	}
+
+	id := fmt.Sprintf("%d", n.seq.Add(1))
+	ch := make(chan net.Conn, 1)
+	p.writeMu.Lock()
+	p.waiting[id] = ch
+	err := writeRequest(ctrlW, id, viaAddr)
+	if err != nil {
+		delete(p.waiting, id)
+	}
+	p.writeMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	conn, err := n.awaitDial(ctx, p, id, ch, fmt.Sprintf("dial via %q", firstPeer))
+	if err != nil {
+		return nil, err
+	}
+	return n.wrapConnPath(firstPeer, pathKey, conn), nil
+}
+
+// --- Wire helpers ---
+
+func (n *Node) copyCount(dst io.Writer, src io.Reader, counter *atomic.Uint64, peerCounter *atomic.Uint64) {
+	buf := make([]byte, 32*1024)
+	for {
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			nw, ew := dst.Write(buf[:nr])
+			if nw > 0 {
+				counter.Add(uint64(nw))
+				if peerCounter != nil {
+					peerCounter.Add(uint64(nw))
+				}
+			}
+			if ew != nil {
+				return
+			}
+		}
+		if er != nil {
+			return
+		}
+	}
+}
+
+// ConnHint names hop name in a via chain together with the connection its
+// dialer should carry it over: "x@1" = dial peer x on its connection 1
+// (an index into the dialer's healthy connections to x, modulo their
+// number). A chain through a multi-address hop can so be spread over every
+// connection of that hop. Only nodes from 1.3.12 read hints; the ingress
+// never sends one to an older node.
+func ConnHint(name string, idx int) string { return proto.ConnHint(name, idx) }
+
+// SplitConnHint: "x@1" → ("x", 1); "x" → ("x", -1).
+func SplitConnHint(seg string) (string, int) { return proto.SplitConnHint(seg) }
+
+// StripConnHints: "a/x@1" → "a/x".
+func StripConnHints(chain string) string { return proto.StripConnHints(chain) }
+
+// dialChain dials the next hop of a via chain ("x" or "x/y/z"; hops may
+// carry a ConnHint) toward addr.
+func (n *Node) dialChain(ctx context.Context, chain, addr string) (net.Conn, error) {
+	parts := strings.Split(chain, "/")
+	first, idx := SplitConnHint(parts[0])
+	parts[0] = first
+	if len(parts) > 1 {
+		return n.DialViaIdx(ctx, parts, addr, idx)
+	}
+	return n.DialTCPIdx(ctx, first, addr, idx)
+}
+
+func parseVia(reqAddr string) (nodeName, targetAddr string, ok bool) {
+	return proto.ParseVia(reqAddr)
+}
+
+func writeString(w io.Writer, s string) error { return proto.WriteString(w, s) }
+
+func readString(r io.Reader) (string, error) { return proto.ReadString(r) }
+
+func writeRequest(w io.Writer, id, addr string) error {
+	if err := writeString(w, id); err != nil {
+		return err
+	}
+	return writeString(w, addr)
+}
+
+func readRequest(r io.Reader) (id, addr string, err error) {
+	id, err = readString(r)
+	if err != nil {
+		return
+	}
+	addr, err = readString(r)
+	return
+}

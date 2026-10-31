@@ -1,30 +1,48 @@
-import { useState, useCallback, useEffect, useRef, type MouseEvent } from 'react';
+import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  StatsGrid, Card, Button, Badge, Tooltip,
-  TreeTable, TreeCell, IconTabs, useToast, useConfirm, useSelection,
+  Card, Button, Badge, Tooltip, IconChevronRight, ExpandButton, IconLink,
+  TreeTable, TreeCell, useToast, useConfirm, useSelection,
   type TreeNode, type TreeColumn,
 } from '@hy2scale/ui';
 import type { TopologyNode } from '@/api';
 import * as api from '@/api';
 import { useNodeStore } from '@/store/node';
-import { fmtBytes, fmtRate } from '@/hooks/useFormat';
-import { useHistory } from '@/hooks/useHistory';
-import { getBasePath } from '@/api/client';
+import { SELF_KEY } from '@/utils/nodeKeys';
+import { usePageView } from '@/store/pageView';
+import { fmtRate } from '@/hooks/useFormat';
 import NodeModal from '@/components/NodeModal';
 import NodeImportModal from '@/components/NodeImportModal';
 import EditSelfModal from '@/components/EditSelfModal';
-import RemoteConnectModal from '@/components/RemoteConnectModal';
+import RemoteModal from '@/components/RemoteModal';
+import NodeDetailModal from '@/components/NodeDetailModal';
 import ResponsiveActions from '@/components/ResponsiveActions';
-import ImportExportButton from '@/components/ImportExportButton';
+import { useImportExport } from '@/components/ImportExport';
 import NodesGraphView from '@/components/NodesGraphView';
-import { useLongPress } from '@/hooks/useLongPress';
 import { useDeselectOnBlankClick } from '@/hooks/useDeselectOnBlankClick';
-import { versionAtLeast } from '../utils/version';
+import { versionAtLeast } from '@/utils/version';
+import { latencyClass } from '@/utils/latency';
+import { fmtPunchAddr, punchesFor } from '@/utils/punch';
+import VersionBadge from '@/components/VersionBadge';
+import { boldMarkup } from '@/utils/richText';
+import { PublicIP } from '@/components/CountryFlag';
 
 export default function NodesPage() {
   const { t } = useTranslation();
+  const ie = useImportExport('nodes');
+  // Hole-punched routes this node works on (state per route address)
+  const { data: punchStatus = [] } = useQuery({ queryKey: ['punchStatus'], queryFn: api.getPunchStatus, refetchInterval: 5000 });
+  const fmtAddr = (a: string) => fmtPunchAddr(t, a);
+  const punchBadge = (name: string) => {
+    const sts = punchesFor(punchStatus, name);
+    if (!sts.length) return null;
+    const best = sts.find((p) => p.state === 'connected') || sts.find((p) => p.state === 'punching') || sts[0];
+    const variant = best.state === 'connected' ? 'blue' : best.state === 'failed' ? 'red' : 'muted';
+    const tip = sts.map((p) => `${fmtAddr(p.addr)}: ${t(`punch.state.${p.state}`)}${p.reason ? ` (${t(`punch.reason.${p.reason}`, { defaultValue: p.reason })})` : ''}${p.mapping ? ` → ${p.mapping}` : ''}`).join('\n');
+    return <span title={tip} data-testid="punch-badge" data-state={best.state} data-reason={best.reason || ''}> <Badge variant={variant as any}>{t(`punch.state.${best.state}`)}</Badge></span>;
+  };
   const toast = useToast();
   const confirm = useConfirm();
   const queryClient = useQueryClient();
@@ -39,67 +57,22 @@ export default function NodesPage() {
   // the local page, then a fresh tab is opened with a token already in
   // sessionStorage so the remote SPA never has to render its own LoginPage.
   const [remoteConnect, setRemoteConnect] = useState<{ chain: string[]; label: string } | null>(null);
-  const lastPointer = useRef<{ x: number; y: number } | null>(null);
-  // Default to graph view on first visit (no stored preference) since the
-  // topology graph is the more informative presentation; list view remains
-  // a one-click toggle away. localStorage remembers the user's last pick
-  // explicitly — but the fallback when no preference exists is 'graph',
-  // not 'list', so fresh installs don't land on the denser table.
-  const [viewMode, setViewMode] = useState<'list' | 'graph'>(() => {
-    try {
-      const v = localStorage.getItem('scale:nodes-view');
-      if (v === 'list' || v === 'graph') return v;
-    } catch { /* ignore */ }
-    return 'graph';
-  });
-  useEffect(() => {
-    try { localStorage.setItem('scale:nodes-view', viewMode); } catch { /* ignore */ }
-  }, [viewMode]);
+  // Node details dialog (row click in the list, overlay button in the graph).
+  // The key outlives `open` so the dialog keeps its content while closing.
+  const [detailKey, setDetailKey] = useState<string | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const openDetails = (key: string, anchor?: { x: number; y: number }) => {
+    setClickPos(anchor);
+    setDetailKey(key);
+    setDetailOpen(true);
+  };
+  // List / topology view. The switch is the top bar title (MainLayout);
+  // the store persists the pick.
+  const [view] = usePageView('nodes');
   // The list-view scroll-to-selection effect is defined AFTER `selection`
   // is set up further down. JS hoists `function` declarations and `const`
   // bindings differently; this useEffect references `selection.*` so it
   // can't sit above the `useSelection(...)` call.
-
-  // On short or narrow viewports the 4-stat row squeezes the Network
-  // Topology card below half-screen — at narrow widths the cards wrap
-  // to 2×2 and eat 300+ px of height before topology gets any. Measure
-  // actual element heights and hide the stats row whenever showing it
-  // would leave topology at <50 % of the viewport. Uses hysteresis
-  // against viewport height rather than current topo height so the
-  // decision doesn't thrash when toggling stats.
-  const [showStats, setShowStats] = useState(true);
-  const pageRef = useRef<HTMLDivElement | null>(null);
-  const statsRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const evaluate = () => {
-      const vh = window.innerHeight;
-      const pageEl = pageRef.current;
-      const statsEl = statsRef.current;
-      if (!pageEl) return;
-      // Everything that competes for vertical space inside the page
-      // area: topbar above + this page's top offset + the card gap.
-      const pageTop = pageEl.getBoundingClientRect().top;
-      // Measure the stats row height if it's currently rendered. When
-      // it's hidden, estimate based on a fresh paint would be fragile —
-      // so we only flip hidden→shown when the math works even with a
-      // conservative overestimate of the stats height.
-      const statsH = statsEl ? statsEl.getBoundingClientRect().height : 320;
-      const STATS_GAP = 20; // gap between page children
-      const CARD_HEADER = 60; // network topology card header + padding
-      const nonTopo = pageTop + statsH + STATS_GAP + CARD_HEADER;
-      const topoIfStats = vh - nonTopo;
-      const shouldShow = topoIfStats >= 0.5 * vh;
-      setShowStats((prev) => (prev === shouldShow ? prev : shouldShow));
-    };
-    // Run after layout settles; ResizeObserver on the stats row
-    // catches the narrow-width re-wrap that changes its height.
-    evaluate();
-    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(evaluate) : null;
-    if (ro && statsRef.current) ro.observe(statsRef.current);
-    if (ro && pageRef.current) ro.observe(pageRef.current);
-    window.addEventListener('resize', evaluate);
-    return () => { window.removeEventListener('resize', evaluate); ro?.disconnect(); };
-  }, [showStats]);
 
   // Poll topology every 2s
   useQuery({
@@ -112,43 +85,18 @@ export default function NodesPage() {
     refetchInterval: 2000,
   });
 
-  // Poll stats every 2s
-  const { data: stats, dataUpdatedAt: statsTick } = useQuery({
-    queryKey: ['stats'],
-    queryFn: () => api.getStats(),
-    refetchInterval: 2000,
-  });
-
-  // Rolling history for stat-card sparklines (tech-feel background).
-  // Sample on the poll tick so plateaued metrics still advance the line.
-  const txBytesHist = useHistory(stats?.tx_bytes, statsTick);
-  const rxBytesHist = useHistory(stats?.rx_bytes, statsTick);
-  const txRateHist = useHistory(stats?.tx_rate, statsTick);
-  const rxRateHist = useHistory(stats?.rx_rate, statsTick);
-  const connsHist = useHistory(stats?.conns, statsTick);
-  const exitClientsHist = useHistory(stats?.exit_clients, statsTick);
-
-  // Short click on the Add Node button → manual form. The pointer position
-  // for the modal animation comes from lastPointer (captured on mousedown
-  // by useLongPress' handlers, since onClick's MouseEvent reflects the
-  // release point — usually identical, but we want the press anchor).
-  const addNodeShortClick = useCallback(() => {
-    setClickPos(lastPointer.current || undefined);
+  // Add Node: the button opens the manual form; its secondary action
+  // imports a hysteria2:// link. Both animate from the click.
+  const at = (e: { clientX: number; clientY: number }) => ({ x: e.clientX, y: e.clientY });
+  const openAddNode = (e: { clientX: number; clientY: number }) => {
+    setClickPos(at(e));
     setEditingName(null);
     setModalOpen(true);
-  }, []);
-
-  // Long press → import-from-URL submenu.
-  const addNodeLongPress = useCallback(() => {
-    setClickPos(lastPointer.current || undefined);
+  };
+  const openImportLink = (e: { clientX: number; clientY: number }) => {
+    setClickPos(at(e));
     setImportOpen(true);
-  }, []);
-
-  const addNodeHandlers = useLongPress({
-    delayMs: 600,
-    onLongPress: addNodeLongPress,
-    onShortClick: addNodeShortClick,
-  });
+  };
 
   // The single source of truth for opening the edit modal is the
   // top-right Edit button (see `openEditFromBar`/`openEditSelfFromBar`).
@@ -177,19 +125,6 @@ export default function NodesPage() {
     setEditSelfOpen(true);
   };
 
-  const handleToggle = useCallback(async (n: TopologyNode, qualifiedPath: string) => {
-    const newDisabled = !n.disabled;
-    setSyncing(qualifiedPath, !newDisabled);
-    try {
-      await api.disableClient(n.name, newDisabled);
-      queryClient.invalidateQueries({ queryKey: ['topology'] });
-    } catch (e: any) {
-      toast.error(String(e.message || e));
-    } finally {
-      setTimeout(() => clearSyncing(qualifiedPath), 3000);
-    }
-  }, [setSyncing, clearSyncing, queryClient, toast]);
-
   const handleNestedToggle = useCallback(async (n: TopologyNode, qualifiedPath: string) => {
     const newNested = !n.nested;
     setSyncing(qualifiedPath, newNested);
@@ -205,24 +140,6 @@ export default function NodesPage() {
       setTimeout(() => clearSyncing(qualifiedPath), 3000);
     }
   }, [setSyncing, clearSyncing, queryClient, toast]);
-
-  const handleDelete = useCallback(async (name: string) => {
-    const ok = await confirm({
-      title: t('nodes.deleteTitle'),
-      message: t('nodes.deleteConfirm', { name }),
-      danger: true,
-      confirmText: t('app.delete'),
-      cancelText: t('app.cancel'),
-    });
-    if (!ok) return;
-    try {
-      await api.deleteClient(name);
-      toast.success(t('nodes.deleted', { name }));
-      queryClient.invalidateQueries({ queryKey: ['topology'] });
-    } catch (e: any) {
-      toast.error(String(e.message || e));
-    }
-  }, [confirm, t, queryClient, toast]);
 
   // Build tree nodes from topology
   const buildTreeNodes = (topo: TopologyNode[]): TreeNode<TopologyNode>[] => {
@@ -242,9 +159,11 @@ export default function NodesPage() {
         (c) => c.name !== selfId && c.name !== selfName && c.name !== n.name
       );
       return {
-        key: n.is_self ? '__self__' : n.name,
+        key: n.is_self ? SELF_KEY : n.name,
         data: n,
         expanded: true,
+        // This node stays on top whatever the sort.
+        pinned: n.is_self,
         className: n.is_self ? 'self-row' : syncingNodes.has(n.name) ? 'syncing' : n.disabled ? 'disabled-row' : undefined,
         children: safeChildren && safeChildren.length > 0
           ? [...safeChildren].sort((a, b) => a.name.localeCompare(b.name)).map((c) => buildChildNode(c, rootPath))
@@ -291,90 +210,83 @@ export default function NodesPage() {
     if (n.connected === false) return <span className="latency latency-off">{t('nodes.offline')}</span>;
     if (n.latency_ms === -1) return <span className="latency latency-off">{t('nodes.offline')}</span>;
     if (n.latency_ms === 0) return <span className="latency latency-na">—</span>;
-    const cls = n.latency_ms < 80 ? 'latency-good' : n.latency_ms < 200 ? 'latency-med' : 'latency-bad';
-    return <span className={`latency ${cls}`}>{n.latency_ms}ms</span>;
+    return <span className={`latency ${latencyClass(n.latency_ms)}`}>{n.latency_ms}ms</span>;
   };
 
   const dirBadge = (n: TopologyNode) => {
-    if (n.is_self) return <Badge variant="blue">LOCAL</Badge>;
-    if (n.direction === 'inbound') return <Badge variant="muted">IN</Badge>;
-    if (n.direction === 'outbound') return <Badge variant="muted">OUT</Badge>;
+    if (n.is_self) return <Badge variant="blue">{t('nodes.dirLocal')}</Badge>;
+    if (n.direction === 'inbound') return <Badge variant="muted">{t('nodes.dirIn')}</Badge>;
+    if (n.direction === 'outbound') return <Badge variant="muted">{t('nodes.dirOut')}</Badge>;
     return null;
   };
 
   const columns: TreeColumn<TopologyNode>[] = [
     {
       key: 'status', title: t('nodes.status'), width: '75px', className: 'col-status',
+      // Latency in ms; self first, unreachable / unmeasured rows last.
+      sortValue: (n) => {
+        if (n.is_self) return 0;
+        if (n.incompatible || n.conflict || n.unsupported || n.disabled || n.connected === false) return null;
+        return n.latency_ms > 0 ? n.latency_ms : null;
+      },
       render: (n, meta) => {
         return latencyCell(n, meta.nodeKey);
       },
     },
     {
       key: 'dir', title: t('nodes.dir'), width: '55px', className: 'col-dir',
+      sortValue: (n) => n.is_self ? 'local' : n.direction || null,
       render: (n) => dirBadge(n),
     },
     {
       key: 'node', title: t('nodes.node'), className: 'col-name',
+      sortValue: (n) => n.name || (n.is_self ? node?.name : '') || null,
       render: (n, meta) => {
-        // Already viewing a remote node through the local proxy — don't
-        // offer to chain another /remote/ hop from here. Chained proxy
-        // paths stack double-proxy overhead and make auth/routing hard to
-        // reason about; the user should drive from their own local UI.
-        const isRemoteView = !!(window as any).__PROXY__;
-        const selfId = node?.node_id || '';
-        const chainStr = selfId && meta.nodeKey.startsWith(selfId + '/')
-          ? meta.nodeKey.slice(selfId.length + 1)
-          : meta.nodeKey;
-        // Native peers do NOT speak the hy2scale relay-API protocol — they
-        // are vanilla hysteria2 servers — so opening /remote/<native>/scale/
-        // would just hit a peer that has no idea what to do with it. v1.2's
-        // UI suppressed the click; v1.3 lost that during the React rewrite.
-        // Restore: render the name as plain text, no link.
-        // Offline peers render plain too — chained remote into something
-        // that won't answer would land in a hung tunnel; same gate the
-        // graph view's path-info bar uses. `n.connected === false` is the
-        // canonical "this hop is broken" signal the backend fills for
-        // both top-level peers and sub-rows; latency_ms can lag for a
-        // tick when a peer drops out so it's not the right gate.
-        const offline = n.connected === false;
-        const nameEl = n.is_self ? (
-          <span className="peer-name-cell" style={{ color: 'var(--primary)' }}>{n.name || node?.name || 'self'}</span>
-        ) : isRemoteView || n.native || offline ? (
-          <span className="peer-name-cell">{n.name}</span>
-        ) : (
-          // Click goes through the same RemoteConnectModal the graph view
-          // uses — auto-login + plain-text expired screen handling all live
-          // there. Direct window.open(/remote/<chain>/scale/) used to bypass
-          // that modal entirely and dump users on the remote LoginPage.
+        // Name opens the edit dialog for rows configured here: this node
+        // and its top-level outbound peers. Inbound and nested rows have
+        // no local config — their name is plain text, and a click falls
+        // through to the row (details dialog). Remote connect lives in the
+        // details dialog.
+        const editable = meta.depth === 0 && (n.is_self || n.direction !== 'inbound');
+        const label = n.is_self ? (n.name || node?.name || 'self') : n.name;
+        const nameEl = editable ? (
           <a
             className="peer-link peer-name-cell"
             href="#"
+            style={n.is_self ? { color: 'var(--primary)' } : undefined}
+            data-testid="node-name-edit"
             onClick={(e) => {
               e.preventDefault();
-              const chain = chainStr.split('/').filter(Boolean);
-              if (chain.length === 0) return;
               const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
               setClickPos({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
-              setRemoteConnect({ chain, label: chain.join(' / ') });
+              if (n.is_self) {
+                setEditSelfOpen(true);
+              } else {
+                setEditingName(n.name);
+                setModalOpen(true);
+              }
             }}
           >
-            {n.name}
+            {label}
           </a>
+        ) : (
+          <span className="peer-name-cell">{label}</span>
         );
 
         const lossMin = node?.lossless_min_version;
         const outdated = !!n.version && !!lossMin && !n.incompatible && !versionAtLeast(n.version, lossMin);
         const versionBadge = n.version && n.version !== node?.version ? (
-          <span
-            className={`version-badge${n.incompatible ? ' incompatible' : n.compat ? ' compat' : ''}`}
-            style={{ marginLeft: 6 }}
-            title={outdated ? t('nodes.updateForLossless', { v: lossMin }) : undefined}
-          >
-            v{n.version}{n.incompatible ? ' ✗' : outdated ? ' ↑' : ''}
-          </span>
+          <VersionBadge peer version={n.version} compat={n.compat} incompatible={n.incompatible} outdated={outdated}
+            className="version-after-name" title={outdated ? t('nodes.updateForLossless', { v: lossMin }) : undefined} />
         ) : null;
 
-        const nativeBadge = n.native ? <Badge variant="muted">native</Badge> : null;
+        const nativeBadge = n.native ? <Badge variant="muted">{t('nodes.native')}</Badge> : null;
+        const invisibleBadge = n.invisible
+          ? <span title={t('nodes.invisibleTitle')} data-testid="invisible-badge"><Badge variant="muted">{t('nodes.invisible')}</Badge></span>
+          : null;
+        const restrictedBadge = n.restricted
+          ? <span title={t('nodes.restrictedTitle')} data-testid="restricted-badge"><Badge variant="muted" className="badge-restricted">{t('nodes.restricted')}</Badge></span>
+          : null;
 
         // Tree expand/collapse triangle: shown for non-self, non-native nodes
         // ▶ = nested false (collapsed), ▼ = nested true (expanded)
@@ -383,31 +295,21 @@ export default function NodesPage() {
         // Self/native rows render a non-interactive disabled chevron (forced
         // down state) so the column stays visually consistent with other rows.
         const canExpand = !n.is_self && !n.native && !n.incompatible && !n.conflict;
-        const chevronSvg = (rotated: boolean) => (
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2.5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            style={{ transform: rotated ? 'rotate(90deg)' : 'rotate(0deg)' }}
-          >
-            <path d="M9 6l6 6-6 6" />
-          </svg>
+        const chevron = (rotated: boolean) => (
+          <IconChevronRight size={18} strokeWidth={2.5} className={rotated ? 'rot-90' : undefined} />
         );
         const triangleSlot = canExpand ? (
           <button
             type="button"
             className="hy-tree-toggle"
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleNestedToggle(n, meta.nodeKey); }}
-            aria-label={n.nested ? 'Collapse' : 'Expand'}
+            aria-label={n.nested ? t('app.collapse') : t('app.expand')}
           >
-            {chevronSvg(!!n.nested)}
+            {chevron(!!n.nested)}
           </button>
         ) : (
           <span className="hy-tree-toggle hy-tree-toggle-disabled" aria-hidden="true">
-            {chevronSvg(true)}
+            {chevron(true)}
           </span>
         );
 
@@ -418,22 +320,24 @@ export default function NodesPage() {
               {nameEl}
               {versionBadge}
               {nativeBadge && <> {nativeBadge}</>}
+              {invisibleBadge && <> {invisibleBadge}</>}
+              {restrictedBadge && <> {restrictedBadge}</>}
               {n.via ? (
-                <span className="peer-addr-sub">via {n.via}</span>
+                <span className="peer-addr-sub">{t('nodes.via', { name: n.via })}</span>
               ) : n.addr ? (
                 <span className="peer-addr-sub">
-                  {n.addr}
+                  {fmtAddr(n.addr)}
+                  {punchBadge(n.name)}
                   {n.ip_statuses && n.ip_statuses.length > 0 && (
                     <> <Tooltip content={
                       <div>
                         {n.ip_statuses.map((s, i) => {
                           const isGood = s.latency_ms && s.latency_ms > 0;
                           const isBad = s.latency_ms === -1;
-                          const lat = isGood ? `${s.latency_ms}ms` : isBad ? 'timeout' : s.status;
-                          const color = isGood ? 'var(--green)' : isBad ? 'var(--red)' : 'var(--text-muted)';
+                          const lat = isGood ? `${s.latency_ms}ms` : isBad ? t('nodes.timeout') : s.status;
                           return (
-                            <div key={i} style={{ fontSize: 12 }}>
-                              {s.addr} — <span style={{ color, fontWeight: 600 }}>{lat}</span>
+                            <div key={i} className="cell-small">
+                              {fmtAddr(s.addr)} — <span className={`addr-lat ${isGood ? 'good' : isBad ? 'bad' : ''}`}>{lat}</span>
                             </div>
                           );
                         })}
@@ -450,11 +354,36 @@ export default function NodesPage() {
       },
     },
     {
+      // Selected direct egress of the node (IPv4 line, IPv6 line).
+      key: 'egress', title: t('nodes.egressIp'), className: 'col-egress-ip',
+      sortValue: (n) => {
+        const e = n.egress;
+        return (e?.ipv4?.ok && e.ipv4.ip) || (e?.ipv6?.ok && e.ipv6.ip) || null;
+      },
+      render: (n) => {
+        const e = n.egress;
+        if (e == null) return <span className="iface-muted" data-testid="egress-unknown">{t('nodes.egressUnknown')}</span>;
+        // Only the families the node provides; "—" when it provides neither.
+        const line = (f: api.NodeEgressFamily | null, fam: string) => f == null ? null : (
+          <div className="iface-line" data-fam={fam} key={fam}>
+            {!f.ok ? <span className="iface-bad">{t('iface.unavailable')}</span> : f.ip ? <PublicIP ip={f.ip} /> : <span>—</span>}
+          </div>
+        );
+        const lines = [line(e.ipv4, 'ipv4'), line(e.ipv6, 'ipv6')].filter(Boolean);
+        return (
+          <div className="iface-lines" data-testid="egress-ip">
+            {lines.length ? lines : <div className="iface-line"><span className="iface-muted">—</span></div>}
+          </div>
+        );
+      },
+    },
+    {
       key: 'traffic', title: t('nodes.traffic'), width: '160px', className: 'col-traffic',
+      sortValue: (n) => (n.tx_rate || 0) + (n.rx_rate || 0),
       render: (n) => (
         <>
           <span className="stat-up">{fmtRate(n.tx_rate || 0)}</span>
-          {' '}<span style={{ color: 'var(--text-muted)' }}>/</span>{' '}
+          {' '}<span className="text-muted">/</span>{' '}
           <span className="stat-down">{fmtRate(n.rx_rate || 0)}</span>
         </>
       ),
@@ -464,6 +393,17 @@ export default function NodesPage() {
   ];
 
   const treeNodes = buildTreeNodes(topology);
+  // Row data by tree key (keys are unique across the tree).
+  const findData = (key: string): TopologyNode | undefined => {
+    const search = (nodes: TreeNode<TopologyNode>[]): TopologyNode | undefined => {
+      for (const n of nodes) {
+        if (n.key === key) return n.data;
+        if (n.children) { const r = search(n.children); if (r) return r; }
+      }
+      return undefined;
+    };
+    return search(treeNodes);
+  };
 
   // Collect selectable keys. Self is now selectable too — selecting the
   // self row is the unified way to reach EditSelfModal via the top-right
@@ -479,6 +419,18 @@ export default function NodesPage() {
   collectKeys(treeNodes);
   const selection = useSelection(selectableKeys);
 
+  // Opened with { select: key } (the top bar node badge): select that row
+  // alone once it exists.
+  const location = useLocation();
+  const pendingSelect = useRef<string | null>(null);
+  useEffect(() => { pendingSelect.current = (location.state as { select?: string } | null)?.select ?? null; }, [location.key]);
+  useEffect(() => {
+    const k = pendingSelect.current;
+    if (!k || !selectableKeys.includes(k)) return;
+    pendingSelect.current = null;
+    if (!(selection.count === 1 && selection.selected.has(k))) selection.selectOnly(k);
+  });
+
   // Clicking anywhere outside the list region clears a single-row
   // selection (multi-select stays sticky). The boundary is the Card —
   // graph view's blank-canvas clear is owned by the graph itself, so we
@@ -493,14 +445,14 @@ export default function NodesPage() {
   // row in list view should select it where the user clicked, not yank
   // the table to recenter on it. So `selection` is read inside the
   // effect but is NOT in the dependency list; the only trigger is the
-  // viewMode transition. A ref tracks the previous render's viewMode
-  // so we can distinguish a fresh graph→list flip from any later
-  // re-render while in list view.
-  const prevViewMode = useRef(viewMode);
+  // view transition. A ref tracks the previous render's view so we can
+  // distinguish a fresh topo→list flip from any later re-render while
+  // in list view.
+  const prevView = useRef(view);
   useEffect(() => {
-    const wasGraph = prevViewMode.current === 'graph';
-    prevViewMode.current = viewMode;
-    if (!wasGraph || viewMode !== 'list') return;
+    const wasTopo = prevView.current === 'topo';
+    prevView.current = view;
+    if (!wasTopo || view !== 'list') return;
     if (selection.count !== 1) return;
     const target = Array.from(selection.selected)[0];
     requestAnimationFrame(() => {
@@ -511,7 +463,7 @@ export default function NodesPage() {
     });
     // selection intentionally omitted from deps — see comment above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode]);
+  }, [view]);
 
   const bulkToggleNodes = useCallback(async (disabled: boolean) => {
     try {
@@ -539,7 +491,7 @@ export default function NodesPage() {
 
   const bulkDeleteNodes = useCallback(async () => {
     const ok = await confirm({
-      title: t('app.bulkDelete'), message: t('nodes.deleteConfirm', { name: `${selection.count} nodes` }),
+      title: t('app.bulkDelete'), message: t('app.bulkDeleteConfirm', { count: selection.count }),
       danger: true, confirmText: t('app.delete'), cancelText: t('app.cancel'),
     });
     if (!ok) return;
@@ -551,252 +503,162 @@ export default function NodesPage() {
     } catch (e: any) { toast.error(String(e.message || e)); }
   }, [selection, confirm, queryClient, toast, t]);
 
-  return (
-    <div className="hy-page" ref={pageRef}>
-      {showStats && (
-      <div ref={statsRef}>
-      <StatsGrid
-        items={[
-          {
-            label: t('stats.totalTraffic'),
-            value: stats ? (
-              <><span className="stat-up">{fmtBytes(stats.tx_bytes)}</span> <span className="sep">/</span> <span className="stat-down">{fmtBytes(stats.rx_bytes)}</span></>
-            ) : '—',
-            sub: t('stats.uploadDownload'),
-            history: { up: txBytesHist, down: rxBytesHist },
-            formatPeak: (m) => 'max ' + fmtBytes(m),
-          },
-          {
-            label: t('stats.realtimeSpeed'),
-            value: stats ? (
-              <><span className="stat-up">{fmtRate(stats.tx_rate)}</span> <span className="sep">/</span> <span className="stat-down">{fmtRate(stats.rx_rate)}</span></>
-            ) : '—',
-            sub: t('stats.uploadDownload'),
-            history: { up: txRateHist, down: rxRateHist },
-            formatPeak: (m) => 'max ' + fmtRate(m),
-          },
-          {
-            label: t('stats.connections'),
-            value: stats?.conns ?? '—',
-            sub: t('stats.activeStreams'),
-            history: connsHist,
-            sparkColor: 'var(--primary)',
-            formatPeak: (m) => 'max ' + Math.round(m),
-          },
-          {
-            label: t('stats.exitClients'),
-            value: stats?.exit_clients ?? '—',
-            sub: t('stats.usingAsExit'),
-            history: exitClientsHist,
-            sparkColor: 'var(--primary)',
-            formatPeak: (m) => 'max ' + Math.round(m),
-          },
-        ]}
-      />
-      </div>
-      )}
-
-      <Card
-        fill={1}
-        title={
-          <>
-            {t('nodes.title')}
-            <IconTabs
-              className="hy-card-title-tabs"
-              items={[
-                {
-                  key: 'list',
-                  tooltip: t('nodes.view.list'),
-                  icon: (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <line x1="8" y1="6" x2="21" y2="6" />
-                      <line x1="8" y1="12" x2="21" y2="12" />
-                      <line x1="8" y1="18" x2="21" y2="18" />
-                      <circle cx="4" cy="6" r="1.2" fill="currentColor" />
-                      <circle cx="4" cy="12" r="1.2" fill="currentColor" />
-                      <circle cx="4" cy="18" r="1.2" fill="currentColor" />
-                    </svg>
-                  ),
-                },
-                {
-                  key: 'graph',
-                  tooltip: t('nodes.view.graph'),
-                  icon: (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <circle cx="6" cy="6" r="2.4" />
-                      <circle cx="18" cy="6" r="2.4" />
-                      <circle cx="12" cy="18" r="2.4" />
-                      <line x1="7.7" y1="7.2" x2="10.7" y2="16.2" />
-                      <line x1="16.3" y1="7.2" x2="13.3" y2="16.2" />
-                    </svg>
-                  ),
-                },
-              ]}
-              activeKey={viewMode}
-              onChange={(k) => setViewMode(k as 'list' | 'graph')}
-            />
-          </>
-        }
-        count={topology.length}
-        actions={
-          <ResponsiveActions
-            selectedCount={selection.count}
-            onClearSelection={selection.clear}
-            selectedLabel={t('app.selected', { count: selection.count })}
-          >
-            {(() => {
-              // Inspect selected nodes to decide which buttons to show.
-              const sel = [...selection.selected];
-              const findData = (key: string): TopologyNode | undefined => {
-                const search = (nodes: TreeNode<TopologyNode>[]): TopologyNode | undefined => {
-                  for (const n of nodes) {
-                    if (n.key === key) return n.data;
-                    if (n.children) { const r = search(n.children); if (r) return r; }
-                  }
-                  return undefined;
-                };
-                return search(treeNodes);
-              };
-              const items = sel.map(findData).filter(Boolean) as TopologyNode[];
-              const onlySelf = sel.length === 1 && items.some((n) => n.is_self);
-              // Self is preserved for the enable/disable affordance per UX
-              // spec, but excluded from nested-toggle and bulk-delete (no
-              // path-keyed Peers entry exists for self, and self can't be
-              // removed from its own config).
-              const peerItems = items.filter((n) => !n.is_self);
-              const peerKeys = sel.filter((k) => k !== '__self__');
-              const rootKeys = peerKeys.filter((k) => !k.includes('/'));
-              const hasDisabled = items.some((n) => n.disabled);
-              const hasEnabled = items.some((n) => !n.disabled);
-              const hasNested = peerItems.some((n) => n.nested);
-              const hasUnnested = peerItems.some((n) => !n.nested);
-              const hasRoot = rootKeys.length > 0;
-              return <>
-                {hasDisabled && <Button size="sm" onClick={() => bulkToggleNodes(false)}>{t('app.bulkEnable')}</Button>}
-                {hasEnabled && <Button size="sm" onClick={() => bulkToggleNodes(true)}>{t('app.bulkDisable')}</Button>}
-                {!onlySelf && hasUnnested && <Button size="sm" onClick={() => bulkNested(true)}>{t('nodes.bulkEnableNested')}</Button>}
-                {!onlySelf && hasNested && <Button size="sm" onClick={() => bulkNested(false)}>{t('nodes.bulkDisableNested')}</Button>}
-                {hasRoot && <Button size="sm" variant="danger" onClick={bulkDeleteNodes}>{t('app.bulkDelete')}</Button>}
-              </>;
-            })()}
-            <ImportExportButton target="nodes" />
-            {(() => {
-              // Edit is a single-select shortcut placed deliberately between
-              // Import (group of catalog actions) and Add Node (the primary
-              // creation action), so it reads as "edit the one I just picked"
-              // and not as part of the multi-select bulk group on the left.
-              // Hidden when more than one row is selected, when nothing is
-              // selected, or when the single selection is a nested sub-peer
-              // (whose config lives on the parent and isn't editable here).
-              const sel = [...selection.selected];
-              if (sel.length !== 1) return null;
-              const key = sel[0];
-              if (key === '__self__') {
-                return (
-                  <Button
-                    size="sm"
-                    variant="success"
-                    data-testid="edit-selected-btn"
-                    onClick={openEditSelfFromBar}
-                  >{t('app.edit')}</Button>
-                );
-              }
-              const selfId = node?.node_id || '';
-              const stripped = selfId && key.startsWith(selfId + '/') ? key.slice(selfId.length + 1) : key;
-              if (stripped.includes('/')) return null;
-              const findData = (k: string): TopologyNode | undefined => {
-                const search = (nodes: TreeNode<TopologyNode>[]): TopologyNode | undefined => {
-                  for (const n of nodes) {
-                    if (n.key === k) return n.data;
-                    if (n.children) { const r = search(n.children); if (r) return r; }
-                  }
-                  return undefined;
-                };
-                return search(treeNodes);
-              };
-              const data = findData(key) || findData(stripped);
-              if (!data) return null;
-              // An inbound first-hop peer is one that dialed us — its
-              // configuration lives on the initiator, not on us, so the
-              // Edit modal would have nothing to load and any Save would
-              // either fail or silently overwrite a non-existent client
-              // entry on our side. Suppress the button entirely; bulk
-              // enable/disable on the row still work for the cases (nested
-              // toggle, etc) that ARE locally adjustable.
-              if (data.direction === 'inbound') return null;
-              return (
-                <Button
-                  size="sm"
-                  variant="success"
-                  data-testid="edit-selected-btn"
-                  onClick={() => openEditFromBar(stripped, data)}
-                >{t('app.edit')}</Button>
-              );
-            })()}
+  // Card header actions in list view; floated at the top-right of the
+  // graph in topology view.
+  // `more`: the topology canvas's own secondary controls (⋯ menu).
+  const actionsFor = (more?: ReactNode) => (
+    <ResponsiveActions
+      selectedCount={selection.count}
+      onClearSelection={selection.clear}
+      more={more || undefined}
+    >
+      {(() => {
+        // Inspect selected nodes to decide which buttons to show.
+        const sel = [...selection.selected];
+        const items = sel.map(findData).filter(Boolean) as TopologyNode[];
+        const onlySelf = sel.length === 1 && items.some((n) => n.is_self);
+        // Self is preserved for the enable/disable affordance per UX
+        // spec, but excluded from nested-toggle and bulk-delete (no
+        // path-keyed Peers entry exists for self, and self can't be
+        // removed from its own config).
+        const peerItems = items.filter((n) => !n.is_self);
+        const peerKeys = sel.filter((k) => k !== SELF_KEY);
+        const rootKeys = peerKeys.filter((k) => !k.includes('/'));
+        const hasDisabled = items.some((n) => n.disabled);
+        const hasEnabled = items.some((n) => !n.disabled);
+        const hasNested = peerItems.some((n) => n.nested);
+        const hasUnnested = peerItems.some((n) => !n.nested);
+        const hasRoot = rootKeys.length > 0;
+        return <>
+          {hasDisabled && <Button size="sm" onClick={() => bulkToggleNodes(false)}>{t('app.bulkEnable')}</Button>}
+          {hasEnabled && <Button size="sm" onClick={() => bulkToggleNodes(true)}>{t('app.bulkDisable')}</Button>}
+          {!onlySelf && hasUnnested && <Button size="sm" onClick={() => bulkNested(true)}>{t('nodes.bulkEnableNested')}</Button>}
+          {!onlySelf && hasNested && <Button size="sm" onClick={() => bulkNested(false)}>{t('nodes.bulkDisableNested')}</Button>}
+          {hasRoot && <Button size="sm" variant="danger" onClick={bulkDeleteNodes}>{t('app.bulkDelete')}</Button>}
+        </>;
+      })()}
+      {(() => {
+        // Edit is a single-select shortcut placed deliberately between
+        // Import (group of catalog actions) and Add Node (the primary
+        // creation action), so it reads as "edit the one I just picked"
+        // and not as part of the multi-select bulk group on the left.
+        // Hidden when more than one row is selected, when nothing is
+        // selected, or when the single selection is a nested sub-peer
+        // (whose config lives on the parent and isn't editable here).
+        const sel = [...selection.selected];
+        if (sel.length !== 1) return null;
+        const key = sel[0];
+        if (key === SELF_KEY) {
+          return (
             <Button
               size="sm"
-              variant="primary"
-              title={t('nodes.addNodeHint')}
-              data-testid="add-node-btn"
-              onMouseDown={(e) => { lastPointer.current = { x: e.clientX, y: e.clientY }; addNodeHandlers.onMouseDown(e); }}
-              onMouseUp={addNodeHandlers.onMouseUp}
-              onMouseLeave={addNodeHandlers.onMouseLeave}
-              onTouchStart={(e) => {
-                const t0 = e.touches[0];
-                if (t0) lastPointer.current = { x: t0.clientX, y: t0.clientY };
-                addNodeHandlers.onTouchStart(e);
-              }}
-              onTouchEnd={addNodeHandlers.onTouchEnd}
-              onTouchCancel={addNodeHandlers.onTouchCancel}
-              onContextMenu={addNodeHandlers.onContextMenu}
-              onClick={addNodeHandlers.onClick}
-            >
-              {t('nodes.addNode')}
-            </Button>
-          </ResponsiveActions>
+              variant="success"
+              data-testid="edit-selected-btn"
+              onClick={openEditSelfFromBar}
+            >{t('app.edit')}</Button>
+          );
         }
-        noPadding
-      >
-        <div ref={listScopeRef} style={{ display: 'contents' }}>
-        {viewMode === 'graph' ? (
-          <NodesGraphView
-            topology={topology}
-            selfId={node?.node_id || ''}
-            selfName={node?.name}
-            selectedQPath={selection.count === 1 ? Array.from(selection.selected)[0] : null}
-            onSelectQPath={(qpath) => {
-              // Mirror list-view single-select semantics: clicking a node
-              // replaces the current selection so the same bulk-action bar
-              // responds in either view.
-              selection.clear();
-              if (qpath) selection.toggle(qpath);
-            }}
-            // In proxy mode (already viewing a remote node's UI through
-            // /scale/remote/...), don't offer a further hop into another
-            // remote — the list view drops the node-id link there for the
-            // same reason. Leaving onOpenRemote undefined makes the path-
-            // info bar's `!onOpenRemote` branch render each hop as a
-            // plain span instead of a clickable link.
-            onOpenRemote={(window as any).__PROXY__ ? undefined : (qpath, anchor) => {
-              const selfId = node?.node_id || '';
-              const chainStr = selfId && qpath.startsWith(selfId + '/') ? qpath.slice(selfId.length + 1) : qpath;
-              const chain = chainStr.split('/').filter(Boolean);
-              if (chain.length === 0) return;
-              if (anchor) setClickPos(anchor);
-              setRemoteConnect({ chain, label: chain.join(' / ') });
-            }}
-          />
-        ) : (
-          <TreeTable
-            columns={columns}
-            nodes={treeNodes}
-            emptyText={t('nodes.noConnections')}
-            selection={selection}
-            isSelectable={() => true}
-          />
-        )}
-        </div>
-      </Card>
+        const selfId = node?.node_id || '';
+        const stripped = selfId && key.startsWith(selfId + '/') ? key.slice(selfId.length + 1) : key;
+        if (stripped.includes('/')) return null;
+        const data = findData(key) || findData(stripped);
+        if (!data) return null;
+        // An inbound first-hop peer is one that dialed us — its
+        // configuration lives on the initiator, not on us, so the
+        // Edit modal would have nothing to load and any Save would
+        // either fail or silently overwrite a non-existent client
+        // entry on our side. Suppress the button entirely; bulk
+        // enable/disable on the row still work for the cases (nested
+        // toggle, etc) that ARE locally adjustable.
+        if (data.direction === 'inbound') return null;
+        return (
+          <Button
+            size="sm"
+            variant="success"
+            data-testid="edit-selected-btn"
+            onClick={() => openEditFromBar(stripped, data)}
+          >{t('app.edit')}</Button>
+        );
+      })()}
+      <ExpandButton
+        variant="primary"
+        label={t('nodes.addNode')}
+        testId="add-node-btn"
+        moreLabel={t('app.moreActions')}
+        onClick={openAddNode}
+        actions={[
+          { key: 'link', label: t('nodes.importTitle'), icon: IconLink, onClick: openImportLink, testId: 'add-node-link' },
+          ...ie.actions,
+        ]}
+      />
+    </ResponsiveActions>
+  );
+  const actionsEl = actionsFor();
+
+  const graphEl = (
+    <NodesGraphView
+      full
+      actions={actionsFor}
+      topology={topology}
+      selfId={node?.node_id || ''}
+      selfName={node?.name}
+      selectedQPath={selection.count === 1 ? Array.from(selection.selected)[0] : null}
+      onSelectQPath={(qpath) => {
+        // Mirror list-view single-select semantics: clicking a node
+        // replaces the current selection so the same bulk-action bar
+        // responds in either view.
+        selection.clear();
+        if (qpath) selection.toggle(qpath);
+      }}
+      // In proxy mode (already viewing a remote node's UI), no further
+      // remote hop: undefined renders the overlay hops as plain text.
+      onOpenRemote={(window as any).__PROXY__ ? undefined : (qpath, anchor) => {
+        const selfId = node?.node_id || '';
+        const chainStr = selfId && qpath.startsWith(selfId + '/') ? qpath.slice(selfId.length + 1) : qpath;
+        const chain = chainStr.split('/').filter(Boolean);
+        if (chain.length === 0) return;
+        if (anchor) setClickPos(anchor);
+        setRemoteConnect({ chain, label: chain.join(' / ') });
+      }}
+      onOpenDetails={openDetails}
+    />
+  );
+
+  // Bounds "inside the list" for useDeselectOnBlankClick: the table body in
+  // list view, the whole canvas (with its overlays) in topology view.
+  const scope = (children: ReactNode) => (
+    <div
+      ref={listScopeRef}
+      style={{ display: 'contents' }}
+    >
+      {children}
+    </div>
+  );
+
+  return (
+    <div className={view === 'topo' ? 'hy-topo-full' : 'hy-page'}>
+      {view === 'topo' ? scope(graphEl) : (
+        <Card
+          fill={1}
+          title={t('nodes.title')}
+          count={topology.length}
+          actions={actionsEl}
+          noPadding
+        >
+          {scope(
+            <TreeTable
+              id="nodes"
+              columns={columns}
+              nodes={treeNodes}
+              emptyText={boldMarkup(t('nodes.noConnections'))}
+              selection={selection}
+              isSelectable={() => true}
+              paginate={false}
+              onRowClick={(tn, _m, origin) => openDetails(tn.key, origin)}
+            />,
+          )}
+        </Card>
+      )}
 
       <NodeModal
         open={modalOpen}
@@ -810,6 +672,7 @@ export default function NodesPage() {
         onClose={() => setImportOpen(false)}
         animateFrom={clickPos}
       />
+      {ie.modal}
 
       <EditSelfModal
         open={editSelfOpen}
@@ -817,7 +680,22 @@ export default function NodesPage() {
         animateFrom={clickPos}
       />
 
-      <RemoteConnectModal
+      <NodeDetailModal
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        qpath={detailKey}
+        animateFrom={clickPos}
+        renderStatus={latencyCell}
+        // Already viewing a remote node through the local proxy: no
+        // further remote hop from here.
+        onRemoteConnect={(window as any).__PROXY__ ? undefined : (chain, anchor) => {
+          setDetailOpen(false);
+          if (anchor) setClickPos(anchor);
+          setRemoteConnect({ chain, label: chain.join(' / ') });
+        }}
+      />
+
+      <RemoteModal
         open={!!remoteConnect}
         onClose={() => setRemoteConnect(null)}
         chain={remoteConnect?.chain ?? []}

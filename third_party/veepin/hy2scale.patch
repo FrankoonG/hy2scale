@@ -1,0 +1,2487 @@
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/dataplane/device.go b/dataplane/device.go
+--- a/dataplane/device.go	1970-01-01 11:00:00.000000000 +1100
++++ b/dataplane/device.go	2026-10-29 04:12:45.965006700 +1100
+@@ -0,0 +1,21 @@
++package dataplane
++
++// Device is the packet device a server's data path reads and writes whole IP
++// packets on. *TUN satisfies it; an embedder may hand a server a userspace
++// device instead of letting it open /dev/net/tun. (hy2scale patch P1)
++type Device interface {
++	Read(buf []byte) (int, error)
++	Write(pkt []byte) (int, error)
++	Close() error
++	Name() string
++}
++
++// BatchReader is optionally implemented by a userspace Device: ReadBatch
++// blocks for the first packet and returns at once with whatever else is
++// queued, so the pump can encapsulate a burst and flush it with one batched
++// send. (hy2scale P6)
++type BatchReader interface {
++	ReadBatch(bufs [][]byte, sizes []int) (int, error)
++}
++
++var _ Device = (*TUN)(nil)
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/dataplane/pktconn_linux.go b/dataplane/pktconn_linux.go
+--- a/dataplane/pktconn_linux.go	2026-10-29 03:24:59.384948400 +1100
++++ b/dataplane/pktconn_linux.go	2026-10-29 04:12:45.989146000 +1100
+@@ -57,6 +57,8 @@
+ // It is a drop-in for the subset of *net.UDPConn these servers use.
+ type PacketConn struct {
+ 	conn *net.UDPConn
++	// virt, when set, replaces conn: see NewVirtualPacketConn. (hy2scale P2)
++	virt Datagram
+ 	// pktInfo is false when the socket option is unavailable, in which case
+ 	// this behaves exactly as the bare socket did.
+ 	pktInfo bool
+@@ -128,6 +130,9 @@
+ 
+ // ReadFromUDP reads one datagram, recording which local address it was sent to.
+ func (p *PacketConn) ReadFromUDP(b []byte) (int, *net.UDPAddr, error) {
++	if p.virt != nil {
++		return p.virtRead(b)
++	}
+ 	if !p.pktInfo {
+ 		return p.conn.ReadFromUDP(b)
+ 	}
+@@ -143,6 +148,17 @@
+ 	return n, from, nil
+ }
+ 
++// ReadFromUDPLocal is ReadFromUDP that also reports the local address the
++// datagram was sent to (invalid when unknown). (hy2scale P2)
++func (p *PacketConn) ReadFromUDPLocal(b []byte) (int, *net.UDPAddr, netip.Addr, error) {
++	n, from, err := p.ReadFromUDP(b)
++	if err != nil || from == nil {
++		return n, from, netip.Addr{}, err
++	}
++	local, _ := p.lookup(from)
++	return n, from, local, nil
++}
++
+ // ReadBatch reads up to len(bufs) datagrams — one recvmmsg syscall for the lot —
+ // blocking until at least one arrives. Datagram i lands in bufs[i], its length
+ // in sizes[i], and its source in froms[i]; the count read is returned. sizes and
+@@ -159,6 +175,14 @@
+ 	if len(bufs) == 0 {
+ 		return 0, nil
+ 	}
++	if p.virt != nil {
++		n, from, err := p.virtRead(bufs[0])
++		if err != nil {
++			return 0, err
++		}
++		sizes[0], froms[0] = n, from
++		return 1, nil
++	}
+ 	if cap(p.batchMsgs) < len(bufs) {
+ 		msgs := make([]xipv4.Message, len(bufs))
+ 		copy(msgs, p.batchMsgs)
+@@ -202,6 +226,17 @@
+ 	if len(pkts) == 0 {
+ 		return 0, nil
+ 	}
++	if p.virt != nil {
++		if b, ok := p.virt.(DatagramBatch); ok {
++			return b.WriteBatchTo(pkts, to)
++		}
++		for i, pkt := range pkts {
++			if _, err := p.virt.WriteTo(pkt, to); err != nil {
++				return i, err
++			}
++		}
++		return len(pkts), nil
++	}
+ 	var oob []byte
+ 	if p.pktInfo && to != nil {
+ 		if local, ok := p.lookup(to); ok {
+@@ -234,6 +269,9 @@
+ // when that is known. A peer we have not heard from falls back to the kernel's
+ // choice, which is all that is available and is correct for an unsolicited send.
+ func (p *PacketConn) WriteToUDP(b []byte, to *net.UDPAddr) (int, error) {
++	if p.virt != nil {
++		return p.virt.WriteTo(b, to)
++	}
+ 	if !p.pktInfo || to == nil {
+ 		return p.conn.WriteToUDP(b, to)
+ 	}
+@@ -291,13 +329,28 @@
+ }
+ 
+ // Close closes the socket.
+-func (p *PacketConn) Close() error { return p.conn.Close() }
++func (p *PacketConn) Close() error {
++	if p.virt != nil {
++		return p.virt.Close()
++	}
++	return p.conn.Close()
++}
+ 
+ // LocalAddr is the socket's bound address.
+-func (p *PacketConn) LocalAddr() net.Addr { return p.conn.LocalAddr() }
++func (p *PacketConn) LocalAddr() net.Addr {
++	if p.virt != nil {
++		return p.virt.LocalAddr()
++	}
++	return p.conn.LocalAddr()
++}
+ 
+ // SetReadDeadline forwards to the socket.
+-func (p *PacketConn) SetReadDeadline(t time.Time) error { return p.conn.SetReadDeadline(t) }
++func (p *PacketConn) SetReadDeadline(t time.Time) error {
++	if p.virt != nil {
++		return p.virt.SetReadDeadline(t)
++	}
++	return p.conn.SetReadDeadline(t)
++}
+ 
+ func (p *PacketConn) remember(from *net.UDPAddr, local netip.Addr) {
+ 	ap, ok := addrPortOf(from)
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/dataplane/pump.go b/dataplane/pump.go
+--- a/dataplane/pump.go	2026-10-29 03:25:00.235043400 +1100
++++ b/dataplane/pump.go	2026-10-29 04:12:45.976530200 +1100
+@@ -715,6 +715,10 @@
+ 		p.runVnet()
+ 		return
+ 	}
++	if br, ok := p.tun.(BatchReader); ok && p.batchSend != nil {
++		p.runBatch(br)
++		return
++	}
+ 	buf := make([]byte, 65535)
+ 	for {
+ 		n, err := p.tun.Read(buf)
+@@ -732,6 +736,70 @@
+ 	}
+ }
+ 
++// runBatch is Run for a userspace device that reads bursts: consecutive
++// packets for one tunnel are encapsulated together and flushed with one
++// batched send, exactly as runVnet flushes a super-frame's segments. Anything
++// needing individual treatment (paced tunnels, frag-needed, no route) goes
++// through routeOutbound after the pending burst is flushed, so order holds.
++// (hy2scale P6)
++func (p *Pump) runBatch(br BatchReader) {
++	const burst = 64
++	bufs := make([][]byte, burst)
++	for i := range bufs {
++		bufs[i] = make([]byte, 65535)
++	}
++	sizes := make([]int, burst)
++	outs := make([][]byte, 0, burst)
++	var cur Tunnel
++	flush := func() {
++		if len(outs) > 0 {
++			p.batchSend(outs, cur.PeerAddr())
++		}
++		outs = outs[:0]
++		cur = nil
++	}
++	for {
++		n, err := br.ReadBatch(bufs, sizes)
++		if err != nil {
++			if p.closing.Load() {
++				return
++			}
++			if p.log != nil {
++				p.log.Warnf("dataplane: device read error: %v", err)
++			}
++			return
++		}
++		v := p.tables.Load()
++		mtu := p.innerMTU()
++		for i := range n {
++			pkt := bufs[i][:sizes[i]]
++			dst, ok := innerDest(pkt)
++			if !ok {
++				p.drops[DropNotIP].Add(1)
++				continue
++			}
++			b := v.routes.lookup(dst)
++			if b.t == nil || b.paced != nil || (mtu > 0 && NeedsFragmentation(pkt, mtu)) {
++				flush()
++				p.routeOutbound(pkt)
++				continue
++			}
++			if cur != nil && b.t != cur {
++				flush()
++			}
++			cur = b.t
++			out, err := p.encap(b, pkt, mtu, p.burstBuf(len(outs)))
++			if err != nil {
++				p.drops[DropEncapFailed].Add(1)
++				continue
++			}
++			b.c.countTx(len(pkt))
++			outs = append(outs, out)
++		}
++		flush()
++	}
++}
++
+ // routeOutbound routes one inner IP packet from the TUN to the tunnel whose
+ // route matches its destination most specifically, encapsulates it, and sends
+ // it. Packets that are neither IPv4 nor IPv6, and packets matching no route, are
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/dataplane/virtual.go b/dataplane/virtual.go
+--- a/dataplane/virtual.go	1970-01-01 11:00:00.000000000 +1100
++++ b/dataplane/virtual.go	2026-10-29 04:12:45.963744300 +1100
+@@ -0,0 +1,74 @@
++package dataplane
++
++import (
++	"net"
++	"net/netip"
++	"time"
++)
++
++// Datagram is a UDP endpoint owned by the embedder -- typically one share of a
++// socket demultiplexed between several servers. ReadFrom reports the local
++// address each datagram was sent to, so replies keep being source-pinned.
++// (hy2scale patch P2)
++type Datagram interface {
++	ReadFrom(b []byte) (n int, from *net.UDPAddr, local netip.Addr, err error)
++	WriteTo(b []byte, to *net.UDPAddr) (int, error)
++	Close() error
++	LocalAddr() net.Addr
++	SetReadDeadline(t time.Time) error
++}
++
++// DatagramBatch is optionally implemented by a Datagram that can send a burst
++// to one peer in one call (sendmmsg). (hy2scale P6)
++type DatagramBatch interface {
++	WriteBatchTo(pkts [][]byte, to *net.UDPAddr) (int, error)
++}
++
++// ESPClaimer is optionally implemented by a Datagram shared between several
++// ESP servers: each one claims the inbound SPIs it installs, so ESP is handed to
++// the server that owns the SA even when two servers' peers share one source
++// address and port -- a router running an IKEv2 client and an L2TP/IPsec client
++// from one IKE daemon does. (hy2scale P12)
++type ESPClaimer interface {
++	ClaimESP(spi uint32, claim bool)
++}
++
++// ClaimESP claims (or releases) an inbound ESP SPI on the underlying Datagram,
++// when it routes by SPI; on a plain socket it does nothing. (hy2scale P12)
++func (p *PacketConn) ClaimESP(spi uint32, claim bool) {
++	if c, ok := p.virt.(ESPClaimer); ok {
++		c.ClaimESP(spi, claim)
++	}
++}
++
++// ListenFunc opens the server's socket on a port. Servers that accept one use
++// it instead of net.ListenUDP.
++type ListenFunc func(port int) (*PacketConn, error)
++
++// NewVirtualPacketConn wraps an embedder-owned Datagram in the PacketConn every
++// server already speaks.
++func NewVirtualPacketConn(d Datagram) *PacketConn {
++	p := &PacketConn{
++		virt:   d,
++		locals: map[netip.AddrPort]localEntry{},
++		now:    time.Now,
++	}
++	p.lastGC = p.now()
++	return p
++}
++
++// LocalFor is the local address peer last reached this socket on, if known.
++func (p *PacketConn) LocalFor(peer *net.UDPAddr) net.IP {
++	if local, ok := p.lookup(peer); ok {
++		return net.IP(local.Unmap().AsSlice())
++	}
++	return nil
++}
++
++func (p *PacketConn) virtRead(b []byte) (int, *net.UDPAddr, error) {
++	n, from, local, err := p.virt.ReadFrom(b)
++	if err == nil && from != nil && local.IsValid() {
++		p.remember(from, local)
++	}
++	return n, from, err
++}
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/ikev2/server.go b/ikev2/server.go
+--- a/ikev2/server.go	2026-10-29 03:25:02.904941000 +1100
++++ b/ikev2/server.go	2026-10-29 04:12:46.159839700 +1100
+@@ -95,6 +95,18 @@
+ 	// Logger receives progress logs; nil discards them.
+ 	Logger *slog.Logger
+ 
++	// Device, if set, is the packet device the data path uses instead of a
++	// kernel TUN. (hy2scale P1)
++	Device dataplane.Device
++	// ListenPacket, if set, opens the IKE/NAT-T sockets. (hy2scale P2)
++	ListenPacket dataplane.ListenFunc
++	// EAPLookup, if set, enables EAP-MSCHAPv2 with credentials looked up per
++	// attempt (instead of the static EAPUsers file). (hy2scale P3)
++	EAPLookup func(username string) (password string, ok bool)
++	// OnSession reports a client's tunnel address coming up / going away and
++	// the identity it authenticated as. (hy2scale P3)
++	OnSession func(up bool, user string, addr netip.Addr)
++
+ 	// PostQuantumOnly requires a post-quantum key exchange (ML-KEM-768 over
+ 	// RFC 9370) AND post-quantum authentication, refusing anything less rather
+ 	// than negotiating down. It is what the pq-ikev2 registry name sets.
+@@ -118,7 +130,7 @@
+ type Server struct {
+ 	ike   *ike.Server
+ 	pump  *dataplane.Pump
+-	tun   *dataplane.TUN
++	tun   dataplane.Device
+ 	pool  *dataplane.AddrPool
+ 	pool6 *dataplane.AddrPool6 // always set: Pool6 defaults, so every server is dual-stack
+ 
+@@ -197,12 +209,19 @@
+ 		eapLookup = store.Lookup
+ 		logger.Printf("ikev2: EAP-MSCHAPv2 enabled with %d user(s) from %s", store.Count(), cfg.EAPUsers)
+ 	}
++	if cfg.EAPLookup != nil {
++		eapLookup = cfg.EAPLookup
++	}
+ 
+ 	// GSO: the kernel may hand the pump TCP super-frames to segment and batch
+ 	// (doc/scaling-the-data-path.md); falls back to a plain TUN transparently.
+-	tun, err := dataplane.OpenTUNGSO(cfg.TUNName)
+-	if err != nil {
+-		return nil, fmt.Errorf("ikev2: open TUN: %w", err)
++	var tun dataplane.Device = cfg.Device
++	if tun == nil {
++		t, terr := dataplane.OpenTUNGSO(cfg.TUNName)
++		if terr != nil {
++			return nil, fmt.Errorf("ikev2: open TUN: %w", terr)
++		}
++		tun = t
+ 	}
+ 
+ 	srv, err := ike.NewServer(ike.Config{
+@@ -219,6 +238,8 @@
+ 		RequirePostQuantumAuth: cfg.PostQuantumOnly,
+ 		IPTFSRate:              cfg.IPTFSRate,
+ 		TCP:                    cfg.TCP,
++		ListenPacket:           cfg.ListenPacket,
++		OnSession:              cfg.OnSession,
+ 		Logger:                 logger,
+ 		AssignAddr: func(want ike.AddressRequest) (ike.Assignment, error) {
+ 			var a ike.Assignment
+@@ -268,7 +289,9 @@
+ 		pump.SetShaper(dataplane.NewShaper(dataplane.ShapeConfig{Bytes: cfg.Shape}))
+ 		logger.Printf("ikev2: downstream shaping on, %d bytes per flow", cfg.Shape)
+ 	}
+-	srv.SetDataPath(ike.NewPumpDataPath(pump))
++	dp := ike.NewPumpDataPath(pump)
++	dp.SetESPClaim(srv.ClaimESP) // hy2scale P12
++	srv.SetDataPath(dp)
+ 
+ 	return &Server{
+ 		ike: srv, pump: pump, tun: tun,
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/cryptoutil/modp_more.go b/internal/cryptoutil/modp_more.go
+--- a/internal/cryptoutil/modp_more.go	1970-01-01 11:00:00.000000000 +1100
++++ b/internal/cryptoutil/modp_more.go	2026-10-29 04:12:46.068529200 +1100
+@@ -0,0 +1,73 @@
++package cryptoutil
++
++import "math/big"
++
++// The other finite-field groups IKEv1 peers propose. iKuai's L2TP client (and
++// strongSwan's IKEv1 default) offers only MODP-3072; older ones MODP-1024.
++// The primes are RFC 2409 section 6.2 (group 2) and RFC 3526 sections 4-5
++// (groups 15, 16); the generator is 2. (hy2scale P8)
++
++// NewMODP1024 returns the 1024-bit MODP group (RFC 2409, IKE group 2).
++func NewMODP1024() DHGroup {
++	return &modpGroup{prime: modp1024Prime, g: big.NewInt(2), size: 128}
++}
++
++// NewMODP3072 returns the 3072-bit MODP group (RFC 3526, IKE group 15).
++func NewMODP3072() DHGroup {
++	return &modpGroup{prime: modp3072Prime, g: big.NewInt(2), size: 384}
++}
++
++// NewMODP4096 returns the 4096-bit MODP group (RFC 3526, IKE group 16).
++func NewMODP4096() DHGroup {
++	return &modpGroup{prime: modp4096Prime, g: big.NewInt(2), size: 512}
++}
++
++var modp1024Prime, _ = new(big.Int).SetString(
++	"FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"+
++		"29024E088A67CC74020BBEA63B139B22514A08798E3404DD"+
++		"EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245"+
++		"E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED"+
++		"EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE65381"+
++		"FFFFFFFFFFFFFFFF", 16)
++
++var modp3072Prime, _ = new(big.Int).SetString(
++	"FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"+
++		"29024E088A67CC74020BBEA63B139B22514A08798E3404DD"+
++		"EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245"+
++		"E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED"+
++		"EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3D"+
++		"C2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F"+
++		"83655D23DCA3AD961C62F356208552BB9ED529077096966D"+
++		"670C354E4ABC9804F1746C08CA18217C32905E462E36CE3B"+
++		"E39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9"+
++		"DE2BCBF6955817183995497CEA956AE515D2261898FA0510"+
++		"15728E5A8AAAC42DAD33170D04507A33A85521ABDF1CBA64"+
++		"ECFB850458DBEF0A8AEA71575D060C7DB3970F85A6E1E4C7"+
++		"ABF5AE8CDB0933D71E8C94E04A25619DCEE3D2261AD2EE6B"+
++		"F12FFA06D98A0864D87602733EC86A64521F2B18177B200C"+
++		"BBE117577A615D6C770988C0BAD946E208E24FA074E5AB31"+
++		"43DB5BFCE0FD108E4B82D120A93AD2CAFFFFFFFFFFFFFFFF", 16)
++
++var modp4096Prime, _ = new(big.Int).SetString(
++	"FFFFFFFFFFFFFFFFC90FDAA22168C234C4C6628B80DC1CD1"+
++		"29024E088A67CC74020BBEA63B139B22514A08798E3404DD"+
++		"EF9519B3CD3A431B302B0A6DF25F14374FE1356D6D51C245"+
++		"E485B576625E7EC6F44C42E9A637ED6B0BFF5CB6F406B7ED"+
++		"EE386BFB5A899FA5AE9F24117C4B1FE649286651ECE45B3D"+
++		"C2007CB8A163BF0598DA48361C55D39A69163FA8FD24CF5F"+
++		"83655D23DCA3AD961C62F356208552BB9ED529077096966D"+
++		"670C354E4ABC9804F1746C08CA18217C32905E462E36CE3B"+
++		"E39E772C180E86039B2783A2EC07A28FB5C55DF06F4C52C9"+
++		"DE2BCBF6955817183995497CEA956AE515D2261898FA0510"+
++		"15728E5A8AAAC42DAD33170D04507A33A85521ABDF1CBA64"+
++		"ECFB850458DBEF0A8AEA71575D060C7DB3970F85A6E1E4C7"+
++		"ABF5AE8CDB0933D71E8C94E04A25619DCEE3D2261AD2EE6B"+
++		"F12FFA06D98A0864D87602733EC86A64521F2B18177B200C"+
++		"BBE117577A615D6C770988C0BAD946E208E24FA074E5AB31"+
++		"43DB5BFCE0FD108E4B82D120A92108011A723C12A787E6D7"+
++		"88719A10BDBA5B2699C327186AF4E23C1A946834B6150BDA"+
++		"2583E9CA2AD44CE8DBBBC2DB04DE8EF92E8EFC141FBECAA6"+
++		"287C59474E6BC05D99B2964FA090C3A2233BA186515BE7ED"+
++		"1F612970CEE2D7AFB81BDD762170481CD0069127D5B05AA9"+
++		"93B4EA988D8FDDC186FFB7DC90A6C08F4DF435C934063199"+
++		"FFFFFFFFFFFFFFFF", 16)
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1/const.go b/internal/ikev1/const.go
+--- a/internal/ikev1/const.go	2026-10-29 03:25:04.910262800 +1100
++++ b/internal/ikev1/const.go	2026-10-29 04:12:46.151863200 +1100
+@@ -77,8 +77,9 @@
+ 
+ // ESP transform IDs (RFC 2407 section 4.4.4).
+ const (
+-	espTransform3DES = 3
+-	espTransformAES  = 12 // AES-CBC
++	espTransform3DES  = 3
++	espTransformAES   = 12 // AES-CBC
++	espTransformGCM16 = 20 // AES-GCM with a 16-octet ICV (RFC 4106); hy2scale P8
+ )
+ 
+ // Phase-1 SA attribute types (RFC 2409 Appendix A). Encoded TV (basic) unless
+@@ -107,6 +108,18 @@
+ 	lifeTypeSeconds  = 1
+ )
+ 
++// The rest of the suites a responder accepts (hy2scale P8): SHA2-384/512 for
++// the phase-1 hash, the larger MODP groups and the NIST curves (RFC 5903).
++const (
++	hashSHA2384   = 5
++	hashSHA2512   = 6
++	groupMODP3072 = 15
++	groupMODP4096 = 16
++	groupECP256   = 19
++	groupECP384   = 20
++	groupECP521   = 21
++)
++
+ // Phase-2 (IPsec DOI) SA attribute types (RFC 2407 section 4.5).
+ const (
+ 	ipsecAttrLifeType     = 1
+@@ -133,6 +146,8 @@
+ const (
+ 	authHMACSHA     = 2
+ 	authHMACSHA2256 = 5
++	authHMACSHA2384 = 6 // hy2scale P8
++	authHMACSHA2512 = 7 // hy2scale P8
+ )
+ 
+ // ID types (RFC 2407 section 4.6.2.1). ID_KEY_ID is an opaque octet string,
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1/crypto.go b/internal/ikev1/crypto.go
+--- a/internal/ikev1/crypto.go	2026-10-29 03:25:05.105566300 +1100
++++ b/internal/ikev1/crypto.go	2026-10-29 04:12:46.155249200 +1100
+@@ -3,8 +3,10 @@
+ import (
+ 	"crypto/aes"
+ 	"crypto/cipher"
++	"crypto/ecdh"
+ 	"crypto/sha1" //nolint:gosec // SHA-1 is required for IKEv1 interop (native clients, xl2tpd)
+ 	"crypto/sha256"
++	"crypto/sha512"
+ 	"fmt"
+ 	"hash"
+ 
+@@ -18,6 +20,19 @@
+ 	switch id {
+ 	case groupMODP2048:
+ 		return cryptoutil.NewMODP2048(), nil
++	// hy2scale P8: the other groups IKEv1 peers propose.
++	case groupMODP1024:
++		return cryptoutil.NewMODP1024(), nil
++	case groupMODP3072:
++		return cryptoutil.NewMODP3072(), nil
++	case groupMODP4096:
++		return cryptoutil.NewMODP4096(), nil
++	case groupECP256:
++		return cryptoutil.NewECDH(ecdh.P256(), true), nil
++	case groupECP384:
++		return cryptoutil.NewECDH(ecdh.P384(), true), nil
++	case groupECP521:
++		return cryptoutil.NewECDH(ecdh.P521(), true), nil
+ 	default:
+ 		return nil, fmt.Errorf("ikev1: unsupported DH group %d", id)
+ 	}
+@@ -30,6 +45,10 @@
+ 		return sha256.New, nil
+ 	case hashSHA:
+ 		return sha1.New, nil
++	case hashSHA2384: // hy2scale P8
++		return sha512.New384, nil
++	case hashSHA2512: // hy2scale P8
++		return sha512.New, nil
+ 	default:
+ 		return nil, fmt.Errorf("ikev1: unsupported hash %d", id)
+ 	}
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1/exchange.go b/internal/ikev1/exchange.go
+--- a/internal/ikev1/exchange.go	2026-10-29 03:25:05.510924100 +1100
++++ b/internal/ikev1/exchange.go	2026-10-29 04:12:46.146289900 +1100
+@@ -7,10 +7,7 @@
+ // integKeyLen returns the HMAC key length in octets for an ESP integrity
+ // transform.
+ func integKeyLen(integID uint16) int {
+-	if integID == espAuthHMACSHA256128 {
+-		return 32
+-	}
+-	return 20 // HMAC-SHA1
++	return integKeyLenFor(integID) // hy2scale P8: SHA2-384/512, AEAD
+ }
+ 
+ // --- initiator ---
+@@ -261,7 +258,8 @@
+ 	}
+ 	prop, num, ok := s.selectIKEProposal(transforms)
+ 	if !ok {
+-		return fmt.Errorf("ikev1: no acceptable IKE proposal offered")
++		s.sendPhase1NoProposal() // hy2scale P8: say so instead of going silent
++		return fmt.Errorf("ikev1: no acceptable IKE proposal offered (%s)", describeOffer(transforms))
+ 	}
+ 	s.prop = prop
+ 	s.propNum = num
+@@ -388,21 +386,41 @@
+ 	if proto != protoESP || len(spi) != 4 {
+ 		return fmt.Errorf("ikev1: QM1 SA malformed")
+ 	}
+-	esp, num, ok := s.selectESPProposal(transforms)
++	// hy2scale P8: PFS. A KE payload means the initiator wants a fresh DH in
++	// Quick Mode, over the group its transform names.
++	ke, pfs := findPayload(payloads, payloadKE)
++	esp, chosen, ok := s.selectESPProposal(transforms, pfs)
+ 	if !ok {
+-		return fmt.Errorf("ikev1: no acceptable ESP proposal offered")
++		s.sendQuickNoProposal(spi)
++		return fmt.Errorf("ikev1: no acceptable ESP proposal offered (pfs=%v: %s)", pfs, describeOffer(transforms))
++	}
++	var qmKE []byte
++	if pfs {
++		dh, derr := dhGroup(esp.group)
++		if derr != nil {
++			return derr
++		}
++		if qmKE, err = dh.Generate(); err != nil {
++			return err
++		}
++		if s.qmShared, err = dh.ComputeSecret(ke.body); err != nil {
++			return err
++		}
+ 	}
+ 	s.esp = esp
+-	s.outSPI = be32ToU32(spi) // initiator's inbound SPI: our outbound
++	s.outSPI = be32ToU32(chosen.spi) // initiator's inbound SPI: our outbound
+ 	s.inSPI = randSPI()
+ 	s.qmNr = nonce()
+ 	s.advance()
+ 
+-	// QM2: HASH(2), SA (our inbound SPI, the chosen transform), Nr, IDci, IDcr.
++	// QM2: HASH(2), SA (our inbound SPI, the chosen transform), Nr, [KE,] IDci, IDcr.
+ 	content := []payload{
+-		{typ: payloadSA, body: buildPhase2SA(s.inSPI, []espProposal{withNum(esp, num)})},
++		{typ: payloadSA, body: buildPhase2SAChosen(s.inSPI, chosen, esp)},
+ 		{typ: payloadNonce, body: s.qmNr},
+ 	}
++	if qmKE != nil {
++		content = append(content, payload{typ: payloadKE, body: qmKE})
++	}
+ 	// Echo the two traffic-selector IDs if present.
+ 	for _, p := range payloads {
+ 		if p.typ == payloadID {
+@@ -433,8 +451,3 @@
+ 	s.finish()
+ 	return nil
+ }
+-
+-// withNum returns a copy of the ESP proposal — the number is set by the SA
+-// builder's transform index, so this is a passthrough kept for symmetry with the
+-// selection API.
+-func withNum(p espProposal, _ uint8) espProposal { return p }
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1/helpers.go b/internal/ikev1/helpers.go
+--- a/internal/ikev1/helpers.go	2026-10-29 03:25:05.722311100 +1100
++++ b/internal/ikev1/helpers.go	2026-10-29 04:12:46.139979100 +1100
+@@ -74,11 +74,12 @@
+ // to the handler.
+ func (s *Session) finish() {
+ 	encrID, keyLn, integID := espResultIDs(s.esp)
+-	encKeyLen := int(keyLn) / 8
++	encKeyLen := espEncKeyLen(s.esp) // hy2scale P8: AES-GCM adds its salt
+ 	total := encKeyLen + integKeyLen(integID)
+ 
+-	outKM := s.keys.keymat(protoESP, be32(s.outSPI), s.qmNi, s.qmNr, total)
+-	inKM := s.keys.keymat(protoESP, be32(s.inSPI), s.qmNi, s.qmNr, total)
++	// hy2scale P8: with PFS the Quick Mode DH secret leads the KEYMAT seed.
++	outKM := s.keys.keymat(protoESP, be32(s.outSPI), s.qmNi, s.qmNr, total, s.qmShared...)
++	inKM := s.keys.keymat(protoESP, be32(s.inSPI), s.qmNi, s.qmNr, total, s.qmShared...)
+ 
+ 	r := Result{
+ 		EncrID: encrID, EncrKeyLn: keyLn, IntegID: integID,
+@@ -115,9 +116,17 @@
+ func espResultIDs(p espProposal) (encrID, keyLn, integID uint16) {
+ 	encrID = espEncrAESCBC
+ 	keyLn = p.keyBits
+-	if p.authAlg == authHMACSHA2256 {
++	if p.transformID == espTransformGCM16 { // hy2scale P8: AEAD, no integrity
++		return espEncrAESGCM16, keyLn, 0
++	}
++	switch p.authAlg {
++	case authHMACSHA2256:
+ 		integID = espAuthHMACSHA256128
+-	} else {
++	case authHMACSHA2384: // hy2scale P8
++		integID = espAuthHMACSHA384192
++	case authHMACSHA2512: // hy2scale P8
++		integID = espAuthHMACSHA512256
++	default:
+ 		integID = espAuthHMACSHA196
+ 	}
+ 	return encrID, keyLn, integID
+@@ -153,15 +162,18 @@
+ // PSK to an XAuth profile would skip it, and a peer that offers XAuth to a
+ // profile with no credentials to give would stall — both are better refused
+ // here, where the reason is still legible.
++//
++// hy2scale P8: any AES-CBC key size, SHA-1 or SHA-2, and every group dhGroup
++// implements. The initiator still proposes only defaultIKEProposals.
+ func (s *Session) supportedIKE(p ikeProposal) bool {
+-	return p.encr == encrAES && p.keyBits == 256 &&
+-		(p.hash == hashSHA2256 || p.hash == hashSHA) &&
+-		p.group == groupMODP2048 && p.auth == s.authMethod()
++	return p.encr == encrAES && aesKeyBitsOK(p.keyBits) &&
++		hashOK(p.hash) && groupOK(p.group) && p.auth == s.authMethod()
+ }
+ 
+ func (s *Session) selectIKEProposal(transforms []parsedTransform) (ikeProposal, uint8, bool) {
+ 	for _, t := range transforms {
+ 		if p, ok := ikePropFromAttrs(t.attrs); ok && s.supportedIKE(p) {
++			p.raw = t.raw // hy2scale P8: echo the offer as made
+ 			return p, t.num, true
+ 		}
+ 	}
+@@ -170,12 +182,13 @@
+ 
+ func espPropFromAttrs(transformID uint8, attrs []attr) (espProposal, bool) {
+ 	auth, ok := basicAttrOf(attrs, ipsecAttrAuthAlg)
+-	if !ok {
++	if !ok && transformID != espTransformGCM16 { // hy2scale P8: an AEAD has none
+ 		return espProposal{}, false
+ 	}
+ 	encap, _ := basicAttrOf(attrs, ipsecAttrEncapMode)
+ 	kb, _ := basicAttrOf(attrs, ipsecAttrKeyLength)
+-	return espProposal{transformID: transformID, keyBits: kb, authAlg: auth, encap: encap, lifeSeconds: 3600}, true
++	grp, _ := basicAttrOf(attrs, ipsecAttrGroup) // hy2scale P8: PFS
++	return espProposal{transformID: transformID, keyBits: kb, authAlg: auth, encap: encap, lifeSeconds: 3600, group: grp}, true
+ }
+ 
+ // supportedESP reports whether a phase-2 proposal matches the profile. The
+@@ -189,17 +202,32 @@
+ 	} else {
+ 		okEncap = p.encap == encapUDPTransport || p.encap == encapTransport || p.encap == encapUDPTransportDraft
+ 	}
+-	return p.transformID == espTransformAES && p.keyBits == 256 &&
+-		(p.authAlg == authHMACSHA2256 || p.authAlg == authHMACSHA) && okEncap
+-}
+-
+-func (s *Session) selectESPProposal(transforms []parsedTransform) (espProposal, uint8, bool) {
++	// hy2scale P8: AES-CBC with SHA-1/SHA-2, or AES-GCM-16, any key size, and
++	// PFS over any group dhGroup implements.
++	var okCipher bool
++	switch p.transformID {
++	case espTransformAES:
++		okCipher = espAuthOK(p.authAlg)
++	case espTransformGCM16:
++		okCipher = p.authAlg == 0
++	}
++	return okCipher && aesKeyBitsOK(p.keyBits) && (p.group == 0 || groupOK(p.group)) && okEncap
++}
++
++// selectESPProposal picks the first acceptable ESP transform. pfs reports a KE
++// payload in the Quick Mode message: a PFS transform needs one, and one
++// without PFS must not leave the initiator's KE unanswered. (hy2scale P8)
++func (s *Session) selectESPProposal(transforms []parsedTransform, pfs bool) (espProposal, parsedTransform, bool) {
+ 	for _, t := range transforms {
+-		if p, ok := espPropFromAttrs(t.id, t.attrs); ok && s.supportedESP(p) {
+-			return p, t.num, true
++		if t.proto != protoESP || len(t.spi) != 4 {
++			continue
++		}
++		if p, ok := espPropFromAttrs(t.id, t.attrs); ok && s.supportedESP(p) && (p.group != 0) == pfs {
++			p.raw = t.raw
++			return p, t, true
+ 		}
+ 	}
+-	return espProposal{}, 0, false
++	return espProposal{}, parsedTransform{}, false
+ }
+ 
+ // phase2Selectors are the traffic selectors Quick Mode names, local first.
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1/keymat.go b/internal/ikev1/keymat.go
+--- a/internal/ikev1/keymat.go	2026-10-29 03:25:06.137637200 +1100
++++ b/internal/ikev1/keymat.go	2026-10-29 04:12:46.141235800 +1100
+@@ -95,8 +95,11 @@
+ //
+ // It returns n octets, from which the caller slices the encryption then the
+ // integrity key.
+-func (p *phase1) keymat(proto uint8, spi, ni, nr []byte, n int) []byte {
+-	seed := concat([]byte{proto}, spi, ni, nr)
++//
++// pfs, when given, is the Quick Mode Diffie-Hellman secret g(qm)^xy, which
++// leads the seed (RFC 2409 section 5.5). (hy2scale P8)
++func (p *phase1) keymat(proto uint8, spi, ni, nr []byte, n int, pfs ...byte) []byte {
++	seed := concat(pfs, []byte{proto}, spi, ni, nr)
+ 	block := p.prf.Apply(p.skeyidD, seed)
+ 	out := append([]byte(nil), block...)
+ 	for len(out) < n {
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1/sa.go b/internal/ikev1/sa.go
+--- a/internal/ikev1/sa.go	2026-10-29 03:25:06.998035100 +1100
++++ b/internal/ikev1/sa.go	2026-10-29 04:12:46.148486200 +1100
+@@ -15,6 +15,10 @@
+ 	group       uint16 // groupMODP2048 / groupMODP1024
+ 	auth        uint16 // authPSK
+ 	lifeSeconds uint32
++	// raw is the attribute block as the initiator offered it. A responder
++	// echoes it unchanged, lifetime included (or absent), rather than
++	// re-rendering its own idea of the suite. (hy2scale P8)
++	raw []byte
+ }
+ 
+ // defaultIKEProposals is what the initiator offers and the responder accepts,
+@@ -33,6 +37,9 @@
+ }
+ 
+ func (p ikeProposal) attrs() []byte {
++	if p.raw != nil {
++		return p.raw // hy2scale P8
++	}
+ 	attrs := []attr{
+ 		basicAttr(attrEncryption, p.encr),
+ 		basicAttr(attrKeyLength, p.keyBits),
+@@ -115,6 +122,12 @@
+ 	num   uint8
+ 	id    uint8
+ 	attrs []attr
++	// hy2scale P8: the raw attribute block (echoed by a responder) and the
++	// proposal the transform came from — an initiator may send several.
++	raw     []byte
++	propNum uint8
++	proto   uint8
++	spi     []byte
+ }
+ 
+ // parseSA decodes an SA payload body into its protocol ID, SPI, and the list of
+@@ -129,40 +142,57 @@
+ 	if len(chain) < 4 {
+ 		return 0, nil, nil, fmt.Errorf("ikev1: SA without a proposal")
+ 	}
+-	propLen := int(binary.BigEndian.Uint16(chain[2:]))
+-	if propLen < 8 || propLen > len(chain) {
+-		return 0, nil, nil, fmt.Errorf("ikev1: proposal length out of range")
+-	}
+-	prop := chain[4:propLen] // proposal body
+-	if len(prop) < 4 {
+-		return 0, nil, nil, fmt.Errorf("ikev1: truncated proposal")
+-	}
+-	proto = prop[1]
+-	spiSize := int(prop[2])
+-	ntrans := int(prop[3])
+-	if len(prop) < 4+spiSize {
+-		return 0, nil, nil, fmt.Errorf("ikev1: proposal SPI overruns")
+-	}
+-	spi = append([]byte(nil), prop[4:4+spiSize]...)
+-	tchain := prop[4+spiSize:]
+-
+-	for range ntrans {
+-		if len(tchain) < 4 {
+-			return 0, nil, nil, fmt.Errorf("ikev1: truncated transform header")
+-		}
+-		tlen := int(binary.BigEndian.Uint16(tchain[2:]))
+-		if tlen < 8 || tlen > len(tchain) {
+-			return 0, nil, nil, fmt.Errorf("ikev1: transform length out of range")
+-		}
+-		tbody := tchain[4:tlen]
+-		attrs, aerr := parseAttrs(tbody[4:])
+-		if aerr != nil {
+-			return 0, nil, nil, aerr
++	// hy2scale P8: walk every Proposal payload, not just the first. strongSwan
++	// puts each of its proposals in one; the first need not be one we take.
++	for first := true; ; first = false {
++		if len(chain) < 4 {
++			return 0, nil, nil, fmt.Errorf("ikev1: truncated proposal header")
++		}
++		next := chain[0]
++		propLen := int(binary.BigEndian.Uint16(chain[2:]))
++		if propLen < 8 || propLen > len(chain) {
++			return 0, nil, nil, fmt.Errorf("ikev1: proposal length out of range")
++		}
++		prop := chain[4:propLen] // proposal body
++		if len(prop) < 4 {
++			return 0, nil, nil, fmt.Errorf("ikev1: truncated proposal")
++		}
++		pnum, pproto := prop[0], prop[1]
++		spiSize := int(prop[2])
++		ntrans := int(prop[3])
++		if len(prop) < 4+spiSize {
++			return 0, nil, nil, fmt.Errorf("ikev1: proposal SPI overruns")
++		}
++		pspi := append([]byte(nil), prop[4:4+spiSize]...)
++		if first {
++			proto, spi = pproto, pspi
++		}
++		tchain := prop[4+spiSize:]
++
++		for range ntrans {
++			if len(tchain) < 4 {
++				return 0, nil, nil, fmt.Errorf("ikev1: truncated transform header")
++			}
++			tlen := int(binary.BigEndian.Uint16(tchain[2:]))
++			if tlen < 8 || tlen > len(tchain) {
++				return 0, nil, nil, fmt.Errorf("ikev1: transform length out of range")
++			}
++			tbody := tchain[4:tlen]
++			attrs, aerr := parseAttrs(tbody[4:])
++			if aerr != nil {
++				return 0, nil, nil, aerr
++			}
++			transforms = append(transforms, parsedTransform{
++				num: tbody[0], id: tbody[1], attrs: attrs,
++				raw: append([]byte(nil), tbody[4:]...), propNum: pnum, proto: pproto, spi: pspi,
++			})
++			tchain = tchain[tlen:]
++		}
++		chain = chain[propLen:]
++		if next != payloadProposal || len(chain) == 0 {
++			return proto, spi, transforms, nil
+ 		}
+-		transforms = append(transforms, parsedTransform{num: tbody[0], id: tbody[1], attrs: attrs})
+-		tchain = tchain[tlen:]
+ 	}
+-	return proto, spi, transforms, nil
+ }
+ 
+ // espProposal is a phase-2 (IPsec ESP) cipher suite for Quick Mode.
+@@ -172,9 +202,16 @@
+ 	authAlg     uint16 // authHMACSHA2256 / authHMACSHA
+ 	encap       uint16 // encapUDPTransport
+ 	lifeSeconds uint32
++	// group is the PFS group (0: no PFS) and raw the offered attribute block a
++	// responder echoes. (hy2scale P8)
++	group uint16
++	raw   []byte
+ }
+ 
+ func (p espProposal) attrs() []byte {
++	if p.raw != nil {
++		return p.raw // hy2scale P8
++	}
+ 	return encodeAttrs([]attr{
+ 		basicAttr(ipsecAttrEncapMode, p.encap),
+ 		basicAttr(ipsecAttrAuthAlg, p.authAlg),
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1/session.go b/internal/ikev1/session.go
+--- a/internal/ikev1/session.go	2026-10-29 03:25:07.203774200 +1100
++++ b/internal/ikev1/session.go	2026-10-29 04:12:46.149706300 +1100
+@@ -255,6 +255,7 @@
+ 	qmNi, qmNr []byte
+ 	inSPI      uint32 // our inbound ESP SPI
+ 	outSPI     uint32 // peer's inbound ESP SPI (stamped on our outbound ESP)
++	qmShared   []byte // PFS: the Quick Mode DH secret, nil without PFS (hy2scale P8)
+ 
+ 	// Retransmission of the last message we sent. lastSentNATT pins it to the
+ 	// port it originally went out on: the responder floats immediately after
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1/suites.go b/internal/ikev1/suites.go
+--- a/internal/ikev1/suites.go	1970-01-01 11:00:00.000000000 +1100
++++ b/internal/ikev1/suites.go	2026-10-29 04:12:46.154017300 +1100
+@@ -0,0 +1,133 @@
++package ikev1
++
++import (
++	"encoding/binary"
++	"fmt"
++	"strings"
++)
++
++// The suites a responder accepts, PFS in Quick Mode, and the NO-PROPOSAL-CHOSEN
++// answer to an offer it cannot take. (hy2scale P8)
++//
++// Routers rarely let the user choose: iKuai's L2TP client offers exactly one
++// phase-1 transform, AES-128/SHA2-256/MODP-3072, and strongSwan's IKEv1
++// default ESP leads with AES-GCM. A responder that accepts only its own
++// initiator's set silently drops those, and the client times out with no
++// reason given.
++
++// IKEv2 transform IDs the internal/ikev2/esp data path takes for the suites
++// added here.
++const (
++	espEncrAESGCM16      = 20 // ENCR_AES_GCM_16
++	espAuthHMACSHA384192 = 13 // AUTH_HMAC_SHA2_384_192
++	espAuthHMACSHA512256 = 14 // AUTH_HMAC_SHA2_512_256
++)
++
++// notifyNoProposalChosen is the ISAKMP error a responder answers an
++// unacceptable SA with (RFC 2408 section 3.14.1).
++const notifyNoProposalChosen = 14
++
++func aesKeyBitsOK(bits uint16) bool { return bits == 128 || bits == 192 || bits == 256 }
++
++func hashOK(id uint16) bool {
++	_, err := hashCtor(id)
++	return err == nil
++}
++
++func groupOK(id uint16) bool {
++	_, err := dhGroup(id)
++	return err == nil
++}
++
++func espAuthOK(alg uint16) bool {
++	switch alg {
++	case authHMACSHA, authHMACSHA2256, authHMACSHA2384, authHMACSHA2512:
++		return true
++	}
++	return false
++}
++
++// espEncKeyLen is the ESP encryption key length in octets: AES-GCM carries a
++// 4-octet salt after the key (RFC 4106 section 8.1).
++func espEncKeyLen(p espProposal) int {
++	n := int(p.keyBits) / 8
++	if p.transformID == espTransformGCM16 {
++		n += 4
++	}
++	return n
++}
++
++// integKeyLenFor is the HMAC key length for an ESP integrity transform (the
++// IKEv2 ID); 0 for an AEAD suite.
++func integKeyLenFor(integID uint16) int {
++	switch integID {
++	case 0:
++		return 0
++	case espAuthHMACSHA256128:
++		return 32
++	case espAuthHMACSHA384192:
++		return 48
++	case espAuthHMACSHA512256:
++		return 64
++	}
++	return 20 // HMAC-SHA1
++}
++
++// buildPhase2SAChosen renders the responder's Quick Mode SA: our inbound SPI
++// and the one transform chosen, under the proposal and transform numbers the
++// initiator gave it.
++func buildPhase2SAChosen(spi uint32, chosen parsedTransform, p espProposal) []byte {
++	t := buildTransform(payloadNone, chosen.num, p.transformID, p.attrs())
++	prop := buildProposal(payloadNone, chosen.propNum, protoESP, be32(spi), 1, t)
++	return append(saPrefix(), prop...)
++}
++
++// notifyBody renders a Notification payload body: DOI, protocol, SPI, type.
++func notifyBody(proto uint8, spi []byte, typ uint16) []byte {
++	body := make([]byte, 8+len(spi))
++	binary.BigEndian.PutUint32(body[0:], doiIPsec)
++	body[4] = proto
++	body[5] = uint8(len(spi))
++	binary.BigEndian.PutUint16(body[6:], typ)
++	copy(body[8:], spi)
++	return body
++}
++
++// sendPhase1NoProposal answers a Main Mode SA offer with nothing acceptable in
++// it. No keys exist yet, so it is a plaintext Informational exchange naming the
++// ISAKMP SA by its cookie pair. Best effort: the session fails either way.
++func (s *Session) sendPhase1NoProposal() {
++	spi := append(append([]byte(nil), s.initCookie[:]...), s.respCookie[:]...)
++	msg := marshalMessage(s.mmHeader(exchangeInformational, 0, randSPI()), []payload{
++		{typ: payloadNotify, body: notifyBody(protoISAKMP, spi, notifyNoProposalChosen)},
++	})
++	_ = s.cfg.Send(msg, s.floated)
++}
++
++// sendQuickNoProposal answers a Quick Mode SA offer with nothing acceptable in
++// it: a protected Informational exchange naming the initiator's ESP SPI.
++func (s *Session) sendQuickNoProposal(spi []byte) {
++	if err := s.sendInformational([]payload{
++		{typ: payloadNotify, body: notifyBody(protoESP, spi, notifyNoProposalChosen)},
++	}); err != nil {
++		s.logger.Printf("ikev1: NO-PROPOSAL-CHOSEN: %v", err)
++	}
++}
++
++// describeOffer summarises an SA offer (each transform's basic attributes) for
++// the log line a refusal leaves.
++func describeOffer(transforms []parsedTransform) string {
++	var b strings.Builder
++	for i, t := range transforms {
++		if i > 0 {
++			b.WriteString("; ")
++		}
++		fmt.Fprintf(&b, "#%d id=%d", t.num, t.id)
++		for _, a := range t.attrs {
++			if v, ok := attrUint16(a); ok && a.basic {
++				fmt.Fprintf(&b, " %d=%d", a.typ, v)
++			}
++		}
++	}
++	return b.String()
++}
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev2/ike/child_info.go b/internal/ikev2/ike/child_info.go
+--- a/internal/ikev2/ike/child_info.go	2026-10-29 03:25:09.914422900 +1100
++++ b/internal/ikev2/ike/child_info.go	2026-10-29 04:12:46.093194600 +1100
+@@ -87,6 +87,7 @@
+ 	newSA.ClientIP6 = sa.ClientIP6
+ 	newSA.assigned = sa.assigned
+ 	newSA.PeerID = sa.PeerID
++	newSA.EAPIdentity = sa.EAPIdentity // hy2scale P3: keep the user across an IKE rekey
+ 	newSA.RecvMsgID = 0
+ 	newSA.SendMsgID = 0
+ 	newSA.Children = sa.Children
+@@ -96,6 +97,7 @@
+ 	// Child SA data paths nor releases the assigned address.
+ 	sa.Children = make(map[uint32]*ChildSA)
+ 	sa.ClientIP = nil
++	sa.ClientIP6 = nil // hy2scale P7: the v6 lease moved too
+ 	sa.State = StateDeleting
+ 
+ 	// Response under the OLD SA: SA (accepted proposal carrying our new
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev2/ike/datapath.go b/internal/ikev2/ike/datapath.go
+--- a/internal/ikev2/ike/datapath.go	2026-10-29 03:25:10.543524100 +1100
++++ b/internal/ikev2/ike/datapath.go	2026-10-29 04:12:46.101588400 +1100
+@@ -256,8 +256,15 @@
+ 	// not the espTunnel inside it: Pump.RemoveTunnel matches by identity, so
+ 	// removing the inner one would leave the wrapper routing packets forever.
+ 	byIn map[uint32]espTunnelIface
++
++	// claim, when set, is told each inbound SPI as it comes and goes, so a
++	// NAT-T socket shared with another ESP server routes it here. (hy2scale P12)
++	claim func(spi uint32, claim bool)
+ }
+ 
++// SetESPClaim sets the callback told of every inbound SPI. (hy2scale P12)
++func (d *PumpDataPath) SetESPClaim(f func(spi uint32, claim bool)) { d.claim = f }
++
+ // NewPumpDataPath wires Child SA events into pump.
+ func NewPumpDataPath(pump *dataplane.Pump) *PumpDataPath {
+ 	return &PumpDataPath{
+@@ -296,6 +303,9 @@
+ 	d.mu.Lock()
+ 	d.byIn[child.InboundSPI] = reg
+ 	d.mu.Unlock()
++	if d.claim != nil {
++		d.claim(child.InboundSPI, true) // hy2scale P12
++	}
+ 	d.pump.AddTunnel(reg)
+ }
+ 
+@@ -307,6 +317,9 @@
+ 	d.mu.Unlock()
+ 	if t != nil {
+ 		d.pump.RemoveTunnel(t)
++		if d.claim != nil {
++			d.claim(child.InboundSPI, false) // hy2scale P12
++		}
+ 	}
+ }
+ 
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev2/ike/ike_auth.go b/internal/ikev2/ike/ike_auth.go
+--- a/internal/ikev2/ike/ike_auth.go	2026-10-29 03:25:11.151863500 +1100
++++ b/internal/ikev2/ike/ike_auth.go	2026-10-29 04:12:46.123979800 +1100
+@@ -61,7 +61,7 @@
+ 			s.respondEncryptedNotify(sa, payload.IKE_AUTH, hdr.MessageID, payload.AuthenticationFailed, remote)
+ 			return
+ 		}
+-		if len(s.cfg.PSK) == 0 {
++		if len(s.cfg.PSK) == 0 && s.serverCred == nil {
+ 			// The server's own AUTH in an EAP exchange is PSK-keyed (see
+ 			// handleEAPStart). With no PSK that AUTH would be prf("", ...),
+ 			// which anyone can compute, so an EAP client would have no way
+@@ -197,9 +197,26 @@
+ // deferred until EAP completes.
+ func (s *Server) handleEAPStart(sa *IKESA, hdr payload.Header, inners []payload.RawPayload, remote *net.UDPAddr) {
+ 	// Our AUTH uses PSK (the server authenticates itself with the PSK even when
+-	// the client uses EAP).
++	// the client uses EAP) -- unless a server certificate is configured, in
++	// which case it signs with it, as RFC 7296 2.16 expects and as the native
++	// Windows / Apple / Android EAP clients require. (hy2scale P5)
+ 	localIDBody := idPayloadBody(s.cfg.LocalID)
+-	ourAuth := computePSKAuth(sa.Suite.PRF, s.cfg.PSK, sa.ResponderSAInit, sa.Ni, sa.Keys.SKpr, localIDBody, sa.intAuth(sa.IKEAuthMsgID))
++	var ourAuthPay payload.AuthPayload
++	var certPays [][]byte
++	if s.serverCred != nil {
++		respOctets := AuthOctets(sa.Suite.PRF, sa.ResponderSAInit, sa.Ni, sa.Keys.SKpr, localIDBody, sa.intAuth(sa.IKEAuthMsgID))
++		method, authData, serr := signAuth(s.serverCred, respOctets, sa.peerSigHashes)
++		if serr != nil {
++			s.log.Printf("ikev2: signing server AUTH for %s: %v", remote, serr)
++			s.respondEncryptedNotify(sa, payload.IKE_AUTH, hdr.MessageID, payload.AuthenticationFailed, remote)
++			return
++		}
++		ourAuthPay = payload.AuthPayload{Method: method, Data: authData}
++		certPays = s.serverCred.chain
++	} else {
++		ourAuth := computePSKAuth(sa.Suite.PRF, s.cfg.PSK, sa.ResponderSAInit, sa.Ni, sa.Keys.SKpr, localIDBody, sa.intAuth(sa.IKEAuthMsgID))
++		ourAuthPay = payload.AuthPayload{Method: payload.AuthSharedKeyMIC, Data: ourAuth}
++	}
+ 
+ 	// Start EAP-MSCHAPv2.
+ 	srv := eap.NewServer(s.cfg.EAPCredentials, s.cfg.EAPServerName)
+@@ -227,9 +244,12 @@
+ 
+ 	b := payload.NewBuilder()
+ 	b.Add(payload.TypeIDr, false, localIDBody)
+-	b.Add(payload.TypeAUTH, false, payload.MarshalAuth(payload.AuthPayload{
+-		Method: payload.AuthSharedKeyMIC, Data: ourAuth,
+-	}))
++	for _, der := range certPays {
++		b.Add(payload.TypeCERT, false, payload.MarshalCert(payload.CertPayload{
++			Encoding: payload.CertX509Signature, Data: der,
++		}))
++	}
++	b.Add(payload.TypeAUTH, false, payload.MarshalAuth(ourAuthPay))
+ 	b.Add(payload.TypeEAP, false, challenge.Marshal())
+ 
+ 	sa.RecvMsgID = hdr.MessageID + 1
+@@ -441,6 +461,7 @@
+ 			s.cfg.OnChildSA(sa, respChild)
+ 		}
+ 	}
++	sa.reportSession(s.cfg.OnSession, true)
+ }
+ 
+ // narrowTSiToAssignment rewrites the initiator's proposed TSi to name exactly
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev2/ike/peers.go b/internal/ikev2/ike/peers.go
+--- a/internal/ikev2/ike/peers.go	2026-10-29 03:25:12.494717800 +1100
++++ b/internal/ikev2/ike/peers.go	2026-10-29 04:12:46.105264700 +1100
+@@ -66,7 +66,7 @@
+ 		sa.mu.Lock()
+ 		for _, child := range sa.Children {
+ 			p := Peer{
+-				ID:         peerIDString(sa.PeerID),
++				ID:         sa.sessionUser(),
+ 				Address:    peerAddress(child),
+ 				LastActive: sa.lastSeen,
+ 			}
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev2/ike/server.go b/internal/ikev2/ike/server.go
+--- a/internal/ikev2/ike/server.go	2026-10-29 03:25:13.375002400 +1100
++++ b/internal/ikev2/ike/server.go	2026-10-29 04:12:46.123072400 +1100
+@@ -5,6 +5,7 @@
+ 	"crypto/x509"
+ 	"fmt"
+ 	"net"
++	"net/netip"
+ 	"os"
+ 	"strconv"
+ 	"sync"
+@@ -106,6 +107,14 @@
+ 	// ReleaseAddr, if set, reclaims the assignment when the SA is torn down.
+ 	ReleaseAddr func(Assignment)
+ 
++	// ListenPacket, if set, opens the IKE and NAT-T sockets instead of
++	// net.ListenUDP. (hy2scale P2)
++	ListenPacket dataplane.ListenFunc
++	// OnSession, if set, is told when a client's tunnel address comes up and
++	// goes away, with the identity it authenticated as (the EAP username when
++	// EAP was used). (hy2scale P3)
++	OnSession func(up bool, user string, addr netip.Addr)
++
+ 	// IPTFSRate, when positive, makes every AGGFRAG Child SA transmit at that
+ 	// many bytes per second regardless of load. It is the traffic-flow
+ 	// confidentiality half of RFC 9347 and it costs that bandwidth
+@@ -201,11 +210,21 @@
+ 	if ip == nil {
+ 		return nil, fmt.Errorf("ike: invalid ListenIP %q", cfg.ListenIP)
+ 	}
+-	c500, err := net.ListenUDP("udp", &net.UDPAddr{IP: ip, Port: cfg.Port500})
++	listen := cfg.ListenPacket
++	if listen == nil {
++		listen = func(port int) (*dataplane.PacketConn, error) {
++			c, lerr := net.ListenUDP("udp", &net.UDPAddr{IP: ip, Port: port})
++			if lerr != nil {
++				return nil, lerr
++			}
++			return dataplane.NewPacketConn(c), nil
++		}
++	}
++	c500, err := listen(cfg.Port500)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("ike: bind :%d: %w", cfg.Port500, err)
+ 	}
+-	c4500, err := net.ListenUDP("udp", &net.UDPAddr{IP: ip, Port: cfg.Port4500})
++	c4500, err := listen(cfg.Port4500)
+ 	if err != nil {
+ 		c500.Close()
+ 		return nil, fmt.Errorf("ike: bind :%d: %w", cfg.Port4500, err)
+@@ -221,8 +240,8 @@
+ 		byRemote:   make(map[string]*IKESA),
+ 	}
+ 	s.tr = &transport{
+-		conn500:    dataplane.NewPacketConn(c500),
+-		conn4500:   dataplane.NewPacketConn(c4500),
++		conn500:    c500,
++		conn4500:   c4500,
+ 		onESP:      s.handleESP,
+ 		onESPBatch: s.handleESPBatch,
+ 	}
+@@ -375,6 +394,14 @@
+ 	s.cfg.DataPath = dp
+ }
+ 
++// ClaimESP claims (or releases) an inbound SPI on the NAT-T socket, for a
++// socket shared with another ESP server. (hy2scale P12)
++func (s *Server) ClaimESP(spi uint32, claim bool) {
++	if s.tr != nil {
++		s.tr.conn4500.ClaimESP(spi, claim)
++	}
++}
++
+ // SendESP transmits an encapsulated ESP datagram to a peer on the NAT-T socket.
+ // It matches the dataplane.Sender signature so a Pump can send through the
+ // server's own socket. In this userspace build ESP always rides UDP port 4500,
+@@ -467,11 +494,36 @@
+ 	if sa.RemoteAddr != nil && s.byRemote[sa.RemoteAddr.String()] == sa {
+ 		delete(s.byRemote, sa.RemoteAddr.String())
+ 	}
++	sa.reportSession(s.cfg.OnSession, false)
+ 	if s.cfg.ReleaseAddr != nil && (sa.ClientIP != nil || sa.ClientIP6 != nil) {
+ 		s.cfg.ReleaseAddr(sa.assigned)
+ 	}
+ }
+ 
++// reportSession tells OnSession about each address the SA holds: the IPv4
++// lease and, on a dual-stack SA, the IPv6 one. (hy2scale P3, P7)
++func (sa *IKESA) reportSession(on func(bool, string, netip.Addr), up bool) {
++	if on == nil {
++		return
++	}
++	if a, ok := netip.AddrFromSlice(sa.ClientIP.To4()); ok {
++		on(up, sa.sessionUser(), a)
++	}
++	if len(sa.ClientIP6) == net.IPv6len && sa.ClientIP6.To4() == nil {
++		if a, ok := netip.AddrFromSlice(sa.ClientIP6); ok {
++			on(up, sa.sessionUser(), a)
++		}
++	}
++}
++
++// sessionUser is the identity reported to OnSession. (hy2scale P3)
++func (sa *IKESA) sessionUser() string {
++	if sa.EAPIdentity != "" {
++		return sa.EAPIdentity
++	}
++	return peerIDString(sa.PeerID)
++}
++
+ // handlePacket is the top-level IKE ingress: parse the header, route by
+ // exchange. on4500 indicates the message arrived on the NAT-T port.
+ func (s *Server) handlePacket(pkt []byte, remote *net.UDPAddr, on4500 bool) {
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/l2tp/client.go b/internal/l2tp/client.go
+--- a/internal/l2tp/client.go	2026-10-29 03:25:16.011917800 +1100
++++ b/internal/l2tp/client.go	2026-10-29 04:12:46.031178500 +1100
+@@ -249,7 +249,7 @@
+ 	if err != nil || nh != ipProtoUDP {
+ 		return
+ 	}
+-	if l2, ok := unwrapUDP(inner); ok {
++	if l2, _, ok := unwrapUDP(inner); ok { // hy2scale P9
+ 		tun.HandleInbound(l2)
+ 	}
+ }
+@@ -276,7 +276,7 @@
+ 	if sa == nil {
+ 		return errors.New("l2tp: ESP SA not ready")
+ 	}
+-	pkt, err := sa.Encapsulate(wrapUDP(l2tp), ipProtoUDP)
++	pkt, err := sa.Encapsulate(wrapUDP(l2tp, l2tpUDPPort), ipProtoUDP) // hy2scale P9
+ 	if err != nil {
+ 		return err
+ 	}
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/l2tp/ipsec.go b/internal/l2tp/ipsec.go
+--- a/internal/l2tp/ipsec.go	2026-10-29 03:25:16.235459200 +1100
++++ b/internal/l2tp/ipsec.go	2026-10-29 04:12:46.026555300 +1100
+@@ -59,10 +59,18 @@
+ // wrapUDP prepends the inner UDP header to an L2TP datagram, producing the
+ // transport-mode ESP payload. The checksum is left zero: IPv4 UDP permits it,
+ // which spares the peer a pseudo-header recomputation after decryption.
+-func wrapUDP(l2tp []byte) []byte {
++//
++// The source is always 1701; the destination is the port the peer's L2TP
++// speaks from. Native clients use 1701 there too, but xl2tpd as a LAC (iKuai,
++// OpenWrt) binds a port of its own, and a reply sent to 1701 lands on a port
++// nobody listens on. (hy2scale P9)
++func wrapUDP(l2tp []byte, dstPort uint16) []byte {
++	if dstPort == 0 {
++		dstPort = l2tpUDPPort
++	}
+ 	out := make([]byte, udpHeaderLen+len(l2tp))
+ 	binary.BigEndian.PutUint16(out[0:], l2tpUDPPort)
+-	binary.BigEndian.PutUint16(out[2:], l2tpUDPPort)
++	binary.BigEndian.PutUint16(out[2:], dstPort)
+ 	binary.BigEndian.PutUint16(out[4:], uint16(udpHeaderLen+len(l2tp)))
+ 	// out[6:8] checksum stays zero.
+ 	copy(out[udpHeaderLen:], l2tp)
+@@ -70,12 +78,13 @@
+ }
+ 
+ // unwrapUDP strips the inner UDP header from a decapsulated transport-mode
+-// payload, returning the L2TP datagram.
+-func unwrapUDP(inner []byte) ([]byte, bool) {
++// payload, returning the L2TP datagram and the sender's UDP source port
++// (hy2scale P9).
++func unwrapUDP(inner []byte) ([]byte, uint16, bool) {
+ 	if len(inner) < udpHeaderLen {
+-		return nil, false
++		return nil, 0, false
+ 	}
+-	return inner[udpHeaderLen:], true
++	return inner[udpHeaderLen:], binary.BigEndian.Uint16(inner[0:]), true
+ }
+ 
+ // isIKE reports whether a datagram on the shared NAT-T port is an IKE message
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/l2tp/server.go b/internal/l2tp/server.go
+--- a/internal/l2tp/server.go	2026-10-29 03:25:16.662092400 +1100
++++ b/internal/l2tp/server.go	2026-10-29 04:12:46.028994400 +1100
+@@ -20,6 +20,11 @@
+ type ServerConfig struct {
+ 	PSK   []byte
+ 	Users map[string]string // username -> password for MS-CHAPv2
++	// UserLookup, if set, replaces Users. (hy2scale P3)
++	UserLookup func(username string) (string, bool)
++	// OnSession reports a client's address coming up after PPP authentication
++	// and going away. (hy2scale P3)
++	OnSession func(up bool, user string, addr netip.Addr)
+ 	// PublicIP is the server's outer address as clients reach it. It becomes the
+ 	// IKE identity and the phase-2 traffic selector, so a server listening on the
+ 	// wildcard — where the socket cannot name it — must be told.
+@@ -77,9 +82,7 @@
+ }
+ 
+ // NewServer builds a server over the two bound UDP sockets and a TUN.
+-func NewServer(rawIKE, rawNATT *net.UDPConn, tun tunIO, cfg ServerConfig) *Server {
+-	ikeConn := dataplane.NewPacketConn(rawIKE)
+-	nattConn := dataplane.NewPacketConn(rawNATT)
++func NewServer(ikeConn, nattConn *dataplane.PacketConn, tun tunIO, cfg ServerConfig) *Server {
+ 	logger := cfg.Logger
+ 	var shaper *dataplane.Shaper
+ 	if cfg.Shape > 0 {
+@@ -239,7 +242,7 @@
+ 	p.ike = ikev1.NewSession(ikev1.Config{
+ 		Role:      ikev1.Responder,
+ 		PSK:       s.cfg.PSK,
+-		LocalIP:   s.publicIP(),
++		LocalIP:   s.localIPFor(addr),
+ 		PeerIP:    addr.IP,
+ 		LocalPort: defaultIKEPort,
+ 		PeerPort:  uint16(addr.Port),
+@@ -256,6 +259,15 @@
+ // traffic selector: the configured one, else the IKE socket's bound address when
+ // it is concrete. Listening on the wildcard without configuring one leaves it
+ // nil, which yields an empty ID — workable only with a peer matching on %any.
++// localIPFor is publicIP, falling back to the local address this peer's first
++// datagram arrived on, so a wildcard listener still has an identity. (hy2scale P2)
++func (s *Server) localIPFor(peer *net.UDPAddr) net.IP {
++	if ip := s.publicIP(); ip != nil {
++		return ip
++	}
++	return s.ikeConn.LocalFor(peer)
++}
++
+ func (s *Server) publicIP() net.IP {
+ 	if s.cfg.PublicIP != nil {
+ 		return s.cfg.PublicIP
+@@ -312,6 +324,7 @@
+ 	delete(s.byCookie, p.cookie)
+ 	if p.inSPI != 0 {
+ 		delete(s.bySPI, p.inSPI)
++		defer s.nattConn.ClaimESP(p.inSPI, false) // hy2scale P12, after the unlock
+ 	}
+ 	if v4 := p.innerIP.To4(); v4 != nil {
+ 		delete(s.byIP, binary.BigEndian.Uint32(v4))
+@@ -319,6 +332,9 @@
+ 	s.mu.Unlock()
+ 
+ 	if p.innerIP != nil {
++		if s.cfg.OnSession != nil && p.up.Load() {
++			s.cfg.OnSession(false, p.user, p.inner4)
++		}
+ 		s.pool.Release(p.innerIP)
+ 	}
+ 	p.mu.Lock()
+@@ -331,6 +347,9 @@
+ }
+ 
+ func (s *Server) auth(username string) (string, bool) {
++	if s.cfg.UserLookup != nil {
++		return s.cfg.UserLookup(username)
++	}
+ 	pw, ok := s.cfg.Users[username]
+ 	return pw, ok
+ }
+@@ -352,14 +371,18 @@
+ 			continue
+ 		}
+ 		p.mu.Lock()
+-		t := p.tunnel
++		t, ps := p.tunnel, p.ppp
+ 		p.mu.Unlock()
+ 		if t != nil {
+ 			// A non-zero target pads the PPP Information field out to it, so the
+ 			// ESP packet this becomes is the same size whatever the inner packet
+ 			// was. RFC 1661 5.1 sanctions the padding; ppp.IsIP trims it back.
+ 			pkt := append([]byte(nil), buf[:n]...)
+-			_ = t.SendPPP(ppp.EncapsulateIPPadded(pkt, s.shaper.Target(pkt, s.mtu())))
++			frame := ppp.EncapsulateIPPadded(pkt, s.shaper.Target(pkt, s.mtu()))
++			if ps != nil {
++				frame = ps.Outbound(frame) // hy2scale P10: MPPE, when negotiated
++			}
++			_ = t.SendPPP(frame)
+ 		}
+ 	}
+ }
+@@ -385,6 +408,11 @@
+ 	// group PSK that got the peer this far authenticates no user.
+ 	up     atomic.Bool
+ 	inner4 netip.Addr
++	user   string // hy2scale P3: the MS-CHAPv2 username, set before up
++
++	// l2tpPort is the inner UDP source port of the peer's last authenticated
++	// L2TP datagram, the destination of ours (0: not seen yet, 1701). (hy2scale P9)
++	l2tpPort atomic.Uint32
+ }
+ 
+ // noteIKEAddr records where a peer's IKE now comes from. After the float that is
+@@ -447,7 +475,10 @@
+ 	if nh != ipProtoUDP {
+ 		return true // authentic, just not L2TP: nothing to deliver
+ 	}
+-	if l2, ok := unwrapUDP(inner); ok {
++	if l2, port, ok := unwrapUDP(inner); ok {
++		// hy2scale P9: replies go back to the port the peer's L2TP sent from.
++		// Only an authenticated packet gets here, so this cannot be steered.
++		p.l2tpPort.Store(uint32(port))
+ 		tun.HandleInbound(l2)
+ 	}
+ 	return true
+@@ -462,6 +493,7 @@
+ 	p.tunnel = NewTunnel(RoleLNS, p.espSend, p) // LNS starts passively on SCCRQ
+ 	p.mu.Unlock()
+ 	p.srv.mapSPI(r.InSPI, p)
++	p.srv.nattConn.ClaimESP(r.InSPI, true) // hy2scale P12
+ 	p.srv.logger.Printf("l2tp: IPsec SA established with %s (spi in=%#x out=%#x)", p.addr, r.InSPI, r.OutSPI)
+ }
+ 
+@@ -474,7 +506,7 @@
+ 	if sa == nil {
+ 		return errors.New("l2tp: ESP SA not ready")
+ 	}
+-	pkt, err := sa.Encapsulate(wrapUDP(l2tp), ipProtoUDP)
++	pkt, err := sa.Encapsulate(wrapUDP(l2tp, uint16(p.l2tpPort.Load())), ipProtoUDP) // hy2scale P9
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -506,15 +538,23 @@
+ }
+ 
+ func (p *serverPeer) DataFrame(frame []byte) {
++	p.mu.Lock()
++	ps := p.ppp
++	p.mu.Unlock()
++	if ps != nil {
++		// hy2scale P10: open MPPE-encrypted frames, refuse cleartext ones
++		// once MPPE is on.
++		var ok bool
++		if frame, ok = ps.Inbound(frame); !ok {
++			return
++		}
++	}
+ 	if ip, ok := ppp.IsIP(frame); ok {
+ 		if p.up.Load() && dataplane.SourceIs(ip, p.inner4) {
+ 			_, _ = p.srv.tun.Write(ip)
+ 		}
+ 		return
+ 	}
+-	p.mu.Lock()
+-	ps := p.ppp
+-	p.mu.Unlock()
+ 	if ps != nil {
+ 		ps.Receive(frame)
+ 	}
+@@ -525,7 +565,11 @@
+ // serverPPP adapts serverPeer to ppp.ServerHandler.
+ type serverPPP struct{ p *serverPeer }
+ 
+-func (h serverPPP) Authenticated(u, pw string, nt [mschap.NTResponseLen]byte) {}
++func (h serverPPP) Authenticated(u, pw string, nt [mschap.NTResponseLen]byte) {
++	h.p.mu.Lock()
++	h.p.user = u
++	h.p.mu.Unlock()
++}
+ func (h serverPPP) NetworkUp() {
+ 	h.p.mu.Lock()
+ 	ip := h.p.innerIP
+@@ -534,7 +578,20 @@
+ 	// Mapped only now, so the TUN routes nothing to a peer that has not
+ 	// authenticated.
+ 	h.p.srv.mapIP(ip, h.p)
+-	h.p.srv.logger.Printf("l2tp: PPP up for %s", h.p.addr)
++	if cb := h.p.srv.cfg.OnSession; cb != nil {
++		h.p.mu.Lock()
++		user, a := h.p.user, h.p.inner4
++		h.p.mu.Unlock()
++		cb(true, user, a)
++	}
++	h.p.mu.Lock()
++	ps := h.p.ppp
++	h.p.mu.Unlock()
++	mode := ""
++	if ps != nil {
++		mode = " (MPPE " + ps.MPPEMode() + ")" // hy2scale P10
++	}
++	h.p.srv.logger.Printf("l2tp: PPP up for %s%s", h.p.addr, mode)
+ }
+ func (h serverPPP) Closed(err error) { h.p.srv.removePeer(h.p, err) }
+ 
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/mschap/mppe.go b/internal/mschap/mppe.go
+--- a/internal/mschap/mppe.go	2026-10-29 03:25:17.113628100 +1100
++++ b/internal/mschap/mppe.go	2026-10-29 04:12:46.024719400 +1100
+@@ -72,3 +72,14 @@
+ 	copy(hlak[16:], recv)
+ 	return hlak
+ }
++
++// ServerMPPEKeys derives the authenticator's 128-bit MPPE start keys from a
++// completed MS-CHAPv2 exchange (RFC 3079 section 3.3): the key it encrypts
++// with, which is the client's receive key, and the one it decrypts with.
++// (hy2scale P10)
++func ServerMPPEKeys(password string, ntResponse [NTResponseLen]byte) (send, recv [16]byte) {
++	masterKey := getMasterKey(ntPasswordHashHash(NTPasswordHash(password)), ntResponse)
++	copy(send[:], getAsymmetricStartKey(masterKey, 16, true, true))
++	copy(recv[:], getAsymmetricStartKey(masterKey, 16, false, true))
++	return send, recv
++}
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/openvpn/server.go b/internal/openvpn/server.go
+--- a/internal/openvpn/server.go	2026-10-29 03:25:19.473318100 +1100
++++ b/internal/openvpn/server.go	2026-10-29 04:12:46.057228900 +1100
+@@ -1,6 +1,7 @@
+ package openvpn
+ 
+ import (
++	"bytes"
+ 	"crypto/tls"
+ 	"crypto/x509"
+ 	"encoding/binary"
+@@ -114,6 +115,18 @@
+ 	// what the pq-openvpn registry name sets; see internal/pqpolicy for the contract
+ 	// and doc/pq-variants-plan.md for why it is a name rather than a flag.
+ 	PostQuantumOnly bool
++
++	// Device, if set, replaces the kernel TUN. (hy2scale P1)
++	Device dataplane.Device
++	// ListenPacket, if set, opens the UDP socket. (hy2scale P2)
++	ListenPacket dataplane.ListenFunc
++	// VerifyUser, if set, authenticates clients by the auth-user-pass
++	// credentials of key method 2; a client certificate becomes optional.
++	// (hy2scale P4)
++	VerifyUser func(username, password string) bool
++	// OnSession reports a client's address coming up / going away with the
++	// username (or certificate common name) it authenticated as. (hy2scale P3)
++	OnSession func(up bool, user string, addr netip.Addr)
+ }
+ 
+ // Validate reports whether a ServerConfig has what a server cannot start
+@@ -204,7 +217,10 @@
+ 	gate     *dataplane.Gate
+ 
+ 	listenAddr *net.UDPAddr
+-	tun        *dataplane.TUN
++	listen     dataplane.ListenFunc
++	verifyUser func(string, string) bool
++	onSession  func(bool, string, netip.Addr)
++	tun        dataplane.Device
+ 	conn       *dataplane.PacketConn
+ 	pump       *dataplane.Pump
+ 
+@@ -285,9 +301,13 @@
+ 
+ 	// GSO: the kernel may hand the pump TCP super-frames to segment and batch
+ 	// (doc/scaling-the-data-path.md); falls back to a plain TUN transparently.
+-	tun, err := dataplane.OpenTUNGSO(cfg.TUNName)
+-	if err != nil {
+-		return nil, fmt.Errorf("openvpn: open TUN: %w", err)
++	var tun dataplane.Device = cfg.Device
++	if tun == nil {
++		t, terr := dataplane.OpenTUNGSO(cfg.TUNName)
++		if terr != nil {
++			return nil, fmt.Errorf("openvpn: open TUN: %w", terr)
++		}
++		tun = t
+ 	}
+ 
+ 	return &Server{
+@@ -303,6 +323,9 @@
+ 		shape:      cfg.Shape,
+ 		logger:     logger,
+ 		listenAddr: &net.UDPAddr{IP: listenIP, Port: port},
++		listen:     cfg.ListenPacket,
++		verifyUser: cfg.VerifyUser,
++		onSession:  cfg.OnSession,
+ 		tun:        tun,
+ 		clients:    make(map[string]*serverClient),
+ 		closed:     make(chan struct{}),
+@@ -386,11 +409,20 @@
+ // ListenAndServe binds the UDP socket, starts the data path, and serves clients
+ // until Close. It blocks.
+ func (s *Server) ListenAndServe() error {
+-	conn, err := net.ListenUDP("udp", s.listenAddr)
+-	if err != nil {
+-		return fmt.Errorf("openvpn: listen: %w", err)
++	if s.listen != nil {
++		pc, err := s.listen(s.listenAddr.Port)
++		if err != nil {
++			return fmt.Errorf("openvpn: listen: %w", err)
++		}
++		s.conn = pc
++	} else {
++		conn, err := net.ListenUDP("udp", s.listenAddr)
++		if err != nil {
++			return fmt.Errorf("openvpn: listen: %w", err)
++		}
++		s.conn = dataplane.NewPacketConn(conn)
+ 	}
+-	s.conn = dataplane.NewPacketConn(conn)
++	conn := s.conn
+ 
+ 	// The pump routes TUN packets to a client tunnel by destination /32, and sends
+ 	// each encapsulated packet to that tunnel's current peer address; inbound data
+@@ -586,6 +618,23 @@
+ 		s.dropClient(cl, fmt.Sprintf("read client keys: %v", err))
+ 		return
+ 	}
++	// hy2scale P4: auth-user-pass, and the identity reported to OnSession.
++	if st := tlsConn.ConnectionState(); len(st.PeerCertificates) > 0 {
++		cl.user = st.PeerCertificates[0].Subject.CommonName
++	}
++	// A refusal is answered the way OpenVPN's own server does: after the key
++	// exchange, as the reply to PUSH_REQUEST, where clients expect it.
++	authErr := ""
++	if s.verifyUser != nil {
++		switch {
++		case hello.Username == "" && cl.user == "":
++			authErr = "no credentials"
++		case hello.Username != "" && !s.verifyUser(hello.Username, hello.Password):
++			authErr = fmt.Sprintf("bad credentials for %q", hello.Username)
++		case hello.Username != "":
++			cl.user = hello.Username
++		}
++	}
+ 
+ 	serverKS, err := keys.NewServerKeySource()
+ 	if err != nil {
+@@ -601,6 +650,10 @@
+ 		s.dropClient(cl, fmt.Sprintf("await push request: %v", err))
+ 		return
+ 	}
++	if authErr != "" {
++		s.authFailed(tlsConn, cl, authErr)
++		return
++	}
+ 
+ 	ip, err := s.pool.Allocate()
+ 	if err != nil {
+@@ -623,7 +676,7 @@
+ 		return
+ 	}
+ 
+-	if _, err := tlsConn.Write(s.buildPushReply(ip, peerID)); err != nil {
++	if _, err := tlsConn.Write(s.buildPushReply(ip, peerID, hello.PeerInfo)); err != nil {
+ 		s.pool.Release(ip)
+ 		s.dropClient(cl, fmt.Sprintf("send push reply: %v", err))
+ 		return
+@@ -649,10 +702,25 @@
+ 	cl.upAt = time.Now()
+ 	s.pump.AddTunnel(tun)
+ 
++	s.reportSession(cl, true)
+ 	s.logger.Printf("openvpn: client %s up, assigned %s (peer-id %d)", cl.addr, ip, peerID)
+ 	go s.serveClient(cl)
+ }
+ 
++// reportSession tells onSession about each tunnel address of cl: the IPv4
++// one and, on a dual-stack tunnel, the IPv6 one derived from it. (hy2scale P7)
++func (s *Server) reportSession(cl *serverClient, up bool) {
++	if s.onSession == nil {
++		return
++	}
++	if a, ok := netip.AddrFromSlice(cl.assignedIP.To4()); ok {
++		s.onSession(up, cl.user, a)
++	}
++	if a6, ok := s.client6(cl.assignedIP); ok {
++		s.onSession(up, cl.user, a6)
++	}
++}
++
+ // serveClient owns one established client for as long as it is alive. It sends
+ // the data-channel ping the pushed keepalive promises, and it is the only thing
+ // that ever notices the client is gone. Both are on one ticker because they are
+@@ -717,6 +785,7 @@
+ 	}
+ 	cl.ch.Close()
+ 	s.pump.RemoveTunnel(cl.tunnel)
++	s.reportSession(cl, false)
+ 	s.pool.Release(cl.assignedIP)
+ 
+ 	s.mu.Lock()
+@@ -732,6 +801,14 @@
+ 	s.logger.Printf("openvpn: client %s down, released %s: %s", cl.addr, cl.assignedIP, reason)
+ }
+ 
++// authFailed tells the client its credentials were refused, then drops it.
++// (hy2scale P4)
++func (s *Server) authFailed(tlsConn *tls.Conn, cl *serverClient, reason string) {
++	_, _ = tlsConn.Write([]byte("AUTH_FAILED\x00"))
++	time.Sleep(200 * time.Millisecond) // let the control channel carry it
++	s.dropClient(cl, "auth: "+reason)
++}
++
+ // dropClient tears down a half-open client after a handshake failure.
+ func (s *Server) dropClient(cl *serverClient, reason string) {
+ 	s.logger.Warnf("openvpn: client %s dropped: %s", cl.addr, reason)
+@@ -743,14 +820,46 @@
+ 
+ // occOptions is the server's advisory OCC options string, matching the client's
+ // AES-256-GCM profile from the responder side.
++//
++// hy2scale P11: the MTU in it is the configured one, as pushed, rather than
++// OpenVPN's 1500 default. link-mtu is tun-mtu plus the 49 octets the AES-GCM
++// data channel adds over UDPv4, the figure OpenVPN's own server reports.
+ func (s *Server) occOptions() string {
+-	return "V4,dev-type tun,link-mtu 1549,tun-mtu 1500,proto UDPv4,cipher AES-256-GCM,auth [null-digest],keysize 256,key-method 2,tls-server"
++	return fmt.Sprintf("V4,dev-type tun,link-mtu %d,tun-mtu %d,proto UDPv4,cipher AES-256-GCM,auth [null-digest],keysize 256,key-method 2,tls-server",
++		s.mtu+49, s.mtu)
+ }
+ 
++// peerVersionAtLeast reports whether a client's IV_VER is at least
++// major.minor; a client that sends none is taken to be old.
++func peerVersionAtLeast(peerInfo string, major, minor int) bool {
++	for _, line := range strings.Split(peerInfo, "\n") {
++		if k, v, _ := strings.Cut(strings.TrimSpace(line), "="); k == "IV_VER" {
++			var ma, mi int
++			if _, err := fmt.Sscanf(v, "%d.%d", &ma, &mi); err == nil {
++				return ma > major || ma == major && mi >= minor
++			}
++		}
++	}
++	return false
++}
++
++// peerTakesPushedMTU reports whether a client applies a pushed tun-mtu: OpenVPN
++// 2.6 does (it announces IV_MTU), while 2.4 and 2.5 refuse the option with an
++// error in their log. Such clients take the MTU from their own config, which
++// the exported profile sets. (hy2scale P11)
++func peerTakesPushedMTU(peerInfo string) bool {
++	return strings.Contains(peerInfo, "IV_MTU=") || peerVersionAtLeast(peerInfo, 2, 6)
++}
++
++// occMagic opens an OCC message on the data channel (OpenVPN occ.h): option
++// queries, MTU probes, and the explicit-exit-notify a UDP client sends on the
++// way out. None carries IP, and none is an error. (hy2scale P11)
++var occMagic = []byte{0x28, 0x7f, 0x34, 0x6b, 0xd4, 0xef, 0x7a, 0x81, 0x2d, 0x56, 0xb8, 0xd3, 0xaf, 0xc5, 0x45, 0x9c}
++
+ // buildPushReply constructs the NUL-terminated PUSH_REPLY: the subnet-topology
+ // address assignment, the tunnel gateway, the negotiated cipher and peer-id, the
+ // keepalive timers, and any DNS servers.
+-func (s *Server) buildPushReply(ip net.IP, peerID uint32) []byte {
++func (s *Server) buildPushReply(ip net.IP, peerID uint32, peerInfo string) []byte {
+ 	var b strings.Builder
+ 	b.WriteString("PUSH_REPLY")
+ 	fmt.Fprintf(&b, ",route-gateway %s", s.gateway)
+@@ -765,12 +874,16 @@
+ 		// client that configures the server's address on its own interface,
+ 		// which looks like a routing problem and is not one.
+ 		fmt.Fprintf(&b, ",ifconfig-ipv6 %s/%d %s", addr6, s.pool6.Bits(), s.gateway6)
+-		fmt.Fprintf(&b, ",route-ipv6-gateway %s", s.gateway6)
++		if peerVersionAtLeast(peerInfo, 2, 5) { // hy2scale P11: 2.4 refuses it
++			fmt.Fprintf(&b, ",route-ipv6-gateway %s", s.gateway6)
++		}
+ 	}
+ 	for _, d := range s.dns {
+ 		fmt.Fprintf(&b, ",dhcp-option DNS %s", d)
+ 	}
+-	fmt.Fprintf(&b, ",tun-mtu %d", s.mtu)
++	if peerTakesPushedMTU(peerInfo) { // hy2scale P11
++		fmt.Fprintf(&b, ",tun-mtu %d", s.mtu)
++	}
+ 	b.WriteString(",cipher AES-256-GCM")
+ 	fmt.Fprintf(&b, ",peer-id %d", peerID)
+ 	return append([]byte(b.String()), 0)
+@@ -823,6 +936,7 @@
+ 
+ 	tunnel     *serverTunnel
+ 	assignedIP net.IP
++	user       string // hy2scale P3/P4
+ 	// upAt is when the client was established, and it is the liveness clock
+ 	// until the first inbound data packet moves the pump's own LastSeen. A
+ 	// client that completes the handshake and never speaks again is still on a
+@@ -869,6 +983,9 @@
+ 	if data.IsPing(pt) {
+ 		return nil, nil // keepalive: authenticated but nothing to deliver
+ 	}
++	if bytes.HasPrefix(pt, occMagic) {
++		return nil, nil // hy2scale P11: OCC control, not data
++	}
+ 	// Trim any shaping filler past the inner packet; the data channel delimits
+ 	// its payload by length, so only the IP header says where the packet ends.
+ 	inner := dataplane.TrimToIP(pt)
+@@ -919,7 +1036,7 @@
+ 		// ever found that still stalls, cap that path and name the client;
+ 		// do not restore a blanket cap whose reason had a narrower cause.
+ 		SessionTicketsDisabled: true,
+-		ClientAuth:             tls.RequireAndVerifyClientCert,
++		ClientAuth:             clientAuthMode(cfg),
+ 		ClientCAs:              pool,
+ 	}
+ 	if cfg.PostQuantumOnly {
+@@ -1018,3 +1135,12 @@
+ 	}
+ 	return uint32(pkt[1])<<16 | uint32(pkt[2])<<8 | uint32(pkt[3]), true
+ }
++
++// clientAuthMode makes the client certificate optional when credentials are
++// checked by VerifyUser instead. (hy2scale P4)
++func clientAuthMode(cfg *ServerConfig) tls.ClientAuthType {
++	if cfg.VerifyUser != nil {
++		return tls.VerifyClientCertIfGiven
++	}
++	return tls.RequireAndVerifyClientCert
++}
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ppp/ccp_server.go b/internal/ppp/ccp_server.go
+--- a/internal/ppp/ccp_server.go	1970-01-01 11:00:00.000000000 +1100
++++ b/internal/ppp/ccp_server.go	2026-10-29 04:12:46.073229200 +1100
+@@ -0,0 +1,284 @@
++package ppp
++
++import (
++	"encoding/binary"
++	"fmt"
++
++	"github.com/xen0bit/veepin/internal/mschap"
++)
++
++// CCP (RFC 1962) for the server session, offering only MPPE. (hy2scale P10)
++//
++// The server answers CCP rather than starting it: a client that wants MPPE
++// sends its Configure-Request after authentication, and only then does the
++// server send its own, asking for MPPE exactly when the client did and in the
++// client's mode (stateless or stateful). Anything else a client offers
++// (Deflate, BSD-Compress, MPPC without encryption) is rejected, which leaves a
++// client that does not require MPPE on a plain link, as before.
++//
++// Each Configure-Request names what its sender will receive, so the client's
++// acknowledged request sets how the server encrypts and the server's
++// acknowledged request how the client does.
++
++const (
++	ccpOptMPPE      = 18
++	mppeBitH        = 0x01000000 // stateless
++	mppeBitS        = 0x00000040 // 128-bit keys
++	ccpResetRequest = 14
++	ccpResetAck     = 15
++
++	codeProtocolReject = 8 // LCP (RFC 1661 section 5.7)
++)
++
++// ccpServer is the server session's CCP state, guarded by the session mutex.
++// The two MPPE directions it produces live on the session as atomics, since
++// the data path uses them without that lock.
++type ccpServer struct {
++	keys             bool // MS-CHAPv2 succeeded, so MPPE keys exist
++	sendKey, recvKey [16]byte
++
++	started               bool   // our Configure-Request has gone out
++	reqBits               uint32 // MPPE bits in it; 0 for an empty request
++	reqID                 byte
++	req                   []byte
++	localOpen, remoteOpen bool
++	naks                  int
++	restart               restartTimer
++}
++
++// maxCCPNaks bounds how often the server follows a Configure-Nak before it
++// asks for nothing (RFC 1661 Max-Failure).
++const maxCCPNaks = 5
++
++// setMPPEKeys records the MPPE start keys a completed MS-CHAPv2 exchange gives.
++func (s *ServerSession) setMPPEKeys(password string, nt [mschap.NTResponseLen]byte) {
++	s.ccp.sendKey, s.ccp.recvKey = mschap.ServerMPPEKeys(password, nt)
++	s.ccp.keys = true
++}
++
++func (s *ServerSession) handleCCP(payload []byte) {
++	if s.phase != phaseIPCP && s.phase != phaseUp {
++		return // CCP belongs to the network phase
++	}
++	pkt, ok := parseCP(payload)
++	if !ok {
++		return
++	}
++	c := &s.ccp
++	switch pkt.Code {
++	case codeConfigureRequest:
++		s.handleCCPConfigReq(pkt)
++	case codeConfigureAck:
++		if pkt.ID == c.reqID && c.started {
++			c.restart.stop()
++			c.localOpen = true
++			if c.reqBits != 0 {
++				s.mppeRx.Store(newMPPE(c.recvKey, c.reqBits&mppeBitH != 0))
++			} else {
++				s.mppeRx.Store(nil)
++			}
++			s.maybeCCPUp()
++		}
++	case codeConfigureNak:
++		if pkt.ID != c.reqID || !c.started {
++			return
++		}
++		c.restart.alive()
++		c.reqBits = 0
++		// A peer that keeps Nak'ing settles for no compression this way.
++		if c.naks++; c.naks > maxCCPNaks {
++			s.sendCCPConfigReq()
++			return
++		}
++		if opts, ok := parseOptions(pkt.Body); ok {
++			for _, o := range opts {
++				if o.Type == ccpOptMPPE && len(o.Value) == 4 {
++					if bits := binary.BigEndian.Uint32(o.Value); bits&mppeBitS != 0 {
++						c.reqBits = mppeBitS | bits&mppeBitH
++					}
++				}
++			}
++		}
++		s.sendCCPConfigReq()
++	case codeConfigureReject:
++		if pkt.ID != c.reqID || !c.started {
++			return
++		}
++		c.restart.alive()
++		c.reqBits = 0
++		s.sendCCPConfigReq()
++	case codeTerminateRequest:
++		s.send(ProtocolCCP, cpPacket{Code: codeTerminateAck, ID: pkt.ID}.marshal())
++		c.restart.stop()
++		c.localOpen, c.remoteOpen, c.started = false, false, false
++		s.mppeTx.Store(nil)
++		s.mppeRx.Store(nil)
++	case ccpResetRequest:
++		// Stateful MPPE: the client lost sync. Rekey on the next packet and
++		// flag it; the Ack is what RFC 1962 asks for.
++		if tx := s.mppeTx.Load(); tx != nil {
++			tx.flush()
++		}
++		s.send(ProtocolCCP, cpPacket{Code: ccpResetAck, ID: pkt.ID}.marshal())
++	}
++}
++
++func (s *ServerSession) handleCCPConfigReq(pkt cpPacket) {
++	opts, ok := parseOptions(pkt.Body)
++	if !ok {
++		return
++	}
++	c := &s.ccp
++	var rej, nak []option
++	var bits uint32
++	mppe := false
++	for _, o := range opts {
++		if o.Type != ccpOptMPPE || !c.keys || len(o.Value) != 4 {
++			rej = append(rej, o)
++			continue
++		}
++		offered := binary.BigEndian.Uint32(o.Value)
++		if offered&mppeBitS == 0 {
++			rej = append(rej, o) // 40- and 56-bit keys, or MPPC alone: not offered
++			continue
++		}
++		mppe = true
++		bits = mppeBitS | offered&mppeBitH
++		if offered != bits {
++			nak = append(nak, option{Type: ccpOptMPPE, Value: binary.BigEndian.AppendUint32(nil, bits)})
++		}
++	}
++	switch {
++	case len(rej) > 0:
++		s.send(ProtocolCCP, cpPacket{Code: codeConfigureReject, ID: pkt.ID, Body: marshalOptions(rej)}.marshal())
++	case len(nak) > 0:
++		s.send(ProtocolCCP, cpPacket{Code: codeConfigureNak, ID: pkt.ID, Body: marshalOptions(nak)}.marshal())
++	default:
++		s.send(ProtocolCCP, cpPacket{Code: codeConfigureAck, ID: pkt.ID, Body: pkt.Body}.marshal())
++		c.remoteOpen = true
++		if mppe {
++			s.mppeTx.Store(newMPPE(c.sendKey, bits&mppeBitH != 0))
++		} else {
++			s.mppeTx.Store(nil)
++		}
++	}
++	if !c.started {
++		// Ask for MPPE exactly when the client offered it, in its mode.
++		c.started = true
++		if mppe {
++			c.reqBits = bits
++		}
++		s.sendCCPConfigReq()
++	}
++	s.maybeCCPUp()
++}
++
++func (s *ServerSession) sendCCPConfigReq() {
++	c := &s.ccp
++	var opts []option
++	if c.reqBits != 0 {
++		opts = append(opts, option{Type: ccpOptMPPE, Value: binary.BigEndian.AppendUint32(nil, c.reqBits)})
++	}
++	c.reqID = s.nextID()
++	c.localOpen = false
++	c.req = cpPacket{Code: codeConfigureRequest, ID: c.reqID, Body: marshalOptions(opts)}.marshal()
++	s.resendCCPConfigReq()
++}
++
++func (s *ServerSession) resendCCPConfigReq() {
++	s.send(ProtocolCCP, s.ccp.req)
++	// An unanswered CCP gives up quietly: the link can run without it, and a
++	// client that requires MPPE closes it itself.
++	s.ccp.restart.arm(s.withLock, s.resendCCPConfigReq, func() {})
++}
++
++// maybeCCPUp runs once both directions are agreed. A client requiring MPPE
++// holds IPCP until CCP is up and ignored the IPCP request sent before then,
++// so it is repeated now rather than on the next Restart tick.
++func (s *ServerSession) maybeCCPUp() {
++	if !s.ccp.localOpen || !s.ccp.remoteOpen {
++		return
++	}
++	if s.phase == phaseIPCP && !s.ipcpLocalOpen && s.ipcpConfigReq != nil {
++		s.ipcpRestart.stop()
++		s.resendIPCPConfigReq()
++	}
++}
++
++// protocolReject answers a frame of a protocol this session does not run, as
++// RFC 1661 section 5.7 requires once LCP is open. Silently dropping it leaves
++// the peer waiting out its own timers (IPV6CP, BACP, ...).
++func (s *ServerSession) protocolReject(protocol uint16, payload []byte) {
++	if s.phase == phaseLCP {
++		return
++	}
++	if max := defaultMRU - 6; len(payload) > max {
++		payload = payload[:max]
++	}
++	body := binary.BigEndian.AppendUint16(make([]byte, 0, 2+len(payload)), protocol)
++	body = append(body, payload...)
++	s.send(ProtocolLCP, cpPacket{Code: codeProtocolReject, ID: s.nextID(), Body: body}.marshal())
++}
++
++// Inbound prepares a received frame for the data path: a compressed datagram
++// is decrypted into the frame it carried, and with MPPE on, a cleartext
++// network-layer frame is refused. ok is false for a frame to drop.
++func (s *ServerSession) Inbound(frame []byte) (out []byte, ok bool) {
++	protocol, payload, valid := decodeFrame(frame)
++	if !valid {
++		return frame, true
++	}
++	rx := s.mppeRx.Load()
++	switch {
++	case protocol == ProtocolCompressed:
++		if rx == nil {
++			return nil, false
++		}
++		plain, reset, ok := rx.decrypt(payload)
++		if reset {
++			id := byte(s.resetID.Add(1))
++			_ = s.tr.SendPPP(encodeFrame(ProtocolCCP, cpPacket{Code: ccpResetRequest, ID: id}.marshal()))
++		}
++		if !ok {
++			return nil, false
++		}
++		return append([]byte{hdlcAddress, hdlcControl}, plain...), true
++	case rx != nil && protocol >= 0x0021 && protocol <= 0x00fa:
++		return nil, false
++	}
++	return frame, true
++}
++
++// Outbound encrypts a network-layer frame once MPPE is on; other frames pass.
++func (s *ServerSession) Outbound(frame []byte) []byte {
++	tx := s.mppeTx.Load()
++	if tx == nil {
++		return frame
++	}
++	protocol, payload, ok := decodeFrame(frame)
++	if !ok || protocol < 0x0021 || protocol > 0x00fa {
++		return frame
++	}
++	// MPPE encrypts the protocol field with the information.
++	if len(frame) >= frameHeaderLen && frame[0] == hdlcAddress && frame[1] == hdlcControl && frame[2]&1 == 0 {
++		return tx.encrypt(frame[2:])
++	}
++	plain := make([]byte, 2+len(payload))
++	binary.BigEndian.PutUint16(plain, protocol)
++	copy(plain[2:], payload)
++	return tx.encrypt(plain)
++}
++
++// MPPEMode describes the encryption in effect each way, for logs.
++func (s *ServerSession) MPPEMode() string {
++	mode := func(m *mppe) string {
++		if m == nil {
++			return "off"
++		}
++		if m.stateless {
++			return "128-bit stateless"
++		}
++		return "128-bit stateful"
++	}
++	return fmt.Sprintf("tx %s, rx %s", mode(s.mppeTx.Load()), mode(s.mppeRx.Load()))
++}
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ppp/mppe.go b/internal/ppp/mppe.go
+--- a/internal/ppp/mppe.go	1970-01-01 11:00:00.000000000 +1100
++++ b/internal/ppp/mppe.go	2026-10-29 04:12:46.078231100 +1100
+@@ -0,0 +1,157 @@
++package ppp
++
++// MPPE (RFC 3078) with 128-bit keys, the encryption pppd-based L2TP clients
++// insist on: iKuai's client always runs "mppe required,stateless", and pppd
++// fails the link with "MPPE required but peer negotiation failed" when the
++// server never answers CCP. (hy2scale P10)
++//
++// The cipher follows the Linux ppp_mppe driver, which is what the client end
++// runs: RC4 keyed from the MS-CHAPv2 start key, a 12-bit coherency count, and
++// a rekey before every packet in stateless mode (every 256 packets, or after a
++// CCP Reset-Request, in stateful mode). The keys come from RFC 3079.
++
++import (
++	"bytes"
++	"crypto/rc4"  //nolint:gosec // RC4 is what MPPE is defined over
++	"crypto/sha1" //nolint:gosec // as is SHA-1 for its key changes
++	"encoding/binary"
++	"sync"
++)
++
++// PPP protocol numbers for CCP and the datagrams it compresses (encrypts).
++const (
++	ProtocolCCP        = 0x80fd
++	ProtocolCompressed = 0x00fd
++)
++
++// The MPPE header that opens a compressed datagram: flag bits over a 12-bit
++// coherency count (RFC 3078 section 3).
++const (
++	mppeFlushed    = 0x8000 // A: the sender rekeyed (stateless: always)
++	mppeEncrypted  = 0x1000 // D
++	mppeCountMask  = 0x0fff
++	mppeCountSpace = 4096
++)
++
++var (
++	mppeSHAPad1 = make([]byte, 40)
++	mppeSHAPad2 = bytes.Repeat([]byte{0xf2}, 40)
++)
++
++// mppe is one direction of an MPPE link.
++type mppe struct {
++	mu        sync.Mutex
++	master    [16]byte // the start key from RFC 3079
++	session   [16]byte
++	rc4       *rc4.Cipher
++	ccount    uint16
++	stateless bool
++	flushNext bool // tx, stateful: a Reset-Request asked for a rekey
++	discard   bool // rx, stateful: lost sync, waiting for a flushed packet
++}
++
++func newMPPE(key [16]byte, stateless bool) *mppe {
++	m := &mppe{master: key, session: key, stateless: stateless, ccount: mppeCountSpace - 1}
++	m.rekey(true)
++	return m
++}
++
++// rekey is GetNewKeyFromSHA, then (except for the initial key) the RC4
++// encryption of the interim key with itself (RFC 3078 section 7.3).
++func (m *mppe) rekey(initial bool) {
++	h := sha1.New()
++	h.Write(m.master[:])
++	h.Write(mppeSHAPad1)
++	h.Write(m.session[:])
++	h.Write(mppeSHAPad2)
++	interim := h.Sum(nil)[:16]
++	if initial {
++		copy(m.session[:], interim)
++	} else {
++		c, _ := rc4.NewCipher(interim)
++		c.XORKeyStream(m.session[:], interim)
++	}
++	m.rc4, _ = rc4.NewCipher(m.session[:])
++}
++
++// encrypt turns plain — a PPP protocol number and its information — into a
++// complete compressed-datagram frame.
++func (m *mppe) encrypt(plain []byte) []byte {
++	m.mu.Lock()
++	defer m.mu.Unlock()
++	m.ccount = (m.ccount + 1) % mppeCountSpace
++	hdr := m.ccount | mppeEncrypted
++	if m.stateless || m.ccount&0xff == 0xff || m.flushNext {
++		m.flushNext = false
++		m.rekey(false)
++		hdr |= mppeFlushed
++	}
++	out := make([]byte, frameHeaderLen+2+len(plain))
++	putFrameHeader(out, ProtocolCompressed)
++	binary.BigEndian.PutUint16(out[frameHeaderLen:], hdr)
++	m.rc4.XORKeyStream(out[frameHeaderLen+2:], plain)
++	return out
++}
++
++// flush makes the next packet rekey and say so, answering a Reset-Request.
++func (m *mppe) flush() {
++	m.mu.Lock()
++	m.flushNext = true
++	m.mu.Unlock()
++}
++
++// decrypt opens a compressed datagram's information field (the MPPE header
++// and ciphertext). reset reports that a stateful link just lost sync, so the
++// caller should send a CCP Reset-Request.
++func (m *mppe) decrypt(data []byte) (plain []byte, reset, ok bool) {
++	if len(data) < 3 {
++		return nil, false, false
++	}
++	hdr := binary.BigEndian.Uint16(data)
++	if hdr&mppeEncrypted == 0 {
++		return nil, false, false
++	}
++	ccount := hdr & mppeCountMask
++	flushed := hdr&mppeFlushed != 0
++
++	m.mu.Lock()
++	defer m.mu.Unlock()
++	if m.stateless {
++		// Every packet is rekeyed, so a lost one costs nothing: catch up by
++		// as many key changes as the count moved. A packet from the past (or
++		// a repeat) cannot be decrypted any more.
++		ahead := (ccount + mppeCountSpace - m.ccount) % mppeCountSpace
++		if !flushed || ahead == 0 || ahead > mppeCountSpace/2 {
++			return nil, false, false
++		}
++		for m.ccount != ccount {
++			m.rekey(false)
++			m.ccount = (m.ccount + 1) % mppeCountSpace
++		}
++	} else {
++		if !m.discard {
++			m.ccount = (m.ccount + 1) % mppeCountSpace
++			if ccount != m.ccount {
++				m.discard = true
++				return nil, true, false
++			}
++		} else {
++			if !flushed {
++				return nil, false, false
++			}
++			// One key change for every flag packet missed, then resync.
++			for ccount&^0xff != m.ccount&^0xff {
++				m.rekey(false)
++				m.ccount = (m.ccount + 256) % mppeCountSpace
++			}
++			m.discard = false
++			m.ccount = ccount
++		}
++		if flushed {
++			m.rekey(false)
++		}
++	}
++	plain = make([]byte, len(data)-2)
++	m.rc4.XORKeyStream(plain, data[2:])
++	return plain, false, true
++}
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ppp/server.go b/internal/ppp/server.go
+--- a/internal/ppp/server.go	2026-10-29 03:25:21.678021500 +1100
++++ b/internal/ppp/server.go	2026-10-29 04:12:46.075729700 +1100
+@@ -6,6 +6,7 @@
+ 	"fmt"
+ 	"net"
+ 	"sync"
++	"sync/atomic"
+ 
+ 	"github.com/xen0bit/veepin/internal/mschap"
+ )
+@@ -66,6 +67,11 @@
+ 	ipcpLocalOpen, ipcpRemoteOpen bool
+ 
+ 	lcpRestart, ipcpRestart restartTimer
++
++	// CCP and the MPPE state it negotiates, one per direction. (hy2scale P10)
++	ccp            ccpServer
++	mppeTx, mppeRx atomic.Pointer[mppe]
++	resetID        atomic.Uint32
+ }
+ 
+ // NewServer builds a PPP server session that authenticates clients via cfg.Auth,
+@@ -107,6 +113,13 @@
+ 		s.handleCHAP(payload)
+ 	case ProtocolIPCP:
+ 		s.handleIPCP(payload)
++	case ProtocolCCP: // hy2scale P10
++		s.handleCCP(payload)
++	case ProtocolCompressed:
++		// A compressed datagram only reaches here when no MPPE is running
++		// for it (Inbound decrypts the rest); there is nothing to open it.
++	default:
++		s.protocolReject(protocol, payload) // hy2scale P10
+ 	}
+ }
+ 
+@@ -128,6 +141,7 @@
+ 	s.phase = phaseClosed
+ 	s.lcpRestart.stop()
+ 	s.ipcpRestart.stop()
++	s.ccp.restart.stop() // hy2scale P10
+ 	s.h.Closed(err)
+ }
+ 
+@@ -281,6 +295,7 @@
+ 	}
+ 
+ 	s.username, s.password, s.ntResponse = username, password, ntResp
++	s.setMPPEKeys(password, ntResp) // hy2scale P10
+ 	success := buildSuccess(s.authChallenge, peerCh, username, password, ntResp)
+ 	s.send(ProtocolCHAP, cpPacket{Code: chapSuccess, ID: pkt.ID, Body: success}.marshal())
+ 
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/l2tp/server.go b/l2tp/server.go
+--- a/l2tp/server.go	2026-10-29 03:25:23.473505100 +1100
++++ b/l2tp/server.go	2026-10-29 04:12:46.007017300 +1100
+@@ -4,6 +4,7 @@
+ 	"fmt"
+ 	"log/slog"
+ 	"net"
++	"net/netip"
+ 	"os"
+ 	"strconv"
+ 
+@@ -83,6 +84,15 @@
+ 	// dataplane.DefaultShapeBytes is a reasonable value.
+ 	Shape int
+ 
++	// Device, if set, replaces the kernel TUN. (hy2scale P1)
++	Device dataplane.Device
++	// ListenPacket, if set, opens the IKE (Port) and NAT-T sockets. (hy2scale P2)
++	ListenPacket dataplane.ListenFunc
++	// UserLookup, if set, replaces Users. (hy2scale P3)
++	UserLookup func(username string) (string, bool)
++	// OnSession reports a client's address coming up / going away. (hy2scale P3)
++	OnSession func(up bool, user string, addr netip.Addr)
++
+ 	Logger *slog.Logger
+ }
+ 
+@@ -91,7 +101,7 @@
+ // Network report what the caller needs to do that.
+ type Server struct {
+ 	eng     *engine.Server
+-	tun     *dataplane.TUN
++	tun     dataplane.Device
+ 	pool    *dataplane.AddrPool
+ 	gateway net.IP
+ }
+@@ -102,7 +112,7 @@
+ 	switch {
+ 	case cfg.PSK == "":
+ 		return nil, fmt.Errorf("l2tp: PSK is required")
+-	case len(cfg.Users) == 0:
++	case len(cfg.Users) == 0 && cfg.UserLookup == nil:
+ 		return nil, fmt.Errorf("l2tp: at least one user is required")
+ 	}
+ 	logger := vlog.From(cfg.Logger)
+@@ -125,31 +135,47 @@
+ 	// Two sockets: Main Mode arrives on the IKE port, and everything after the
+ 	// NAT-T float — IKE behind the non-ESP marker, and UDP-encapsulated ESP —
+ 	// arrives on 4500.
+-	ikeConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: listenIP, Port: port})
++	listen := cfg.ListenPacket
++	if listen == nil {
++		listen = func(p int) (*dataplane.PacketConn, error) {
++			c, lerr := net.ListenUDP("udp", &net.UDPAddr{IP: listenIP, Port: p})
++			if lerr != nil {
++				return nil, lerr
++			}
++			return dataplane.NewPacketConn(c), nil
++		}
++	}
++	ikeConn, err := listen(port)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("l2tp: bind %s:%d: %w", cfg.ListenIP, port, err)
+ 	}
+-	nattConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: listenIP, Port: nattPort})
++	nattConn, err := listen(nattPort)
+ 	if err != nil {
+ 		ikeConn.Close()
+ 		return nil, fmt.Errorf("l2tp: bind %s:%d: %w", cfg.ListenIP, nattPort, err)
+ 	}
+-	tun, err := dataplane.OpenTUN(cfg.TUNName)
+-	if err != nil {
+-		ikeConn.Close()
+-		nattConn.Close()
+-		return nil, fmt.Errorf("l2tp: open TUN: %w", err)
++	var tun dataplane.Device = cfg.Device
++	if tun == nil {
++		t, terr := dataplane.OpenTUN(cfg.TUNName)
++		if terr != nil {
++			ikeConn.Close()
++			nattConn.Close()
++			return nil, fmt.Errorf("l2tp: open TUN: %w", terr)
++		}
++		tun = t
+ 	}
+ 
+ 	eng := engine.NewServer(ikeConn, nattConn, tun, engine.ServerConfig{
+-		PSK:      []byte(cfg.PSK),
+-		Users:    cfg.Users,
+-		PublicIP: net.ParseIP(cfg.PublicIP),
+-		Pool:     pool,
+-		Gateway:  gateway,
+-		DNS:      cfg.DNS,
+-		Shape:    cfg.Shape,
+-		Logger:   logger,
++		PSK:        []byte(cfg.PSK),
++		Users:      cfg.Users,
++		UserLookup: cfg.UserLookup,
++		OnSession:  cfg.OnSession,
++		PublicIP:   net.ParseIP(cfg.PublicIP),
++		Pool:       pool,
++		Gateway:    gateway,
++		DNS:        cfg.DNS,
++		Shape:      cfg.Shape,
++		Logger:     logger,
+ 	})
+ 	return &Server{eng: eng, tun: tun, pool: pool, gateway: gateway}, nil
+ }

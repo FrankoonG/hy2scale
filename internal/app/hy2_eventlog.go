@@ -2,114 +2,13 @@ package app
 
 import (
 	"net"
-	"runtime"
-	"strconv"
 	"sync"
 )
 
-// hyserver's Authenticator returns the auth ID *during* connection setup, but
-// its Outbound.TCP only receives the requested target address — no auth
-// context. To gate `_relay_api_:0` streams on whether the underlying QUIC
-// connection authenticated as a peer node ("system") versus an ordinary
-// proxy user ("user:<name>"), we exploit the fact that hyserver calls
-// EventLogger.TCPRequest immediately before Outbound.TCP *in the same
-// goroutine* (apernet/hysteria/core/v2 server.go:280-285). Stashing the
-// authID under the current goroutine ID makes it available to the very
-// next Outbound.TCP call without modifying the upstream interfaces.
-//
-// Caveat: this relies on the same-goroutine call sequence. If a future
-// hyserver release decouples the two callbacks or hops goroutines between
-// them, the loadGoIDAuth lookup will return "" and the relay-API bypass
-// will fail safe (default-deny). The vendored hyserver version is pinned
-// in go.mod so we'd notice during a deliberate upgrade.
-var goidAuthID sync.Map // map[uint64]string  goroutine ID → hyserver auth ID
-var goidAddr sync.Map   // map[uint64]string  goroutine ID → hyserver client addr (IP:port)
-
-// goid parses runtime.Stack output to recover the current goroutine's
-// numeric identifier. The format "goroutine <N> [<state>]:" has been
-// stable since Go 1.5; the worst case on a parser fault is an authID
-// lookup miss, which falls through to the safe default-deny path.
-func goid() uint64 {
-	var buf [32]byte
-	n := runtime.Stack(buf[:], false)
-	line := buf[:n]
-	if len(line) < 10 {
-		return 0
-	}
-	line = line[len("goroutine "):]
-	end := 0
-	for end < len(line) && line[end] >= '0' && line[end] <= '9' {
-		end++
-	}
-	id, _ := strconv.ParseUint(string(line[:end]), 10, 64)
-	return id
-}
-
-// setGoIDAuth records the current goroutine's hyserver authID. Called from
-// hy2Auth.TCPRequest; cleared by takeGoIDAuth or by an explicit Delete on
-// the error path (hy2Auth.TCPError) to prevent stale entries piling up if
-// the goroutine is reused.
-func setGoIDAuth(id string) {
-	goidAuthID.Store(goid(), id)
-}
-
-// takeGoIDAuth atomically reads and deletes the authID for the current
-// goroutine. Returns "" if no entry — caller treats that as "unauthenticated"
-// (default-deny for the relay-API path).
-func takeGoIDAuth() string {
-	v, ok := goidAuthID.LoadAndDelete(goid())
-	if !ok {
-		return ""
-	}
-	s, _ := v.(string)
-	return s
-}
-
-// EventLogger implementation on *hy2Auth — only TCPRequest does real work.
-// Connect/Disconnect/UDP*/TCPError are no-ops here; other observability
-// (per-conn stats, Disconnect logging) lives elsewhere in the app.
-
-func (a *hy2Auth) Connect(addr net.Addr, id string, tx uint64)            {}
-func (a *hy2Auth) Disconnect(addr net.Addr, id string, err error)         {}
-func (a *hy2Auth) TCPRequest(addr net.Addr, id, reqAddr string) {
-	setGoIDAuth(id)
-	// Also stash the peer's network addr (QUIC remote addr). Used by the
-	// inbound-identity sync path (docs/peer-identity-sync-bugs.md Bug B) to
-	// distinguish "same peer reconnecting from same source IP" from "different
-	// peer happens to share an egress IP". Without this stash, stream
-	// processing inside the relay only sees a "pipe" RemoteAddr because the
-	// stream is delivered via net.Pipe from nodeOutbound.TCP. Cleared by
-	// takeGoIDAddr in nodeOutbound.TCP / TCPError to avoid stale entries.
-	if addr != nil {
-		goidAddr.Store(goid(), addr.String())
-	}
-}
-func (a *hy2Auth) TCPError(addr net.Addr, id, reqAddr string, err error) {
-	takeGoIDAuth()
-	goidAddr.Delete(goid())
-}
-
-// takeGoIDAddr atomically reads and deletes the peer addr for the current
-// goroutine. Companion to takeGoIDAuth — same stash mechanism, different
-// payload. Returns "" if no entry.
-func takeGoIDAddr() string {
-	v, ok := goidAddr.LoadAndDelete(goid())
-	if !ok {
-		return ""
-	}
-	s, _ := v.(string)
-	return s
-}
-func (a *hy2Auth) UDPRequest(addr net.Addr, id string, sessionID uint32, reqAddr string) {
-	// hyserver calls this right before Outbound.UDP on the same goroutine;
-	// nodeOutbound.UDP takes it to route hy2 users by their exit (and the
-	// peer addr for their device row).
-	setGoIDAuth(id)
-	if addr != nil {
-		goidAddr.Store(goid(), addr.String())
-	}
-}
-func (a *hy2Auth) UDPError(addr net.Addr, id string, sessionID uint32, err error) {}
+// hy2Auth is also the server's ConnEvents (core/server); the per-request
+// auth stash lives there.
+func (a *hy2Auth) Connect(addr net.Addr, id string, tx uint64)    {}
+func (a *hy2Auth) Disconnect(addr net.Addr, id string, err error) {}
 
 // RelayAuthConn wraps the hub-side end of the net.Pipe used to deliver a
 // `_relay_api_:0` stream to the local API server, carrying the hyserver
@@ -126,33 +25,6 @@ type RelayAuthConn struct {
 // import this package's concrete type — they can use the small interface
 // `interface{ RelayAuthID() string }` instead.
 func (c *RelayAuthConn) RelayAuthID() string { return c.AuthID }
-
-// peerAddrConn wraps a net.Pipe end so RemoteAddr() returns the original
-// QUIC peer's network address (host:port) instead of "pipe". The address is
-// stashed by hy2Auth.TCPRequest into goidAddr and unstashed in
-// nodeOutbound.TCP. This lets the inbound-identity sync path
-// (docs/peer-identity-sync-bugs.md Bug B) see a real source IP to use as a
-// stable handle for detecting NodeID changes.
-type peerAddrConn struct {
-	net.Conn
-	peerAddr string
-}
-
-type strAddr string
-
-func (s strAddr) Network() string { return "tcp" }
-func (s strAddr) String() string  { return string(s) }
-
-func (c *peerAddrConn) RemoteAddr() net.Addr {
-	if c.peerAddr == "" {
-		return c.Conn.RemoteAddr()
-	}
-	return strAddr(c.peerAddr)
-}
-
-// PeerAddr returns the stashed peer addr without requiring callers to know
-// the concrete type. Returns "" if not set.
-func (c *peerAddrConn) PeerAddr() string { return c.peerAddr }
 
 // syncMapLen counts entries of a sync.Map (diagnostics only — O(n)).
 func syncMapLen(m *sync.Map) int {

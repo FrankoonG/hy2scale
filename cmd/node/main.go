@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/http/pprof"
@@ -16,6 +17,8 @@ import (
 
 	"github.com/FrankoonG/hy2scale/internal/api"
 	"github.com/FrankoonG/hy2scale/internal/app"
+	"github.com/FrankoonG/hy2scale/core/logbuf"
+	"github.com/FrankoonG/hy2scale/internal/selfupdate"
 )
 
 func main() {
@@ -36,6 +39,9 @@ func main() {
 		return
 	}
 
+	// Recent log lines are also kept in memory for the web UI.
+	log.SetOutput(io.MultiWriter(os.Stderr, logbuf.Default))
+
 	// Resolve data directory: explicit flag > ./hy2scale
 	dir := *dataDir
 	if dir == "" {
@@ -51,6 +57,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "cannot create data directory %s: %v\n", dir, err)
 		os.Exit(1)
 	}
+
+	// An in-app upgrade lives in the data directory (survives container
+	// recreation): hand over to it while it is newer than this binary.
+	selfupdate.Handoff(dir, api.Version)
+	go func() {
+		time.Sleep(60 * time.Second)
+		selfupdate.Healthy(dir)
+	}()
 
 	// Opt-in profiling listener for leak investigations. Off unless
 	// HY2SCALE_PPROF is set (e.g. "127.0.0.1:6060"); never on the UI port.
@@ -126,8 +140,6 @@ func main() {
 		}
 	}()
 
-	go srv.StartSubPeersUpdater(ctx)
-
 	if err := a.Run(ctx); err != nil && ctx.Err() == nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -143,7 +155,7 @@ const restartExitCode = 75
 
 // restartProcess brings the node back after a restart requested from the web
 // UI. Under a supervisor (container restart policy, systemd Restart=) exiting
-// is the clean way: it also ends child daemons (strongSwan, xl2tpd) and
+// is the clean way: it also ends child processes and
 // resets kernel state. A bare process re-executes itself.
 func restartProcess() {
 	if supervised() {

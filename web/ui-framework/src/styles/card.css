@@ -1,0 +1,15 @@
+/* Cards. */
+/* ====== Cards ====== */
+.hy-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px;box-shadow:var(--shadow)}
+.hy-card.no-pad{padding:0}
+.hy-card-header{display:flex;align-items:center;gap:8px;margin-bottom:16px}
+.hy-card.no-pad .hy-card-header{padding:16px 20px;margin-bottom:0;border-bottom:1px solid var(--border-light)}
+.hy-card-title{font-size:13px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.6px;display:inline-flex;align-items:center;gap:8px}
+.hy-card-count{font-size:11px;background:var(--bg);color:var(--text-muted);padding:1px 8px;border-radius:10px}
+.hy-card-actions{display:flex;gap:8px;margin-left:auto}
+.hy-card-body{} /* no padding when card has padding */
+.hy-card.no-pad .hy-card-body{padding:0}
+/* .fill (legacy): panels no longer share the viewport height; the body
+   never scrolls inside the panel. */
+.hy-card.fill{margin-bottom:0}
+

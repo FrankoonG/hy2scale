@@ -1,8 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Reorder, useDragControls } from 'framer-motion';
-import { Input, FormGroup, GripIcon } from '@hy2scale/ui';
-import clsx from 'clsx';
+import { Input, FormGroup, SortableList } from '@hy2scale/ui';
+import { validateIP } from '@/utils/ipaddr';
 
 interface TargetItem {
   id: number;
@@ -18,16 +17,7 @@ interface TargetListProps {
 
 let nextId = 1;
 
-// Validation patterns
-const IP_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
-const CIDR_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$/;
-const RANGE_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}-\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 const DOMAIN_RE = /^(\*\.)?[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*\.[a-zA-Z]{2,}$/;
-
-function validateIP(val: string): boolean {
-  if (!val) return true;
-  return IP_RE.test(val) || CIDR_RE.test(val) || RANGE_RE.test(val);
-}
 
 function validateDomain(val: string): boolean {
   if (!val) return true;
@@ -83,86 +73,28 @@ export function TargetList({ type, value, onChange, label }: TargetListProps) {
     setItems(newItems);
   }, []);
 
-  const listRef = useRef<HTMLUListElement>(null);
   const placeholder = type === 'ip' ? t('rules.ipHint') : t('rules.domainHint');
   const addLabel = type === 'ip' ? t('rules.addIP') : t('rules.addDomain');
 
   return (
     <FormGroup label={label || (type === 'ip' ? t('rules.ipTargets') : t('rules.domainTargets'))} required>
-      <Reorder.Group
-        ref={listRef}
-        axis="y"
-        values={items}
+      <SortableList
+        items={items}
         onReorder={handleReorder}
-        className="addr-list"
-        style={{ listStyle: 'none', padding: 0, margin: 0 }}
-      >
-        {items.map((item) => (
-          <TargetRow
-            key={item.id}
-            item={item}
-            canDrag={items.length > 1}
-            canRemove={items.length > 1}
-            constraintsRef={listRef}
+        removeLabel={t('app.delete')}
+        onRemove={(item) => removeItem(item.id)}
+        addLabel={addLabel}
+        onAdd={addItem}
+        renderItem={(item) => (
+          <Input
+            value={item.value}
+            onChange={(e) => updateItem(item.id, e.target.value)}
             placeholder={placeholder}
-            validate={validate}
-            onUpdate={(val) => updateItem(item.id, val)}
-            onRemove={() => removeItem(item.id)}
+            error={!validate(item.value)}
+            className="mono"
           />
-        ))}
-      </Reorder.Group>
-      <div className="addr-add-row" onClick={addItem}>
-        {addLabel}
-      </div>
-    </FormGroup>
-  );
-}
-
-interface TargetRowProps {
-  item: TargetItem;
-  canDrag: boolean;
-  canRemove: boolean;
-  constraintsRef: React.RefObject<HTMLElement | null>;
-  placeholder: string;
-  validate: (val: string) => boolean;
-  onUpdate: (val: string) => void;
-  onRemove: () => void;
-}
-
-function TargetRow({ item, canDrag, canRemove, constraintsRef, placeholder, validate, onUpdate, onRemove }: TargetRowProps) {
-  const controls = useDragControls();
-  const [dragging, setDragging] = useState(false);
-  const isValid = validate(item.value);
-
-  return (
-    <Reorder.Item
-      value={item}
-      dragListener={false}
-      dragControls={controls}
-      dragConstraints={constraintsRef}
-      dragElastic={0.1}
-      onDragStart={() => { setDragging(true); document.body.classList.add('dragging-active'); }}
-      onDragEnd={() => { setDragging(false); document.body.classList.remove('dragging-active'); }}
-      className={clsx('addr-row', dragging && 'dragging')}
-      style={{ listStyle: 'none' }}
-    >
-      {canDrag && (
-        <div className="addr-drag" onPointerDown={(e) => controls.start(e)}>
-          <GripIcon />
-        </div>
-      )}
-      <Input
-        value={item.value}
-        onChange={(e) => onUpdate(e.target.value)}
-        placeholder={placeholder}
-        error={!isValid}
-        style={{ fontFamily: 'var(--mono)', flex: 1 }}
+        )}
       />
-      {canRemove && (
-        <button type="button" className="addr-del" onClick={onRemove} title="×">
-          ×
-        </button>
-      )}
-    </Reorder.Item>
+    </FormGroup>
   );
 }

@@ -1,5 +1,6 @@
 import { Modal } from './Modal';
 import { Button } from './Button';
+import { useUiLabels } from './UiLabels';
 import { createContext, useContext, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 
 export interface ConfirmDialogProps {
@@ -14,10 +15,11 @@ export interface ConfirmDialogProps {
   onCancel: () => void;
 }
 
-export function ConfirmDialog({
-  open, title, message, confirmText = 'Confirm', cancelText = 'Cancel',
+function ConfirmDialog({
+  open, title, message, confirmText, cancelText,
   danger, animateFrom, onConfirm, onCancel,
 }: ConfirmDialogProps) {
+  const L = useUiLabels();
   return (
     <Modal
       open={open}
@@ -26,8 +28,8 @@ export function ConfirmDialog({
       animateFrom={animateFrom}
       footer={
         <>
-          <Button onClick={onCancel}>{cancelText}</Button>
-          <Button variant={danger ? 'danger' : 'primary'} onClick={onConfirm}>{confirmText}</Button>
+          <Button onClick={onCancel}>{cancelText ?? L.cancel}</Button>
+          <Button variant={danger ? 'danger' : 'primary'} onClick={onConfirm}>{confirmText ?? L.confirm}</Button>
         </>
       }
     >

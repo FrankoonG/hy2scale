@@ -1,471 +1,495 @@
 name: Release
 
+# Runs only on the code of a release tag: a tag push, or a manual run
+# started from the tag itself ("Use workflow from" = the tag;
+# trigger-release.yml does that after creating the tag).
+#
+# Jobs and what they may touch:
+#   version   reads the tag and the version constant      no token, no secrets
+#   frontend  builds the web UI (npm, no install scripts) read-only token
+#   build     builds the binaries (go only)               read-only token
+#   sign      signs the built binaries                    the signing key only;
+#             (environment "release"; never checks out    no repository code
+#             or runs repository code)
+#   package / docker   archives, images, iKuai packages   read-only token
+#   release   publishes the GitHub release                contents: write
+#   publish-docker     pushes to Docker Hub               Docker Hub token only
 on:
   push:
     tags:
       - "[0-9]*"
       - "v[0-9]*"
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Release tag (e.g. 1.3.0)"
-        required: true
-        type: string
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
-  group: release-${{ github.ref_name || github.run_id }}
-  cancel-in-progress: true
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
 
 env:
-  GO_VERSION: "1.24"
-  BINARY_NAME: hy2scale
+  GO_VERSION: "1.27"
+  # Public half of the release signing key (internal/buildsig: "hy2scale-1").
+  SIGNING_KEY_ID: hy2scale-1
+  SIGNING_PUBLIC_KEY: qacIdvM9YVk+SbRNEsSiXqTyxTizsKKlJm06Z1KyYlc=
 
 jobs:
-  # ─── Cross-compile bare binaries ───────────────────────────────
-  build-binary:
-    name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+  version:
+    name: Resolve version
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
-          - goos: linux
-            goarch: arm
-            goarm: "7"
-          - goos: linux
-            goarch: mips64le
-          - goos: linux
-            goarch: mipsle
-            gomips: softfloat
-
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+      binary_version: ${{ steps.v.outputs.binary_version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: internal/api/server.go
+          sparse-checkout-cone-mode: false
+      - id: v
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          if [ "$REF_TYPE" != tag ]; then
+            echo "::error::run this workflow from a release tag (Use workflow from: <tag>)"
+            exit 1
+          fi
+          if ! printf '%s' "$TAG" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::not a release tag: $TAG"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          BINVER="$(sed -n 's/^const Version = "\([0-9A-Za-z.-]*\)"$/\1/p' internal/api/server.go)"
+          case "$VERSION" in
+            "$BINVER"|"$BINVER"-*) ;;
+            *) echo "::error::tag $TAG does not match the source version $BINVER"; exit 1 ;;
+          esac
+          {
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "binary_version=$BINVER"
+            case "$VERSION" in *-*) echo "prerelease=true" ;; *) echo "prerelease=false" ;; esac
+          } >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-node@v4
+  # ─── Web UI (no secrets; npm runs in this job only) ──────────────
+  frontend:
+    name: Build web UI
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
 
-      # Frontend MUST be rebuilt fresh and copied into internal/web/static/
-      # before `go build` runs — the binary uses `go:embed internal/web/static`
-      # so a stale committed bundle silently ships outdated UI even when
-      # NodesGraphView.tsx etc. are correctly updated in source. The
-      # build-docker job already does this via Dockerfile; build-binary used
-      # to skip it, which made every release bare-binary tarball ship the
-      # last-committed dist instead of the post-checkout source. Mirror
-      # build-docker's frontend step here so the two artifacts stay in sync.
-      - name: Build frontend
+      # Dependencies' install scripts never run.
+      - name: Build
         run: |
-          set -euxo pipefail
-          (cd web/ui-framework && npm ci && npm run build)
-          (cd web/app && npm ci && npm run build)
-          rm -rf internal/web/static
-          mkdir -p internal/web/static
-          cp -r web/app/dist/. internal/web/static/
-          ls -la internal/web/static/assets/
-        working-directory: ${{ github.workspace }}
+          set -eux
+          (cd web/ui-framework && npm ci --ignore-scripts && npm run build)
+          (cd web/app && npm ci --ignore-scripts && npm run build)
 
-      - uses: actions/setup-go@v5
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: web-static
+          path: web/app/dist/
+          if-no-files-found: error
+
+  # ─── Binaries (no secrets; go only) ──────────────────────────────
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: [version, frontend]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { platform: linux-amd64, goarch: amd64 }
+          - { platform: linux-arm64, goarch: arm64 }
+          - { platform: linux-armv7, goarch: arm, goarm: "7" }
+          - { platform: linux-mips64le, goarch: mips64le }
+          - { platform: linux-mipsle-softfloat, goarch: mipsle, gomips: softfloat }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # The binary embeds internal/web/static: the UI built from this
+      # commit, never the committed bundle.
+      - name: Use the built web UI
+        run: rm -rf internal/web/static
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: web-static
+          path: internal/web/static
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache: false
 
       - name: Build binary
         env:
           CGO_ENABLED: "0"
-          GOOS: ${{ matrix.goos }}
+          GOOS: linux
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
           GOMIPS: ${{ matrix.gomips }}
+          PLATFORM: ${{ matrix.platform }}
         run: |
-          SUFFIX="${{ matrix.goos }}-${{ matrix.goarch }}"
-          [ -n "${{ matrix.goarm }}" ] && SUFFIX="${SUFFIX}v${{ matrix.goarm }}"
-          [ -n "${{ matrix.gomips }}" ] && SUFFIX="${SUFFIX}-${{ matrix.gomips }}"
+          set -eu
+          go build -trimpath -ldflags="-s -w" -o "hy2scale-${PLATFORM}" ./cmd/node
+          sha256sum "hy2scale-${PLATFORM}"
 
-          OUTPUT="${BINARY_NAME}-${SUFFIX}"
-          go build -ldflags="-s -w" -o "${OUTPUT}" ./cmd/node
-          tar czf "${OUTPUT}.tar.gz" "${OUTPUT}"
-
-          echo "ASSET=${OUTPUT}.tar.gz" >> $GITHUB_ENV
-          echo "ARTIFACT_NAME=${OUTPUT}" >> $GITHUB_ENV
-
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ${{ env.ARTIFACT_NAME }}
-          path: ${{ env.ASSET }}
+          name: bin-${{ matrix.platform }}
+          path: hy2scale-${{ matrix.platform }}
+          if-no-files-found: error
 
-  # ─── Docker image + iKuai ipkg (per-arch) ─────────────────────
-  # Matrix builds amd64 + arm64 in parallel, each emitting:
-  #   docker-image-{arch}.tar.gz   (offline-loadable image)
-  #   hy2scale-{version}-{arch}.ipkg  (iKuai package with image embedded)
-  # Both archs run on amd64 GitHub runners; arm64 uses QEMU emulation
-  # via docker buildx. The ipkg's manifest.json `image: hy2scale:ikuai`
-  # tag is the same name on both archs so iKuai's bootstrap script does
-  # not need per-arch logic — it just `docker load`s the per-arch tarball
-  # the user installed and the embedded image runs natively.
-  build-docker:
-    name: Build Docker + ipkg (${{ matrix.arch }})
+  # ─── Signing (the key, nothing else) ─────────────────────────────
+  # Configure the "release" environment in the repository settings: the
+  # secret RELEASE_SIGNING_KEY (the Ed25519 private key, PEM) and a
+  # deployment rule that allows release tags only.
+  sign:
+    name: Sign binaries
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions: {}
+    steps:
+      # Each expected binary by its exact artifact name, nothing else.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-amd64
+          path: in/linux-amd64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-arm64
+          path: in/linux-arm64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-armv7
+          path: in/linux-armv7
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-mips64le
+          path: in/linux-mips64le
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-mipsle-softfloat
+          path: in/linux-mipsle-softfloat
+
+      - name: Check the binaries
+        run: |
+          set -eu
+          mkdir bin
+          for p in \
+            'linux-amd64:ELF 64-bit LSB.*x86-64' \
+            'linux-arm64:ELF 64-bit LSB.*ARM aarch64' \
+            'linux-armv7:ELF 32-bit LSB.*ARM' \
+            'linux-mips64le:ELF 64-bit LSB.*MIPS' \
+            'linux-mipsle-softfloat:ELF 32-bit LSB.*MIPS'; do
+            plat="${p%%:*}"; want="${p#*:}"
+            [ "$(ls "in/$plat")" = "hy2scale-$plat" ] || { echo "::error::unexpected files for $plat: $(ls "in/$plat")"; exit 1; }
+            kind="$(file -b "in/$plat/hy2scale-$plat")"
+            echo "$kind" | grep -Eq "$want" || { echo "::error::hy2scale-$plat is not $want: $kind"; exit 1; }
+            mv "in/$plat/hy2scale-$plat" bin/
+          done
+
+      - name: Sign
+        env:
+          SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+          VERSION: ${{ needs.version.outputs.binary_version }}
+          TAG: ${{ needs.version.outputs.tag }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -eu
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "::error::RELEASE_SIGNING_KEY is not set in the release environment"
+            exit 1
+          fi
+          umask 077
+          KEY="$RUNNER_TEMP/release.key"
+          trap 'rm -f "$KEY"' EXIT
+          printf '%s\n' "$SIGNING_KEY" > "$KEY"
+          PUB="$(openssl pkey -in "$KEY" -pubout -outform DER | tail -c 32 | base64 -w0)"
+          if [ "$PUB" != "$SIGNING_PUBLIC_KEY" ]; then
+            echo "::error::RELEASE_SIGNING_KEY is not the key $SIGNING_KEY_ID"
+            exit 1
+          fi
+          cd bin
+          for f in hy2scale-*; do
+            PLATFORM="${f#hy2scale-}"
+            SUM="$(sha256sum "$f" | cut -d' ' -f1)"
+            jq -cn --arg v "$VERSION" --arg p "$PLATFORM" --arg s "$SUM" --arg c "$COMMIT" --arg t "$TAG" \
+              '{name:"hy2scale",version:$v,platform:$p,sha256:$s,commit:$c,tag:$t}' > "$RUNNER_TEMP/m.json"
+            openssl pkeyutl -sign -inkey "$KEY" -rawin -in "$RUNNER_TEMP/m.json" -out "$RUNNER_TEMP/m.sig"
+            jq -cn --arg k "$SIGNING_KEY_ID" --arg m "$(base64 -w0 "$RUNNER_TEMP/m.json")" --arg s "$(base64 -w0 "$RUNNER_TEMP/m.sig")" \
+              '{key:$k,manifest:$m,sig:$s}' > "$f.sig"
+            echo "signed $f ($SUM)"
+          done
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: signed
+          path: bin/
+          if-no-files-found: error
+
+  # ─── Release archives ────────────────────────────────────────────
+  package:
+    name: Package archives
+    needs: sign
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signed
+          path: signed
+      - name: Archive
+        run: |
+          set -eu
+          mkdir -p out
+          cd signed
+          for f in hy2scale-*; do
+            case "$f" in *.sig) continue ;; esac
+            chmod 0755 "$f"
+            tar czf "../out/$f.tar.gz" "$f" "$f.sig"
+          done
+          ls -la ../out
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: archives
+          path: out/
+          if-no-files-found: error
+
+  # ─── Docker image + iKuai ipkg (per arch) ────────────────────────
+  # The image takes the signed binary (Dockerfile, BIN=release), so it runs
+  # the signed bytes. ipkg file name: hy2scale-<x86|arm64>-<version>.ipkg.
+  docker:
+    name: Docker + ipkg (${{ matrix.arch }})
+    needs: [version, sign]
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
-          # amd64 → x86 in user-facing ipkg filename (matches iKuai router
-          # CPU labels). Native amd64 runner.
-          - arch: amd64
-            arch_label: x86
-            platform: linux/amd64
-            runner: ubuntu-latest
-          # arm64 native runner (ubuntu-24.04-arm) — avoids QEMU emulation
-          # of strongswan + iptables source compiles, cuts the arm64 leg
-          # from ~13min to ~3min.
-          - arch: arm64
-            arch_label: arm64
-            platform: linux/arm64
-            runner: ubuntu-24.04-arm
+          - { arch: amd64, arch_label: x86, platform: linux/amd64, runner: ubuntu-latest }
+          - { arch: arm64, arch_label: arm64, platform: linux/arm64, runner: ubuntu-24.04-arm }
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      ARCH: ${{ matrix.arch }}
+      ARCH_LABEL: ${{ matrix.arch_label }}
+      PLATFORM: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Resolve version
-        id: ver
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          node-version: 20
+          persist-credentials: false
 
-      - name: Build frontend
-        run: |
-          cd web/ui-framework && npm ci && npm run build
-          cd ../app && npm ci && npm run build
-
-      - uses: actions/setup-go@v5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          go-version: ${{ env.GO_VERSION }}
+          name: signed
+          path: release
 
-      - name: Build Docker image (${{ matrix.platform }})
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Build image
         run: |
-          # buildx --load brings the built image into the local docker
-          # daemon so subsequent `docker save` works the same way the
-          # legacy single-arch path did. Both runners are native to
-          # their target arch (amd64 on ubuntu-latest, arm64 on
-          # ubuntu-24.04-arm), so the build is fast and --load is the
-          # natural endpoint. Three tags:
-          #   frankoong/hy2scale:<version>           (legacy: same name
-          #                                           ops see when they
-          #                                           docker load the
-          #                                           offline tarball)
-          #   frankoong/hy2scale:<version>-<arch>    (per-arch tag pushed
-          #                                           to Docker Hub; the
-          #                                           publish-manifest
-          #                                           job assembles these
-          #                                           into a multi-arch
-          #                                           manifest)
-          #   hy2scale:ikuai                         (local tag the ipkg
-          #                                           bootstrap expects)
-          docker buildx build \
-            --platform ${{ matrix.platform }} \
-            --tag frankoong/hy2scale:${{ steps.ver.outputs.version }} \
-            --tag frankoong/hy2scale:${{ steps.ver.outputs.version }}-${{ matrix.arch }} \
-            --tag hy2scale:ikuai \
-            --load \
-            .
+          set -eu
+          docker buildx build --platform "$PLATFORM" --build-arg BIN=release \
+            --tag "frankoong/hy2scale:${VERSION}" --tag hy2scale:ikuai --load .
+          docker run --rm --entrypoint sh hy2scale:ikuai -c 'ls -l /usr/local/bin/hy2scale /usr/local/bin/hy2scale.sig'
 
-      - name: Login to Docker Hub
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Push per-arch image to Docker Hub
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-        run: |
-          docker push frankoong/hy2scale:${{ steps.ver.outputs.version }}-${{ matrix.arch }}
-
-      - name: Export Docker image
-        run: |
-          docker save frankoong/hy2scale:${{ steps.ver.outputs.version }} \
-            | gzip > docker-image-${{ matrix.arch }}.tar.gz
-          echo "DOCKER_SIZE=$(du -h docker-image-${{ matrix.arch }}.tar.gz | cut -f1)" >> $GITHUB_ENV
+      - name: Export image
+        run: docker save "frankoong/hy2scale:${VERSION}" | gzip > "docker-image-${ARCH}.tar.gz"
 
       - name: Build ipkg
         run: |
-          # ipkg version must be plain X.Y.Z (iKuai's parser rejects suffixes
-          # like -rc1). Read from Go source then strip any prerelease suffix
-          # so the manifest stays installable even on rc-tagged releases.
-          RAW_VERSION=$(grep 'const Version' internal/api/server.go | sed 's/.*"\(.*\)".*/\1/')
-          IPKG_VERSION=$(echo "$RAW_VERSION" | sed 's/-.*//')
-          echo "Source Version: ${RAW_VERSION} -> ipkg manifest: ${IPKG_VERSION}"
-
-          # The release-asset filename uses the FULL tag (with -rc1 suffix
-          # if present) so users can tell candidate builds apart, but the
-          # internal manifest version stays plain X.Y.Z.
-          ASSET_VERSION="${{ steps.ver.outputs.version }}"
-
-          # Update manifest version (in-tree, not committed)
+          set -eu
+          # The ipkg manifest version must be plain X.Y.Z (iKuai rejects -rc1).
+          RAW_VERSION="$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/api/server.go)"
+          IPKG_VERSION="${RAW_VERSION%%-*}"
           sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${IPKG_VERSION}\"/" ipkg/hy2scale/manifest.json
-
-          # Embed Docker image (iKuai bootstrap expects hy2scale:ikuai tag).
           docker save hy2scale:ikuai | gzip > ipkg/hy2scale/docker_image.tar.gz
+          (cd ipkg && tar czf "hy2scale-${ARCH_LABEL}-${VERSION}.ipkg" hy2scale/)
+          rm -f ipkg/hy2scale/docker_image.tar.gz
 
-          # Package ipkg. Filename: hy2scale-<arch>-<version>.ipkg
-          # (arch first, then version) so installers visually parse the
-          # arch immediately and don't mistake a version-suffix for one.
-          # arch_label uses iKuai's CPU naming convention: "x86" for
-          # amd64 routers, "arm64" for aarch64 routers.
-          cd ipkg
-          tar czf "hy2scale-${{ matrix.arch_label }}-${ASSET_VERSION}.ipkg" hy2scale/
-
-          # Clean embedded image
-          rm -f hy2scale/docker_image.tar.gz
-
-          echo "IPKG_FILE=ipkg/hy2scale-${{ matrix.arch_label }}-${ASSET_VERSION}.ipkg" >> $GITHUB_ENV
-
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: docker-image-${{ matrix.arch }}
           path: docker-image-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ipkg-${{ matrix.arch }}
-          path: ${{ env.IPKG_FILE }}
+          path: ipkg/hy2scale-${{ matrix.arch_label }}-${{ needs.version.outputs.version }}.ipkg
+          if-no-files-found: error
 
-  # ─── Create GitHub Release ─────────────────────────────────────
+  # ─── GitHub release ──────────────────────────────────────────────
   release:
-    name: Create Release
-    needs: [build-binary, build-docker]
+    name: Create release
+    needs: [version, package, docker]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+      VERSION: ${{ needs.version.outputs.version }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           fetch-depth: 0
 
-      - name: Resolve version
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
-
-      - name: Generate changelog
-        id: changelog
-        run: |
-          TAG="${{ steps.version.outputs.tag }}"
-
-          # Find the most recent tag strictly before this one. When the
-          # workflow is triggered by a tag push, HEAD == TAG, so HEAD^
-          # skips past the tag commit itself.
-          PREV=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
-
-          if [ -n "${PREV}" ]; then
-            RANGE="${PREV}..HEAD"
-            HEADER="Changelog since ${PREV}"
-          else
-            RANGE=""
-            HEADER="Full commit history"
-          fi
-          echo "Previous tag: ${PREV:-<none>}"
-          echo "Range: ${RANGE:-<full history>}"
-
-          {
-            echo "header=${HEADER}"
-            echo "changelog<<CHANGELOG_EOF"
-            if [ -z "${RANGE}" ]; then
-              git log --pretty=format:"- %s (%h)" --no-merges
-            else
-              git log "${RANGE}" --pretty=format:"- %s (%h)" --no-merges
-            fi
-            echo ""
-            echo "CHANGELOG_EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
 
-      - name: Collect release assets
+      - name: Collect assets
         run: |
+          set -eu
           mkdir -p release
-          find artifacts -name '*.tar.gz' -exec cp {} release/ \;
-          find artifacts -name '*.ipkg' -exec cp {} release/ \;
-          ls -la release/
+          cp artifacts/archives/*.tar.gz release/
+          cp artifacts/docker-image-*/*.tar.gz release/
+          cp artifacts/ipkg-*/*.ipkg release/
+          (cd release && sha256sum -- * > checksums-sha256.txt && cat checksums-sha256.txt)
 
-      - name: Generate checksums
-        working-directory: release
+      - name: Release notes
         run: |
-          sha256sum * > checksums-sha256.txt
-          cat checksums-sha256.txt
+          set -eu
+          PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          {
+            echo "## hy2scale ${TAG}"
+            echo
+            echo "### Binary downloads"
+            echo
+            echo "| Platform | File |"
+            echo "|----------|------|"
+            for p in linux-amd64 linux-arm64 linux-armv7 linux-mips64le linux-mipsle-softfloat; do
+              echo "| ${p} | \`hy2scale-${p}.tar.gz\` |"
+            done
+            echo
+            echo "Every binary is signed by this workflow (\`hy2scale-<platform>.sig\` in the archive); a node running an official build checks it before an upgrade."
+            echo
+            echo "### Docker image"
+            echo
+            echo '```bash'
+            echo "docker pull frankoong/hy2scale:${VERSION}"
+            echo '```'
+            echo
+            echo "Offline: \`docker load < docker-image-amd64.tar.gz\` (or \`-arm64\`)."
+            echo
+            echo "### iKuai package"
+            echo
+            echo "- \`hy2scale-x86-${VERSION}.ipkg\` for x86 / x86_64 iKuai"
+            echo "- \`hy2scale-arm64-${VERSION}.ipkg\` for arm64 / aarch64 iKuai"
+            echo
+            echo "### Verify checksums"
+            echo
+            echo '```'
+            echo 'sha256sum -c checksums-sha256.txt'
+            echo '```'
+            echo
+            echo "<details>"
+            if [ -n "$PREV" ]; then
+              echo "<summary>Changelog since ${PREV}</summary>"
+              echo
+              git log "${PREV}..${TAG}" --pretty=format:"- %s (%h)" --no-merges
+            else
+              echo "<summary>Full commit history</summary>"
+              echo
+              git log "${TAG}" --pretty=format:"- %s (%h)" --no-merges
+            fi
+            echo
+            echo
+            echo "</details>"
+          } > notes.md
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: ${{ steps.version.outputs.tag }}
-          body: |
-            ## hy2scale ${{ steps.version.outputs.tag }}
-
-            ### Binary Downloads
-
-            | Platform | Architecture | File |
-            |----------|-------------|------|
-            | Linux | amd64 | `hy2scale-linux-amd64.tar.gz` |
-            | Linux | arm64 | `hy2scale-linux-arm64.tar.gz` |
-            | Linux | armv7 | `hy2scale-linux-armv7.tar.gz` |
-            | Linux | mips64le | `hy2scale-linux-mips64le.tar.gz` |
-            | Linux | mipsle | `hy2scale-linux-mipsle-softfloat.tar.gz` |
-
-            ### Docker Image
-
-            Pull from Docker Hub (multi-arch manifest, amd64 + arm64):
-            ```bash
-            docker pull frankoong/hy2scale:${{ steps.version.outputs.version }}
-            ```
-
-            Or load offline (one per arch — useful for air-gapped hosts):
-            ```bash
-            # amd64 (x86_64)
-            docker load < docker-image-amd64.tar.gz
-            # arm64 (aarch64)
-            docker load < docker-image-arm64.tar.gz
-            ```
-
-            ### iKuai Package
-
-            Pick the package matching your iKuai router's CPU architecture:
-            - `hy2scale-x86-${{ steps.version.outputs.version }}.ipkg` — for x86 / x86_64 iKuai
-            - `hy2scale-arm64-${{ steps.version.outputs.version }}.ipkg` — for arm64 / aarch64 iKuai
-
-            Install via the iKuai web UI (Advanced Apps → App Market → Local Install).
-
-            ### Verify checksums
-            ```
-            sha256sum -c checksums-sha256.txt
-            ```
-
-            <details>
-            <summary>${{ steps.changelog.outputs.header }}</summary>
-
-            ${{ steps.changelog.outputs.changelog }}
-
-            </details>
-          files: |
-            release/*
-          draft: false
-          prerelease: ${{ contains(steps.version.outputs.tag, '-') }}
+      - name: Publish
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # ─── Glue per-arch Docker Hub tags into a multi-arch manifest ───
-  # build-docker already pushed `frankoong/hy2scale:<version>-amd64`
-  # and `frankoong/hy2scale:<version>-arm64` from their respective
-  # native runners. We just create + push the multi-arch manifest
-  # (and `:latest` for finalised tags) — no rebuild, ~20s total.
-  publish-manifest:
-    name: Publish multi-arch manifest to Docker Hub
-    needs: build-docker
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-    permissions:
-      contents: read
-    steps:
-      - name: Resolve version
-        id: ver
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
-          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+          set -eu
+          FLAGS=""
+          [ "$PRERELEASE" = true ] && FLAGS="--prerelease"
+          gh release create "$TAG" release/* --repo "$GITHUB_REPOSITORY" --title "$TAG" --notes-file notes.md --verify-tag $FLAGS
 
-      - uses: docker/login-action@v3
+  # ─── Docker Hub ──────────────────────────────────────────────────
+  # Per-arch tags are pushed, glued into one multi-arch manifest (plus
+  # :latest for a final release), then the per-arch tags are removed.
+  publish-docker:
+    name: Publish to Docker Hub
+    needs: [version, release]
+    runs-on: ubuntu-latest
+    permissions: {}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      IMG: frankoong/hy2scale
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: docker-image-*
+          merge-multiple: true
+          path: images
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Create + push manifest(s)
+      - name: Push per-arch images and the manifest
         run: |
-          set -e
-          VER="${{ steps.ver.outputs.version }}"
-          IMG="frankoong/hy2scale"
-
-          # Multi-arch manifest under the version tag.
-          docker manifest create "${IMG}:${VER}" \
-            --amend "${IMG}:${VER}-amd64" \
-            --amend "${IMG}:${VER}-arm64"
-          docker manifest push "${IMG}:${VER}"
-          echo "Published multi-arch manifest ${IMG}:${VER}"
-
-          # Stamp :latest only on a finalised tag (no -rc / -dev / etc.).
-          # Detect via dash in the version string — anything like
-          # 1.3.4-rc1 / 1.3.4-dev1 / 1.3.4-bondfix is a pre-release;
-          # plain 1.3.4 is finalised.
-          case "$VER" in
-            *-*)
-              echo "Pre-release ${VER} — skipping :latest"
-              ;;
+          set -eu
+          for arch in amd64 arm64; do
+            gunzip -c "images/docker-image-${arch}.tar.gz" | docker load
+            docker tag "${IMG}:${VERSION}" "${IMG}:${VERSION}-${arch}"
+            docker push "${IMG}:${VERSION}-${arch}"
+          done
+          docker manifest create "${IMG}:${VERSION}" --amend "${IMG}:${VERSION}-amd64" --amend "${IMG}:${VERSION}-arm64"
+          docker manifest push "${IMG}:${VERSION}"
+          case "$VERSION" in
+            *-*) echo "pre-release ${VERSION}: :latest left as is" ;;
             *)
-              docker manifest create "${IMG}:latest" \
-                --amend "${IMG}:${VER}-amd64" \
-                --amend "${IMG}:${VER}-arm64"
+              docker manifest create "${IMG}:latest" --amend "${IMG}:${VERSION}-amd64" --amend "${IMG}:${VERSION}-arm64"
               docker manifest push "${IMG}:latest"
-              echo "Aligned :latest to ${IMG}:${VER}"
               ;;
           esac
 
-      - name: Delete intermediate per-arch tags from Docker Hub
-        # `docker manifest create` requires real registry references for
-        # each architecture, so the build-docker matrix legs pushed
-        # `${IMG}:${VER}-amd64` and `${IMG}:${VER}-arm64` as visible
-        # tags. After the multi-arch manifest is published these are
-        # clutter on the Hub tag list — the digests they pointed to
-        # remain accessible through the parent manifest tag, so it's
-        # safe to delete the per-arch tags. Done via the Hub web API
-        # (the registry API doesn't expose tag deletion).
+      - name: Remove the per-arch tags
+        env:
+          HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
-          set -e
-          VER="${{ steps.ver.outputs.version }}"
-          REPO="frankoong/hy2scale"
-          # Docker Hub web API uses JWT auth (separate from the
-          # registry push token). Exchange the PAT for a JWT.
-          JWT=$(curl -fsS -X POST \
-            -H "Content-Type: application/json" \
-            -d "{\"username\":\"${{ secrets.DOCKERHUB_USERNAME }}\",\"password\":\"${{ secrets.DOCKERHUB_TOKEN }}\"}" \
-            https://hub.docker.com/v2/users/login/ | jq -r .token)
-          if [ -z "$JWT" ] || [ "$JWT" = "null" ]; then
-            echo "::warning::Hub API login failed; per-arch tags left in place"
+          set -eu
+          # The login body goes through stdin, never the command line.
+          JWT="$(jq -n --arg u "$HUB_USER" --arg p "$HUB_TOKEN" '{username:$u,password:$p}' \
+            | curl -fsS -X POST -H "Content-Type: application/json" --data-binary @- https://hub.docker.com/v2/users/login/ \
+            | jq -r .token)" || true
+          if [ -z "$JWT" ] || [ "$JWT" = null ]; then
+            echo "::warning::Docker Hub API login failed; per-arch tags left in place"
             exit 0
           fi
           for arch in amd64 arm64; do
-            TAG="${VER}-${arch}"
-            HTTP=$(curl -sS -o /tmp/del.out -w "%{http_code}" \
-              -X DELETE \
-              -H "Authorization: JWT ${JWT}" \
-              "https://hub.docker.com/v2/repositories/${REPO}/tags/${TAG}/" || echo 000)
-            case "$HTTP" in
-              204|404) echo "deleted (or already gone): ${REPO}:${TAG} (HTTP ${HTTP})" ;;
-              *)       echo "::warning::failed to delete ${REPO}:${TAG} (HTTP ${HTTP}): $(cat /tmp/del.out)" ;;
-            esac
+            HTTP="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: JWT ${JWT}" \
+              "https://hub.docker.com/v2/repositories/${IMG}/tags/${VERSION}-${arch}/" || echo 000)"
+            echo "delete ${IMG}:${VERSION}-${arch}: HTTP ${HTTP}"
           done

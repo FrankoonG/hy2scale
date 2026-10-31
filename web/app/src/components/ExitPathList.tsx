@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Reorder, useDragControls } from 'framer-motion';
-import { Autocomplete, FormGroup, GripIcon } from '@hy2scale/ui';
+import { Autocomplete, FormGroup, SortableList } from '@hy2scale/ui';
 import { useExitPaths } from '@/hooks/useExitPaths';
 import { useNodeStore } from '@/store/node';
 import type { TopologyNode } from '@/api';
-import clsx from 'clsx';
+import { findPaths } from '@/components/topo/graphModel';
 
 export interface ExitPathValue {
   paths: string[];
@@ -49,6 +48,8 @@ export function pathHasMultiConn(topology: TopologyNode[], path: string, selfId?
 
 export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
   const { t } = useTranslation();
+  // Several lists can share a form (policy rules): one radio group each.
+  const radioName = `exitMode-${useId()}`;
   const { exitPaths } = useExitPaths();
 
   // Items are the per-row form state. The earlier assumption — that
@@ -132,6 +133,7 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
 
   const topology = useNodeStore((s) => s.topology);
   const selfId = useNodeStore((s) => s.node?.node_id);
+  const selfName = useNodeStore((s) => s.node?.name);
 
   const removePath = useCallback((id: number) => {
     setItems((prev) => {
@@ -151,13 +153,28 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
     onChange({ paths: items.map((it) => it.value), mode: m });
   }, [items, onChange]);
 
-  const listRef = useRef<HTMLUListElement>(null);
   const filledItems = items.filter((it) => it.value);
   const hasMultiple = filledItems.length > 1;
   // one path whose route has several connections somewhere still offers
   // quality / aggregate
   const singleMultiConn = filledItems.length === 1 && pathHasMultiConn(topology, filledItems[0].value, selfId);
   const singleOnly = !hasMultiple && !singleMultiConn;
+
+  // One bare node entered and the topology knows more routes to it (the
+  // routes the topology's path panel steps through): offer them all.
+  const completion = (() => {
+    if (filledItems.length !== 1 || !selfId) return null;
+    const name = filledItems[0].value.trim();
+    if (!name || name.includes('/') || name === selfId || name === selfName) return null;
+    const routes = findPaths(topology, name, selfId, selfName).map((r) => r.segs.join('/'));
+    const all = Array.from(new Set(routes));
+    return all.length > 1 || (all.length === 1 && all[0] !== name) ? all : null;
+  })();
+  const completePaths = () => {
+    if (!completion) return;
+    pendingModeOverrideRef.current = completion.length > 1 ? (mode || 'quality') : mode;
+    setItems(toItems(completion));
+  };
 
   // Aggregate requires all paths to reach the same final exit node
   let aggregateDisabled = singleOnly;
@@ -167,99 +184,49 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
   }
 
   return (
-    <FormGroup label={label || t('users.exitVia')}>
+    <FormGroup label={label ?? t('users.exitVia')}>
       {/* Mode selection */}
       <div className="exit-mode-options">
         <label className="exit-mode-opt">
-          <input type="radio" name="exitMode" checked={mode === '' || !mode} onChange={() => setMode('')} disabled={hasMultiple} />
+          <input type="radio" name={radioName} checked={mode === '' || !mode} onChange={() => setMode('')} disabled={hasMultiple} />
           {t('exit.modeNone')}
         </label>
         <label className="exit-mode-opt">
-          <input type="radio" name="exitMode" checked={mode === 'quality'} onChange={() => setMode('quality')} disabled={singleOnly} />
+          <input type="radio" name={radioName} checked={mode === 'quality'} onChange={() => setMode('quality')} disabled={singleOnly} />
           {t('exit.modeStability')}
         </label>
         <label className="exit-mode-opt">
-          <input type="radio" name="exitMode" checked={mode === 'aggregate'} onChange={() => setMode('aggregate')} disabled={aggregateDisabled} />
+          <input type="radio" name={radioName} checked={mode === 'aggregate'} onChange={() => setMode('aggregate')} disabled={aggregateDisabled} />
           {t('exit.modeSpeed')}
         </label>
+        {completion && (
+          <button type="button" className="exit-mode-fill" onClick={completePaths} data-testid="exit-complete-paths"
+            title={t('exit.completePathsHint', { count: completion.length })}>
+            {t('exit.completePaths')}
+          </button>
+        )}
       </div>
 
-      {/* Path inputs */}
-      <Reorder.Group
-        ref={listRef}
-        axis="y"
-        values={items}
+      {/* Path inputs. The radios' name starts with "exitMode" (UI regression
+          driver) and is unique per list: a shared name would make the browser
+          keep only one of them checked across all lists in a form. */}
+      <SortableList
+        items={items}
         onReorder={handleReorder}
-        className="addr-list"
-        style={{ listStyle: 'none', padding: 0, margin: 0 }}
-      >
-        {items.map((item) => (
-          <PathRow
-            key={item.id}
-            item={item}
-            canDrag={items.length > 1}
-            canRemove={items.length > 1}
-            constraintsRef={listRef}
-            exitPaths={exitPaths}
+        removeLabel={t('app.delete')}
+        onRemove={(item) => removePath(item.id)}
+        addLabel={t('exit.addPath')}
+        onAdd={addPath}
+        renderItem={(item) => (
+          <Autocomplete
+            options={exitPaths}
+            value={item.value}
+            onChange={(val) => updateItem(item.id, val)}
             placeholder={t('users.exitViaHint')}
-            deleteTitle={t('app.delete')}
-            onUpdate={(val) => updateItem(item.id, val)}
-            onRemove={() => removePath(item.id)}
           />
-        ))}
-      </Reorder.Group>
-      <div className="addr-add-row" onClick={addPath}>
-        {t('exit.addPath')}
-      </div>
-    </FormGroup>
-  );
-}
-
-interface PathRowProps {
-  item: PathItem;
-  canDrag: boolean;
-  canRemove: boolean;
-  constraintsRef: RefObject<HTMLElement | null>;
-  exitPaths: string[];
-  placeholder: string;
-  deleteTitle: string;
-  onUpdate: (val: string) => void;
-  onRemove: () => void;
-}
-
-function PathRow({ item, canDrag, canRemove, constraintsRef, exitPaths, placeholder, deleteTitle, onUpdate, onRemove }: PathRowProps) {
-  const controls = useDragControls();
-  const [dragging, setDragging] = useState(false);
-
-  return (
-    <Reorder.Item
-      value={item}
-      dragListener={false}
-      dragControls={controls}
-      dragConstraints={constraintsRef}
-      dragElastic={0.1}
-      onDragStart={() => { setDragging(true); document.body.classList.add('dragging-active'); }}
-      onDragEnd={() => { setDragging(false); document.body.classList.remove('dragging-active'); }}
-      className={clsx('addr-row', dragging && 'dragging')}
-      style={{ listStyle: 'none' }}
-    >
-      {canDrag && (
-        <div className="addr-drag" onPointerDown={(e) => controls.start(e)}>
-          <GripIcon />
-        </div>
-      )}
-      <Autocomplete
-        options={exitPaths}
-        value={item.value}
-        onChange={onUpdate}
-        placeholder={placeholder}
+        )}
       />
-      {canRemove && (
-        <button type="button" className="addr-del" onClick={onRemove} title={deleteTitle}>
-          ×
-        </button>
-      )}
-    </Reorder.Item>
+    </FormGroup>
   );
 }
 

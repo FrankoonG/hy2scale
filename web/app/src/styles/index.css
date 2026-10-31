@@ -1,0 +1,13 @@
+/* App styles; loaded after the framework CSS. */
+@import './widgets.css';
+@import './tables.css';
+@import './nodes-graph.css';
+@import './interfaces.css';
+@import './interfaces-topo.css';
+@import './overview.css';
+@import './logs.css';
+@import './login.css';
+@import './about.css';
+@import './tools.css';
+@import './audit.css';
+@import './policy.css';

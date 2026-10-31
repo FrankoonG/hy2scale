@@ -1,0 +1,4 @@
+/* Page and tab transitions. */
+/* ====== Animations ====== */
+.page-enter{animation:pageIn .4s ease both}
+@keyframes pageIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}

@@ -5,20 +5,26 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"github.com/FrankoonG/hy2scale/core/policy"
+	"github.com/FrankoonG/hy2scale/core/sockmark"
 	"io"
 	"log"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/FrankoonG/hy2scale/core/audit"
 	"golang.org/x/crypto/curve25519"
 	"golang.zx2c4.com/wireguard/conn"
 	"golang.zx2c4.com/wireguard/device"
 
+	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
@@ -32,6 +38,7 @@ type WireGuardConfig struct {
 	ListenPort int             `yaml:"listen_port" json:"listen_port"`
 	PrivateKey string          `yaml:"private_key" json:"private_key"`
 	Address    string          `yaml:"address" json:"address"`
+	Address6   string          `yaml:"address6,omitempty" json:"address6"` // IPv6 interface address; "" = DefaultWGAddress6
 	DNS        string          `yaml:"dns,omitempty" json:"dns,omitempty"`
 	MTU        int             `yaml:"mtu,omitempty" json:"mtu,omitempty"`
 	Peers      []WireGuardPeer `yaml:"peers" json:"peers"`
@@ -39,14 +46,26 @@ type WireGuardConfig struct {
 
 // WireGuardPeer is a peer entry.
 type WireGuardPeer struct {
-	Name       string `yaml:"name" json:"name"`
-	PublicKey  string `yaml:"public_key" json:"public_key"`
-	PrivateKey string `yaml:"private_key" json:"private_key"`
-	AllowedIPs string `yaml:"allowed_ips" json:"allowed_ips"`
-	Keepalive  int    `yaml:"keepalive" json:"keepalive"`
+	Name       string   `yaml:"name" json:"name"`
+	PublicKey  string   `yaml:"public_key" json:"public_key"`
+	PrivateKey string   `yaml:"private_key" json:"private_key"`
+	AllowedIPs string   `yaml:"allowed_ips" json:"allowed_ips"`
+	Keepalive  int      `yaml:"keepalive" json:"keepalive"`
 	ExitVia    string   `yaml:"exit_via,omitempty" json:"exit_via"`
 	ExitPaths  []string `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
 	ExitMode   string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"`
+	ExitPolicy string   `yaml:"exit_policy,omitempty" json:"exit_policy"` // a policy set id (overrides the exit fields)
+}
+
+// DefaultWGAddress6 is the server's IPv6 tunnel address when none is set.
+const DefaultWGAddress6 = "fd00:9::1/64"
+
+// WGAddress6 is the configured IPv6 interface address, or the default.
+func (c *WireGuardConfig) WGAddress6() string {
+	if a := strings.TrimSpace(c.Address6); a != "" {
+		return a
+	}
+	return DefaultWGAddress6
 }
 
 type wgInstance struct {
@@ -55,9 +74,9 @@ type wgInstance struct {
 }
 
 var (
-	wgMu         sync.Mutex
-	wgRunning    *wgInstance
-	wgConnected  sync.Map // srcIP → connCount (atomic int32)
+	wgMu        sync.Mutex
+	wgRunning   *wgInstance
+	wgConnected sync.Map // peer key → open connections (*atomic.Int32)
 )
 
 // GenerateWireGuardKey returns (privateKey, publicKey) base64.
@@ -110,10 +129,14 @@ func (a *App) StartWireGuard(cfg WireGuardConfig) error {
 	}
 
 	localAddr, _ := netip.ParseAddr(gateway)
+	local6, err := netip.ParsePrefix(cfg.WGAddress6())
+	if err != nil || !local6.Addr().Is6() || local6.Addr().Is4In6() {
+		return fmt.Errorf("wireguard: address6 %q: need an IPv6 address/prefix", cfg.Address6)
+	}
 
 	// Create custom netstack TUN (HandleLocal=false for transparent forwarding)
 	tunDev, gvStack, err := createWGNetstack(
-		[]netip.Addr{localAddr},
+		[]netip.Addr{localAddr, local6.Addr()},
 		cfg.MTU,
 	)
 	if err != nil {
@@ -130,6 +153,10 @@ func (a *App) StartWireGuard(cfg WireGuardConfig) error {
 
 	ipc := fmt.Sprintf("private_key=%s\nlisten_port=%d\n",
 		hex.EncodeToString(privBytes), cfg.ListenPort)
+	if sockmark.Available() {
+		// handshakes it starts never enter the system capture
+		ipc += fmt.Sprintf("fwmark=%d\n", sockmark.Mark)
+	}
 	for _, peer := range cfg.Peers {
 		pubBytes, perr := base64.StdEncoding.DecodeString(peer.PublicKey)
 		if perr != nil || len(pubBytes) != 32 {
@@ -168,25 +195,56 @@ func (a *App) StartWireGuard(cfg WireGuardConfig) error {
 	wgMu.Unlock()
 
 	_ = ctx
-	log.Printf("[wireguard] listening on :%d, address %s", cfg.ListenPort, cfg.Address)
+	log.Printf("[wireguard] listening on :%d, address %s %s", cfg.ListenPort, cfg.Address, cfg.WGAddress6())
 	return nil
 }
 
-// findPeerExitInfo finds the exit_via, exit_paths, and exit_mode for a WG peer by their tunnel IP.
-func findPeerExitInfo(cfg WireGuardConfig, srcIP string) (string, []string, string) {
-	for _, p := range cfg.Peers {
-		for _, aip := range strings.Split(p.AllowedIPs, ",") {
-			aip = strings.TrimSpace(aip)
-			if aip == "" {
+// findWGPeer is the peer a tunnel source address belongs to: the one whose
+// AllowedIPs hold it, the most specific entry winning (WireGuard's own
+// cryptokey routing). Addresses are compared parsed, so any spelling of an
+// IPv6 address matches.
+func findWGPeer(cfg WireGuardConfig, srcIP string) *WireGuardPeer {
+	src, err := netip.ParseAddr(srcIP)
+	if err != nil {
+		return nil
+	}
+	src = src.Unmap()
+	var best *WireGuardPeer
+	bestBits := -1
+	for i := range cfg.Peers {
+		for _, aip := range strings.Split(cfg.Peers[i].AllowedIPs, ",") {
+			pfx, ok := parseAllowedIP(aip)
+			if !ok || !pfx.Contains(src) || pfx.Bits() <= bestBits {
 				continue
 			}
-			ip := strings.SplitN(aip, "/", 2)[0]
-			if ip == srcIP {
-				return p.ExitVia, p.ExitPaths, p.ExitMode
-			}
+			best, bestBits = &cfg.Peers[i], pfx.Bits()
 		}
 	}
-	return "", nil, ""
+	return best
+}
+
+// parseAllowedIP parses one AllowedIPs entry: a prefix, or a bare address.
+func parseAllowedIP(s string) (netip.Prefix, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return netip.Prefix{}, false
+	}
+	if !strings.Contains(s, "/") {
+		a, err := netip.ParseAddr(s)
+		if err != nil {
+			return netip.Prefix{}, false
+		}
+		a = a.Unmap()
+		return netip.PrefixFrom(a, a.BitLen()), true
+	}
+	p, err := netip.ParsePrefix(s)
+	if err != nil {
+		return netip.Prefix{}, false
+	}
+	if p.Addr().Is4In6() {
+		p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+	}
+	return p.Masked(), true
 }
 
 // StopWireGuard stops the running WireGuard instance.
@@ -276,19 +334,40 @@ func WireGuardConnectedCount() int {
 	return count
 }
 
-func wgConnAdd(srcIP string) {
-	v, _ := wgConnected.LoadOrStore(srcIP, &atomic.Int32{})
+// wgConnAdd / wgConnDel count open connections per peer (key: the peer's
+// name, or the source address when no peer claims it), so a dual-stack peer
+// counts once.
+func wgConnAdd(key string) {
+	v, _ := wgConnected.LoadOrStore(key, &atomic.Int32{})
 	v.(*atomic.Int32).Add(1)
 }
-func wgConnDel(srcIP string) {
-	v, ok := wgConnected.Load(srcIP)
+func wgConnDel(key string) {
+	v, ok := wgConnected.Load(key)
 	if !ok {
 		return
 	}
 	c := v.(*atomic.Int32)
 	if c.Add(-1) <= 0 {
-		wgConnected.Delete(srcIP)
+		wgConnected.Delete(key)
 	}
+}
+
+// wgPeerRoute is the routing of a source address: its peer's exit, and the
+// key the peer's connections are counted under.
+func (a *App) wgPeerRoute(srcIP string) (key string, sel exitSel, ok bool) {
+	wgCfg := a.store.Get().WireGuard
+	if wgCfg == nil {
+		return "", exitSel{}, false
+	}
+	if p := findWGPeer(*wgCfg, srcIP); p != nil {
+		return "peer:" + p.Name, selOf(p.ExitPolicy, p.ExitVia, p.ExitPaths, p.ExitMode), true
+	}
+	return srcIP, exitSel{}, true
+}
+
+// wgSrc: the flow source of a WireGuard client (user = the peer name).
+func wgSrc(key, addr string) flowSrc {
+	return flowSrc{kind: policy.KindWireGuard, user: wgPeerName(key), addr: addr}
 }
 
 // installTCPForwarder intercepts all TCP via gvisor's tcp.Forwarder.
@@ -296,42 +375,66 @@ func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 	tcpFwd := tcp.NewForwarder(s, 0, 65535, func(r *tcp.ForwarderRequest) {
 		id := r.ID()
 		dstAddr := net.JoinHostPort(id.LocalAddress.String(), fmt.Sprintf("%d", id.LocalPort))
-
-		var wq waiter.Queue
-		ep, tcpErr := r.CreateEndpoint(&wq)
-		if tcpErr != nil {
+		srcIP := id.RemoteAddress.String()
+		key, sel, ok := a.wgPeerRoute(srcIP)
+		if !ok {
+			log.Printf("[wg-fwd] no WireGuard config, dropping %s -> %s", srcIP, dstAddr)
 			r.Complete(true)
 			return
 		}
-		r.Complete(false)
-		wgConn := gonet.NewTCPConn(&wq, ep)
+		debugLog("[wg-fwd] %s -> %s sel=%+v", srcIP, dstAddr, sel)
+		srcAddr := net.JoinHostPort(srcIP, strconv.Itoa(int(id.RemotePort)))
+		af := beginUserFlowStr(audit.InWireGuard, "tcp", wgPeerName(key), srcAddr, dstAddr)
+		dctx := audit.NewContext(a.appCtx, af)
+		rt := a.route(sel, wgSrc(key, srcAddr), "tcp", dstAddr)
 
+		var wgConn *gonet.TCPConn
+		var remote net.Conn
+		if sniffAfterAccept(dstAddr) {
+			var ep tcpip.Endpoint
+			if wgConn, ep = acceptForwarded(r, "[wg-fwd]", srcIP, dstAddr); wgConn == nil {
+				af.End(errors.New("connection not accepted"))
+				return
+			}
+			var ok bool
+			if remote, ok = a.dialAccepted(dctx, wgConn, ep, rt, dstAddr); !ok {
+				af.End(errors.New("dial failed"))
+				return
+			}
+		} else {
+			// Dial before answering the SYN (this runs in the forwarder's own
+			// goroutine): a destination the exit cannot reach is refused with
+			// a RST at once, so the client falls back to its other address
+			// family.
+			ctx, cancel := context.WithTimeout(dctx, 15*time.Second)
+			var err error
+			remote, err = rt.dial(ctx)
+			cancel()
+			if err != nil {
+				af.End(err)
+				log.Printf("[wg-fwd] %s -> %s failed: %v", srcIP, dstAddr, err)
+				_, deny := policy.AsDeny(err)
+				r.Complete(!deny || isReject(err)) // a policy drop sends nothing
+				return
+			}
+			var wq waiter.Queue
+			ep, tcpErr := r.CreateEndpoint(&wq)
+			if tcpErr != nil {
+				af.End(errors.New(tcpErr.String()))
+				remote.Close()
+				r.Complete(true)
+				return
+			}
+			r.Complete(false)
+			wgConn = gonet.NewTCPConn(&wq, ep)
+		}
+
+		remote = audit.Track(af, remote, false)
 		go func() {
 			defer wgConn.Close()
-			srcIP := id.RemoteAddress.String()
-			wgConnAdd(srcIP)
-			defer wgConnDel(srcIP)
-			wgCfg := a.store.Get().WireGuard
-			if wgCfg == nil {
-				log.Printf("[wg-fwd] no WireGuard config, dropping %s -> %s", srcIP, dstAddr)
-				return
-			}
-			exitVia, exitPaths, exitMode := findPeerExitInfo(*wgCfg, srcIP)
-			log.Printf("[wg-fwd] %s -> %s via=%q paths=%v mode=%q", srcIP, dstAddr, exitVia, exitPaths, exitMode)
-
-			var remote net.Conn
-			var err error
-			if exitVia == "" {
-				remote, err = net.DialTimeout("tcp", dstAddr, 10*time.Second)
-			} else {
-				remote, err = a.dialExitWithPaths(context.Background(), exitVia, exitPaths, exitMode, dstAddr)
-			}
-			if err != nil {
-				log.Printf("[wg-fwd] %s -> %s failed: %v", srcIP, dstAddr, err)
-				return
-			}
 			defer remote.Close()
-			log.Printf("[wg-fwd] %s -> %s connected", srcIP, dstAddr)
+			wgConnAdd(key)
+			defer wgConnDel(key)
 
 			done := make(chan struct{})
 			go func() {
@@ -367,24 +470,21 @@ func installUDPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 			srcIP := id.RemoteAddress.String()
 
 			// Look up exit routing for this WireGuard peer
-			wgCfg := a.store.Get().WireGuard
-			var remote net.Conn
-			var derr error
-			if wgCfg != nil {
-				exitVia, _, _ := findPeerExitInfo(*wgCfg, srcIP)
-				if exitVia != "" {
-					remote, derr = a.dialExitUDP(context.Background(), exitVia, dstAddr)
-					if derr != nil {
-						debugLog("[wg-fwd] UDP %s -> %s exit=%q dial: %v", srcIP, dstAddr, exitVia, derr)
-					}
-				}
-			}
-			if remote == nil {
-				remote, derr = net.DialTimeout("udp", dstAddr, 5*time.Second)
-			}
-			if derr != nil {
+			key, sel, ok := a.wgPeerRoute(srcIP)
+			if !ok {
 				return
 			}
+			srcAddr := net.JoinHostPort(srcIP, strconv.Itoa(int(id.RemotePort)))
+			af := beginUserFlowStr(audit.InWireGuard, "udp", wgPeerName(key), srcAddr, dstAddr)
+			ctx, cancel := context.WithTimeout(audit.NewContext(a.appCtx, af), 15*time.Second)
+			remote, derr := a.dialRoutedUDP(ctx, sel, wgSrc(key, srcAddr), dstAddr)
+			cancel()
+			if derr != nil {
+				af.End(derr)
+				debugLog("[wg-fwd] UDP %s -> %s sel=%+v dial: %v", srcIP, dstAddr, sel, derr)
+				return
+			}
+			remote = audit.Track(af, remote, false)
 			defer remote.Close()
 			// Idle reap: gvisor netstack has no conntrack, so this forwarder
 			// owns the lifetime of each UDP flow. The deadline must be
@@ -445,8 +545,8 @@ func GenerateWireGuardClientConfig(serverCfg WireGuardConfig, peer WireGuardPeer
 	}
 	b.WriteString("\n[Peer]\n")
 	b.WriteString(fmt.Sprintf("PublicKey = %s\n", serverPub))
-	if endpoint != "" {
-		b.WriteString(fmt.Sprintf("Endpoint = %s:%d\n", endpoint, serverCfg.ListenPort))
+	if endpoint = strings.Trim(strings.TrimSpace(endpoint), "[]"); endpoint != "" {
+		b.WriteString(fmt.Sprintf("Endpoint = %s\n", net.JoinHostPort(endpoint, fmt.Sprint(serverCfg.ListenPort))))
 	}
 	b.WriteString("AllowedIPs = 0.0.0.0/0, ::/0\n")
 	if peer.Keepalive > 0 {
@@ -486,4 +586,3 @@ func WireGuardRunning() bool {
 	defer wgMu.Unlock()
 	return wgRunning != nil
 }
-

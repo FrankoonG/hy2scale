@@ -1,0 +1,51 @@
+/* Interfaces page (list, dialogs). */
+/* ====== Interfaces page ====== */
+/* Two fixed lines per cell (IPv4 / IPv6). */
+.iface-lines{display:flex;flex-direction:column;gap:2px;min-width:0}
+.iface-line{display:flex;align-items:center;gap:6px;min-height:20px;font-family:var(--mono);font-size:12px;white-space:nowrap}
+.iface-line-main{flex:1;min-width:0;display:inline-flex;align-items:center;gap:6px}
+.iface-muted{color:var(--text-muted)}
+.iface-bad{color:var(--red);font-weight:500;font-family:var(--font)}
+.iface-pending{color:var(--text-muted);font-style:italic;font-family:var(--font)}
+/* Egress badge: hy-badge look; solid = selected, ghost = hover-only switch. */
+.iface-egress{font-family:var(--mono);font-size:10px;line-height:14px;padding:0 5px;border:1px solid transparent;flex-shrink:0;text-transform:none;background:var(--blue-bg);color:var(--blue);cursor:default}
+.iface-egress.warn{background:var(--orange-bg);color:var(--c-orange);border-color:var(--orange)}
+/* Small name tags (mode / VLAN / state) and the faint "direct" tag. */
+.iface-tag{display:inline-flex;align-items:center;font-size:10px;font-weight:600;line-height:14px;padding:0 5px;border:1px solid var(--tag-border);border-radius:4px;color:var(--text-secondary);font-family:var(--font);white-space:nowrap;user-select:none;-webkit-user-select:none}
+.iface-tag.faint{color:var(--text-muted);border-color:var(--tag-border-faint);font-weight:500}
+.iface-tag.off{color:var(--text-muted);border-style:dashed}
+/* Link-type badge beside an interface name */
+.iface-type{display:inline-flex;align-items:center;flex-shrink:0;font-size:10px;font-weight:600;line-height:14px;padding:1px 6px;border-radius:4px;font-family:var(--font);white-space:nowrap;user-select:none;-webkit-user-select:none;color:var(--text-secondary);background:var(--type-bg)}
+.iface-type[data-t=ethernet]{color:var(--type-ethernet);background:var(--type-ethernet-bg)}
+.iface-type[data-t=wlan]{color:var(--type-wlan);background:var(--type-wlan-bg)}
+.iface-type[data-t=child]{color:var(--type-child);background:var(--type-child-bg)}
+.iface-type[data-t=bridge]{color:var(--type-bridge);background:var(--type-bridge-bg)}
+.iface-type[data-t=bond]{color:var(--type-bond);background:var(--type-bond-bg)}
+.iface-type[data-t=vlan]{color:var(--type-vlan);background:var(--type-vlan-bg)}
+.iface-type[data-t=veth]{color:var(--type-veth);background:var(--type-veth-bg)}
+.iface-type[data-t=macvlan],.iface-type[data-t=ipvlan]{color:var(--type-macvlan);background:var(--type-macvlan-bg)}
+.iface-type[data-t=tun],.iface-type[data-t=wireguard]{color:var(--type-tun);background:var(--type-tun-bg)}
+.iface-type[data-t=vxlan],.iface-type[data-t=ovs]{color:var(--type-vxlan);background:var(--type-vxlan-bg)}
+
+.iface-name{font-weight:600}
+.iface-name-wrap{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+.iface-pub{cursor:pointer;border-radius:4px}
+.iface-pub:hover .iface-pub-ip{color:var(--primary);text-decoration:underline dotted}
+.iface-pub.busy{cursor:progress;opacity:.6}
+.hy-table .col-iface-addr{min-width:240px}
+.hy-table .col-iface-pub{width:190px}
+.iface-name-link{padding:0;border:none;background:none;font:inherit;font-weight:600;color:var(--primary);cursor:pointer}
+.iface-name-link:hover{text-decoration:underline}
+.iface-parent-list{display:flex;flex-direction:column;gap:6px}
+.iface-parent-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;transition:border-color .12s,background .12s}
+.iface-parent-item:hover{border-color:var(--primary)}
+.iface-parent-item.on{border-color:var(--primary);background:var(--primary-light)}
+.iface-parent-item input{accent-color:var(--primary);margin:0}
+.iface-parent-name{font-weight:600}
+.iface-parent-addr{font-family:var(--mono);font-size:12px;color:var(--text-muted);margin-left:auto}
+
+.iface-tip-row{font-size:12px;font-family:var(--mono);white-space:nowrap}
+/* Child interface dialog */
+.iface-form-section{font-size:12px;font-weight:600;color:var(--text-secondary);padding-top:6px;border-top:1px solid var(--border-light)}
+.iface-hint{font-size:11px;color:var(--text-muted);margin-top:4px;line-height:1.4}
+.iface-ref-list{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--bg);font-size:12px;font-family:var(--mono);max-height:180px;overflow-y:auto}

@@ -222,7 +222,7 @@ func (a *App) collectPaths(cfg Config) []string {
 		// the displayable paths get rings. Checking only the root enrolled
 		// every path the cache could derive (production AUB: 10,600 paths
 		// and a 50 MB history.json for a 92-path topology).
-		if !isPathAuthorised(append(parts, ""), cfg) {
+		if !a.exit.Authorised(append(parts, "")) {
 			continue
 		}
 		if len(parts) >= maxLeafDepth {
@@ -300,13 +300,8 @@ func (a *App) collectPaths(cfg Config) []string {
 			add(prx.ExitVia)
 		}
 	}
-	for _, r := range cfg.Rules {
-		for _, p := range r.ExitPaths {
-			add(p)
-		}
-		if r.ExitVia != "" {
-			add(r.ExitVia)
-		}
+	for _, p := range policyExitPaths(&cfg) {
+		add(p)
 	}
 	if cfg.WireGuard != nil {
 		for _, wp := range cfg.WireGuard.Peers {

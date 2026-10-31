@@ -1,33 +1,44 @@
 import { create } from 'zustand';
 import { login as apiLogin } from '@/api';
-import { sha256, getToken, setToken, clearToken, getSavedCredentials, saveCredentials, clearCredentials, setSessionHash, clearSessionHash, setHubSessionCookie, clearHubSessionCookie } from '@/hooks/useAuth';
+import { sha256, getToken, setToken, clearToken, saveCredentials, clearCredentials, setSessionHash, clearSessionHash, setHubSessionCookie, clearHubSessionCookie, getLoginUser, setLoginUser, clearLoginUser } from '@/hooks/useAuth';
 
 const isProxy = () => !!(window as any).__PROXY__;
 
+type Commit = (apply: () => void) => void | Promise<void>;
+const now: Commit = (apply) => apply();
+
 interface AuthState {
   token: string | null;
+  /** Username entered at login (null after a passthrough/handoff session). */
+  username: string | null;
   loading: boolean;
   error: string | null;
   forcePasswordChange: boolean;
-  login: (username: string, password: string, remember: boolean) => Promise<boolean>;
-  loginWithHash: (username: string, passHash: string, remember: boolean) => Promise<boolean>;
+  /** `commit` runs the state change that enters the app (e.g. inside a view transition). */
+  login: (username: string, password: string, remember: boolean, commit?: Commit) => Promise<boolean>;
+  loginWithHash: (username: string, passHash: string, remember: boolean, commit?: Commit) => Promise<boolean>;
+  /** Ends the session and hard-reloads /login (picks up a newer bundle). */
   logout: () => void;
+  /** Ends the session without leaving the page. */
+  endSession: () => void;
   restoreSession: () => boolean;
   clearForcePasswordChange: () => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
   token: getToken(),
+  username: getLoginUser(),
   loading: false,
   error: null,
   forcePasswordChange: false,
 
-  login: async (username, password, remember) => {
+  login: async (username, password, remember, commit = now) => {
     set({ loading: true, error: null });
     try {
       const passHash = await sha256(password);
       const res = await apiLogin(username, passHash);
       setToken(res.token);
+      setLoginUser(username);
       if (remember) {
         saveCredentials(username, passHash);
       } else {
@@ -43,7 +54,7 @@ export const useAuthStore = create<AuthState>((set) => ({
         setSessionHash(username, passHash);
         setHubSessionCookie(res.token);
       }
-      set({ token: res.token, loading: false, forcePasswordChange: !!res.force_password_change });
+      await commit(() => set({ token: res.token, username, loading: false, forcePasswordChange: !!res.force_password_change }));
       return true;
     } catch (e: any) {
       set({ loading: false, error: String(e?.message || e) });
@@ -51,17 +62,18 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
   },
 
-  loginWithHash: async (username, passHash, remember) => {
+  loginWithHash: async (username, passHash, remember, commit = now) => {
     set({ loading: true, error: null });
     try {
       const res = await apiLogin(username, passHash);
       setToken(res.token);
+      setLoginUser(username);
       if (remember) saveCredentials(username, passHash);
       if (!isProxy()) {
         setSessionHash(username, passHash);
         setHubSessionCookie(res.token);
       }
-      set({ token: res.token, loading: false, forcePasswordChange: !!res.force_password_change });
+      await commit(() => set({ token: res.token, username, loading: false, forcePasswordChange: !!res.force_password_change }));
       return true;
     } catch (e: any) {
       clearCredentials();
@@ -70,13 +82,18 @@ export const useAuthStore = create<AuthState>((set) => ({
     }
   },
 
-  logout: () => {
+  endSession: () => {
     clearToken();
+    clearLoginUser();
     if (!isProxy()) {
       clearSessionHash();
       clearHubSessionCookie();
     }
-    set({ token: null, forcePasswordChange: false });
+    set({ token: null, username: null, forcePasswordChange: false });
+  },
+
+  logout: () => {
+    useAuthStore.getState().endSession();
     // Hard-reload rather than a soft react-router navigation: picks up
     // any new JS bundle deployed since this tab was first opened, so a
     // subsequent login lands on the current build instead of continuing

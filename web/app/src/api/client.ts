@@ -56,3 +56,8 @@ export async function api<T = any>(
 export function getBasePath() {
   return basePath;
 }
+
+/** The current session token (for carriers that cannot set headers, e.g. WebSocket). */
+export function authToken(): string | null {
+  return getToken();
+}

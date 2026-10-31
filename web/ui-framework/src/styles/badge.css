@@ -1,0 +1,10 @@
+/* Badges. */
+/* ====== Badges ====== */
+.hy-badge{font-size:11px;padding:2px 8px;border-radius:4px;font-weight:600;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.hy-badge.green{background:var(--green-bg);color:var(--c-green)}
+.hy-badge.red{background:var(--red-bg);color:var(--red)}
+.hy-badge.orange{background:var(--orange-bg);color:var(--c-orange)}
+.hy-badge.blue{background:var(--blue-bg);color:var(--blue)}
+.hy-badge.muted{background:var(--bg);color:var(--text-muted)}
+.hy-badge.warn{background:var(--c-yellow-bg);color:var(--c-yellow)}
+

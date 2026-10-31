@@ -1,11 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useLayoutEffect, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Button, Input, PasswordInput } from '@hy2scale/ui';
+import { Button, Input, PasswordInput, IconServer, IconCircleAlert } from '@hy2scale/ui';
 import { useAuthStore, getSavedCredentials } from '@/store/auth';
-import { sha256, getSessionHash } from '@/hooks/useAuth';
-import LanguageSwitcher from '@/components/LanguageSwitcher';
-import LoginBackground from '@/components/LoginBackground';
+import { LanguageSwitcher } from '@/components/PrefSwitcher';
+import LoginTopology from '@/components/login/LoginTopology';
+import ThemeCycleButton from '@/components/login/ThemeCycleButton';
+import BrandLogo from '@/components/login/BrandLogo';
+import { enterApp, playLoginEnter, takeHandoff } from '@/hooks/authTransition';
 
 export default function LoginPage() {
   const { t } = useTranslation();
@@ -32,6 +34,10 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [remember, setRemember] = useState(false);
   const [hasSaved, setHasSaved] = useState(false);
+  const [caps, setCaps] = useState(false);
+  // arriving from the app: the sidebar edge slides out to this page's divider
+  const [handoff] = useState(() => takeHandoff('app'));
+  useLayoutEffect(() => { if (handoff) playLoginEnter(handoff); }, [handoff]);
 
   // Local login: pre-fill from saved credentials (don't auto-submit).
   // Skip entirely in proxy mode — the plain-text screen rendered below
@@ -46,8 +52,6 @@ export default function LoginPage() {
       setHasSaved(true);
     }
   }, [isProxy]);
-  // Suppress unused-var warning for the no-op proxy branch.
-  void getSessionHash; void loginWithHash; void navigate;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,72 +60,56 @@ export default function LoginPage() {
       // Use saved hash — user didn't change the password field
       const cred = getSavedCredentials();
       if (cred) {
-        ok = await loginWithHash(cred.u, cred.h, remember);
+        ok = await loginWithHash(cred.u, cred.h, remember, enterApp);
       } else {
-        ok = await login(username, password, remember);
+        ok = await login(username, password, remember, enterApp);
       }
     } else {
       // User typed a new password
       setHasSaved(false);
-      ok = await login(username, password, remember);
+      ok = await login(username, password, remember, enterApp);
     }
-    if (ok) navigate('/nodes', { replace: true });
+    if (ok) navigate('/overview', { replace: true });
   };
+
+  const capsCheck = (e: KeyboardEvent<HTMLInputElement>) => setCaps(e.getModifierState('CapsLock'));
 
   if (isProxy) {
     return (
-      <div
-        style={{
-          position: 'fixed', inset: 0,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          padding: 24, fontFamily: 'var(--mono)',
-          fontSize: 14, lineHeight: 1.6, color: 'var(--text-secondary)',
-          textAlign: 'center', whiteSpace: 'pre-wrap',
-          background: 'var(--bg)',
-        }}
-      >
-        {t('remote.expired')}
-      </div>
+      <div className="hy-remote-expired">{t('remote.expired')}</div>
     );
   }
 
   return (
-    <div className="hy-login-wrap">
-      <LoginBackground />
-      <div style={{ position: 'absolute', top: 16, right: 16, zIndex: 1 }}>
-        <LanguageSwitcher />
-      </div>
-      <div className="hy-login-box" style={{ position: 'relative', zIndex: 1 }}>
-        <div className="hy-login-logo">
-          <img src="./logo.min.svg" alt="logo" />
+    <div className={`lg-page${handoff ? ' arriving' : ''}`}>
+      <LoginTopology />
+      <div className="lg-right">
+        <ThemeCycleButton />
+        <div className="lg-formbox">
+          <div className="lg-mobile-brand"><BrandLogo size={24} /><span>HY2 SCALE</span></div>
+          <h1 className="lg-title">{t('app.signin')}</h1>
+          <div className="lg-sub">{t('app.subtitle')}</div>
+          <div className="lg-host"><IconServer size={12} /><span>{window.location.host}</span></div>
+          <form className="lg-form" onSubmit={handleSubmit}>
+            <label className="lg-label" htmlFor="lg-user">{t('app.username')}</label>
+            <Input id="lg-user" name="username" autoComplete="username" spellCheck={false} autoFocus
+              value={username} onChange={(e) => setUsername(e.target.value)} />
+            <label className="lg-label" htmlFor="lg-pass">{t('app.password')}</label>
+            <PasswordInput id="lg-pass" name="password" autoComplete="current-password"
+              value={password} onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={capsCheck} onKeyUp={capsCheck} onBlur={() => setCaps(false)} />
+            {caps && <div className="lg-caps"><IconCircleAlert size={13} />{t('login.caps')}</div>}
+            <div className="lg-lang"><LanguageSwitcher /></div>
+            <label className="lg-remember">
+              <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+              {t('app.remember')}
+            </label>
+            {error && <div className="lg-error" role="alert">{t('error.invalidCredentials')}</div>}
+            <Button type="submit" variant="primary" fullWidth loading={loading}>
+              {t('app.signin')}
+            </Button>
+          </form>
         </div>
-        <div className="hy-login-title">{t('app.title')}</div>
-        <div className="hy-login-sub">{t('app.subtitle')}</div>
-        <form className="hy-login-form" onSubmit={handleSubmit}>
-          <Input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder={t('app.username')}
-            autoFocus
-          />
-          <PasswordInput
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder={t('app.password')}
-          />
-          <label className="hy-login-remember">
-            <input
-              type="checkbox"
-              checked={remember}
-              onChange={(e) => setRemember(e.target.checked)}
-            />
-            {t('app.remember')}
-          </label>
-          {error && <div style={{ color: 'var(--red)', fontSize: 13 }}>{t('error.invalidCredentials')}</div>}
-          <Button type="submit" variant="primary" fullWidth loading={loading}>
-            {t('app.signin')}
-          </Button>
-        </form>
       </div>
     </div>
   );

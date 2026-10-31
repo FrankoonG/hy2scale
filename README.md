@@ -46,27 +46,24 @@ docker run -d --name hy2scale \
   frankoong/hy2scale:latest
 ```
 
-Bridge mode (VPN + proxies, no routing rules):
+Bridge mode (VPN + proxies; rules route their users):
 
 ```bash
 docker run -d --name hy2scale \
-  --cap-add NET_ADMIN --cap-add NET_RAW \
-  --device-cgroup-rule="c 10:200 rwm" \
-  --device-cgroup-rule="c 108:0 rwm" \
   -p 5565:5565/tcp -p 5565:5565/udp \
-  -p 500:500/udp -p 4500:4500/udp -p 1701:1701/udp -p 51820:51820/udp \
+  -p 500:500/udp -p 4500:4500/udp -p 1194:1194/udp -p 51820:51820/udp \
   -v hy2scale-data:/data \
   --restart unless-stopped \
   frankoong/hy2scale:latest
 ```
 
-The two `--device-cgroup-rule` lines grant access to `/dev/net/tun` (relay
-packet capture) and `/dev/ppp` (L2TP/IPsec PPP layer). Without `c 108:0 rwm`,
-L2TP tunnels establish IKE+ESP successfully but pppd exits before assigning
-an IP, so clients see "Connected" briefly then disconnect. Full mode skips
-this because `--privileged` grants every device.
+The VPN servers (IKEv2, L2TP/IPsec, OpenVPN, WireGuard) and proxies run in
+userspace and need no capabilities or devices; plain port mapping is enough.
+Routing rules apply to their users in every mode. Capturing the host's own
+traffic and hosts routed through it (transparent rules) needs `--network host`
+and `NET_ADMIN`; server port hopping needs `NET_ADMIN`.
 
-Open `http://<host>:5565/scale/` — default login `admin` / `admin`.
+Open `https://<host>:5565/scale/` (self-signed certificate by default) — default login `admin` / `admin`.
 
 For iKuai v4, download the `.ipkg` from [Releases](https://github.com/FrankoonG/hy2scale/releases) and install via the app store — see the [iKuai v4 guide](https://github.com/FrankoonG/hy2scale/wiki/iKuai-v4-Installation).
 
@@ -74,7 +71,9 @@ For iKuai v4, download the `.ipkg` from [Releases](https://github.com/FrankoonG/
 
 - Connect nodes into a mesh and route traffic through any of them.
 - See live topology and latency in an interactive graph or a table view.
-- Run VPN / proxy services: Hysteria 2, SOCKS5, HTTP, Shadowsocks, L2TP, IKEv2, WireGuard.
+- Run VPN / proxy services: Hysteria 2, SOCKS5, HTTP, Shadowsocks, L2TP, IKEv2, OpenVPN, WireGuard — the VPNs fully in userspace, without privileges.
+- Hole punching: direct connections between nodes behind NAT, set up through nodes both already reach.
+- Per-address outgoing interface or source address for multi-homed nodes.
 - Per-user exit routing, traffic limits, expiry, bulk management.
 - IP and domain routing rules steer specific traffic through specific exits.
 - TLS certificate management with built-in CA signing.
@@ -96,6 +95,10 @@ git clone https://github.com/FrankoonG/hy2scale.git
 cd hy2scale
 docker build -t hy2scale .
 ```
+
+## Notice
+
+HY2 SCALE uses the Hysteria 2 protocol. It is not affiliated with the Hysteria project or with Tailscale.
 
 ## Star History
 

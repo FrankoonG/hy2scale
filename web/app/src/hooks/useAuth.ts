@@ -19,6 +19,22 @@ export function clearToken() {
   sessionStorage.removeItem(tokenKey());
 }
 
+// Username of the signed-in web user, kept beside the token (same scope and
+// lifetime). Fallback for the top bar when GET /api/me is unavailable.
+const userKey = () => 'user:' + getBasePath();
+
+export function getLoginUser(): string | null {
+  try { return sessionStorage.getItem(userKey()); } catch { return null; }
+}
+
+export function setLoginUser(username: string) {
+  try { sessionStorage.setItem(userKey(), username); } catch { /* ignore */ }
+}
+
+export function clearLoginUser() {
+  try { sessionStorage.removeItem(userKey()); } catch { /* ignore */ }
+}
+
 // hy2_session is a cookie that mirrors the hub-origin session token.
 // Auth-store calls setHubSessionCookie() on hub login (non-proxy mode
 // only) so that any tab opened against this origin — including the

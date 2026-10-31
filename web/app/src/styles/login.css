@@ -1,0 +1,191 @@
+/* Login: live topology (left) + sign-in form (right). Topology paints use
+   literal colours / currentColor (docs/dark-reader-testing.md). */
+.lg-page{
+  min-height:100vh;display:grid;grid-template-columns:56fr 44fr;background:var(--surface);
+  --lg-l1:#eef1fd;--lg-l2:#f7f8fc;--lg-grid:rgba(67,97,238,.07);--lg-type-bg:rgba(144,152,168,.14);--lg-track:rgba(90,96,112,.22);
+  --lg-svg-surface:#fff;
+}
+:root[data-theme="dark"] .lg-page{
+  --lg-l1:#1a2036;--lg-l2:#12151b;--lg-grid:rgba(143,162,251,.06);--lg-type-bg:rgba(144,152,168,.16);--lg-track:rgba(169,176,190,.25);
+  --lg-svg-surface:#181b22;
+}
+/* Dark Reader lightens every SVG fill it sees, but leaves var() fills alone:
+   surface-coloured fills (node discs, chips, pills) switch through this var. */
+html[data-darkreader-scheme="dark"] .lg-page{--lg-svg-surface:#202224}
+/* logo (login and sidebar): literal colour + currentColor so Dark Reader
+   transforms it (docs/dark-reader-testing.md); the native dark theme below */
+.lg-ring{color:#4D6EA3;fill:currentColor;fill-opacity:.5}
+.lg-hub,.lg-ink{color:#102545;fill:currentColor}
+.lg-arrow{color:#FEBD02;fill:none;stroke:currentColor}
+.lg-chain{color:#9ca3af;fill:none;stroke:currentColor}
+:root[data-theme="dark"] .lg-ring{color:#6f8fc7}
+:root[data-theme="dark"] .lg-hub{color:#96b0e2}
+:root[data-theme="dark"] .lg-ink{color:#e3e6ed}
+:root[data-theme="dark"] .lg-chain{color:#6b7488}
+
+/* ---- left panel */
+.lg-left{position:sticky;top:0;height:100vh;overflow:hidden;background:linear-gradient(155deg,var(--lg-l1),var(--lg-l2));border-right:1px solid var(--border);padding:34px 40px 30px;display:flex;flex-direction:column;min-width:0}
+.lg-left::before{content:"";position:absolute;inset:0;background-image:linear-gradient(var(--lg-grid) 1px,transparent 1px),linear-gradient(90deg,var(--lg-grid) 1px,transparent 1px);background-size:32px 32px;-webkit-mask-image:radial-gradient(ellipse at 50% 50%,#000 25%,transparent 75%);mask-image:radial-gradient(ellipse at 50% 50%,#000 25%,transparent 75%);pointer-events:none}
+.lg-brand{position:relative;display:flex;align-items:center;gap:10px;font-weight:700;font-size:15px;letter-spacing:.06em;color:var(--text)}
+.lg-topo{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:6px 0}
+.lg-tsvg{width:100%;height:100%;max-height:720px;overflow:visible}
+.lg-foot{position:relative;display:flex;align-items:flex-end;justify-content:space-between;gap:18px}
+.lg-left{cursor:pointer}
+.lg-status{display:flex;align-items:center;gap:10px;margin-bottom:9px;flex:none}
+.lg-hint{font-size:12px;color:var(--text-muted);white-space:nowrap;opacity:0;transform:translateX(6px);transition:opacity .2s ease,transform .2s ease}
+.lg-hint.on{opacity:1;transform:none}
+/* features of the current topology: an unframed list drifting down through a window faded at both edges */
+.lg-tags{position:relative;flex:1;min-width:0;max-width:280px;height:120px;overflow:hidden;transition:opacity .3s ease;
+  -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 30%,#000 70%,transparent 100%);mask-image:linear-gradient(to bottom,transparent 0,#000 30%,#000 70%,transparent 100%)}
+.lg-tags.swap{opacity:0}
+.lg-tag-track{list-style:none;margin:0;padding:0;will-change:transform;animation:lgTagDrift var(--dur,12s) linear infinite}
+@keyframes lgTagDrift{from{transform:translateY(var(--from,-50%))}to{transform:translateY(0)}}
+.lg-tag{display:flex;align-items:center;gap:9px;height:24px;font-size:12.5px;color:var(--text-secondary);white-space:nowrap}
+.lg-tag::before{content:'';width:5px;height:5px;border-radius:50%;background:var(--primary);opacity:.55;flex:none}
+.lg-progress{position:relative;width:32px;height:5px;border-radius:3px;background:var(--lg-track);overflow:hidden;flex:none}
+.lg-progress span{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--primary);border-radius:3px}
+.lg-progress.paused span{background:var(--text-muted)}
+
+/* ---- topology svg
+   Every paint is a literal `color` + currentColor so Dark Reader can
+   transform it (docs/dark-reader-testing.md); native dark overrides below. */
+.lg-tsvg .zone rect{color:#9098a8;fill:currentColor;fill-opacity:.06;stroke:currentColor;stroke-opacity:.5;stroke-dasharray:4 4}
+.lg-tsvg .zone text{color:#9098a8;fill:currentColor;font:600 10px var(--mono);letter-spacing:.1em}
+.lg-tsvg .le{fill:none;stroke:currentColor;stroke-linecap:round;transition:color .5s ease,stroke-width .5s ease,stroke-opacity .5s ease}
+.lg-tsvg .k-peer .le,.lg-tsvg .k-punch .le{color:#4d6ea3;stroke-opacity:.4;stroke-width:1.6}
+.lg-tsvg .k-access .le,.lg-tsvg .k-egress .le{color:#5a6070;stroke-opacity:.3;stroke-width:1.3}
+.lg-tsvg .k-native .le{color:#eab308;stroke-opacity:.6;stroke-width:1.6}
+.lg-tsvg .s-pending .le{color:#9333ea;stroke-opacity:1;stroke-dasharray:4 5;animation:lgMarch .9s linear infinite}
+.lg-tsvg .s-degraded .le{color:#d97706;stroke-opacity:1;stroke-width:1.8}
+.lg-tsvg .s-offline .le{color:#dc2626;stroke-opacity:.55;stroke-dasharray:5 5;stroke-width:1.3}
+.lg-tsvg .s-dim .le{color:#9098a8;stroke-opacity:.5;stroke-dasharray:2 4}
+.lg-tsvg .k-punch.s-up .le{color:#9333ea;stroke-opacity:1;stroke-width:2.2}
+@keyframes lgMarch{to{stroke-dashoffset:-18}}
+/* punch status pill */
+.lg-tsvg .pst rect{fill:var(--lg-svg-surface);stroke:#9333ea;stroke-width:1.2;transition:fill .35s ease}
+.lg-tsvg .pst text{color:#9333ea;fill:currentColor;font:600 10px var(--font);dominant-baseline:central;transition:fill .35s ease}
+.lg-tsvg .pst .pdot{color:#9333ea;fill:currentColor;animation:lgPdot 1s ease-in-out infinite}
+.lg-tsvg .pst .pzap{color:#9333ea;transition:color .35s ease}
+.lg-tsvg .pst.up rect{color:#9333ea;fill:currentColor}
+.lg-tsvg .pst.up text{fill:var(--lg-svg-surface)}
+.lg-tsvg .pst.up .pzap{color:var(--lg-svg-surface)}
+@keyframes lgPdot{0%,100%{opacity:.25}50%{opacity:1}}
+.lg-tsvg .probe{color:#9333ea;fill:currentColor}
+.lg-tsvg .pburst{color:#9333ea;fill:none;stroke:currentColor;stroke-width:2}
+/* chips and notes */
+.lg-tsvg .chip rect{fill:var(--lg-svg-surface);stroke:#9098a8;stroke-opacity:.45}
+.lg-tsvg .chip text{color:#5a6070;fill:currentColor;font:10px var(--mono);text-anchor:middle;dominant-baseline:central}
+.lg-tsvg .note rect{color:#eef1fd;fill:currentColor;stroke:#4361ee;stroke-opacity:.3}
+.lg-tsvg .note text{color:#4361ee;fill:currentColor;font:10.5px var(--mono);text-anchor:middle;dominant-baseline:central}
+/* nodes */
+.lg-tsvg .tn .nd{color:#4d6ea3;fill:currentColor;fill-opacity:.45;transition:color .5s,fill-opacity .5s}
+.lg-tsvg .tn .hb{color:#102545;fill:currentColor;transition:opacity .5s}
+.lg-tsvg .tn .nat{color:#eab308;fill:currentColor;fill-opacity:.85}
+.lg-tsvg .tn.off .nd{color:#fca5a5;fill-opacity:1}
+.lg-tsvg .tn.off .hb{opacity:0}
+.lg-tsvg .tn .term{fill:var(--lg-svg-surface);stroke:#9098a8;stroke-opacity:.45;stroke-width:1.2}
+.lg-tsvg .tn .ticon{color:#5a6070}
+.lg-tsvg .tn .so{color:#4361ee;fill:currentColor;fill-opacity:.16;stroke:currentColor;stroke-opacity:.55;stroke-width:1.2}
+.lg-tsvg .tn .si{color:#4361ee;fill:currentColor}
+.lg-tsvg .tn .ring{color:#4361ee;fill:none;stroke:currentColor;stroke-width:1.2;transform-box:fill-box;transform-origin:center;animation:lgRing 2.8s ease-out infinite;opacity:0}
+@keyframes lgRing{0%{transform:scale(1);opacity:.55}100%{transform:scale(1.9);opacity:0}}
+.lg-tsvg .tn .tl{color:#9098a8;fill:currentColor;font:11px var(--font);text-anchor:middle}
+.lg-tsvg .tn .tl .tg{color:#4361ee;fill:currentColor;font-family:var(--mono)}
+.lg-tsvg .tn-self .tl{color:#4361ee;font-weight:600}
+.lg-tsvg .tn .bdc{fill:var(--lg-svg-surface);stroke:#9098a8;stroke-opacity:.45}
+.lg-tsvg .tn .bdi{color:#5a6070}
+.lg-tsvg .tn .bdi.key{color:#4361ee}
+.lg-tsvg .tn .qt{color:#9098a8;fill:none;stroke:currentColor;stroke-opacity:.4;stroke-width:2}
+.lg-tsvg .tn .qa{color:#d97706;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+/* packets: upload / download, as on the overview chart */
+.lg-tsvg .pk .up{color:#4361ee;fill:currentColor}
+.lg-tsvg .pk .down{color:#16a34a;fill:currentColor}
+.lg-tsvg .pk .halo{fill-opacity:.2}
+
+/* native dark theme (Dark Reader is locked out there) */
+:root[data-theme="dark"] .lg-tsvg .zone text,:root[data-theme="dark"] .lg-tsvg .tn .tl,:root[data-theme="dark"] .lg-tsvg .s-dim .le{color:#7d8597}
+:root[data-theme="dark"] .lg-tsvg .k-peer .le,:root[data-theme="dark"] .lg-tsvg .k-punch .le{color:#96b0e2;stroke-opacity:.34}
+:root[data-theme="dark"] .lg-tsvg .k-access .le,:root[data-theme="dark"] .lg-tsvg .k-egress .le{color:#a9b0be}
+:root[data-theme="dark"] .lg-tsvg .k-native .le{stroke-opacity:.45}
+:root[data-theme="dark"] .lg-tsvg .s-pending .le,:root[data-theme="dark"] .lg-tsvg .k-punch.s-up .le{color:#c084fc;stroke-opacity:1}
+:root[data-theme="dark"] .lg-tsvg .s-degraded .le{color:#fbbf24}
+:root[data-theme="dark"] .lg-tsvg .s-offline .le{color:#f87171}
+:root[data-theme="dark"] .lg-tsvg .pst rect{stroke:#c084fc}
+:root[data-theme="dark"] .lg-tsvg .pst text,:root[data-theme="dark"] .lg-tsvg .pst .pdot,:root[data-theme="dark"] .lg-tsvg .pst .pzap,
+:root[data-theme="dark"] .lg-tsvg .probe,:root[data-theme="dark"] .lg-tsvg .pburst,:root[data-theme="dark"] .lg-tsvg .pst.up rect{color:#c084fc}
+:root[data-theme="dark"] .lg-tsvg .pst.up .pzap{color:var(--lg-svg-surface)}
+:root[data-theme="dark"] .lg-tsvg .chip rect,:root[data-theme="dark"] .lg-tsvg .tn .term,:root[data-theme="dark"] .lg-tsvg .tn .bdc{stroke:#7d8597}
+:root[data-theme="dark"] .lg-tsvg .chip text,:root[data-theme="dark"] .lg-tsvg .tn .ticon,:root[data-theme="dark"] .lg-tsvg .tn .bdi{color:#a9b0be}
+:root[data-theme="dark"] .lg-tsvg .note rect{color:#212a45;stroke:#5a78f8}
+:root[data-theme="dark"] .lg-tsvg .note text,:root[data-theme="dark"] .lg-tsvg .tn .so,:root[data-theme="dark"] .lg-tsvg .tn .si,
+:root[data-theme="dark"] .lg-tsvg .tn .ring,:root[data-theme="dark"] .lg-tsvg .tn .tl .tg,:root[data-theme="dark"] .lg-tsvg .tn-self .tl,
+:root[data-theme="dark"] .lg-tsvg .tn .bdi.key{color:#5a78f8}
+:root[data-theme="dark"] .lg-tsvg .tn .nd{color:#6f8fc7;fill-opacity:.55}
+:root[data-theme="dark"] .lg-tsvg .tn .hb{color:#96b0e2}
+:root[data-theme="dark"] .lg-tsvg .tn .nat{fill-opacity:.75}
+:root[data-theme="dark"] .lg-tsvg .tn.off .nd{color:#f87171;fill-opacity:.6}
+:root[data-theme="dark"] .lg-tsvg .tn .qa{color:#fbbf24}
+:root[data-theme="dark"] .lg-tsvg .pk .up{color:#7a92fa}
+:root[data-theme="dark"] .lg-tsvg .pk .down{color:#4ade80}
+
+/* ---- right panel */
+.lg-right{position:relative;display:flex;align-items:center;justify-content:center;padding:72px 24px 48px;min-width:0}
+.lg-formbox{width:340px;max-width:100%;animation:lgRise .55s cubic-bezier(.2,.7,.2,1) .12s both}
+.lg-brand,.lg-foot{animation:lgRise .55s cubic-bezier(.2,.7,.2,1) both}
+.lg-foot{animation-delay:.3s}
+@keyframes lgRise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+.lg-mobile-brand{display:none;align-items:center;gap:10px;font-weight:700;font-size:15px;letter-spacing:.06em;margin-bottom:28px}
+.lg-title{font-size:24px;font-weight:700;margin:0 0 2px;line-height:1.35}
+.lg-sub{color:var(--text-muted);font-size:13px;margin-bottom:12px}
+.lg-host{display:inline-flex;align-items:center;gap:6px;font:12px/20px var(--mono);color:var(--text-secondary);background:var(--lg-type-bg);padding:1px 10px;border-radius:999px;margin-bottom:26px;max-width:100%}
+.lg-host span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lg-form{display:flex;flex-direction:column;gap:14px}
+.lg-form .hy-input,.lg-form .hy-pw-wrap{width:100%}
+.lg-label{font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:-8px}
+.lg-caps{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--c-orange);margin-top:-6px}
+.lg-lang{align-self:flex-start;margin-top:-2px}
+.lg-lang .hy-pref-btn{height:30px;padding:0 8px 0 10px;gap:6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--input-bg);font-size:12.5px}
+.lg-lang .hy-pref-btn:hover,.lg-lang .hy-pref-btn.open{border-color:var(--primary)}
+.lg-remember{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary);cursor:pointer;user-select:none;width:max-content}
+.lg-remember input{margin:0;accent-color:var(--primary)}
+.lg-error{color:var(--red);font-size:13px}
+.lg-form .hy-btn{margin-top:2px;padding:10px 16px;font-size:14px}
+
+/* theme: one round button, icons swap with a turn */
+.lg-theme-btn{position:absolute;top:18px;right:18px;z-index:5;width:40px;height:40px;border-radius:50%;border:1px solid var(--border);background:var(--surface);color:var(--text-secondary);display:grid;place-items:center;cursor:pointer;padding:0;transition:color .15s,border-color .15s,background .15s,transform .1s}
+.lg-theme-btn:hover{color:var(--primary);border-color:var(--primary);background:var(--primary-light)}
+.lg-theme-btn:active{transform:scale(.94)}
+.lg-theme-btn:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.lg-theme-btn svg{grid-area:1/1;opacity:0;transform:rotate(-100deg) scale(.4);transition:transform .38s cubic-bezier(.2,.7,.2,1.25),opacity .22s}
+.lg-theme-btn svg.on{opacity:1;transform:none}
+.lg-theme-tip{position:absolute;top:26px;right:68px;z-index:5;font-size:12px;color:var(--text-secondary);background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:1px 8px;white-space:nowrap;pointer-events:none;opacity:0;transform:translateX(4px);transition:opacity .15s,transform .15s}
+.lg-theme-btn:hover+.lg-theme-tip,.lg-theme-btn:focus-visible+.lg-theme-tip,.lg-theme-tip.flash{opacity:1;transform:none}
+
+@media (max-width:900px){
+  .lg-page{grid-template-columns:1fr}
+  .lg-left{display:none}
+  .lg-mobile-brand{display:flex}
+}
+@media (prefers-reduced-motion:reduce){
+  .lg-tag-track,.lg-tsvg .s-pending .le,.lg-tsvg .tn .ring,.lg-tsvg .pst .pdot{animation:none}
+  .lg-formbox,.lg-brand,.lg-foot{animation:none}
+}
+
+/* ---- login ⇄ app (hooks/authTransition.ts): around the shared divider.
+   leaving: the left panel turns to the sidebar surface and the right side to
+   the app background before the app takes over; arriving: the reverse while
+   the divider slides out, then the panel content rises in. */
+.lg-brand{z-index:2}
+.lg-left::after{content:'';position:absolute;inset:0;background:var(--surface);opacity:0;pointer-events:none;z-index:1}
+.lg-page.leaving{background:var(--bg);transition:background-color .3s ease}
+.lg-page.leaving .lg-left::after{animation:lgVeilIn .3s ease forwards}
+.lg-page.arriving{animation:lgPageIn .5s ease .25s backwards}
+.lg-page.arriving .lg-left::after{animation:lgVeilOut .5s ease .3s backwards}
+.lg-page.arriving .lg-brand{animation:none}
+.lg-page.arriving .lg-topo{animation:lgRise .55s cubic-bezier(.2,.7,.2,1) .5s both}
+.lg-page.arriving .lg-foot{animation-delay:.6s}
+.lg-page.arriving .lg-formbox{animation-delay:.45s}
+.lg-page.arriving .lg-theme-btn{animation:lgRise .45s cubic-bezier(.2,.7,.2,1) .55s both}
+@keyframes lgVeilIn{to{opacity:1}}
+@keyframes lgVeilOut{from{opacity:1}to{opacity:0}}
+@keyframes lgPageIn{from{background-color:var(--bg)}}
