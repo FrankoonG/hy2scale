@@ -486,6 +486,22 @@ export interface RouteOpts {
   waypoints?: Record<string, Waypoint[] | undefined>;
   /** Bend straight edges that would pass through other dots. */
   avoid?: boolean;
+  /** Horizontal period of a wrapping world (map view): each edge takes
+   *  the shorter way round, dots repeat every `wrap` units. */
+  wrap?: number;
+}
+
+/**
+ * Horizontal shift of an edge's far end on a world repeating every `w`
+ * units: the end lands at most half a world away from the near end. Both
+ * directions of a pair agree (the tie at exactly half a world included).
+ */
+export function wrapDx(p: Pos, q: Pos, w: number | undefined, from: string, to: string): number {
+  if (!w) return 0;
+  const sgn = from < to ? 1 : -1;
+  const d = (q.x - p.x) * sgn;
+  const s = Math.floor(d / w + 0.5) * w; // d - s in [-w/2, w/2)
+  return -sgn * (d - s === -w / 2 ? s - w : s);
 }
 
 /**
@@ -499,9 +515,13 @@ export function routeEdges(g: Graph, pos: Record<string, Pos>, opts: RouteOpts =
   // a uniform grid so a curve only tests the obstacles near it.
   const placedNodes = [...g.nodes.values()].filter((n) => pos[n.key]);
   const stamps = new Int32Array(placedNodes.length);
+  const shifts = opts.wrap ? [0, -opts.wrap, opts.wrap] : [0];
   const obstacles = placedNodes.flatMap((n, ni) => {
-    const p = pos[n.key], r = nodeRadiusFor(n);
-    return [{ key: n.key, ni, p, r }, { key: n.key, ni, p: { x: p.x, y: p.y + r + 10 }, r: 7 }];
+    const p0 = pos[n.key], r = nodeRadiusFor(n);
+    return shifts.flatMap((dx) => {
+      const p = { x: p0.x + dx, y: p0.y };
+      return [{ key: n.key, ni, p, r }, { key: n.key, ni, p: { x: p.x, y: p.y + r + 10 }, r: 7 }];
+    });
   });
   const CELL = 64;
   const grid = new Map<string, typeof obstacles>();
@@ -560,8 +580,9 @@ export function routeEdges(g: Graph, pos: Record<string, Pos>, opts: RouteOpts =
     return n;
   };
   for (const e of g.edges.values()) {
-    const p = pos[e.from], q = pos[e.to];
-    if (!p || !q) continue;
+    const p = pos[e.from], q0 = pos[e.to];
+    if (!p || !q0) continue;
+    const q = opts.wrap ? { x: q0.x + wrapDx(p, q0, opts.wrap, e.from, e.to), y: q0.y } : q0;
     const rA = nodeRadiusFor(g.nodes.get(e.from));
     const rB = nodeRadiusFor(g.nodes.get(e.to));
     const trim = (W: Pos[]) => {
