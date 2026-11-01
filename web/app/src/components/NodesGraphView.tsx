@@ -257,8 +257,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   const selfCountry = selfIP ? geoInfos.get(selfIP)?.country?.toUpperCase() : undefined;
   const geoInfoSig = [...ipOf].map(([k, ip]) => { const g = geoInfos.get(ip); return `${k}=${g ? `${g.lat ?? ''},${g.lon ?? ''},${g.country ?? ''}` : '?'}`; }).join(';');
 
-  // Map detail only in the countries the nodes are in (cities there only,
-  // states elsewhere when zoomed in further).
+  // Map detail only in the countries the nodes are in (names and cities
+  // there only, state outlines elsewhere when zoomed in further).
   const [geoFocus, setGeoFocusState] = useState(() => lsGet(GEOFOCUS_STORE) !== '0');
   const setGeoFocus = (on: boolean) => { lsSet(GEOFOCUS_STORE, on ? '1' : '0'); setGeoFocusState(on); };
   const nodeCountries = useMemo(() => {

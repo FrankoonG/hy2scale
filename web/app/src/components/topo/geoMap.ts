@@ -209,8 +209,9 @@ export function copiesOf(v: { x: number; k: number }, w: number, extra = 0): num
 export function drawBasemap(
   ctx: CanvasRenderingContext2D, w: number, h: number, kind: MapProj, v: { x: number; y: number; k: number },
   data: GeoData, admin1: Admin1 | null, pal: Palette, lang: Lang,
-  /** Countries (ISO codes) that get full detail: cities only there, states
-   *  elsewhere only zoomed in further. Undefined: every country. */
+  /** Countries (ISO codes) that get full detail: names and cities only
+   *  there, state outlines elsewhere only zoomed in further. Undefined:
+   *  every country. */
   focusIso?: Set<string>,
 ) {
   const z = zoomLevel(v.k);
@@ -301,7 +302,7 @@ export function drawBasemap(
   }
   // countries
   for (const c of data.countries) {
-    if (z + 1 < c.ml) continue;
+    if (z + 1 < c.ml || (focusIso && !focusIso.has(c.iso))) continue;
     // Specks (small islands, territories) get no name.
     const bb = boundsOf(kind, c.f);
     if ((bb[1][0] - bb[0][0]) * v.k < 30) continue;
@@ -314,8 +315,7 @@ export function drawBasemap(
   // states
   if (admin1 && z >= 4.5) {
     for (const r of admin1.regions) {
-      const extra = focusIso && !focusIso.has(r.iso) ? OUTSIDE_FOCUS_Z : 0;
-      if (z + 1.5 < r.ml + extra || z < 4.5 + extra) continue;
+      if (z + 1.5 < r.ml || (focusIso && !focusIso.has(r.iso))) continue;
       const bb = boundsOf(kind, r.f);
       for (const { vn, proj } of projs) {
         if (!onScreen(vn, bb)) continue;
