@@ -852,6 +852,7 @@
   "overview.days": "{{count}}d",
   "nodes.egressIp": "Egress IP",
   "nodes.egressUnknown": "Unknown",
+  "nodes.egressProbed": "Probed",
   "iface.title": "Interfaces",
   "iface.name": "Name",
   "iface.address": "Address",

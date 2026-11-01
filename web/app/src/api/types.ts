@@ -66,6 +66,8 @@ export interface TopologyNode {
   // Selected direct-egress of this node as it reports it. undefined / null =
   // unknown (older node); a family set to null = not provided.
   egress?: NodeEgress | null;
+  // egress found by this node through the peer (it does not report one)
+  egress_probed?: boolean;
 }
 
 export interface NodeEgressFamily { ip: string; ok: boolean }

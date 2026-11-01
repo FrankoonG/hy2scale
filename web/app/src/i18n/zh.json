@@ -852,6 +852,7 @@
   "overview.days": "{{count}}天",
   "nodes.egressIp": "出口 IP",
   "nodes.egressUnknown": "未知",
+  "nodes.egressProbed": "探测",
   "iface.title": "接口",
   "iface.name": "名称",
   "iface.address": "地址",
