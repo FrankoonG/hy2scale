@@ -1,6 +1,6 @@
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/dataplane/device.go b/dataplane/device.go
 --- a/dataplane/device.go	1970-01-01 11:00:00.000000000 +1100
-+++ b/dataplane/device.go	2026-10-29 04:12:45.965006700 +1100
++++ b/dataplane/device.go	2026-11-01 15:56:35.172531400 +1100
 @@ -0,0 +1,21 @@
 +package dataplane
 +
@@ -24,8 +24,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/dataplane/devi
 +
 +var _ Device = (*TUN)(nil)
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/dataplane/pktconn_linux.go b/dataplane/pktconn_linux.go
---- a/dataplane/pktconn_linux.go	2026-10-29 03:24:59.384948400 +1100
-+++ b/dataplane/pktconn_linux.go	2026-10-29 04:12:45.989146000 +1100
+--- a/dataplane/pktconn_linux.go	2026-11-01 15:57:15.490181700 +1100
++++ b/dataplane/pktconn_linux.go	2026-11-01 15:56:36.039849000 +1100
 @@ -57,6 +57,8 @@
  // It is a drop-in for the subset of *net.UDPConn these servers use.
  type PacketConn struct {
@@ -139,8 +139,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/dataplane/pktc
  func (p *PacketConn) remember(from *net.UDPAddr, local netip.Addr) {
  	ap, ok := addrPortOf(from)
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/dataplane/pump.go b/dataplane/pump.go
---- a/dataplane/pump.go	2026-10-29 03:25:00.235043400 +1100
-+++ b/dataplane/pump.go	2026-10-29 04:12:45.976530200 +1100
+--- a/dataplane/pump.go	2026-11-01 15:57:15.801688700 +1100
++++ b/dataplane/pump.go	2026-11-01 15:56:36.556767300 +1100
 @@ -715,6 +715,10 @@
  		p.runVnet()
  		return
@@ -225,7 +225,7 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/dataplane/pump
  // it. Packets that are neither IPv4 nor IPv6, and packets matching no route, are
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/dataplane/virtual.go b/dataplane/virtual.go
 --- a/dataplane/virtual.go	1970-01-01 11:00:00.000000000 +1100
-+++ b/dataplane/virtual.go	2026-10-29 04:12:45.963744300 +1100
++++ b/dataplane/virtual.go	2026-11-01 15:56:37.823196100 +1100
 @@ -0,0 +1,74 @@
 +package dataplane
 +
@@ -302,8 +302,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/dataplane/virt
 +	return n, from, err
 +}
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/ikev2/server.go b/ikev2/server.go
---- a/ikev2/server.go	2026-10-29 03:25:02.904941000 +1100
-+++ b/ikev2/server.go	2026-10-29 04:12:46.159839700 +1100
+--- a/ikev2/server.go	2026-11-01 15:57:16.754348800 +1100
++++ b/ikev2/server.go	2026-11-01 15:56:38.170673700 +1100
 @@ -95,6 +95,18 @@
  	// Logger receives progress logs; nil discards them.
  	Logger *slog.Logger
@@ -377,7 +377,7 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/ikev2/server.g
  		ike: srv, pump: pump, tun: tun,
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/cryptoutil/modp_more.go b/internal/cryptoutil/modp_more.go
 --- a/internal/cryptoutil/modp_more.go	1970-01-01 11:00:00.000000000 +1100
-+++ b/internal/cryptoutil/modp_more.go	2026-10-29 04:12:46.068529200 +1100
++++ b/internal/cryptoutil/modp_more.go	2026-11-01 15:56:38.891881300 +1100
 @@ -0,0 +1,73 @@
 +package cryptoutil
 +
@@ -453,8 +453,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/crypt
 +		"93B4EA988D8FDDC186FFB7DC90A6C08F4DF435C934063199"+
 +		"FFFFFFFFFFFFFFFF", 16)
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1/const.go b/internal/ikev1/const.go
---- a/internal/ikev1/const.go	2026-10-29 03:25:04.910262800 +1100
-+++ b/internal/ikev1/const.go	2026-10-29 04:12:46.151863200 +1100
+--- a/internal/ikev1/const.go	2026-11-01 15:57:17.455797600 +1100
++++ b/internal/ikev1/const.go	2026-11-01 15:56:39.389462200 +1100
 @@ -77,8 +77,9 @@
  
  // ESP transform IDs (RFC 2407 section 4.4.4).
@@ -496,8 +496,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1
  
  // ID types (RFC 2407 section 4.6.2.1). ID_KEY_ID is an opaque octet string,
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1/crypto.go b/internal/ikev1/crypto.go
---- a/internal/ikev1/crypto.go	2026-10-29 03:25:05.105566300 +1100
-+++ b/internal/ikev1/crypto.go	2026-10-29 04:12:46.155249200 +1100
+--- a/internal/ikev1/crypto.go	2026-11-01 15:57:17.534839400 +1100
++++ b/internal/ikev1/crypto.go	2026-11-01 15:56:39.504573800 +1100
 @@ -3,8 +3,10 @@
  import (
  	"crypto/aes"
@@ -541,8 +541,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1
  		return nil, fmt.Errorf("ikev1: unsupported hash %d", id)
  	}
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1/exchange.go b/internal/ikev1/exchange.go
---- a/internal/ikev1/exchange.go	2026-10-29 03:25:05.510924100 +1100
-+++ b/internal/ikev1/exchange.go	2026-10-29 04:12:46.146289900 +1100
+--- a/internal/ikev1/exchange.go	2026-11-01 15:57:17.680534500 +1100
++++ b/internal/ikev1/exchange.go	2026-11-01 15:56:39.775839500 +1100
 @@ -7,10 +7,7 @@
  // integKeyLen returns the HMAC key length in octets for an ESP integrity
  // transform.
@@ -622,8 +622,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1
 -// selection API.
 -func withNum(p espProposal, _ uint8) espProposal { return p }
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1/helpers.go b/internal/ikev1/helpers.go
---- a/internal/ikev1/helpers.go	2026-10-29 03:25:05.722311100 +1100
-+++ b/internal/ikev1/helpers.go	2026-10-29 04:12:46.139979100 +1100
+--- a/internal/ikev1/helpers.go	2026-11-01 15:57:17.754708800 +1100
++++ b/internal/ikev1/helpers.go	2026-11-01 15:56:39.903613000 +1100
 @@ -74,11 +74,12 @@
  // to the handler.
  func (s *Session) finish() {
@@ -740,8 +740,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1
  
  // phase2Selectors are the traffic selectors Quick Mode names, local first.
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1/keymat.go b/internal/ikev1/keymat.go
---- a/internal/ikev1/keymat.go	2026-10-29 03:25:06.137637200 +1100
-+++ b/internal/ikev1/keymat.go	2026-10-29 04:12:46.141235800 +1100
+--- a/internal/ikev1/keymat.go	2026-11-01 15:57:17.916046800 +1100
++++ b/internal/ikev1/keymat.go	2026-11-01 15:56:40.137308400 +1100
 @@ -95,8 +95,11 @@
  //
  // It returns n octets, from which the caller slices the encryption then the
@@ -757,8 +757,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1
  	out := append([]byte(nil), block...)
  	for len(out) < n {
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1/sa.go b/internal/ikev1/sa.go
---- a/internal/ikev1/sa.go	2026-10-29 03:25:06.998035100 +1100
-+++ b/internal/ikev1/sa.go	2026-10-29 04:12:46.148486200 +1100
+--- a/internal/ikev1/sa.go	2026-11-01 15:57:18.210070600 +1100
++++ b/internal/ikev1/sa.go	2026-11-01 15:56:40.615298100 +1100
 @@ -15,6 +15,10 @@
  	group       uint16 // groupMODP2048 / groupMODP1024
  	auth        uint16 // authPSK
@@ -901,8 +901,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1
  		basicAttr(ipsecAttrEncapMode, p.encap),
  		basicAttr(ipsecAttrAuthAlg, p.authAlg),
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1/session.go b/internal/ikev1/session.go
---- a/internal/ikev1/session.go	2026-10-29 03:25:07.203774200 +1100
-+++ b/internal/ikev1/session.go	2026-10-29 04:12:46.149706300 +1100
+--- a/internal/ikev1/session.go	2026-11-01 15:57:18.289936700 +1100
++++ b/internal/ikev1/session.go	2026-11-01 15:56:40.735522800 +1100
 @@ -255,6 +255,7 @@
  	qmNi, qmNr []byte
  	inSPI      uint32 // our inbound ESP SPI
@@ -913,7 +913,7 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1
  	// port it originally went out on: the responder floats immediately after
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1/suites.go b/internal/ikev1/suites.go
 --- a/internal/ikev1/suites.go	1970-01-01 11:00:00.000000000 +1100
-+++ b/internal/ikev1/suites.go	2026-10-29 04:12:46.154017300 +1100
++++ b/internal/ikev1/suites.go	2026-11-01 15:56:40.850298300 +1100
 @@ -0,0 +1,133 @@
 +package ikev1
 +
@@ -1049,8 +1049,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev1
 +	return b.String()
 +}
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev2/ike/child_info.go b/internal/ikev2/ike/child_info.go
---- a/internal/ikev2/ike/child_info.go	2026-10-29 03:25:09.914422900 +1100
-+++ b/internal/ikev2/ike/child_info.go	2026-10-29 04:12:46.093194600 +1100
+--- a/internal/ikev2/ike/child_info.go	2026-11-01 15:57:19.288167400 +1100
++++ b/internal/ikev2/ike/child_info.go	2026-11-01 15:56:42.362653200 +1100
 @@ -87,6 +87,7 @@
  	newSA.ClientIP6 = sa.ClientIP6
  	newSA.assigned = sa.assigned
@@ -1068,8 +1068,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev2
  
  	// Response under the OLD SA: SA (accepted proposal carrying our new
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev2/ike/datapath.go b/internal/ikev2/ike/datapath.go
---- a/internal/ikev2/ike/datapath.go	2026-10-29 03:25:10.543524100 +1100
-+++ b/internal/ikev2/ike/datapath.go	2026-10-29 04:12:46.101588400 +1100
+--- a/internal/ikev2/ike/datapath.go	2026-11-01 15:57:19.529194500 +1100
++++ b/internal/ikev2/ike/datapath.go	2026-11-01 15:56:42.742814100 +1100
 @@ -256,8 +256,15 @@
  	// not the espTunnel inside it: Pump.RemoveTunnel matches by identity, so
  	// removing the inner one would leave the wrapper routing packets forever.
@@ -1107,8 +1107,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev2
  }
  
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev2/ike/ike_auth.go b/internal/ikev2/ike/ike_auth.go
---- a/internal/ikev2/ike/ike_auth.go	2026-10-29 03:25:11.151863500 +1100
-+++ b/internal/ikev2/ike/ike_auth.go	2026-10-29 04:12:46.123979800 +1100
+--- a/internal/ikev2/ike/ike_auth.go	2026-11-01 15:57:19.771510000 +1100
++++ b/internal/ikev2/ike/ike_auth.go	2026-11-01 15:56:43.124433200 +1100
 @@ -61,7 +61,7 @@
  			s.respondEncryptedNotify(sa, payload.IKE_AUTH, hdr.MessageID, payload.AuthenticationFailed, remote)
  			return
@@ -1172,8 +1172,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev2
  
  // narrowTSiToAssignment rewrites the initiator's proposed TSi to name exactly
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev2/ike/peers.go b/internal/ikev2/ike/peers.go
---- a/internal/ikev2/ike/peers.go	2026-10-29 03:25:12.494717800 +1100
-+++ b/internal/ikev2/ike/peers.go	2026-10-29 04:12:46.105264700 +1100
+--- a/internal/ikev2/ike/peers.go	2026-11-01 15:57:20.253319100 +1100
++++ b/internal/ikev2/ike/peers.go	2026-11-01 15:56:43.882361200 +1100
 @@ -66,7 +66,7 @@
  		sa.mu.Lock()
  		for _, child := range sa.Children {
@@ -1184,8 +1184,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev2
  				LastActive: sa.lastSeen,
  			}
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev2/ike/server.go b/internal/ikev2/ike/server.go
---- a/internal/ikev2/ike/server.go	2026-10-29 03:25:13.375002400 +1100
-+++ b/internal/ikev2/ike/server.go	2026-10-29 04:12:46.123072400 +1100
+--- a/internal/ikev2/ike/server.go	2026-11-01 15:57:20.604534200 +1100
++++ b/internal/ikev2/ike/server.go	2026-11-01 15:56:44.395893000 +1100
 @@ -5,6 +5,7 @@
  	"crypto/x509"
  	"fmt"
@@ -1297,8 +1297,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ikev2
  // exchange. on4500 indicates the message arrived on the NAT-T port.
  func (s *Server) handlePacket(pkt []byte, remote *net.UDPAddr, on4500 bool) {
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/l2tp/client.go b/internal/l2tp/client.go
---- a/internal/l2tp/client.go	2026-10-29 03:25:16.011917800 +1100
-+++ b/internal/l2tp/client.go	2026-10-29 04:12:46.031178500 +1100
+--- a/internal/l2tp/client.go	2026-11-01 15:57:21.540763200 +1100
++++ b/internal/l2tp/client.go	2026-11-01 15:56:45.841537600 +1100
 @@ -249,7 +249,7 @@
  	if err != nil || nh != ipProtoUDP {
  		return
@@ -1318,8 +1318,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/l2tp/
  		return err
  	}
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/l2tp/ipsec.go b/internal/l2tp/ipsec.go
---- a/internal/l2tp/ipsec.go	2026-10-29 03:25:16.235459200 +1100
-+++ b/internal/l2tp/ipsec.go	2026-10-29 04:12:46.026555300 +1100
+--- a/internal/l2tp/ipsec.go	2026-11-01 15:57:21.615312900 +1100
++++ b/internal/l2tp/ipsec.go	2026-11-01 15:56:45.957177700 +1100
 @@ -59,10 +59,18 @@
  // wrapUDP prepends the inner UDP header to an L2TP datagram, producing the
  // transport-mode ESP payload. The checksum is left zero: IPv4 UDP permits it,
@@ -1360,8 +1360,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/l2tp/
  
  // isIKE reports whether a datagram on the shared NAT-T port is an IKE message
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/l2tp/server.go b/internal/l2tp/server.go
---- a/internal/l2tp/server.go	2026-10-29 03:25:16.662092400 +1100
-+++ b/internal/l2tp/server.go	2026-10-29 04:12:46.028994400 +1100
+--- a/internal/l2tp/server.go	2026-11-01 15:57:21.771805700 +1100
++++ b/internal/l2tp/server.go	2026-11-01 15:56:46.180512100 +1100
 @@ -20,6 +20,11 @@
  type ServerConfig struct {
  	PSK   []byte
@@ -1563,8 +1563,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/l2tp/
  func (h serverPPP) Closed(err error) { h.p.srv.removePeer(h.p, err) }
  
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/mschap/mppe.go b/internal/mschap/mppe.go
---- a/internal/mschap/mppe.go	2026-10-29 03:25:17.113628100 +1100
-+++ b/internal/mschap/mppe.go	2026-10-29 04:12:46.024719400 +1100
+--- a/internal/mschap/mppe.go	2026-11-01 15:57:22.084877100 +1100
++++ b/internal/mschap/mppe.go	2026-11-01 15:56:46.417968700 +1100
 @@ -72,3 +72,14 @@
  	copy(hlak[16:], recv)
  	return hlak
@@ -1580,21 +1580,47 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/mscha
 +	copy(recv[:], getAsymmetricStartKey(masterKey, 16, false, true))
 +	return send, recv
 +}
+diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/openvpn/control/control.go b/internal/openvpn/control/control.go
+--- a/internal/openvpn/control/control.go	2026-11-01 15:57:22.308535600 +1100
++++ b/internal/openvpn/control/control.go	2026-11-01 15:56:46.776278000 +1100
+@@ -318,6 +318,14 @@
+ 	if p.Opcode == wire.PACKV1 {
+ 		return // pure ack: nothing to deliver
+ 	}
++	// hy2scale P15: a hard reset past the first carries only ACKs. OpenVPN
++	// 2.6 over TCP acknowledges the server's reset with another client reset
++	// whose packet ID its first control message then reuses; taking it as a
++	// reliable message made that message (the ClientHello) look like a
++	// duplicate.
++	if p.Opcode == wire.PControlHardResetClientV2 && p.PacketID != 0 {
++		return
++	}
+ 	for _, payload := range c.receiver.Receive(p.PacketID, p.Payload) {
+ 		if len(payload) == 0 {
+ 			continue // the hard reset carries no TLS bytes
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/openvpn/server.go b/internal/openvpn/server.go
---- a/internal/openvpn/server.go	2026-10-29 03:25:19.473318100 +1100
-+++ b/internal/openvpn/server.go	2026-10-29 04:12:46.057228900 +1100
-@@ -1,6 +1,7 @@
+--- a/internal/openvpn/server.go	2026-11-01 15:57:22.941384500 +1100
++++ b/internal/openvpn/server.go	2026-11-01 15:56:47.748326100 +1100
+@@ -1,11 +1,14 @@
  package openvpn
  
  import (
++	"bufio"
 +	"bytes"
  	"crypto/tls"
  	"crypto/x509"
  	"encoding/binary"
-@@ -114,6 +115,18 @@
+ 	"errors"
+ 	"fmt"
++	"io"
+ 	"log/slog"
+ 	"net"
+ 	"net/netip"
+@@ -114,12 +117,51 @@
  	// what the pq-openvpn registry name sets; see internal/pqpolicy for the contract
  	// and doc/pq-variants-plan.md for why it is a name rather than a flag.
  	PostQuantumOnly bool
+-}
 +
 +	// Device, if set, replaces the kernel TUN. (hy2scale P1)
 +	Device dataplane.Device
@@ -1607,22 +1633,69 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/openv
 +	// OnSession reports a client's address coming up / going away with the
 +	// username (or certificate common name) it authenticated as. (hy2scale P3)
 +	OnSession func(up bool, user string, addr netip.Addr)
- }
++
++	// Proto is the transport: "udp" (the default), "tcp", or "both" -- UDP and
++	// TCP on the same port. Over TCP every packet carries OpenVPN's 2-octet
++	// length prefix. (hy2scale P15)
++	Proto string
++	// ListenStream, if set, opens the TCP listener. (hy2scale P15)
++	ListenStream func(port int) (net.Listener, error)
++
++	// RedirectGateway pushes redirect-gateway def1 (and ipv6 with
++	// RedirectIPv6 on a dual-stack tunnel); PushRoutes pushes route /
++	// route-ipv6 for each prefix. Clients that do not pull routes ignore both.
++	// (hy2scale P14)
++	RedirectGateway bool
++	RedirectIPv6    bool
++	PushRoutes      []netip.Prefix
++}
++
++// Transports. (hy2scale P15)
++const (
++	ProtoUDP  = "udp"
++	ProtoTCP  = "tcp"
++	ProtoBoth = "both"
++)
  
  // Validate reports whether a ServerConfig has what a server cannot start
-@@ -204,7 +217,10 @@
+ // without. NewServer runs it; it is exported so the public package can say so
+ // before it opens anything.
+ func (c *ServerConfig) Validate() error {
++	switch c.Proto {
++	case "", ProtoUDP, ProtoTCP, ProtoBoth:
++	default:
++		return fmt.Errorf("openvpn: proto %q: udp, tcp or both", c.Proto)
++	}
+ 	switch {
+ 	case len(c.CA) == 0:
+ 		return errors.New("openvpn: server CA is required")
+@@ -204,7 +246,24 @@
  	gate     *dataplane.Gate
  
  	listenAddr *net.UDPAddr
 -	tun        *dataplane.TUN
 +	listen     dataplane.ListenFunc
++	// udp / tcp are the transports served; listenStream opens the TCP
++	// listener, and streams maps each TCP client's identity address (the
++	// pointer the pump hands back as a tunnel's peer) to its connection.
++	// inMu serialises the pump's inbound side, which every transport feeds.
++	// (hy2scale P15)
++	udp, tcp     bool
++	listenStream func(int) (net.Listener, error)
++	streamLn     net.Listener
++	streams      sync.Map // *net.UDPAddr -> *streamPeer
++	inMu         sync.Mutex
++	// pushed routing. (hy2scale P14)
++	redirect, redirect6 bool
++	pushRoutes          []netip.Prefix
++
 +	verifyUser func(string, string) bool
 +	onSession  func(bool, string, netip.Addr)
 +	tun        dataplane.Device
  	conn       *dataplane.PacketConn
  	pump       *dataplane.Pump
  
-@@ -285,9 +301,13 @@
+@@ -285,9 +344,13 @@
  
  	// GSO: the kernel may hand the pump TCP super-frames to segment and batch
  	// (doc/scaling-the-data-path.md); falls back to a plain TUN transparently.
@@ -1639,42 +1712,355 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/openv
  	}
  
  	return &Server{
-@@ -303,6 +323,9 @@
+@@ -303,6 +366,17 @@
  		shape:      cfg.Shape,
  		logger:     logger,
  		listenAddr: &net.UDPAddr{IP: listenIP, Port: port},
 +		listen:     cfg.ListenPacket,
++		udp:        cfg.Proto != ProtoTCP,
++		tcp:        cfg.Proto == ProtoTCP || cfg.Proto == ProtoBoth,
++		redirect:   cfg.RedirectGateway,
++		redirect6:  cfg.RedirectIPv6,
++		pushRoutes: cfg.PushRoutes,
++
++		listenStream: cfg.ListenStream,
++
 +		verifyUser: cfg.VerifyUser,
 +		onSession:  cfg.OnSession,
  		tun:        tun,
  		clients:    make(map[string]*serverClient),
  		closed:     make(chan struct{}),
-@@ -386,11 +409,20 @@
+@@ -386,27 +460,54 @@
  // ListenAndServe binds the UDP socket, starts the data path, and serves clients
  // until Close. It blocks.
  func (s *Server) ListenAndServe() error {
 -	conn, err := net.ListenUDP("udp", s.listenAddr)
 -	if err != nil {
 -		return fmt.Errorf("openvpn: listen: %w", err)
-+	if s.listen != nil {
-+		pc, err := s.listen(s.listenAddr.Port)
-+		if err != nil {
-+			return fmt.Errorf("openvpn: listen: %w", err)
++	if s.udp {
++		if s.listen != nil {
++			pc, err := s.listen(s.listenAddr.Port)
++			if err != nil {
++				return fmt.Errorf("openvpn: listen: %w", err)
++			}
++			s.conn = pc
++		} else {
++			conn, err := net.ListenUDP("udp", s.listenAddr)
++			if err != nil {
++				return fmt.Errorf("openvpn: listen: %w", err)
++			}
++			s.conn = dataplane.NewPacketConn(conn)
 +		}
-+		s.conn = pc
-+	} else {
-+		conn, err := net.ListenUDP("udp", s.listenAddr)
-+		if err != nil {
-+			return fmt.Errorf("openvpn: listen: %w", err)
++	}
++	if s.tcp { // hy2scale P15
++		var ln net.Listener
++		var err error
++		if s.listenStream != nil {
++			ln, err = s.listenStream(s.listenAddr.Port)
++		} else {
++			ln, err = net.ListenTCP("tcp", &net.TCPAddr{IP: s.listenAddr.IP, Port: s.listenAddr.Port})
 +		}
-+		s.conn = dataplane.NewPacketConn(conn)
++		if err != nil {
++			if s.conn != nil {
++				s.conn.Close()
++			}
++			return fmt.Errorf("openvpn: listen tcp: %w", err)
++		}
++		s.streamLn = ln
  	}
 -	s.conn = dataplane.NewPacketConn(conn)
-+	conn := s.conn
  
  	// The pump routes TUN packets to a client tunnel by destination /32, and sends
  	// each encapsulated packet to that tunnel's current peer address; inbound data
-@@ -586,6 +618,23 @@
+ 	// packets are demuxed by their P_DATA_V2 peer-id.
+-	send := func(pkt []byte, to *net.UDPAddr) {
++	s.pump = dataplane.NewPump(s.tun, s.sendTo, serverDataDemux, s.logger.Slog())
++	// GSO bursts flush with one sendmmsg, source-pinned like every send.
++	s.pump.SetBatchSender(func(pkts [][]byte, to *net.UDPAddr) {
+ 		if to == nil {
+ 			return
+ 		}
+-		if _, werr := conn.WriteToUDP(pkt, to); werr != nil {
+-			s.logger.Printf("openvpn: send to %s: %v", to, werr)
++		if sp := s.stream(to); sp != nil {
++			for _, p := range pkts {
++				sp.send(p)
++			}
++			return
+ 		}
+-	}
+-	s.pump = dataplane.NewPump(s.tun, send, serverDataDemux, s.logger.Slog())
+-	// GSO bursts flush with one sendmmsg, source-pinned like every send.
+-	s.pump.SetBatchSender(func(pkts [][]byte, to *net.UDPAddr) {
+-		if to == nil {
++		if s.conn == nil {
+ 			return
+ 		}
+ 		if _, werr := s.conn.WriteBatch(pkts, to); werr != nil {
+@@ -420,11 +521,213 @@
+ 	}
+ 	go s.pump.Run()
+ 
+-	s.logger.Printf("openvpn: listening on %s, gateway %s", s.listenAddr, s.gateway)
++	s.logger.Printf("openvpn: listening on %s (udp %v, tcp %v), gateway %s", s.listenAddr, s.udp, s.tcp, s.gateway)
++	if s.streamLn != nil {
++		if !s.udp {
++			s.acceptLoop(s.streamLn)
++			return nil
++		}
++		go s.acceptLoop(s.streamLn)
++	}
+ 	s.readLoop()
+ 	return nil
+ }
+ 
++// sendTo sends one datagram to a client: over its TCP connection when it has
++// one, else on the UDP socket. (hy2scale P15)
++func (s *Server) sendTo(pkt []byte, to *net.UDPAddr) {
++	if to == nil {
++		return
++	}
++	if sp := s.stream(to); sp != nil {
++		sp.send(pkt)
++		return
++	}
++	if s.conn == nil {
++		return
++	}
++	if _, werr := s.conn.WriteToUDP(pkt, to); werr != nil {
++		s.logger.Printf("openvpn: send to %s: %v", to, werr)
++	}
++}
++
++// stream is the TCP connection whose identity address is to, or nil.
++func (s *Server) stream(to *net.UDPAddr) *streamPeer {
++	if !s.tcp {
++		return nil
++	}
++	if v, ok := s.streams.Load(to); ok {
++		return v.(*streamPeer)
++	}
++	return nil
++}
++
++// streamPeer is one TCP client connection. Writes go through a queue drained
++// by one goroutine, so a slow client stalls only itself; when its queue is
++// full, packets to it are dropped as a congested UDP path would drop them
++// (the control channel retransmits). (hy2scale P15)
++type streamPeer struct {
++	conn net.Conn
++	out  chan []byte
++	done chan struct{}
++	once sync.Once
++}
++
++const streamQueue = 512
++
++func (p *streamPeer) send(pkt []byte) {
++	if len(pkt) > 0xffff {
++		return
++	}
++	b := make([]byte, 2+len(pkt))
++	binary.BigEndian.PutUint16(b, uint16(len(pkt)))
++	copy(b[2:], pkt)
++	select {
++	case p.out <- b:
++	case <-p.done:
++	default:
++	}
++}
++
++func (p *streamPeer) writeLoop() {
++	w := bufio.NewWriterSize(p.conn, 64<<10)
++	for {
++		select {
++		case b := <-p.out:
++			if _, err := w.Write(b); err != nil {
++				p.close()
++				return
++			}
++			for more := true; more; {
++				select {
++				case b = <-p.out:
++					if _, err := w.Write(b); err != nil {
++						p.close()
++						return
++					}
++				default:
++					more = false
++				}
++			}
++			if err := w.Flush(); err != nil {
++				p.close()
++				return
++			}
++		case <-p.done:
++			return
++		}
++	}
++}
++
++func (p *streamPeer) close() {
++	p.once.Do(func() {
++		close(p.done)
++		p.conn.Close()
++	})
++}
++
++// acceptLoop serves TCP clients until the listener closes. (hy2scale P15)
++func (s *Server) acceptLoop(ln net.Listener) {
++	for {
++		c, err := ln.Accept()
++		if err != nil {
++			select {
++			case <-s.closed:
++				return
++			default:
++			}
++			var ne net.Error
++			if errors.As(err, &ne) && ne.Timeout() {
++				continue
++			}
++			s.logger.Printf("openvpn: tcp accept: %v", err)
++			return
++		}
++		go s.serveStream(c)
++	}
++}
++
++// serveStream reads one TCP client's length-prefixed packets: the first must
++// open a session (a hard reset), control packets then go to it and data
++// packets to the pump. Closing the connection ends the session.
++func (s *Server) serveStream(c net.Conn) {
++	addr := &net.UDPAddr{} // identity in the pump: compared by pointer
++	if ta, ok := c.RemoteAddr().(*net.TCPAddr); ok {
++		addr.IP, addr.Port, addr.Zone = ta.IP, ta.Port, ta.Zone
++	}
++	sp := &streamPeer{conn: c, out: make(chan []byte, streamQueue), done: make(chan struct{})}
++	s.streams.Store(addr, sp)
++	go sp.writeLoop()
++	var cl *serverClient
++	defer func() {
++		sp.close()
++		if cl != nil {
++			cl.ch.Close()
++		}
++		s.streams.Delete(addr)
++	}()
++
++	r := bufio.NewReaderSize(c, 64<<10)
++	buf := make([]byte, 0xffff)
++	pkts := make([][]byte, 1)
++	froms := []*net.UDPAddr{addr}
++	var hdr [2]byte
++	_ = c.SetReadDeadline(time.Now().Add(handshakeTimeout))
++	for {
++		if _, err := io.ReadFull(r, hdr[:]); err != nil {
++			return
++		}
++		n := int(binary.BigEndian.Uint16(hdr[:]))
++		if _, err := io.ReadFull(r, buf[:n]); err != nil {
++			return
++		}
++		pkt := buf[:n]
++		op, keyID, ok := wire.Opcode(pkt)
++		if !ok {
++			continue
++		}
++		switch {
++		case data.IsDataOpcode(op):
++			pkts[0] = pkt
++			s.inMu.Lock()
++			s.pump.HandleInboundBatch(pkts, froms)
++			s.inMu.Unlock()
++		case wire.IsControl(op):
++			cp := append([]byte(nil), pkt...)
++			if cl != nil {
++				cl.ch.Deliver(cp)
++				continue
++			}
++			if op != wire.PControlHardResetClientV2 || !s.authenticateOpener(cp) {
++				return
++			}
++			if r := s.gate.Admit(addr); r != dataplane.Admitted {
++				s.logger.Warnf("openvpn: refusing new tcp client %s: %v", addr, r)
++				return
++			}
++			ncl, err := s.newClient(addr, keyID, func(b []byte) error { sp.send(b); return nil })
++			if err != nil {
++				s.gate.Done()
++				s.logger.Printf("openvpn: tcp client %s: %v", addr, err)
++				return
++			}
++			ncl.key, ncl.stream = "tcp:"+addr.String(), sp
++			s.mu.Lock()
++			s.clients[ncl.key] = ncl
++			s.mu.Unlock()
++			cl = ncl
++			cl.ch.Deliver(cp)
++			go func() {
++				defer s.gate.Done()
++				s.handshake(cl)
++			}()
++			// established sessions are reaped for silence by serveClient,
++			// which closes the connection
++			_ = c.SetReadDeadline(time.Time{})
++		}
++	}
++}
++
+ // readLoop reads datagrams from every client on the shared socket and dispatches
+ // each by opcode: data packets to the pump, control packets to the owning (or a
+ // new) client session. Reads are batched (dataplane.PacketConn.ReadBatch): one
+@@ -464,7 +767,9 @@
+ 			}
+ 		}
+ 		if len(dataPkts) > 0 {
++			s.inMu.Lock() // hy2scale P15: TCP clients feed the pump too
+ 			s.pump.HandleInboundBatch(dataPkts, dataFroms)
++			s.inMu.Unlock()
+ 		}
+ 		if err != nil {
+ 			return // socket closed
+@@ -501,13 +806,18 @@
+ 			s.logger.Warnf("openvpn: refusing new client %s: %v", from, r)
+ 			return
+ 		}
+-		cl, err := s.newClient(from, keyID)
++		dst := *from
++		cl, err := s.newClient(from, keyID, func(b []byte) error {
++			_, err := s.conn.WriteToUDP(b, &dst)
++			return err
++		})
+ 		if err != nil {
+ 			s.gate.Done()
+ 			s.mu.Unlock()
+ 			s.logger.Printf("openvpn: client %s: %v", from, err)
+ 			return
+ 		}
++		cl.key = key
+ 		s.clients[key] = cl
+ 		s.mu.Unlock()
+ 		cl.ch.Deliver(pkt)
+@@ -545,14 +855,9 @@
+ 	return err == nil
+ }
+ 
+-// newClient builds the control channel for a freshly-seen client. Its send
+-// closure targets the client's current address on the shared socket.
+-func (s *Server) newClient(from *net.UDPAddr, keyID uint8) (*serverClient, error) {
+-	dst := *from
+-	send := func(b []byte) error {
+-		_, err := s.conn.WriteToUDP(b, &dst)
+-		return err
+-	}
++// newClient builds the control channel for a freshly-seen client; send carries
++// its control packets (the shared UDP socket, or its TCP connection).
++func (s *Server) newClient(from *net.UDPAddr, keyID uint8, send func([]byte) error) (*serverClient, error) {
+ 	var wrap control.Wrapper
+ 	if s.newWrapper != nil {
+ 		var err error
+@@ -586,13 +891,31 @@
  		s.dropClient(cl, fmt.Sprintf("read client keys: %v", err))
  		return
  	}
@@ -1698,7 +2084,16 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/openv
  
  	serverKS, err := keys.NewServerKeySource()
  	if err != nil {
-@@ -601,6 +650,10 @@
+ 		s.dropClient(cl, err.Error())
+ 		return
+ 	}
+-	if _, err := tlsConn.Write(serverKS.MarshalServer(s.occOptions())); err != nil {
++	comp := clientCompresses(hello.Options) // hy2scale P13
++	if _, err := tlsConn.Write(serverKS.MarshalServer(s.occOptions(cl.stream != nil, comp))); err != nil {
+ 		s.dropClient(cl, fmt.Sprintf("send server keys: %v", err))
+ 		return
+ 	}
+@@ -601,6 +924,10 @@
  		s.dropClient(cl, fmt.Sprintf("await push request: %v", err))
  		return
  	}
@@ -1709,16 +2104,24 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/openv
  
  	ip, err := s.pool.Allocate()
  	if err != nil {
-@@ -623,7 +676,7 @@
+@@ -623,7 +950,7 @@
  		return
  	}
  
 -	if _, err := tlsConn.Write(s.buildPushReply(ip, peerID)); err != nil {
-+	if _, err := tlsConn.Write(s.buildPushReply(ip, peerID, hello.PeerInfo)); err != nil {
++	if _, err := tlsConn.Write(s.buildPushReply(ip, peerID, hello.PeerInfo, comp)); err != nil {
  		s.pool.Release(ip)
  		s.dropClient(cl, fmt.Sprintf("send push reply: %v", err))
  		return
-@@ -649,10 +702,25 @@
+@@ -641,6 +968,7 @@
+ 		cipher: cipher,
+ 		peerID: peerID,
+ 		routes: routes,
++		comp:   comp,
+ 	}
+ 	tun.peer.Store(cl.addr)
+ 
+@@ -649,10 +977,25 @@
  	cl.upAt = time.Now()
  	s.pump.AddTunnel(tun)
  
@@ -1744,15 +2147,46 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/openv
  // serveClient owns one established client for as long as it is alive. It sends
  // the data-channel ping the pushed keepalive promises, and it is the only thing
  // that ever notices the client is gone. Both are on one ticker because they are
-@@ -717,6 +785,7 @@
+@@ -680,13 +1023,12 @@
+ 				s.reapClient(cl, fmt.Sprintf("silent for %s", silent.Round(time.Second)))
+ 				return
+ 			}
+-			pkt, err := cl.tunnel.cipher.Seal(data.Ping)
++			// hy2scale P13: a ping is framed like every data packet
++			pkt, err := cl.tunnel.cipher.Seal(cl.tunnel.frame(nil, data.Ping))
+ 			if err != nil {
+ 				return
+ 			}
+-			if to := cl.tunnel.PeerAddr(); to != nil {
+-				_, _ = s.conn.WriteToUDP(pkt, to)
+-			}
++			s.sendTo(pkt, cl.tunnel.PeerAddr())
+ 		}
+ 	}
+ }
+@@ -716,7 +1058,11 @@
+ 		return
  	}
  	cl.ch.Close()
++	if cl.stream != nil {
++		cl.stream.close() // hy2scale P15
++	}
  	s.pump.RemoveTunnel(cl.tunnel)
 +	s.reportSession(cl, false)
  	s.pool.Release(cl.assignedIP)
  
  	s.mu.Lock()
-@@ -732,6 +801,14 @@
+@@ -724,33 +1070,89 @@
+ 	// from the same address before its old session was reaped owns the key now,
+ 	// and deleting it would strand the new session's control channel while
+ 	// leaving its tunnel in the pump -- a worse leak than the one being fixed.
+-	if cur, ok := s.clients[cl.addr.String()]; ok && cur == cl {
+-		delete(s.clients, cl.addr.String())
++	if cur, ok := s.clients[cl.key]; ok && cur == cl {
++		delete(s.clients, cl.key)
+ 	}
+ 	s.mu.Unlock()
+ 
  	s.logger.Printf("openvpn: client %s down, released %s: %s", cl.addr, cl.assignedIP, reason)
  }
  
@@ -1767,20 +2201,42 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/openv
  // dropClient tears down a half-open client after a handshake failure.
  func (s *Server) dropClient(cl *serverClient, reason string) {
  	s.logger.Warnf("openvpn: client %s dropped: %s", cl.addr, reason)
-@@ -743,14 +820,46 @@
+ 	cl.ch.Close()
++	if cl.stream != nil {
++		cl.stream.close() // hy2scale P15
++	}
+ 	s.mu.Lock()
+-	delete(s.clients, cl.addr.String())
++	if cur, ok := s.clients[cl.key]; ok && cur == cl {
++		delete(s.clients, cl.key)
++	}
+ 	s.mu.Unlock()
+ }
  
  // occOptions is the server's advisory OCC options string, matching the client's
  // AES-256-GCM profile from the responder side.
+-func (s *Server) occOptions() string {
+-	return "V4,dev-type tun,link-mtu 1549,tun-mtu 1500,proto UDPv4,cipher AES-256-GCM,auth [null-digest],keysize 256,key-method 2,tls-server"
 +//
 +// hy2scale P11: the MTU in it is the configured one, as pushed, rather than
 +// OpenVPN's 1500 default. link-mtu is tun-mtu plus the 49 octets the AES-GCM
 +// data channel adds over UDPv4, the figure OpenVPN's own server reports.
- func (s *Server) occOptions() string {
--	return "V4,dev-type tun,link-mtu 1549,tun-mtu 1500,proto UDPv4,cipher AES-256-GCM,auth [null-digest],keysize 256,key-method 2,tls-server"
-+	return fmt.Sprintf("V4,dev-type tun,link-mtu %d,tun-mtu %d,proto UDPv4,cipher AES-256-GCM,auth [null-digest],keysize 256,key-method 2,tls-server",
-+		s.mtu+49, s.mtu)
- }
- 
++//
++// hy2scale P13/P15: the proto is the client's transport, and comp-lzo is
++// listed for a client that has compression on, as OpenVPN's own server does.
++func (s *Server) occOptions(tcp, comp bool) string {
++	proto, link := "UDPv4", s.mtu+49
++	if tcp {
++		proto, link = "TCPv4_SERVER", s.mtu+51
++	}
++	c := ""
++	if comp {
++		c, link = ",comp-lzo", link+1
++	}
++	return fmt.Sprintf("V4,dev-type tun,link-mtu %d,tun-mtu %d,proto %s%s,cipher AES-256-GCM,auth [null-digest],keysize 256,key-method 2,tls-server",
++		link, s.mtu, proto, c)
++}
++
 +// peerVersionAtLeast reports whether a client's IV_VER is at least
 +// major.minor; a client that sends none is taken to be old.
 +func peerVersionAtLeast(peerInfo string, major, minor int) bool {
@@ -1793,8 +2249,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/openv
 +		}
 +	}
 +	return false
-+}
-+
+ }
+ 
 +// peerTakesPushedMTU reports whether a client applies a pushed tun-mtu: OpenVPN
 +// 2.6 does (it announces IV_MTU), while 2.4 and 2.5 refuse the option with an
 +// error in their log. Such clients take the MTU from their own config, which
@@ -1812,11 +2268,11 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/openv
  // address assignment, the tunnel gateway, the negotiated cipher and peer-id, the
  // keepalive timers, and any DNS servers.
 -func (s *Server) buildPushReply(ip net.IP, peerID uint32) []byte {
-+func (s *Server) buildPushReply(ip net.IP, peerID uint32, peerInfo string) []byte {
++func (s *Server) buildPushReply(ip net.IP, peerID uint32, peerInfo string, comp bool) []byte {
  	var b strings.Builder
  	b.WriteString("PUSH_REPLY")
  	fmt.Fprintf(&b, ",route-gateway %s", s.gateway)
-@@ -765,12 +874,16 @@
+@@ -765,12 +1167,36 @@
  		// client that configures the server's address on its own interface,
  		// which looks like a routing problem and is not one.
  		fmt.Fprintf(&b, ",ifconfig-ipv6 %s/%d %s", addr6, s.pool6.Bits(), s.gateway6)
@@ -1829,13 +2285,51 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/openv
  		fmt.Fprintf(&b, ",dhcp-option DNS %s", d)
  	}
 -	fmt.Fprintf(&b, ",tun-mtu %d", s.mtu)
++	// hy2scale P14: routing for clients that pull it
++	if s.redirect {
++		if s.redirect6 && s.pool6.IsValid() {
++			b.WriteString(",redirect-gateway def1 ipv6")
++		} else {
++			b.WriteString(",redirect-gateway def1")
++		}
++	}
++	for _, r := range s.pushRoutes {
++		switch {
++		case r.Addr().Is4():
++			fmt.Fprintf(&b, ",route %s %s", r.Masked().Addr(), net.IP(net.CIDRMask(r.Bits(), 32)))
++		case s.pool6.IsValid():
++			fmt.Fprintf(&b, ",route-ipv6 %s", r.Masked())
++		}
++	}
++	// hy2scale P13: keep the client's compression framing, without compression
++	if comp {
++		b.WriteString(",comp-lzo no")
++	}
 +	if peerTakesPushedMTU(peerInfo) { // hy2scale P11
 +		fmt.Fprintf(&b, ",tun-mtu %d", s.mtu)
 +	}
  	b.WriteString(",cipher AES-256-GCM")
  	fmt.Fprintf(&b, ",peer-id %d", peerID)
  	return append([]byte(b.String()), 0)
-@@ -823,6 +936,7 @@
+@@ -786,6 +1212,10 @@
+ 		if s.conn != nil {
+ 			s.conn.Close()
+ 		}
++		if s.streamLn != nil { // hy2scale P15
++			s.streamLn.Close()
++		}
++		s.streams.Range(func(_, v any) bool { v.(*streamPeer).close(); return true })
+ 		if s.tun != nil {
+ 			s.tun.Close()
+ 		}
+@@ -820,9 +1250,14 @@
+ 	ch    *control.Channel
+ 	addr  *net.UDPAddr
+ 	keyID uint8
++	// key names the client in Server.clients; stream is its TCP connection,
++	// nil over UDP. (hy2scale P15)
++	key    string
++	stream *streamPeer
  
  	tunnel     *serverTunnel
  	assignedIP net.IP
@@ -1843,7 +2337,60 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/openv
  	// upAt is when the client was established, and it is the liveness clock
  	// until the first inbound data packet moves the pump's own LastSeen. A
  	// client that completes the handshake and never speaks again is still on a
-@@ -869,6 +983,9 @@
+@@ -842,12 +1277,25 @@
+ 	peerID uint32
+ 	routes []netip.Prefix
+ 	peer   atomic.Pointer[net.UDPAddr]
+-}
+ 
+-func (t *serverTunnel) InboundKey() uint32                   { return t.peerID }
+-func (t *serverTunnel) Routes() []netip.Prefix               { return t.routes }
+-func (t *serverTunnel) PeerAddr() *net.UDPAddr               { return t.peer.Load() }
+-func (t *serverTunnel) Encapsulate(p []byte) ([]byte, error) { return t.cipher.Seal(p) }
++	// comp: the client runs a compression context, so every data packet
++	// carries its framing; compMode is the framing it was seen to use, and
++	// scratch the pump's buffer for framing an outbound packet. (hy2scale P13)
++	comp     bool
++	compMode atomic.Uint32
++	scratch  []byte
++}
++
++func (t *serverTunnel) InboundKey() uint32     { return t.peerID }
++func (t *serverTunnel) Routes() []netip.Prefix { return t.routes }
++func (t *serverTunnel) PeerAddr() *net.UDPAddr { return t.peer.Load() }
++func (t *serverTunnel) Encapsulate(p []byte) ([]byte, error) {
++	if t.comp { // hy2scale P13 (the pump's goroutine owns scratch)
++		t.scratch = t.frame(t.scratch[:0], p)
++		return t.cipher.Seal(t.scratch)
++	}
++	return t.cipher.Seal(p)
++}
+ 
+ // VerifyInboundSource implements dataplane.SourceCheckedTunnel: a client may
+ // send only as the address(es) it was assigned, which are this tunnel's
+@@ -858,6 +1306,13 @@
+ // length-delimits its payload, so filler past the inner IP packet is delimited
+ // by that packet's own header and is inert to any conforming receiver.
+ func (t *serverTunnel) EncapsulatePadded(p []byte, minInner int) ([]byte, error) {
++	if t.comp { // hy2scale P13
++		t.scratch = t.frame(t.scratch[:0], p)
++		if t.compMode.Load()&^compSeen == compSwap {
++			return t.cipher.Seal(t.scratch) // filler would land in the swapped octet's place
++		}
++		return t.cipher.SealPadded(t.scratch, minInner+1)
++	}
+ 	return t.cipher.SealPadded(p, minInner)
+ }
+ 
+@@ -866,9 +1321,17 @@
+ 	if err != nil {
+ 		return nil, err
+ 	}
++	if t.comp { // hy2scale P13
++		if pt, err = t.unframe(pt); err != nil {
++			return nil, err
++		}
++	}
  	if data.IsPing(pt) {
  		return nil, nil // keepalive: authenticated but nothing to deliver
  	}
@@ -1853,7 +2400,7 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/openv
  	// Trim any shaping filler past the inner packet; the data channel delimits
  	// its payload by length, so only the IP header says where the packet ends.
  	inner := dataplane.TrimToIP(pt)
-@@ -919,7 +1036,7 @@
+@@ -919,7 +1382,7 @@
  		// ever found that still stalls, cap that path and name the client;
  		// do not restore a blanket cap whose reason had a narrower cause.
  		SessionTicketsDisabled: true,
@@ -1862,7 +2409,7 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/openv
  		ClientCAs:              pool,
  	}
  	if cfg.PostQuantumOnly {
-@@ -1018,3 +1135,12 @@
+@@ -1018,3 +1481,116 @@
  	}
  	return uint32(pkt[1])<<16 | uint32(pkt[2])<<8 | uint32(pkt[3]), true
  }
@@ -1875,9 +2422,113 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/openv
 +	}
 +	return tls.RequireAndVerifyClientCert
 +}
++
++// Compression framing (hy2scale P13). A client with a compression context
++// prefixes every data-channel payload: comp-lzo with one octet (0xFA plain,
++// 0x66 LZO), "compress" v1 by swapping the payload's first octet to its end
++// and putting its own there (0xFB plain, 0x69 LZ4), and v2 (stub-v2,
++// lz4-v2) only escapes a payload that starts with 0x50. The server pushes
++// comp-lzo no, so clients keep the framing and stop compressing; a payload
++// that is compressed anyway is refused. Outbound packets use the framing the
++// client was seen to use, comp-lzo until it has sent anything.
++const (
++	compLZO uint32 = iota
++	compSwap
++	compV2
++	compSeen = 4 // or'ed in once the client's framing is known
++)
++
++const (
++	lzoPlain   = 0xFA
++	lzoPacked  = 0x66
++	swapPlain  = 0xFB
++	swapPacked = 0x69
++	v2Escape   = 0x50
++)
++
++var errCompressed = errors.New("openvpn: compressed data packet (compression is not supported)")
++
++// clientCompresses reports whether a client's OCC options string has a
++// compression context; OpenVPN lists any of them as comp-lzo.
++func clientCompresses(options string) bool {
++	for _, o := range strings.Split(options, ",") {
++		if o == "comp-lzo" || strings.HasPrefix(o, "compress") {
++			return true
++		}
++	}
++	return false
++}
++
++// frame appends p framed for the client to dst.
++func (t *serverTunnel) frame(dst, p []byte) []byte {
++	switch t.compMode.Load() &^ compSeen {
++	case compSwap:
++		if len(p) == 0 {
++			return append(dst, swapPlain)
++		}
++		dst = append(dst, swapPlain)
++		dst = append(dst, p[1:]...)
++		return append(dst, p[0])
++	case compV2:
++		if len(p) > 0 && p[0] == v2Escape {
++			dst = append(dst, v2Escape, 0)
++		}
++		return append(dst, p...)
++	default:
++		dst = append(dst, lzoPlain)
++		return append(dst, p...)
++	}
++}
++
++// unframe strips the client's framing from a decrypted payload, in place.
++func (t *serverTunnel) unframe(pt []byte) ([]byte, error) {
++	if len(pt) == 0 {
++		return pt, nil
++	}
++	mode := t.compMode.Load()
++	if mode == compSeen|compV2 { // v2 has no marker on a plain packet
++		if pt[0] != v2Escape {
++			return pt, nil
++		}
++		if len(pt) >= 2 && pt[1] == 0 {
++			return pt[2:], nil
++		}
++		return nil, errCompressed
++	}
++	switch pt[0] {
++	case lzoPlain:
++		t.see(mode, compLZO)
++		return pt[1:], nil
++	case swapPlain:
++		t.see(mode, compSwap)
++		n := len(pt) - 1
++		if n == 0 {
++			return pt[:0], nil
++		}
++		pt[0] = pt[n]
++		return pt[:n], nil
++	case lzoPacked, swapPacked:
++		return nil, errCompressed
++	case v2Escape:
++		if len(pt) >= 2 && pt[1] == 0 {
++			t.see(mode, compV2)
++			return pt[2:], nil
++		}
++		return nil, errCompressed
++	default:
++		t.see(mode, compV2) // a bare packet: v2 framing
++		return pt, nil
++	}
++}
++
++func (t *serverTunnel) see(cur, m uint32) {
++	if cur != compSeen|m {
++		t.compMode.Store(compSeen | m)
++	}
++}
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ppp/ccp_server.go b/internal/ppp/ccp_server.go
 --- a/internal/ppp/ccp_server.go	1970-01-01 11:00:00.000000000 +1100
-+++ b/internal/ppp/ccp_server.go	2026-10-29 04:12:46.073229200 +1100
++++ b/internal/ppp/ccp_server.go	2026-11-01 15:56:48.450404600 +1100
 @@ -0,0 +1,284 @@
 +package ppp
 +
@@ -2165,7 +2816,7 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ppp/c
 +}
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ppp/mppe.go b/internal/ppp/mppe.go
 --- a/internal/ppp/mppe.go	1970-01-01 11:00:00.000000000 +1100
-+++ b/internal/ppp/mppe.go	2026-10-29 04:12:46.078231100 +1100
++++ b/internal/ppp/mppe.go	2026-11-01 15:56:48.895239500 +1100
 @@ -0,0 +1,157 @@
 +package ppp
 +
@@ -2325,8 +2976,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ppp/m
 +	return plain, false, true
 +}
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ppp/server.go b/internal/ppp/server.go
---- a/internal/ppp/server.go	2026-10-29 03:25:21.678021500 +1100
-+++ b/internal/ppp/server.go	2026-10-29 04:12:46.075729700 +1100
+--- a/internal/ppp/server.go	2026-11-01 15:57:23.750524000 +1100
++++ b/internal/ppp/server.go	2026-11-01 15:56:49.106843200 +1100
 @@ -6,6 +6,7 @@
  	"fmt"
  	"net"
@@ -2378,8 +3029,8 @@ diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/internal/ppp/s
  	s.send(ProtocolCHAP, cpPacket{Code: chapSuccess, ID: pkt.ID, Body: success}.marshal())
  
 diff -ruN -x go.mod -x go.sum -x LICENSE -x '*.md' -x '*.patch' a/l2tp/server.go b/l2tp/server.go
---- a/l2tp/server.go	2026-10-29 03:25:23.473505100 +1100
-+++ b/l2tp/server.go	2026-10-29 04:12:46.007017300 +1100
+--- a/l2tp/server.go	2026-11-01 15:57:24.359329800 +1100
++++ b/l2tp/server.go	2026-11-01 15:56:49.971098900 +1100
 @@ -4,6 +4,7 @@
  	"fmt"
  	"log/slog"

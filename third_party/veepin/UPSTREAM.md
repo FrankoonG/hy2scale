@@ -67,6 +67,23 @@ Every change is marked `hy2scale P<n>` in the source.
   between them routes ESP by SPI. One IKE daemon running an IKEv2 client and
   an L2TP/IPsec client to the same server sends both from one address and
   port, which routing by sender cannot split.
+- **P13 — OpenVPN compression framing.** A client with a compression context
+  (its OCC options list comp-lzo, as OpenVPN does for any) frames every data
+  packet: comp-lzo with a leading octet, `compress` v1 by swapping the first
+  octet to the end, v2 only escaping a leading 0x50. The server strips the
+  framing it sees, frames its own packets (pings included) the same way, and
+  pushes `comp-lzo no` so the client stops compressing; a compressed packet
+  is refused. iKuai's client and its exported profiles have comp-lzo on.
+- **P14 — pushed routing.** `RedirectGateway` / `RedirectIPv6` push
+  `redirect-gateway def1 [ipv6]` and `PushRoutes` push `route` /
+  `route-ipv6`, so clients configured without a profile get the routing too.
+- **P15 — OpenVPN over TCP.** `Proto` "udp" (default), "tcp" or "both" on
+  one port, `ListenStream` opening the listener. Each TCP client has its
+  2-octet length framing, a write queue drained by its own goroutine (a full
+  queue drops, like a congested UDP path), and its session ends with the
+  connection; every transport feeds the pump under one mutex. A client hard
+  reset after the first (packet ID not 0) carries only ACKs: OpenVPN 2.6 over
+  TCP acknowledges the server's reset with one and reuses its packet ID.
 
 ## Updating
 

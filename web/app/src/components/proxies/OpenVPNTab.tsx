@@ -11,6 +11,7 @@ import VPNStatus from './VPNStatus';
 
 type Control = '' | 'tls-crypt' | 'tls-auth';
 type Digest = 'SHA1' | 'SHA256';
+type Proto = 'udp' | 'tcp' | 'both';
 
 /** Address / CIDR lists typed as one value each per line or comma. */
 const splitList = (s: string) => s.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
@@ -27,6 +28,7 @@ export default function OpenVPNTab() {
 
   const [enabled, setEnabled] = useState(false);
   const [port, setPort] = useState('1194');
+  const [proto, setProto] = useState<Proto>('udp');
   const [listenIP, setListenIP] = useState('');
   const [pool, setPool] = useState('');
   const [pool6, setPool6] = useState('');
@@ -48,6 +50,7 @@ export default function OpenVPNTab() {
     if (d) {
       setEnabled(d.enabled);
       setPort(String(d.port || 1194));
+      setProto((d.proto || 'udp') as Proto);
       setListenIP(d.listen_ip || '');
       setPool(d.pool || '');
       setPool6(d.pool6 || '');
@@ -70,7 +73,7 @@ export default function OpenVPNTab() {
     setLoading(true);
     try {
       await api.updateOpenVPN({
-        enabled, port: parseInt(port) || 1194, listen_ip: listenIP.trim(), pool, pool6: pool6.trim(), cert_id: certId,
+        enabled, port: parseInt(port) || 1194, proto, listen_ip: listenIP.trim(), pool, pool6: pool6.trim(), cert_id: certId,
         mtu: parseInt(mtu) || 1400, dns: splitList(dns), control, auth: control === 'tls-auth' ? digest : '', shape,
         full_tunnel: fullTunnel, tunnel_ipv6: tunnelIPv6, routes: fullTunnel ? [] : splitList(routes), profile_extra: extra.trim(),
         ...(rotateKey ? { rotate_key: true } : {}),
@@ -112,6 +115,14 @@ export default function OpenVPNTab() {
         <FormStack maxWidth={560}>
           <FormGroup label={t('app.enabled')}>
             <Toggle checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+          </FormGroup>
+          <FormGroup label={t('openvpn.proto')}>
+            <SegmentedControl<Proto>
+              className="ovpn-seg"
+              items={[{ key: 'udp', label: 'UDP', testId: 'ovpn-proto-udp' }, { key: 'tcp', label: 'TCP', testId: 'ovpn-proto-tcp' }, { key: 'both', label: t('openvpn.protoBoth'), testId: 'ovpn-proto-both' }]}
+              value={proto}
+              onChange={setProto}
+            />
           </FormGroup>
           <FormGrid>
             <FormGroup label={t('openvpn.port')} required>

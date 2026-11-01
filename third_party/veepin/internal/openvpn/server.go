@@ -1,12 +1,14 @@
 package openvpn
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -127,12 +129,39 @@ type ServerConfig struct {
 	// OnSession reports a client's address coming up / going away with the
 	// username (or certificate common name) it authenticated as. (hy2scale P3)
 	OnSession func(up bool, user string, addr netip.Addr)
+
+	// Proto is the transport: "udp" (the default), "tcp", or "both" -- UDP and
+	// TCP on the same port. Over TCP every packet carries OpenVPN's 2-octet
+	// length prefix. (hy2scale P15)
+	Proto string
+	// ListenStream, if set, opens the TCP listener. (hy2scale P15)
+	ListenStream func(port int) (net.Listener, error)
+
+	// RedirectGateway pushes redirect-gateway def1 (and ipv6 with
+	// RedirectIPv6 on a dual-stack tunnel); PushRoutes pushes route /
+	// route-ipv6 for each prefix. Clients that do not pull routes ignore both.
+	// (hy2scale P14)
+	RedirectGateway bool
+	RedirectIPv6    bool
+	PushRoutes      []netip.Prefix
 }
+
+// Transports. (hy2scale P15)
+const (
+	ProtoUDP  = "udp"
+	ProtoTCP  = "tcp"
+	ProtoBoth = "both"
+)
 
 // Validate reports whether a ServerConfig has what a server cannot start
 // without. NewServer runs it; it is exported so the public package can say so
 // before it opens anything.
 func (c *ServerConfig) Validate() error {
+	switch c.Proto {
+	case "", ProtoUDP, ProtoTCP, ProtoBoth:
+	default:
+		return fmt.Errorf("openvpn: proto %q: udp, tcp or both", c.Proto)
+	}
 	switch {
 	case len(c.CA) == 0:
 		return errors.New("openvpn: server CA is required")
@@ -218,6 +247,20 @@ type Server struct {
 
 	listenAddr *net.UDPAddr
 	listen     dataplane.ListenFunc
+	// udp / tcp are the transports served; listenStream opens the TCP
+	// listener, and streams maps each TCP client's identity address (the
+	// pointer the pump hands back as a tunnel's peer) to its connection.
+	// inMu serialises the pump's inbound side, which every transport feeds.
+	// (hy2scale P15)
+	udp, tcp     bool
+	listenStream func(int) (net.Listener, error)
+	streamLn     net.Listener
+	streams      sync.Map // *net.UDPAddr -> *streamPeer
+	inMu         sync.Mutex
+	// pushed routing. (hy2scale P14)
+	redirect, redirect6 bool
+	pushRoutes          []netip.Prefix
+
 	verifyUser func(string, string) bool
 	onSession  func(bool, string, netip.Addr)
 	tun        dataplane.Device
@@ -324,6 +367,14 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		logger:     logger,
 		listenAddr: &net.UDPAddr{IP: listenIP, Port: port},
 		listen:     cfg.ListenPacket,
+		udp:        cfg.Proto != ProtoTCP,
+		tcp:        cfg.Proto == ProtoTCP || cfg.Proto == ProtoBoth,
+		redirect:   cfg.RedirectGateway,
+		redirect6:  cfg.RedirectIPv6,
+		pushRoutes: cfg.PushRoutes,
+
+		listenStream: cfg.ListenStream,
+
 		verifyUser: cfg.VerifyUser,
 		onSession:  cfg.OnSession,
 		tun:        tun,
@@ -409,36 +460,54 @@ func derive6(prefix netip.Prefix, network *net.IPNet, ip net.IP) (netip.Addr, er
 // ListenAndServe binds the UDP socket, starts the data path, and serves clients
 // until Close. It blocks.
 func (s *Server) ListenAndServe() error {
-	if s.listen != nil {
-		pc, err := s.listen(s.listenAddr.Port)
-		if err != nil {
-			return fmt.Errorf("openvpn: listen: %w", err)
+	if s.udp {
+		if s.listen != nil {
+			pc, err := s.listen(s.listenAddr.Port)
+			if err != nil {
+				return fmt.Errorf("openvpn: listen: %w", err)
+			}
+			s.conn = pc
+		} else {
+			conn, err := net.ListenUDP("udp", s.listenAddr)
+			if err != nil {
+				return fmt.Errorf("openvpn: listen: %w", err)
+			}
+			s.conn = dataplane.NewPacketConn(conn)
 		}
-		s.conn = pc
-	} else {
-		conn, err := net.ListenUDP("udp", s.listenAddr)
-		if err != nil {
-			return fmt.Errorf("openvpn: listen: %w", err)
-		}
-		s.conn = dataplane.NewPacketConn(conn)
 	}
-	conn := s.conn
+	if s.tcp { // hy2scale P15
+		var ln net.Listener
+		var err error
+		if s.listenStream != nil {
+			ln, err = s.listenStream(s.listenAddr.Port)
+		} else {
+			ln, err = net.ListenTCP("tcp", &net.TCPAddr{IP: s.listenAddr.IP, Port: s.listenAddr.Port})
+		}
+		if err != nil {
+			if s.conn != nil {
+				s.conn.Close()
+			}
+			return fmt.Errorf("openvpn: listen tcp: %w", err)
+		}
+		s.streamLn = ln
+	}
 
 	// The pump routes TUN packets to a client tunnel by destination /32, and sends
 	// each encapsulated packet to that tunnel's current peer address; inbound data
 	// packets are demuxed by their P_DATA_V2 peer-id.
-	send := func(pkt []byte, to *net.UDPAddr) {
-		if to == nil {
-			return
-		}
-		if _, werr := conn.WriteToUDP(pkt, to); werr != nil {
-			s.logger.Printf("openvpn: send to %s: %v", to, werr)
-		}
-	}
-	s.pump = dataplane.NewPump(s.tun, send, serverDataDemux, s.logger.Slog())
+	s.pump = dataplane.NewPump(s.tun, s.sendTo, serverDataDemux, s.logger.Slog())
 	// GSO bursts flush with one sendmmsg, source-pinned like every send.
 	s.pump.SetBatchSender(func(pkts [][]byte, to *net.UDPAddr) {
 		if to == nil {
+			return
+		}
+		if sp := s.stream(to); sp != nil {
+			for _, p := range pkts {
+				sp.send(p)
+			}
+			return
+		}
+		if s.conn == nil {
 			return
 		}
 		if _, werr := s.conn.WriteBatch(pkts, to); werr != nil {
@@ -452,9 +521,211 @@ func (s *Server) ListenAndServe() error {
 	}
 	go s.pump.Run()
 
-	s.logger.Printf("openvpn: listening on %s, gateway %s", s.listenAddr, s.gateway)
+	s.logger.Printf("openvpn: listening on %s (udp %v, tcp %v), gateway %s", s.listenAddr, s.udp, s.tcp, s.gateway)
+	if s.streamLn != nil {
+		if !s.udp {
+			s.acceptLoop(s.streamLn)
+			return nil
+		}
+		go s.acceptLoop(s.streamLn)
+	}
 	s.readLoop()
 	return nil
+}
+
+// sendTo sends one datagram to a client: over its TCP connection when it has
+// one, else on the UDP socket. (hy2scale P15)
+func (s *Server) sendTo(pkt []byte, to *net.UDPAddr) {
+	if to == nil {
+		return
+	}
+	if sp := s.stream(to); sp != nil {
+		sp.send(pkt)
+		return
+	}
+	if s.conn == nil {
+		return
+	}
+	if _, werr := s.conn.WriteToUDP(pkt, to); werr != nil {
+		s.logger.Printf("openvpn: send to %s: %v", to, werr)
+	}
+}
+
+// stream is the TCP connection whose identity address is to, or nil.
+func (s *Server) stream(to *net.UDPAddr) *streamPeer {
+	if !s.tcp {
+		return nil
+	}
+	if v, ok := s.streams.Load(to); ok {
+		return v.(*streamPeer)
+	}
+	return nil
+}
+
+// streamPeer is one TCP client connection. Writes go through a queue drained
+// by one goroutine, so a slow client stalls only itself; when its queue is
+// full, packets to it are dropped as a congested UDP path would drop them
+// (the control channel retransmits). (hy2scale P15)
+type streamPeer struct {
+	conn net.Conn
+	out  chan []byte
+	done chan struct{}
+	once sync.Once
+}
+
+const streamQueue = 512
+
+func (p *streamPeer) send(pkt []byte) {
+	if len(pkt) > 0xffff {
+		return
+	}
+	b := make([]byte, 2+len(pkt))
+	binary.BigEndian.PutUint16(b, uint16(len(pkt)))
+	copy(b[2:], pkt)
+	select {
+	case p.out <- b:
+	case <-p.done:
+	default:
+	}
+}
+
+func (p *streamPeer) writeLoop() {
+	w := bufio.NewWriterSize(p.conn, 64<<10)
+	for {
+		select {
+		case b := <-p.out:
+			if _, err := w.Write(b); err != nil {
+				p.close()
+				return
+			}
+			for more := true; more; {
+				select {
+				case b = <-p.out:
+					if _, err := w.Write(b); err != nil {
+						p.close()
+						return
+					}
+				default:
+					more = false
+				}
+			}
+			if err := w.Flush(); err != nil {
+				p.close()
+				return
+			}
+		case <-p.done:
+			return
+		}
+	}
+}
+
+func (p *streamPeer) close() {
+	p.once.Do(func() {
+		close(p.done)
+		p.conn.Close()
+	})
+}
+
+// acceptLoop serves TCP clients until the listener closes. (hy2scale P15)
+func (s *Server) acceptLoop(ln net.Listener) {
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			select {
+			case <-s.closed:
+				return
+			default:
+			}
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				continue
+			}
+			s.logger.Printf("openvpn: tcp accept: %v", err)
+			return
+		}
+		go s.serveStream(c)
+	}
+}
+
+// serveStream reads one TCP client's length-prefixed packets: the first must
+// open a session (a hard reset), control packets then go to it and data
+// packets to the pump. Closing the connection ends the session.
+func (s *Server) serveStream(c net.Conn) {
+	addr := &net.UDPAddr{} // identity in the pump: compared by pointer
+	if ta, ok := c.RemoteAddr().(*net.TCPAddr); ok {
+		addr.IP, addr.Port, addr.Zone = ta.IP, ta.Port, ta.Zone
+	}
+	sp := &streamPeer{conn: c, out: make(chan []byte, streamQueue), done: make(chan struct{})}
+	s.streams.Store(addr, sp)
+	go sp.writeLoop()
+	var cl *serverClient
+	defer func() {
+		sp.close()
+		if cl != nil {
+			cl.ch.Close()
+		}
+		s.streams.Delete(addr)
+	}()
+
+	r := bufio.NewReaderSize(c, 64<<10)
+	buf := make([]byte, 0xffff)
+	pkts := make([][]byte, 1)
+	froms := []*net.UDPAddr{addr}
+	var hdr [2]byte
+	_ = c.SetReadDeadline(time.Now().Add(handshakeTimeout))
+	for {
+		if _, err := io.ReadFull(r, hdr[:]); err != nil {
+			return
+		}
+		n := int(binary.BigEndian.Uint16(hdr[:]))
+		if _, err := io.ReadFull(r, buf[:n]); err != nil {
+			return
+		}
+		pkt := buf[:n]
+		op, keyID, ok := wire.Opcode(pkt)
+		if !ok {
+			continue
+		}
+		switch {
+		case data.IsDataOpcode(op):
+			pkts[0] = pkt
+			s.inMu.Lock()
+			s.pump.HandleInboundBatch(pkts, froms)
+			s.inMu.Unlock()
+		case wire.IsControl(op):
+			cp := append([]byte(nil), pkt...)
+			if cl != nil {
+				cl.ch.Deliver(cp)
+				continue
+			}
+			if op != wire.PControlHardResetClientV2 || !s.authenticateOpener(cp) {
+				return
+			}
+			if r := s.gate.Admit(addr); r != dataplane.Admitted {
+				s.logger.Warnf("openvpn: refusing new tcp client %s: %v", addr, r)
+				return
+			}
+			ncl, err := s.newClient(addr, keyID, func(b []byte) error { sp.send(b); return nil })
+			if err != nil {
+				s.gate.Done()
+				s.logger.Printf("openvpn: tcp client %s: %v", addr, err)
+				return
+			}
+			ncl.key, ncl.stream = "tcp:"+addr.String(), sp
+			s.mu.Lock()
+			s.clients[ncl.key] = ncl
+			s.mu.Unlock()
+			cl = ncl
+			cl.ch.Deliver(cp)
+			go func() {
+				defer s.gate.Done()
+				s.handshake(cl)
+			}()
+			// established sessions are reaped for silence by serveClient,
+			// which closes the connection
+			_ = c.SetReadDeadline(time.Time{})
+		}
+	}
 }
 
 // readLoop reads datagrams from every client on the shared socket and dispatches
@@ -496,7 +767,9 @@ func (s *Server) readLoop() {
 			}
 		}
 		if len(dataPkts) > 0 {
+			s.inMu.Lock() // hy2scale P15: TCP clients feed the pump too
 			s.pump.HandleInboundBatch(dataPkts, dataFroms)
+			s.inMu.Unlock()
 		}
 		if err != nil {
 			return // socket closed
@@ -533,13 +806,18 @@ func (s *Server) handleControl(op, keyID uint8, pkt []byte, from *net.UDPAddr) {
 			s.logger.Warnf("openvpn: refusing new client %s: %v", from, r)
 			return
 		}
-		cl, err := s.newClient(from, keyID)
+		dst := *from
+		cl, err := s.newClient(from, keyID, func(b []byte) error {
+			_, err := s.conn.WriteToUDP(b, &dst)
+			return err
+		})
 		if err != nil {
 			s.gate.Done()
 			s.mu.Unlock()
 			s.logger.Printf("openvpn: client %s: %v", from, err)
 			return
 		}
+		cl.key = key
 		s.clients[key] = cl
 		s.mu.Unlock()
 		cl.ch.Deliver(pkt)
@@ -577,14 +855,9 @@ func (s *Server) authenticateOpener(pkt []byte) bool {
 	return err == nil
 }
 
-// newClient builds the control channel for a freshly-seen client. Its send
-// closure targets the client's current address on the shared socket.
-func (s *Server) newClient(from *net.UDPAddr, keyID uint8) (*serverClient, error) {
-	dst := *from
-	send := func(b []byte) error {
-		_, err := s.conn.WriteToUDP(b, &dst)
-		return err
-	}
+// newClient builds the control channel for a freshly-seen client; send carries
+// its control packets (the shared UDP socket, or its TCP connection).
+func (s *Server) newClient(from *net.UDPAddr, keyID uint8, send func([]byte) error) (*serverClient, error) {
 	var wrap control.Wrapper
 	if s.newWrapper != nil {
 		var err error
@@ -641,7 +914,8 @@ func (s *Server) handshake(cl *serverClient) {
 		s.dropClient(cl, err.Error())
 		return
 	}
-	if _, err := tlsConn.Write(serverKS.MarshalServer(s.occOptions())); err != nil {
+	comp := clientCompresses(hello.Options) // hy2scale P13
+	if _, err := tlsConn.Write(serverKS.MarshalServer(s.occOptions(cl.stream != nil, comp))); err != nil {
 		s.dropClient(cl, fmt.Sprintf("send server keys: %v", err))
 		return
 	}
@@ -676,7 +950,7 @@ func (s *Server) handshake(cl *serverClient) {
 		return
 	}
 
-	if _, err := tlsConn.Write(s.buildPushReply(ip, peerID, hello.PeerInfo)); err != nil {
+	if _, err := tlsConn.Write(s.buildPushReply(ip, peerID, hello.PeerInfo, comp)); err != nil {
 		s.pool.Release(ip)
 		s.dropClient(cl, fmt.Sprintf("send push reply: %v", err))
 		return
@@ -694,6 +968,7 @@ func (s *Server) handshake(cl *serverClient) {
 		cipher: cipher,
 		peerID: peerID,
 		routes: routes,
+		comp:   comp,
 	}
 	tun.peer.Store(cl.addr)
 
@@ -748,13 +1023,12 @@ func (s *Server) serveClient(cl *serverClient) {
 				s.reapClient(cl, fmt.Sprintf("silent for %s", silent.Round(time.Second)))
 				return
 			}
-			pkt, err := cl.tunnel.cipher.Seal(data.Ping)
+			// hy2scale P13: a ping is framed like every data packet
+			pkt, err := cl.tunnel.cipher.Seal(cl.tunnel.frame(nil, data.Ping))
 			if err != nil {
 				return
 			}
-			if to := cl.tunnel.PeerAddr(); to != nil {
-				_, _ = s.conn.WriteToUDP(pkt, to)
-			}
+			s.sendTo(pkt, cl.tunnel.PeerAddr())
 		}
 	}
 }
@@ -784,6 +1058,9 @@ func (s *Server) reapClient(cl *serverClient, reason string) {
 		return
 	}
 	cl.ch.Close()
+	if cl.stream != nil {
+		cl.stream.close() // hy2scale P15
+	}
 	s.pump.RemoveTunnel(cl.tunnel)
 	s.reportSession(cl, false)
 	s.pool.Release(cl.assignedIP)
@@ -793,8 +1070,8 @@ func (s *Server) reapClient(cl *serverClient, reason string) {
 	// from the same address before its old session was reaped owns the key now,
 	// and deleting it would strand the new session's control channel while
 	// leaving its tunnel in the pump -- a worse leak than the one being fixed.
-	if cur, ok := s.clients[cl.addr.String()]; ok && cur == cl {
-		delete(s.clients, cl.addr.String())
+	if cur, ok := s.clients[cl.key]; ok && cur == cl {
+		delete(s.clients, cl.key)
 	}
 	s.mu.Unlock()
 
@@ -813,8 +1090,13 @@ func (s *Server) authFailed(tlsConn *tls.Conn, cl *serverClient, reason string) 
 func (s *Server) dropClient(cl *serverClient, reason string) {
 	s.logger.Warnf("openvpn: client %s dropped: %s", cl.addr, reason)
 	cl.ch.Close()
+	if cl.stream != nil {
+		cl.stream.close() // hy2scale P15
+	}
 	s.mu.Lock()
-	delete(s.clients, cl.addr.String())
+	if cur, ok := s.clients[cl.key]; ok && cur == cl {
+		delete(s.clients, cl.key)
+	}
 	s.mu.Unlock()
 }
 
@@ -824,9 +1106,20 @@ func (s *Server) dropClient(cl *serverClient, reason string) {
 // hy2scale P11: the MTU in it is the configured one, as pushed, rather than
 // OpenVPN's 1500 default. link-mtu is tun-mtu plus the 49 octets the AES-GCM
 // data channel adds over UDPv4, the figure OpenVPN's own server reports.
-func (s *Server) occOptions() string {
-	return fmt.Sprintf("V4,dev-type tun,link-mtu %d,tun-mtu %d,proto UDPv4,cipher AES-256-GCM,auth [null-digest],keysize 256,key-method 2,tls-server",
-		s.mtu+49, s.mtu)
+//
+// hy2scale P13/P15: the proto is the client's transport, and comp-lzo is
+// listed for a client that has compression on, as OpenVPN's own server does.
+func (s *Server) occOptions(tcp, comp bool) string {
+	proto, link := "UDPv4", s.mtu+49
+	if tcp {
+		proto, link = "TCPv4_SERVER", s.mtu+51
+	}
+	c := ""
+	if comp {
+		c, link = ",comp-lzo", link+1
+	}
+	return fmt.Sprintf("V4,dev-type tun,link-mtu %d,tun-mtu %d,proto %s%s,cipher AES-256-GCM,auth [null-digest],keysize 256,key-method 2,tls-server",
+		link, s.mtu, proto, c)
 }
 
 // peerVersionAtLeast reports whether a client's IV_VER is at least
@@ -859,7 +1152,7 @@ var occMagic = []byte{0x28, 0x7f, 0x34, 0x6b, 0xd4, 0xef, 0x7a, 0x81, 0x2d, 0x56
 // buildPushReply constructs the NUL-terminated PUSH_REPLY: the subnet-topology
 // address assignment, the tunnel gateway, the negotiated cipher and peer-id, the
 // keepalive timers, and any DNS servers.
-func (s *Server) buildPushReply(ip net.IP, peerID uint32, peerInfo string) []byte {
+func (s *Server) buildPushReply(ip net.IP, peerID uint32, peerInfo string, comp bool) []byte {
 	var b strings.Builder
 	b.WriteString("PUSH_REPLY")
 	fmt.Fprintf(&b, ",route-gateway %s", s.gateway)
@@ -881,6 +1174,26 @@ func (s *Server) buildPushReply(ip net.IP, peerID uint32, peerInfo string) []byt
 	for _, d := range s.dns {
 		fmt.Fprintf(&b, ",dhcp-option DNS %s", d)
 	}
+	// hy2scale P14: routing for clients that pull it
+	if s.redirect {
+		if s.redirect6 && s.pool6.IsValid() {
+			b.WriteString(",redirect-gateway def1 ipv6")
+		} else {
+			b.WriteString(",redirect-gateway def1")
+		}
+	}
+	for _, r := range s.pushRoutes {
+		switch {
+		case r.Addr().Is4():
+			fmt.Fprintf(&b, ",route %s %s", r.Masked().Addr(), net.IP(net.CIDRMask(r.Bits(), 32)))
+		case s.pool6.IsValid():
+			fmt.Fprintf(&b, ",route-ipv6 %s", r.Masked())
+		}
+	}
+	// hy2scale P13: keep the client's compression framing, without compression
+	if comp {
+		b.WriteString(",comp-lzo no")
+	}
 	if peerTakesPushedMTU(peerInfo) { // hy2scale P11
 		fmt.Fprintf(&b, ",tun-mtu %d", s.mtu)
 	}
@@ -899,6 +1212,10 @@ func (s *Server) Close() error {
 		if s.conn != nil {
 			s.conn.Close()
 		}
+		if s.streamLn != nil { // hy2scale P15
+			s.streamLn.Close()
+		}
+		s.streams.Range(func(_, v any) bool { v.(*streamPeer).close(); return true })
 		if s.tun != nil {
 			s.tun.Close()
 		}
@@ -933,6 +1250,10 @@ type serverClient struct {
 	ch    *control.Channel
 	addr  *net.UDPAddr
 	keyID uint8
+	// key names the client in Server.clients; stream is its TCP connection,
+	// nil over UDP. (hy2scale P15)
+	key    string
+	stream *streamPeer
 
 	tunnel     *serverTunnel
 	assignedIP net.IP
@@ -956,12 +1277,25 @@ type serverTunnel struct {
 	peerID uint32
 	routes []netip.Prefix
 	peer   atomic.Pointer[net.UDPAddr]
+
+	// comp: the client runs a compression context, so every data packet
+	// carries its framing; compMode is the framing it was seen to use, and
+	// scratch the pump's buffer for framing an outbound packet. (hy2scale P13)
+	comp     bool
+	compMode atomic.Uint32
+	scratch  []byte
 }
 
-func (t *serverTunnel) InboundKey() uint32                   { return t.peerID }
-func (t *serverTunnel) Routes() []netip.Prefix               { return t.routes }
-func (t *serverTunnel) PeerAddr() *net.UDPAddr               { return t.peer.Load() }
-func (t *serverTunnel) Encapsulate(p []byte) ([]byte, error) { return t.cipher.Seal(p) }
+func (t *serverTunnel) InboundKey() uint32     { return t.peerID }
+func (t *serverTunnel) Routes() []netip.Prefix { return t.routes }
+func (t *serverTunnel) PeerAddr() *net.UDPAddr { return t.peer.Load() }
+func (t *serverTunnel) Encapsulate(p []byte) ([]byte, error) {
+	if t.comp { // hy2scale P13 (the pump's goroutine owns scratch)
+		t.scratch = t.frame(t.scratch[:0], p)
+		return t.cipher.Seal(t.scratch)
+	}
+	return t.cipher.Seal(p)
+}
 
 // VerifyInboundSource implements dataplane.SourceCheckedTunnel: a client may
 // send only as the address(es) it was assigned, which are this tunnel's
@@ -972,6 +1306,13 @@ func (t *serverTunnel) VerifyInboundSource() bool { return true }
 // length-delimits its payload, so filler past the inner IP packet is delimited
 // by that packet's own header and is inert to any conforming receiver.
 func (t *serverTunnel) EncapsulatePadded(p []byte, minInner int) ([]byte, error) {
+	if t.comp { // hy2scale P13
+		t.scratch = t.frame(t.scratch[:0], p)
+		if t.compMode.Load()&^compSeen == compSwap {
+			return t.cipher.Seal(t.scratch) // filler would land in the swapped octet's place
+		}
+		return t.cipher.SealPadded(t.scratch, minInner+1)
+	}
 	return t.cipher.SealPadded(p, minInner)
 }
 
@@ -979,6 +1320,11 @@ func (t *serverTunnel) Decapsulate(pkt []byte) ([]byte, error) {
 	pt, err := t.cipher.Open(pkt)
 	if err != nil {
 		return nil, err
+	}
+	if t.comp { // hy2scale P13
+		if pt, err = t.unframe(pt); err != nil {
+			return nil, err
+		}
 	}
 	if data.IsPing(pt) {
 		return nil, nil // keepalive: authenticated but nothing to deliver
@@ -1143,4 +1489,108 @@ func clientAuthMode(cfg *ServerConfig) tls.ClientAuthType {
 		return tls.VerifyClientCertIfGiven
 	}
 	return tls.RequireAndVerifyClientCert
+}
+
+// Compression framing (hy2scale P13). A client with a compression context
+// prefixes every data-channel payload: comp-lzo with one octet (0xFA plain,
+// 0x66 LZO), "compress" v1 by swapping the payload's first octet to its end
+// and putting its own there (0xFB plain, 0x69 LZ4), and v2 (stub-v2,
+// lz4-v2) only escapes a payload that starts with 0x50. The server pushes
+// comp-lzo no, so clients keep the framing and stop compressing; a payload
+// that is compressed anyway is refused. Outbound packets use the framing the
+// client was seen to use, comp-lzo until it has sent anything.
+const (
+	compLZO uint32 = iota
+	compSwap
+	compV2
+	compSeen = 4 // or'ed in once the client's framing is known
+)
+
+const (
+	lzoPlain   = 0xFA
+	lzoPacked  = 0x66
+	swapPlain  = 0xFB
+	swapPacked = 0x69
+	v2Escape   = 0x50
+)
+
+var errCompressed = errors.New("openvpn: compressed data packet (compression is not supported)")
+
+// clientCompresses reports whether a client's OCC options string has a
+// compression context; OpenVPN lists any of them as comp-lzo.
+func clientCompresses(options string) bool {
+	for _, o := range strings.Split(options, ",") {
+		if o == "comp-lzo" || strings.HasPrefix(o, "compress") {
+			return true
+		}
+	}
+	return false
+}
+
+// frame appends p framed for the client to dst.
+func (t *serverTunnel) frame(dst, p []byte) []byte {
+	switch t.compMode.Load() &^ compSeen {
+	case compSwap:
+		if len(p) == 0 {
+			return append(dst, swapPlain)
+		}
+		dst = append(dst, swapPlain)
+		dst = append(dst, p[1:]...)
+		return append(dst, p[0])
+	case compV2:
+		if len(p) > 0 && p[0] == v2Escape {
+			dst = append(dst, v2Escape, 0)
+		}
+		return append(dst, p...)
+	default:
+		dst = append(dst, lzoPlain)
+		return append(dst, p...)
+	}
+}
+
+// unframe strips the client's framing from a decrypted payload, in place.
+func (t *serverTunnel) unframe(pt []byte) ([]byte, error) {
+	if len(pt) == 0 {
+		return pt, nil
+	}
+	mode := t.compMode.Load()
+	if mode == compSeen|compV2 { // v2 has no marker on a plain packet
+		if pt[0] != v2Escape {
+			return pt, nil
+		}
+		if len(pt) >= 2 && pt[1] == 0 {
+			return pt[2:], nil
+		}
+		return nil, errCompressed
+	}
+	switch pt[0] {
+	case lzoPlain:
+		t.see(mode, compLZO)
+		return pt[1:], nil
+	case swapPlain:
+		t.see(mode, compSwap)
+		n := len(pt) - 1
+		if n == 0 {
+			return pt[:0], nil
+		}
+		pt[0] = pt[n]
+		return pt[:n], nil
+	case lzoPacked, swapPacked:
+		return nil, errCompressed
+	case v2Escape:
+		if len(pt) >= 2 && pt[1] == 0 {
+			t.see(mode, compV2)
+			return pt[2:], nil
+		}
+		return nil, errCompressed
+	default:
+		t.see(mode, compV2) // a bare packet: v2 framing
+		return pt, nil
+	}
+}
+
+func (t *serverTunnel) see(cur, m uint32) {
+	if cur != compSeen|m {
+		t.compMode.Store(compSeen | m)
+	}
 }
