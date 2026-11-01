@@ -21,7 +21,7 @@
 .hy-topo-graph.is-preset .hy-topo-dot{cursor:pointer}
 .hy-topo-graph.is-custom .hy-topo-dot{cursor:grab}
 /* No glides while something is being dragged or the layout morphs. */
-.hy-topo-graph.is-busy .hy-topo-edge-label-group{transition:none}
+.hy-topo-graph.is-busy .hy-topo-edge-label-group,.hy-topo-graph.is-geo .hy-topo-edge-label-group{transition:none}
 
 /* Canvas menu: a tool button with the canvas name + caret, opening a
    dropdown; inside the ⋯ menu the same items expand inline. */
@@ -400,5 +400,6 @@
 .iface-topo-tool.on{color:var(--primary);border-color:var(--primary);background:var(--primary-light)}
 .iface-topo-tool:disabled,.iface-topo-tool:disabled:hover{opacity:.45;cursor:not-allowed;color:var(--text-muted);border-color:var(--border)}
 .hy-topo-geo-map{position:absolute;inset:0;width:100%;height:100%;z-index:0;pointer-events:none}
+.hy-topo-geo-cover{position:absolute;inset:0;z-index:2;background:var(--bg)}
 .hy-topo-graph.is-geo .hy-topo-graph-svg{position:relative;z-index:1}
 .hy-topo-dot.unlocated .hy-topo-dot-outer{stroke:currentColor;stroke-width:1.5;stroke-dasharray:3 2;fill-opacity:.15}

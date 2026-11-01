@@ -1,4 +1,4 @@
-import type { Chip, Flow, LinkKind, LinkState, Note, SpecEvent, SpecNode, TopoSpec, Zone } from './spec';
+import { SIGNAL_SPEED, type Chip, type Detour, type Flow, type LinkKind, type LinkState, type Note, type Signal, type SpecEvent, type SpecNode, type TopoSpec, type Zone } from './spec';
 
 /*
  * Imperative SVG renderer for the login topology. show(spec) morphs from the
@@ -71,10 +71,19 @@ interface NoteE extends Fading { key: string; g: SVGGElement; label?: { rect: SV
 
 interface FlowE extends Flow { next: number; rr: number; lc: number; dc: number }
 
+/** A packet's travel over one link, between curve fractions ua → ub in its direction. */
+interface Leg { L: LinkE; fwd: boolean; ua: number; ub: number }
+
 interface Packet {
-  g: SVGGElement; pts: Pt[]; cum: number[]; len: number;
+  g: SVGGElement; legs: Leg[]; pts: Pt[]; cum: number[]; len: number;
   segs: { L: LinkE; i1: number; s1: number }[]; links: LinkE[];
   s: number; op: number; fade: number; dead?: boolean; done?: boolean;
+  /** Fixed speed (signals); else by the link state. */
+  speed?: number;
+  /** Already visible: no fade-in (a packet turned back). */
+  shown?: boolean;
+  /** Time of the failure it was turned back for (one detour per failure). */
+  rerouted?: number;
 }
 
 export interface EngineOptions {
@@ -92,6 +101,7 @@ export class TopoEngine {
   private packets: Packet[] = [];
   private flows: FlowE[] = [];
   private events: (SpecEvent & { done: boolean })[] = [];
+  private signals: (Signal & { done: boolean })[] = [];
   private ts = 0;
   private gen = 0;
   private rm = false;
@@ -168,6 +178,7 @@ export class TopoEngine {
     // timeline
     this.flows = spec.flows.map((f) => ({ ...f, next: Math.max(f.from ?? 1.25, 1.25), rr: 0, lc: 0, dc: 0 }));
     this.events = spec.events.map((ev) => ({ ...ev, done: false }));
+    this.signals = (spec.signals ?? []).map((sg) => ({ ...sg, done: false }));
   }
 
   /** Re-applies labels after a language change. */
@@ -306,7 +317,13 @@ export class TopoEngine {
       ev.done = true;
       if (ev.link) for (const e of this.links.values()) if (!e.dying && e.id === ev.link) {
         this.setLinkState(e, ev.state as LinkState);
-        if (ev.state === 'offline') this.packets.forEach((p) => { if (p.links.includes(e)) p.dead = true; });
+        if (ev.state === 'offline') this.packets.forEach((p) => {
+          if (p.dead || p.rerouted === ev.at) return;
+          const li = p.legs.findIndex((lg) => lg.L === e);
+          if (li < 0 || li < this.legAt(p)) return;   // not on its way
+          if (!ev.detour || !this.reroute(p, ev.detour)) p.dead = true;
+          else p.rerouted = ev.at;
+        });
       }
       if (ev.node) for (const e of this.nodes.values()) if (!e.dying && e.id === ev.node) this.setNodeState(e, ev.state);
     }
@@ -355,6 +372,13 @@ export class TopoEngine {
       f.next = ts + (f.every || 0.42) * (0.75 + Math.random() * 0.5);
       this.spawn(f);
     }
+    for (const sg of this.signals) {
+      if (sg.done || ts < sg.at) continue;
+      const legs = this.legsOf(sg.path);
+      if (!legs) continue;   // its links are not drawn yet
+      sg.done = true;
+      this.addPacket(legs, 'sig', SIGNAL_SPEED);
+    }
     for (const p of this.packets) {
       if (p.dead) {
         p.fade -= dt * 6;
@@ -364,13 +388,13 @@ export class TopoEngine {
       }
       let si = 0;
       while (si < p.segs.length - 1 && p.s >= p.segs[si].s1) si++;
-      p.s += (p.segs[si].L.state === 'degraded' ? 42 : 120) * dt;
+      p.s += (p.speed ?? (p.segs[si].L.state === 'degraded' ? 42 : 120)) * dt;
       if (p.s >= p.len) { p.g.remove(); p.done = true; continue; }
       let lo = 0, hi = p.cum.length - 1;
       while (lo < hi - 1) { const md = (lo + hi) >> 1; if (p.cum[md] <= p.s) lo = md; else hi = md; }
       const sg = p.cum[hi] - p.cum[lo] || 1, t = (p.s - p.cum[lo]) / sg;
       const x = p.pts[lo][0] + (p.pts[hi][0] - p.pts[lo][0]) * t, y = p.pts[lo][1] + (p.pts[hi][1] - p.pts[lo][1]) * t;
-      p.op = Math.min(1, p.s / 16, (p.len - p.s) / 16);
+      p.op = Math.min(1, p.shown ? 1 : p.s / 16, (p.len - p.s) / 16);
       p.g.setAttribute('transform', `translate(${f1(x)} ${f1(y)})`);
       p.g.setAttribute('opacity', p.op.toFixed(3));
     }
@@ -421,27 +445,92 @@ export class TopoEngine {
   private spawn(f: FlowE) {
     const path = f.paths[f.rr++ % f.paths.length];
     const down = f.dir === 'down' || (f.dir === 'both' && f.dc++ % 2 === 1);
-    const seq = down ? path.slice().reverse() : path;
-    const pts: Pt[] = [], segs: Packet['segs'] = [], ls: LinkE[] = [];
+    const legs = this.legsOf(down ? path.slice().reverse() : path, f);
+    if (legs) this.addPacket(legs, down ? 'down' : 'up');
+  }
+
+  /** The links a packet takes along a node sequence; null while one is missing. */
+  private legsOf(seq: string[], f?: FlowE): Leg[] | null {
+    const legs: Leg[] = [];
     for (let i = 0; i < seq.length - 1; i++) {
       const a = seq[i], b = seq[i + 1];
       let cands = [...this.links.values()].filter((e) => !e.dying && e.alpha > 0.6 && e.p >= 1 && (e.state === 'up' || e.state === 'degraded')
         && ((e.A.id === a && e.B.id === b) || (e.A.id === b && e.B.id === a)));
-      if (f.only) { const o = cands.filter((e) => f.only!.includes(e.id)); if (o.length) cands = o; }
-      if (!cands.length) return;
-      const L = cands[f.lc++ % cands.length], fwd = L.A.id === a, C = this.ctrl(L);
-      const P0: Pt = [L.A.x, L.A.y], P2: Pt = [L.B.x, L.B.y];
-      for (let j = i ? 1 : 0; j <= 18; j++) { const t = j / 18; pts.push(quad(P0, C, P2, fwd ? t : 1 - t)); }
-      segs.push({ L, i1: pts.length - 1, s1: 0 });
-      ls.push(L);
+      if (f?.only) { const o = cands.filter((e) => f.only!.includes(e.id)); if (o.length) cands = o; }
+      if (!cands.length) return null;
+      const L = f ? cands[f.lc++ % cands.length] : cands[0];
+      legs.push({ L, fwd: L.A.id === a, ua: 0, ub: 1 });
     }
+    return legs;
+  }
+
+  /** Samples the legs into a polyline (with arc lengths). */
+  private trace(p: Packet) {
+    const pts: Pt[] = [], segs: Packet['segs'] = [];
+    p.legs.forEach((lg, i) => {
+      const L = lg.L, C = this.ctrl(L), P0: Pt = [L.A.x, L.A.y], P2: Pt = [L.B.x, L.B.y];
+      const n = Math.max(2, Math.ceil(18 * Math.abs(lg.ub - lg.ua)));
+      for (let j = i ? 1 : 0; j <= n; j++) {
+        const u = lg.ua + ((lg.ub - lg.ua) * j) / n;
+        pts.push(quad(P0, C, P2, lg.fwd ? u : 1 - u));
+      }
+      segs.push({ L, i1: pts.length - 1, s1: 0 });
+    });
     const cum = [0];
     for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
-    segs.forEach((s) => { s.s1 = cum[s.i1]; });
-    const g = se('g', { opacity: 0 }, this.ly.p), cls = down ? 'down' : 'up';
+    segs.forEach((sg) => { sg.s1 = cum[sg.i1]; });
+    p.pts = pts; p.cum = cum; p.len = cum[cum.length - 1]; p.segs = segs; p.links = p.legs.map((lg) => lg.L);
+  }
+
+  private addPacket(legs: Leg[], cls: string, speed?: number) {
+    const g = se('g', { opacity: 0 }, this.ly.p);
     se('circle', { class: cls + ' halo', r: 6.5 }, g);
-    se('circle', { class: cls, r: 2.9 }, g);
-    this.packets.push({ g, pts, cum, len: cum[cum.length - 1], segs, links: ls, s: 0, op: 0, fade: 1 });
+    se('circle', { class: cls, r: cls === 'sig' ? 3.4 : 2.9 }, g);
+    const p: Packet = { g, legs, pts: [], cum: [], len: 0, segs: [], links: [], s: 0, op: 0, fade: 1, speed };
+    this.trace(p);
+    this.packets.push(p);
+  }
+
+  /** Index of the leg a packet is on. */
+  private legAt(p: Packet): number {
+    let ci = 0;
+    while (ci < p.segs.length - 1 && p.s >= p.segs[ci].s1) ci++;
+    return ci;
+  }
+
+  /**
+   * Part of a packet's way between d.a and d.b failed: one not there yet
+   * takes the detour; one on it turns back to the end it came from, then
+   * takes the detour. False when its way does not pass a and b.
+   */
+  private reroute(p: Packet, d: Detour): boolean {
+    const nodes = [...p.legs.map((lg) => (lg.fwd ? lg.L.A.id : lg.L.B.id)), (() => { const lg = p.legs[p.legs.length - 1]; return lg.fwd ? lg.L.B.id : lg.L.A.id; })()];
+    const ia = nodes.indexOf(d.a), ib = nodes.indexOf(d.b);
+    if (ia < 0 || ib < 0) return false;
+    const lo = Math.min(ia, ib), hi = Math.max(ia, ib);
+    const via = ia < ib ? d.via : d.via.slice().reverse();
+    const detour = this.legsOf([nodes[lo], ...via, nodes[hi]]);
+    if (!detour) return false;
+    const ci = this.legAt(p);
+    if (ci >= hi) return true;   // already past it
+    if (ci < lo) {   // not there yet: same progress, other way
+      p.legs = [...p.legs.slice(0, lo), ...detour, ...p.legs.slice(hi)];
+      this.trace(p);
+      return true;
+    }
+    // on it: where along the current leg
+    let a = 0, b = p.cum.length - 1;
+    while (a < b - 1) { const md = (a + b) >> 1; if (p.cum[md] <= p.s) a = md; else b = md; }
+    const i0 = ci ? p.segs[ci - 1].i1 : 0, i1 = p.segs[ci].i1;
+    const frac = (a - i0 + (p.s - p.cum[a]) / ((p.cum[b] - p.cum[a]) || 1)) / ((i1 - i0) || 1);
+    const cur = p.legs[ci], u = cur.ua + (cur.ub - cur.ua) * clamp01(frac);
+    const back: Leg[] = [{ L: cur.L, fwd: !cur.fwd, ua: 1 - u, ub: 1 }];
+    for (let k = ci - 1; k >= lo; k--) back.push({ L: p.legs[k].L, fwd: !p.legs[k].fwd, ua: 0, ub: 1 });
+    p.legs = [...back, ...detour, ...p.legs.slice(hi)];
+    p.s = 0;
+    p.shown = true;
+    this.trace(p);
+    return true;
   }
 }
 

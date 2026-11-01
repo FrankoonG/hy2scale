@@ -73,12 +73,21 @@ export function usePanZoom(opts: PanZoomOptions) {
     stopAnim();
     const from = viewRef.current;
     const t0 = performance.now();
+    // The world point at the centre moves in a straight line (a zoom in
+    // place keeps it still); interpolating the offset itself would make
+    // the view swing sideways when the offset is large.
+    const r = optsRef.current.ref.current?.getBoundingClientRect();
+    const cx = r ? r.width / 2 : 0, cy = r ? r.height / 2 : 0;
+    const a = { x: (cx - from.x) / from.k, y: (cy - from.y) / from.k };
+    const b = { x: (cx - to.x) / to.k, y: (cy - to.y) / to.k };
     const step = (now: number) => {
       const p = Math.min(1, (now - t0) / dur);
       const e = 1 - Math.pow(1 - p, 3);
       // Geometric scale interpolation keeps the zoom speed even.
       const k = from.k * Math.pow(to.k / from.k, e);
-      apply({ k, x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e });
+      apply(p < 1
+        ? { k, x: cx - (a.x + (b.x - a.x) * e) * k, y: cy - (a.y + (b.y - a.y) * e) * k }
+        : to);
       anim.current = p < 1 ? requestAnimationFrame(step) : 0;
     };
     anim.current = requestAnimationFrame(step);

@@ -15,6 +15,7 @@ import { isPast } from '@/utils/date';
 import { copyToClipboard } from '@/utils/clipboard';
 import { ExitViaCell } from '@/components/ExitViaCell';
 import UsageMeter from '@/components/UsageMeter';
+import { fmtRateLimit } from './RateInput';
 
 export type UserInfoTab = 'details' | 'proxies';
 const TABS: UserInfoTab[] = ['details', 'proxies'];
@@ -102,6 +103,13 @@ function DetailsTab({ user, sessions, conflicts, onKick }: {
       ? <Badge variant="green">{t('app.enabled')}</Badge>
       : <Badge variant="muted">{t('users.disabled')}</Badge>],
     [t('users.traffic'), <UsageMeter used={user.traffic_used} limit={user.traffic_limit} />],
+    [t('users.rateLimit'), (
+      <span className="cell-small" data-testid="user-rate-info">
+        {user.rate_up || user.rate_down
+          ? `↑ ${user.rate_up ? fmtRateLimit(user.rate_up) : '∞'} · ↓ ${user.rate_down ? fmtRateLimit(user.rate_down) : '∞'}`
+          : t('users.rateUnlimited')}
+      </span>
+    )],
     [t('users.expiry'), <span className={`cell-small${isPast(user.expiry_date) ? ' text-bad' : ''}`}>{user.expiry_date || '—'}</span>],
     [t('users.exitVia'), <ExitViaCell exitVia={user.exit_via} exitPaths={user.exit_paths} exitMode={user.exit_mode} />],
   ];
@@ -177,10 +185,11 @@ function ProxiesTab({ user, open }: { user: UserConfig; open: boolean }) {
   const node = useNodeStore((s) => s.node);
   const { data: proxies = [] } = useQuery({ queryKey: ['proxies'], queryFn: api.getProxies, enabled: open });
   const { data: ssConfig } = useQuery({ queryKey: ['ss'], queryFn: api.getSS, enabled: open });
+  const { data: trojanConfig } = useQuery({ queryKey: ['trojan'], queryFn: api.getTrojan, enabled: open });
 
   const host = window.location.hostname || 'localhost';
   const serverPort = node?.server?.listen?.replace(/.*:/, '') || '5565';
-  const ctx: ProxyContext = { serverPort, ssConfig, proxies };
+  const ctx: ProxyContext = { serverPort, ssConfig, trojanConfig, proxies };
   const links = DETAIL_PROXIES.map((def) => {
     const port = def.getPort(ctx);
     const pw = (def.authType === 'password' && user.proxy_passwords?.[def.key]) || user.password;

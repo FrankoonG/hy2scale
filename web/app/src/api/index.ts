@@ -1,14 +1,14 @@
 import { api } from './client';
 import type {
   NodeConfig, Stats, TopologyNode, ClientEntry, PathStatus,
-  UserConfig, TrafficReset, Session, ProxyConfig, SSConfig, L2TPConfig,
+  UserConfig, TrafficReset, Session, ProxyConfig, SSConfig, TrojanConfig, L2TPConfig,
   IKEv2Config, OpenVPNConfig, WireGuardConfig, WireGuardPeer,
   CertInfo, UISettings, PortConflict, PasswordConflicts,
   UpgradeStatus, UpgradeCheckResult, NodeEgress, NodeEgressFamily,
   PublicIPSettings,
 } from './types';
 
-export type { NodeConfig, Stats, TopologyNode, ClientEntry, PathStatus, UserConfig, TrafficReset, Session, ProxyConfig, SSConfig, L2TPConfig, IKEv2Config, OpenVPNConfig, WireGuardConfig, WireGuardPeer, CertInfo, UISettings, PortConflict, PasswordConflicts, UpgradeStatus, UpgradeCheckResult, NodeEgress, NodeEgressFamily };
+export type { NodeConfig, Stats, TopologyNode, ClientEntry, PathStatus, UserConfig, TrafficReset, Session, ProxyConfig, SSConfig, TrojanConfig, L2TPConfig, IKEv2Config, OpenVPNConfig, WireGuardConfig, WireGuardPeer, CertInfo, UISettings, PortConflict, PasswordConflicts, UpgradeStatus, UpgradeCheckResult, NodeEgress, NodeEgressFamily };
 
 // Auth
 export const login = (username: string, password: string) =>
@@ -127,6 +127,11 @@ export const getSS = () => api<SSConfig>('/ss');
 export const updateSS = (data: Partial<SSConfig>) =>
   api('/ss', { method: 'PUT', body: JSON.stringify(data) });
 
+// Trojan
+export const getTrojan = () => api<TrojanConfig>('/trojan');
+export const updateTrojan = (data: Partial<TrojanConfig>) =>
+  api('/trojan', { method: 'PUT', body: JSON.stringify(data) });
+
 // L2TP
 export const getL2TP = () => api<L2TPConfig>('/l2tp');
 export const updateL2TP = (data: Partial<L2TPConfig>) =>
@@ -177,6 +182,8 @@ export const generateCert = (data: { id: string; name: string; domains: string[]
   api('/tls/generate', { method: 'POST', body: JSON.stringify(data) });
 export const signCert = (data: { ca_id: string; id: string; name: string; cn: string; days?: number }) =>
   api('/tls/sign', { method: 'POST', body: JSON.stringify(data) });
+export const generateCA = (data: { id: string; name: string; cn: string; org?: string; days: number; key: string }) =>
+  api('/tls/ca', { method: 'POST', body: JSON.stringify(data) });
 export const getCertPem = (id: string) =>
   api<{ cert: string; key: string }>(`/tls/${encodeURIComponent(id)}/pem`);
 export const deleteCert = (id: string) =>

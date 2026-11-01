@@ -126,6 +126,7 @@ type Config struct {
 	Users      []UserConfig          `yaml:"users" json:"users"`
 	Proxies    []ProxyConfig         `yaml:"proxies" json:"proxies"`
 	SS         *SSConfig             `yaml:"ss,omitempty" json:"ss,omitempty"`
+	Trojan     *TrojanConfig         `yaml:"trojan,omitempty" json:"trojan,omitempty"`
 	L2TP       *L2TPConfig           `yaml:"l2tp,omitempty" json:"l2tp,omitempty"`
 	IKEv2      *IKEv2Config          `yaml:"ikev2,omitempty" json:"ikev2,omitempty"`
 	WireGuard  *WireGuardConfig      `yaml:"wireguard,omitempty" json:"wireguard,omitempty"`
@@ -253,6 +254,9 @@ type App struct {
 	srvCancel    context.CancelFunc
 	ssListener   net.Listener
 	ssCancel     context.CancelFunc
+	trojanMu        sync.Mutex // guards trojan
+	trojanRestartMu sync.Mutex // serializes RestartTrojan
+	trojan          *trojanServer
 	serverCert   atomic.Pointer[tls.Certificate] // the hy2 server's certificate (punch listeners reuse it)
 	punch        *punchManager
 	vpnMu        sync.Mutex // guards vpn and vpnMux (IKEv2 / L2TP / OpenVPN servers)
@@ -260,6 +264,8 @@ type App struct {
 	vpnMux       *vpnmux.Mux
 	usersMu       sync.RWMutex
 	userIndex     map[string]*UserConfig           // username → user (for fast auth lookup)
+	ratesMu       sync.RWMutex
+	rates         map[string]*userRate // per-user rate limits (ratelimit.go)
 	pwConflicted  map[string]map[string]bool       // username → proxy → conflicted
 	pwConflictAll map[string]map[string][]string   // proxy → password → []usernames (for API)
 	trafficDirty  sync.Map                         // username → true (needs flush)
@@ -475,6 +481,22 @@ func (a *App) Run(ctx context.Context) error {
 		}
 		if cfg.SS != nil {
 			a.StartSS(*cfg.SS)
+		}
+	}
+
+	// Start the Trojan server if configured
+	if cfg.Trojan != nil && cfg.Trojan.Enabled {
+		start := true
+		if _, p, err := net.SplitHostPort(cfg.Trojan.Listen); err == nil {
+			if pn, _ := strconv.Atoi(p); pn > 0 {
+				if c := CheckPorts([]PortConflict{{Port: pn, Proto: "tcp", Desc: "trojan"}}); len(c) > 0 {
+					log.Printf("[trojan] port %d/tcp in use — trojan disabled", pn)
+					start = false
+				}
+			}
+		}
+		if start {
+			a.StartTrojan(*cfg.Trojan)
 		}
 	}
 
@@ -847,6 +869,7 @@ func (a *App) rebuildUserIndex() {
 	a.pwConflicted = conflicted
 	a.pwConflictAll = proxyPwUsers
 	a.usersMu.Unlock()
+	a.syncUserRates(cfg.Users)
 }
 
 // IsPasswordConflicted returns true if the user has a password collision on the given proxy.

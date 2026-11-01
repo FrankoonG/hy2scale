@@ -157,6 +157,9 @@ export interface UserConfig {
   exit_policy?: string;
   traffic_limit: number;
   traffic_used: number;
+  /** Rate limits in bytes per second (from / to the user); 0 = unlimited. */
+  rate_up?: number;
+  rate_down?: number;
   /** Automatic reset of traffic_used at 00:00 node time; '' = never. */
   traffic_reset?: TrafficReset;
   /** weekly: ISO weekday 1 (Mon)..7 (Sun); monthly: 1..31 (clamped to the month). */
@@ -218,6 +221,16 @@ export interface SSConfig {
   exit_policy?: string;
 }
 
+// ===== Trojan =====
+export interface TrojanConfig {
+  listen: string;
+  enabled: boolean;
+  /** TLS certificate id; '' = the hy2 server's certificate. */
+  cert_id: string;
+  /** host:port for connections that fail authentication; '' = close them. */
+  fallback: string;
+}
+
 // ===== L2TP =====
 export interface L2TPConfig {
   capable?: boolean;
@@ -267,6 +280,8 @@ export interface OpenVPNConfig {
   connected?: number;
   enabled: boolean;
   port: number;
+  /** transport: udp (default), tcp, or both on one port */
+  proto?: 'udp' | 'tcp' | 'both';
   pool: string;
   pool6?: string;
   cert_id: string;

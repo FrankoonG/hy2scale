@@ -395,6 +395,9 @@ func (a *App) dialVPNTCP(ctx context.Context, kind string, route vpnRoute, src, 
 // the flow lives until it has been idle in both directions.
 func (a *App) relayVPNUDP(n *vpnNet, conn *gonet.UDPConn, route vpnRoute, srcIP string, srcPort int, dst string) {
 	defer conn.Close()
+	if a.overTrafficLimit(route.user) {
+		return // over its traffic limit: new flows are dropped
+	}
 	af := beginUserFlowStr(n.proto, "udp", route.user, net.JoinHostPort(srcIP, strconv.Itoa(srcPort)), dst)
 	ctx, cancel := context.WithTimeout(audit.NewContext(n.ctx, af), 15*time.Second)
 	remote, err := a.dialRoutedUDP(withRestrict(ctx, a.userRestrict(route.user)), route.sel(),
@@ -407,6 +410,18 @@ func (a *App) relayVPNUDP(n *vpnNet, conn *gonet.UDPConn, route vpnRoute, srcIP 
 	}
 	defer remote.Close()
 	defer af.End(nil)
+	// device row and live accounting, as relayUser gives TCP flows: the
+	// bytes count toward the user's traffic (and limit), rate limits apply
+	stop := func() { conn.Close(); remote.Close() }
+	sid := a.Sessions.Connect(route.user, srcIP, n.proto, stop)
+	if sid == "" {
+		return // device kicked
+	}
+	m := a.newUserMeter(route.user, sid, stop)
+	defer func() {
+		a.Sessions.Disconnect(sid, 0, 0)
+		m.done()
+	}()
 
 	idle := vpnUDPIdle(dst)
 	refresh := func() {
@@ -426,6 +441,7 @@ func (a *App) relayVPNUDP(n *vpnNet, conn *gonet.UDPConn, route vpnRoute, srcIP 
 			}
 			refresh()
 			af.Add(int64(k), 0)
+			m.add(int64(k), 0)
 			if _, e := remote.Write(buf[:k]); e != nil {
 				return
 			}
@@ -439,6 +455,7 @@ func (a *App) relayVPNUDP(n *vpnNet, conn *gonet.UDPConn, route vpnRoute, srcIP 
 		}
 		refresh()
 		af.Add(0, int64(k))
+		m.add(0, int64(k))
 		if _, e := conn.Write(buf[:k]); e != nil {
 			break
 		}

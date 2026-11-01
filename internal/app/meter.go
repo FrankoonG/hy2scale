@@ -41,8 +41,11 @@ func (a *App) newUserMeter(user, sid string, stop func()) *userMeter {
 	return m
 }
 
-// add records bytes from the user (up) and to the user (down).
+// add records bytes from the user (up) and to the user (down), then waits
+// while the user is over its rate limit — callers are the connection's
+// copy loops, so waiting slows that direction down.
 func (m *userMeter) add(up, down int64) {
+	defer m.throttle(up, down)
 	m.flow.Add(up, down)
 	if m.dev != nil {
 		m.dev.TxBytes.Add(up)
@@ -54,6 +57,14 @@ func (m *userMeter) add(up, down int64) {
 	if m.pending.Add(up+down) >= meterFlushBytes ||
 		time.Now().UnixNano()-m.flushed.Load() >= int64(meterFlushEvery) {
 		m.flush()
+	}
+}
+
+func (m *userMeter) throttle(up, down int64) {
+	// looked up each time: a limit set or lifted applies to open connections
+	if r := m.a.userRate(m.user); r != nil {
+		r.wait(true, int(up))
+		r.wait(false, int(down))
 	}
 }
 

@@ -83,6 +83,7 @@ func (s *Server) coreRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/tls/import-path", s.importCertFromPath)
 	m.HandleFunc("POST /api/tls/generate", s.generateCert)
 	m.HandleFunc("POST /api/tls/sign", s.signCertWithCA)
+	m.HandleFunc("POST /api/tls/ca", s.generateCA)
 	m.HandleFunc("GET /api/tls/{id}/pem", s.getCertPEM)
 	m.HandleFunc("DELETE /api/tls/{id}", s.deleteCert)
 }

@@ -318,6 +318,14 @@ func (c *Channel) handleDatagram(dg []byte) {
 	if p.Opcode == wire.PACKV1 {
 		return // pure ack: nothing to deliver
 	}
+	// hy2scale P15: a hard reset past the first carries only ACKs. OpenVPN
+	// 2.6 over TCP acknowledges the server's reset with another client reset
+	// whose packet ID its first control message then reuses; taking it as a
+	// reliable message made that message (the ClientHello) look like a
+	// duplicate.
+	if p.Opcode == wire.PControlHardResetClientV2 && p.PacketID != 0 {
+		return
+	}
 	for _, payload := range c.receiver.Receive(p.PacketID, p.Payload) {
 		if len(payload) == 0 {
 			continue // the hard reset carries no TLS bytes

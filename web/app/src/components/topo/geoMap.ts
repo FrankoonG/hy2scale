@@ -1,16 +1,15 @@
-// World map of the node topology (geo mode): projections, the bundled
-// Natural Earth data (public domain; web/app/public/geo, loaded on demand)
-// and the basemap drawn on a canvas under the graph. Positions are "base"
-// coordinates — the projection at a fixed scale around (0, 0) — so the
-// canvas view (screen = base × k + offset) pans and zooms them like any
-// other topology layout.
-import { geoArea, geoEqualEarth, geoMercator, geoPath, type GeoProjection } from 'd3-geo';
+// World map of the node topology (geo mode): the Mercator projection, the
+// bundled Natural Earth data (public domain; web/app/public/geo, loaded on
+// demand) and the basemap drawn on a canvas under the graph. Positions are
+// "base" coordinates — the projection at a fixed scale around (0, 0) — so
+// the canvas view (screen = base × k + offset) pans and zooms them like any
+// other topology layout. The world repeats horizontally every BASE units.
+import { geoArea, geoContains, geoMercator, geoPath, type GeoProjection } from 'd3-geo';
 import { feature, mesh } from 'topojson-client';
-import type { Feature, FeatureCollection, Geometry, MultiLineString } from 'geojson';
+import type { Feature, FeatureCollection, Geometry, MultiLineString, Position } from 'geojson';
 import type { Topology } from 'topojson-specification';
 
-export type MapProj = 'mercator' | 'equalearth';
-export const MAP_PROJS: MapProj[] = ['mercator', 'equalearth'];
+export type MapProj = 'mercator';
 
 /** Width of the whole world in base units. */
 export const BASE = 1000;
@@ -20,17 +19,20 @@ interface Named { en: string; zh?: string; ko?: string }
 interface Props extends Named { iso: string; lx: number; ly: number; ml: number }
 
 export interface Country { iso: string; names: Named; label: [number, number]; ml: number; f: Feature<Geometry, Props> }
-interface Region { names: Named; label: [number, number]; ml: number; f: Feature<Geometry, Props> }
+interface Region { iso: string; names: Named; label: [number, number]; ml: number; f: Feature<Geometry, Props> }
 /** [lon, lat, scalerank, capital, en, zh, ko] */
 type City = [number, number, number, number, string, string, string];
+
+/** A line of a mesh with its base bounds (drawn only when on screen). */
+interface Line { coords: Position[]; b: Box }
 
 export interface GeoData {
   countries: Country[];
   byIso: Map<string, Country>;
-  borders: MultiLineString;
+  borders: Line[];
   cities: City[];
 }
-export interface Admin1 { regions: Region[]; lines: MultiLineString }
+export interface Admin1 { regions: Region[]; lines: Line[] }
 
 const name = (n: Named, lang: Lang) => (lang !== 'en' && n[lang]) || n.en;
 
@@ -71,7 +73,7 @@ export async function loadGeo(base: string): Promise<GeoData> {
   return {
     countries,
     byIso: largestByIso(countries),
-    borders: mesh(ct, obj as any, (a, b) => a !== b) as MultiLineString,
+    borders: linesOf(mesh(ct, obj as any, (a, b) => a !== b) as MultiLineString),
     cities,
   };
 }
@@ -81,8 +83,8 @@ export async function loadAdmin1(base: string): Promise<Admin1> {
   const fc = layer(t);
   const obj = t.objects[Object.keys(t.objects)[0]];
   return {
-    regions: fc.features.map((f) => ({ names: f.properties, label: [f.properties.lx, f.properties.ly], ml: f.properties.ml ?? 8, f })),
-    lines: mesh(t, obj as any, (a, b) => a !== b) as MultiLineString,
+    regions: fc.features.map((f) => ({ iso: String(f.properties.iso || ''), names: f.properties, label: [f.properties.lx, f.properties.ly], ml: f.properties.ml ?? 8, f })),
+    lines: linesOf(mesh(t, obj as any, (a, b) => a !== b) as MultiLineString),
   };
 }
 
@@ -94,7 +96,7 @@ const projCache = new Map<MapProj, { p: GeoProjection; s: number }>();
 function baseOf(kind: MapProj): { p: GeoProjection; s: number } {
   let b = projCache.get(kind);
   if (!b) {
-    const p = (kind === 'mercator' ? geoMercator() : geoEqualEarth()).translate([0, 0]).scale(1);
+    const p = geoMercator().translate([0, 0]).scale(1);
     const [[x0], [x1]] = geoPath(p).bounds({ type: 'Sphere' });
     const s = BASE / (x1 - x0);
     p.scale(s);
@@ -119,11 +121,16 @@ export function invert(kind: MapProj, x: number, y: number): [number, number] | 
 /** The projection drawing at view (x, y, k): screen = base × k + (x, y). */
 function screenProjection(kind: MapProj, v: { x: number; y: number; k: number }): GeoProjection {
   const { s } = baseOf(kind);
-  const p = kind === 'mercator' ? geoMercator() : geoEqualEarth();
-  return p.scale(s * v.k).translate([v.x, v.y]);
+  return geoMercator().scale(s * v.k).translate([v.x, v.y]);
 }
 
 type Box = [[number, number], [number, number]];
+
+/** The lines of a mesh, each with its base bounds. */
+function linesOf(m: MultiLineString): Line[] {
+  const path = geoPath(baseOf('mercator').p);
+  return m.coordinates.map((coords) => ({ coords, b: path.bounds({ type: 'LineString', coordinates: coords }) as Box }));
+}
 const boundsCache = new WeakMap<object, Map<MapProj, Box>>();
 /** Base-coordinate bounds of a feature. */
 export function boundsOf(kind: MapProj, f: object): Box {
@@ -167,50 +174,87 @@ export interface Palette { ocean: string; land: string; border: string; region: 
 export const zoomLevel = (k: number) => Math.log2((BASE * k) / 256);
 
 /**
+ * Whether a point lies in one of the focus countries; cached per point
+ * object and focus set (cities and admin1 lines carry no country).
+ */
+const inFocusCache = new WeakMap<object, { sig: string; v: boolean }>();
+function inFocus(key: object, lonlat: [number, number], focus: Country[], sig: string): boolean {
+  const c = inFocusCache.get(key);
+  if (c && c.sig === sig) return c.v;
+  const v = focus.some((f) => geoContains(f.f, lonlat));
+  inFocusCache.set(key, { sig, v });
+  return v;
+}
+
+/** Extra zoom levels before states show outside the focus countries. */
+const OUTSIDE_FOCUS_Z = 2;
+
+/** The horizontal copies of the world that view `v` (w px wide) shows:
+ *  copy n is the world shifted by n × BASE × k. */
+export function copiesOf(v: { x: number; k: number }, w: number, extra = 0): number[] {
+  const W = BASE * v.k;
+  const out: number[] = [];
+  const n0 = Math.floor((-extra - (v.x + W / 2)) / W) + 1;
+  const n1 = Math.ceil((w + extra - (v.x - W / 2)) / W) - 1;
+  for (let n = n0; n <= n1 && out.length < 24; n++) out.push(n);
+  return out;
+}
+
+/**
  * Draws the basemap of view `v` into ctx (CSS px; the caller scales for
- * the device pixel ratio). Countries always; states and cities appear as
- * the zoom grows, labels are thinned so they never overlap.
+ * the device pixel ratio), every horizontal copy the view shows. Countries
+ * always; states and cities appear as the zoom grows, only what is on
+ * screen is drawn, and labels are thinned so they never overlap.
  */
 export function drawBasemap(
   ctx: CanvasRenderingContext2D, w: number, h: number, kind: MapProj, v: { x: number; y: number; k: number },
   data: GeoData, admin1: Admin1 | null, pal: Palette, lang: Lang,
+  /** Countries (ISO codes) that get full detail: names and cities only
+   *  there, state outlines elsewhere only zoomed in further. Undefined:
+   *  every country. */
+  focusIso?: Set<string>,
 ) {
-  const proj = screenProjection(kind, v);
-  const path = geoPath(proj, ctx);
   const z = zoomLevel(v.k);
-  const visible = (f: object) => {
-    const [[x0, y0], [x1, y1]] = boundsOf(kind, f);
-    return x1 * v.k + v.x >= 0 && x0 * v.k + v.x <= w && y1 * v.k + v.y >= 0 && y0 * v.k + v.y <= h;
+  const focus = focusIso ? [...focusIso].map((i) => data.byIso.get(i)).filter((c): c is Country => !!c) : null;
+  const sig = focus ? [...focusIso!].sort().join(',') : '';
+  const lineIn = (l: Line) => !focus || inFocus(l, l.coords[l.coords.length >> 1] as [number, number], focus, sig);
+  const W = BASE * v.k;
+  const copies = copiesOf(v, w).map((n) => ({ x: v.x + n * W, y: v.y, k: v.k }));
+  const onScreen = (vn: { x: number; y: number; k: number }, [[x0, y0], [x1, y1]]: Box, pad = 0) =>
+    x1 * vn.k + vn.x >= -pad && x0 * vn.k + vn.x <= w + pad && y1 * vn.k + vn.y >= -pad && y0 * vn.k + vn.y <= h + pad;
+  const strokeLines = (path: ReturnType<typeof geoPath>, vn: { x: number; y: number; k: number }, lines: Line[], keep?: (l: Line) => boolean) => {
+    ctx.beginPath();
+    for (const l of lines) if (onScreen(vn, l.b, 2) && (!keep || keep(l))) path({ type: 'LineString', coordinates: l.coords });
+    ctx.stroke();
   };
 
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = pal.outside;
   ctx.fillRect(0, 0, w, h);
-  ctx.beginPath();
-  path({ type: 'Sphere' });
-  ctx.fillStyle = pal.ocean;
-  ctx.fill();
-
-  ctx.beginPath();
-  for (const c of data.countries) if (visible(c.f)) path(c.f);
-  ctx.fillStyle = pal.land;
-  ctx.fill();
-
-  if (admin1 && z >= 3.2) {
+  for (const vn of copies) {
+    const path = geoPath(screenProjection(kind, vn), ctx);
     ctx.beginPath();
-    path(admin1.lines);
-    ctx.strokeStyle = pal.region;
-    ctx.lineWidth = 0.6;
-    ctx.setLineDash([3, 2]);
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
+    path({ type: 'Sphere' });
+    ctx.fillStyle = pal.ocean;
+    ctx.fill();
 
-  ctx.beginPath();
-  path(data.borders);
-  ctx.strokeStyle = pal.border;
-  ctx.lineWidth = 0.8;
-  ctx.stroke();
+    ctx.beginPath();
+    for (const c of data.countries) if (onScreen(vn, boundsOf(kind, c.f))) path(c.f);
+    ctx.fillStyle = pal.land;
+    ctx.fill();
+
+    if (admin1 && z >= 3.2) {
+      ctx.strokeStyle = pal.region;
+      ctx.lineWidth = 0.6;
+      ctx.setLineDash([3, 2]);
+      strokeLines(path, vn, admin1.lines, focus && z < 3.2 + OUTSIDE_FOCUS_Z ? lineIn : undefined);
+      ctx.setLineDash([]);
+    }
+
+    ctx.strokeStyle = pal.border;
+    ctx.lineWidth = 0.8;
+    strokeLines(path, vn, data.borders);
+  }
 
   // ---- labels (larger first; a placed label blocks its box)
   const placed: Array<[number, number, number, number]> = [];
@@ -239,34 +283,45 @@ export function drawBasemap(
 
   // cities: capitals and big cities first (data is sorted by rank)
   const maxRank = z < 2 ? -1 : z < 3 ? 1 : z < 4 ? 3 : z < 5 ? 5 : z < 6 ? 7 : z < 7 ? 9 : 10;
+  const projs = copies.map((vn) => ({ vn, proj: screenProjection(kind, vn) }));
   if (maxRank >= 0) {
     for (const c of data.cities) {
       if (c[2] > maxRank) break;
-      const p = proj([c[0], c[1]]);
-      if (!p || p[0] < -20 || p[0] > w + 20 || p[1] < -20 || p[1] > h + 20) continue;
-      const label = (lang === 'zh' && c[5]) || (lang === 'ko' && c[6]) || c[4];
-      if (!text(label, p[0] + 5, p[1] + 4, `${c[3] ? 600 : 400} 11px system-ui, sans-serif`, pal.city, 'left')) continue;
-      ctx.beginPath();
-      ctx.arc(p[0], p[1], c[3] ? 2.6 : 2, 0, Math.PI * 2);
-      ctx.fillStyle = pal.city;
-      ctx.fill();
+      for (const { proj } of projs) {
+        const p = proj([c[0], c[1]]);
+        if (!p || p[0] < -20 || p[0] > w + 20 || p[1] < -20 || p[1] > h + 20) continue;
+        if (focus && !inFocus(c, [c[0], c[1]], focus, sig)) break;
+        const label = (lang === 'zh' && c[5]) || (lang === 'ko' && c[6]) || c[4];
+        if (!text(label, p[0] + 5, p[1] + 4, `${c[3] ? 600 : 400} 11px system-ui, sans-serif`, pal.city, 'left')) continue;
+        ctx.beginPath();
+        ctx.arc(p[0], p[1], c[3] ? 2.6 : 2, 0, Math.PI * 2);
+        ctx.fillStyle = pal.city;
+        ctx.fill();
+      }
     }
   }
   // countries
   for (const c of data.countries) {
-    if (z + 1 < c.ml || !visible(c.f)) continue;
+    if (z + 1 < c.ml || (focusIso && !focusIso.has(c.iso))) continue;
     // Specks (small islands, territories) get no name.
-    const [[bx0], [bx1]] = boundsOf(kind, c.f);
-    if ((bx1 - bx0) * v.k < 30) continue;
-    const p = proj(c.label);
-    if (p) text(name(c.names, lang), p[0], p[1], '600 12px system-ui, sans-serif', pal.text);
+    const bb = boundsOf(kind, c.f);
+    if ((bb[1][0] - bb[0][0]) * v.k < 30) continue;
+    for (const { vn, proj } of projs) {
+      if (!onScreen(vn, bb)) continue;
+      const p = proj(c.label);
+      if (p) text(name(c.names, lang), p[0], p[1], '600 12px system-ui, sans-serif', pal.text);
+    }
   }
   // states
   if (admin1 && z >= 4.5) {
     for (const r of admin1.regions) {
-      if (z + 1.5 < r.ml || !visible(r.f)) continue;
-      const p = proj(r.label);
-      if (p) text(name(r.names, lang), p[0], p[1], 'italic 11px system-ui, sans-serif', pal.region);
+      if (z + 1.5 < r.ml || (focusIso && !focusIso.has(r.iso))) continue;
+      const bb = boundsOf(kind, r.f);
+      for (const { vn, proj } of projs) {
+        if (!onScreen(vn, bb)) continue;
+        const p = proj(r.label);
+        if (p) text(name(r.names, lang), p[0], p[1], 'italic 11px system-ui, sans-serif', pal.region);
+      }
     }
   }
 }
