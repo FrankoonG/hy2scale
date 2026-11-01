@@ -55,6 +55,7 @@ const (
 	InSOCKS5    = "socks5"
 	InHTTP      = "http"
 	InSS        = "ss"
+	InTrojan    = "trojan"
 	InHy2       = "hy2"
 	InIKEv2     = "ikev2"
 	InL2TP      = "l2tp"

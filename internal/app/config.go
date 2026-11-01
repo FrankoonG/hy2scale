@@ -15,7 +15,7 @@ import (
 // PasswordOnlyProxies lists proxy types that authenticate by password alone
 // (no username). These need per-proxy password support and conflict detection.
 // To add a new proxy: add its key here AND in web/app/src/config/proxyRegistry.ts
-var PasswordOnlyProxies = []string{"hy2", "ss"}
+var PasswordOnlyProxies = []string{"hy2", "ss", "trojan"}
 
 // UserConfig defines a client user with auth and exit routing.
 type UserConfig struct {
