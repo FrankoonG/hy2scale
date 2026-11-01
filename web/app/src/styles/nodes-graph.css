@@ -21,7 +21,7 @@
 .hy-topo-graph.is-preset .hy-topo-dot{cursor:pointer}
 .hy-topo-graph.is-custom .hy-topo-dot{cursor:grab}
 /* No glides while something is being dragged or the layout morphs. */
-.hy-topo-graph.is-busy .hy-topo-edge-label-group{transition:none}
+.hy-topo-graph.is-busy .hy-topo-edge-label-group,.hy-topo-graph.is-geo .hy-topo-edge-label-group{transition:none}
 
 /* Canvas menu: a tool button with the canvas name + caret, opening a
    dropdown; inside the ⋯ menu the same items expand inline. */
