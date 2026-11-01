@@ -164,7 +164,12 @@ export default function NodeDetailModal({ open, onClose, qpath, animateFrom, ren
     const e = n.egress;
     const fam = (f: api.NodeEgressFamily | null, k: string) => f == null ? null
       : !f.ok ? <span key={k} className="iface-bad">{t('iface.unavailable')}</span>
-      : f.ip ? <PublicIP key={k} ip={f.ip} /> : <span key={k}>—</span>;
+      : f.ip ? (
+        <span key={k}>
+          <PublicIP ip={f.ip} />
+          {n.egress_probed && <>{' '}<span className="iface-tag faint" data-testid="detail-egress-probed">{t('nodes.egressProbed')}</span></>}
+        </span>
+      ) : <span key={k}>—</span>;
     const egLines = e == null ? [] : [fam(e.ipv4, 'v4'), fam(e.ipv6, 'v6')].filter(Boolean);
     items.push([t('nodes.egressIp'), e == null
       ? <span className="iface-muted">{t('nodes.egressUnknown')}</span>
