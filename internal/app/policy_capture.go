@@ -51,8 +51,9 @@ func (a *App) captureManager() *capture.Manager {
 }
 
 // startPolicyCapture installs the capture (and first removes what a
-// previous process left behind).
+// previous process, 1.3.x included, left behind).
 func (a *App) startPolicyCapture() {
+	cleanupV13Rules()
 	a.captureManager()
 	captureApp.Store(a)
 	a.reloadPolicyCapture()
