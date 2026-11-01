@@ -146,6 +146,8 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 		"scale": true, "users": true, "rules": true, "assets": true,
 		"interfaces": true, "overview": true, "endpoints": true, "logs": true,
 		"tools": true, "audit": true,
+		// map data of a 1.4.0 pre-release (now under assets/)
+		"geo": true,
 	}
 	chainLen := 0
 	for _, seg := range segments {

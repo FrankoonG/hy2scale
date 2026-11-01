@@ -1,9 +1,10 @@
 // World map of the node topology (geo mode): the Mercator projection, the
-// bundled Natural Earth data (public domain; web/app/public/geo, loaded on
-// demand) and the basemap drawn on a canvas under the graph. Positions are
-// "base" coordinates — the projection at a fixed scale around (0, 0) — so
-// the canvas view (screen = base × k + offset) pans and zooms them like any
-// other topology layout. The world repeats horizontally every BASE units.
+// bundled Natural Earth data (public domain; web/app/public/assets/geo,
+// loaded on demand; under assets/ because every version's remote proxy
+// passes that path on to the managed node) and the basemap drawn on a
+// canvas under the graph. Positions are "base" coordinates — the projection
+// at a fixed scale around (0, 0) — so the canvas view (screen = base × k +
+// offset) pans and zooms them like any other topology layout. The world repeats horizontally every BASE units.
 import { geoArea, geoContains, geoMercator, geoPath, type GeoProjection } from 'd3-geo';
 import { feature, mesh } from 'topojson-client';
 import type { Feature, FeatureCollection, Geometry, MultiLineString, Position } from 'geojson';
@@ -62,8 +63,8 @@ function largestByIso(countries: Country[]): Map<string, Country> {
 
 export async function loadGeo(base: string): Promise<GeoData> {
   const [ct, cities] = await Promise.all([
-    getJSON<Topology>(`${base}/geo/countries.json`),
-    getJSON<City[]>(`${base}/geo/cities.json`),
+    getJSON<Topology>(`${base}/assets/geo/countries.json`),
+    getJSON<City[]>(`${base}/assets/geo/cities.json`),
   ]);
   const fc = layer(ct);
   const countries: Country[] = fc.features.map((f) => ({
@@ -79,7 +80,7 @@ export async function loadGeo(base: string): Promise<GeoData> {
 }
 
 export async function loadAdmin1(base: string): Promise<Admin1> {
-  const t = await getJSON<Topology>(`${base}/geo/admin1.json`);
+  const t = await getJSON<Topology>(`${base}/assets/geo/admin1.json`);
   const fc = layer(t);
   const obj = t.objects[Object.keys(t.objects)[0]];
   return {
