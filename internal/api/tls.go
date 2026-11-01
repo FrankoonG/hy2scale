@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"regexp"
 )
 
 func (s *Server) listCerts(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +116,45 @@ func (s *Server) generateCert(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.app.TLS().Generate(body.ID, body.Name, body.Domains, body.Days); err != nil {
 		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+// certIDRe: a certificate id is a file name in the TLS directory.
+var certIDRe = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$`)
+
+// generateCA: POST /api/tls/ca — a new self-signed certificate authority.
+func (s *Server) generateCA(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		CN   string `json:"cn"`
+		Org  string `json:"org"`
+		Days int    `json:"days"`
+		Key  string `json:"key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if body.ID == "" || body.CN == "" {
+		http.Error(w, "id and cn required", 400)
+		return
+	}
+	if !certIDRe.MatchString(body.ID) {
+		http.Error(w, "id: letters, digits, '.', '_' and '-' only", 400)
+		return
+	}
+	if _, err := s.app.TLS().Get(body.ID); err == nil {
+		http.Error(w, "a certificate with this id exists", http.StatusConflict)
+		return
+	}
+	if body.Name == "" {
+		body.Name = body.ID
+	}
+	if err := s.app.TLS().GenerateCA(body.ID, body.Name, body.CN, body.Org, body.Days, body.Key); err != nil {
+		http.Error(w, err.Error(), 400)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
