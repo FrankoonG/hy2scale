@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { create } from 'zustand';
 import { Button, useConfirm, useToast } from '@hy2scale/ui';
 import * as api from '@/api';
+import { liveStream } from '@/api/client';
 import { versionGreater } from '@/utils/version';
 
 /**
@@ -41,12 +42,9 @@ export function useUpgradeFeed() {
 
   useEffect(() => {
     if (!enabled) return;
-    api.getUpgradeStatus().then(setStatus).catch(() => {});
-    const base = (window as any).__BASE__ || '';
-    const token = sessionStorage.getItem('token:' + base);
-    const es = new EventSource(`${base}/api/upgrade/events${token ? '?token=' + encodeURIComponent(token) : ''}`);
-    es.onmessage = (e) => { try { setStatus(JSON.parse(e.data)); } catch { /* partial frame */ } };
-    return () => es.close();
+    const fetchStatus = () => { api.getUpgradeStatus().then(setStatus).catch(() => {}); };
+    fetchStatus();
+    return liveStream('/upgrade/events', setStatus, fetchStatus);
   }, [enabled, setStatus]);
 
   useEffect(() => {
