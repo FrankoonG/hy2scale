@@ -3,7 +3,7 @@
   "version": "1.3.4",
   "display_name": "Hy2Scale",
   "image": "hy2scale:ikuai",
-  "description": "Decentralized relay network with L2TP/IKEv2/OpenVPN/WireGuard VPN and a rules engine",
+  "description": "Decentralized relay network with L2TP/IKEv2/OpenVPN/WireGuard VPN, proxies and policy routing",
   "type": "1",
   "maintainer": "FrankoonG",
   "maintainer_url": "https://github.com/FrankoonG/hy2scale",

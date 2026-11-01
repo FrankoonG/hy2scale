@@ -1,3 +1,15 @@
+v1.4.0
+- VPN servers (L2TP/IPsec, IKEv2, OpenVPN, WireGuard) run in userspace, no privileges needed
+- Policy sets and condition sets replace IP/domain rules; transparent capture of local and forwarded traffic
+- Trojan server; OpenVPN over TCP, compression framing, pushed routes
+- Per-user upload/download rate limits, traffic reset periods
+- Hole punching between nodes behind NAT; per-address outgoing interface
+- Overview, Interfaces, Tools, Audit and Logs pages; world map view of nodes
+- In-app upgrade kept across app restarts on iKuai
+
+v1.3.x
+- See https://github.com/FrankoonG/hy2scale/releases
+
 v1.2.2
 - Added TUN mode IP packet forwarding (rules advanced mode)
 - Fixed TCP proxy splitting connections breaking ENC-RTSP authentication
