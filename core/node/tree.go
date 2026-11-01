@@ -47,6 +47,9 @@ type TreePeer struct {
 	// Egress: the node's egress (public address per family, null family =
 	// not provided); null = unknown (older node).
 	Egress json.RawMessage `json:"egress"`
+	// EgressProbed: Egress was found by the viewing node itself (the node
+	// does not report it); set for display only, never sent to peers.
+	EgressProbed bool `json:"egress_probed,omitempty"`
 	// Connected: false for a peer the parent has configured but is offline.
 	// Old peers don't send it; absent is read as connected.
 	Connected bool `json:"connected"`
@@ -438,7 +441,7 @@ func (t *Tree) fetch(name, selfID string) []TreePeer {
 	for _, rp := range remote {
 		c := rp.TreePeer
 		c.Via = name
-		c.Nested, c.Disabled, c.Punched, c.TxRate, c.RxRate = false, false, nil, 0, 0
+		c.Nested, c.Disabled, c.Punched, c.TxRate, c.RxRate, c.EgressProbed = false, false, nil, 0, 0, false
 		if c.LatencyMs > 0 && parentLat > 0 {
 			c.LatencyMs += parentLat
 		}

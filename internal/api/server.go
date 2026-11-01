@@ -193,7 +193,7 @@ func (s *Server) Start(ctx context.Context) error {
 				case strings.HasSuffix(path, ".json"):
 					w.Header().Set("Content-Type", "application/json")
 				}
-				if strings.HasPrefix(path, "geo/") {
+				if strings.HasPrefix(path, "assets/geo/") {
 					// Map data (megabytes, fixed per build): cached, gzipped.
 					w.Header().Set("Cache-Control", "public, max-age=86400")
 					w.Header().Add("Vary", "Accept-Encoding")

@@ -137,7 +137,13 @@ func selfSigned() (*tls.Certificate, error) {
 func (w *webTLS) serverConfig() *tls.Config {
 	return &tls.Config{
 		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{"http/1.1"},
+		// HTTP/2 first: every tab of a browser shares its 6 HTTP/1.1
+		// connections per origin, and each UI tab holds one or two live
+		// streams (SSE), so a few open tabs (this node's and remote nodes'
+		// through it) used them all and every further request hung. The
+		// terminal's WebSocket still comes over HTTP/1.1 (extended CONNECT
+		// stays off in net/http).
+		NextProtos: []string{"h2", "http/1.1"},
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 			if c := w.certificate(); c != nil {
 				return c, nil

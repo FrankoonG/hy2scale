@@ -130,49 +130,242 @@ function orderLayers(g: Graph, layers: string[][]): string[][] {
   return best;
 }
 
-// ---------------------------------------------------------------- layered
+// ---------------------------------------------------------------- density
 
-const LEVEL = 130;
-const SIB = 92;
-const ROW_STAGGER = 48;
-const MAX_PER_ROW = 12;
+/*
+ * Room the layouts make for text, in world units (zoom 1): a node name is
+ * 11px mono under its dot, an edge carries a latency-over-rate label pair.
+ * Rates change on every poll while a layout only follows the graph's
+ * shape, so every edge is planned with a full label pair.
+ */
+const NAME_CH = 6.6;
+const LABEL_W = 62;
+const LABEL_H = 27;
+/** Space one label takes in a row of labels (with a margin). */
+const LABEL_SLOT = (LABEL_W + LABEL_H) / 2 + 10;
+/** Canvas the size penalty is measured against (a common window). */
+const REF_W = 1190;
+const REF_H = 730;
+/** Above this, layouts keep the density estimate and skip the search;
+ *  above SEARCH_FINE_EDGES the search tries fewer spreads. */
+const SEARCH_MAX_EDGES = 120;
+const SEARCH_FINE_EDGES = 60;
 
-function layeredTD(g: Graph): Record<string, Pos> {
-  const ls = orderLayers(g, layersOf(g));
-  const pos: Record<string, Pos> = {};
-  let y = 0;
-  for (const l of ls) {
-    // Wide layers zig-zag over several staggered rows: the left-to-right
-    // order is kept, same-row neighbours stay SIB apart, and edges from
-    // the layer above pass between the dots of the front row.
-    const rows = Math.ceil(l.length / MAX_PER_ROW);
-    const step = SIB / rows;
-    l.forEach((k, i) => {
-      pos[k] = { x: (i - (l.length - 1) / 2) * step, y: y + (i % rows) * ROW_STAGGER };
-    });
-    y += LEVEL + (rows - 1) * ROW_STAGGER;
+const nameW = (g: Graph, k: string) => (g.nodes.get(k)?.name.length || 0) * NAME_CH;
+
+/** Edges per layer band (band i joins layers i and i+1). */
+function bandLoad(g: Graph, ls: string[][]): number[] {
+  const li = new Map<string, number>();
+  ls.forEach((l, i) => l.forEach((k) => li.set(k, i)));
+  const band = new Array(Math.max(0, ls.length - 1)).fill(0);
+  for (const e of g.edges.values()) {
+    const a = li.get(e.from), b = li.get(e.to);
+    if (a === undefined || b === undefined || a === b) continue;
+    band[Math.min(a, b)]++;
   }
-  return pos;
+  return band;
 }
 
-const LEVEL_X = 200;
-const SIB_Y = 56;
-const COL_STAGGER = 84;
-const MAX_PER_COL = 14;
+interface Box { x0: number; y0: number; x1: number; y1: number }
+const boxHit = (a: Box, b: Box) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
 
-function layeredLR(g: Graph): Record<string, Pos> {
-  const ls = orderLayers(g, layersOf(g));
-  const pos: Record<string, Pos> = {};
-  let x = 0;
-  for (const l of ls) {
-    const cols = Math.ceil(l.length / MAX_PER_COL);
-    const step = SIB_Y / cols;
-    l.forEach((k, i) => {
-      pos[k] = { x: x + (i % cols) * COL_STAGGER, y: (i - (l.length - 1) / 2) * step };
-    });
-    x += LEVEL_X + (cols - 1) * COL_STAGGER;
+/** Whether segment a→b passes through the box (Liang–Barsky). */
+function segBox(a: Pos, b: Pos, bx: Box): boolean {
+  let t0 = 0, t1 = 1;
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const clip = (p: number, q: number) => {
+    if (Math.abs(p) < 1e-12) return q >= 0;
+    const r = q / p;
+    if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; } else { if (r < t0) return false; if (r < t1) t1 = r; }
+    return true;
+  };
+  return clip(-dx, a.x - bx.x0) && clip(dx, bx.x1 - a.x) && clip(-dy, a.y - bx.y0) && clip(dy, bx.y1 - a.y);
+}
+
+/**
+ * How hard a placement is to read, as the view would draw it: text or dots
+ * overlapping (heavy), lines running through labels and names (light), and
+ * how much a canvas of REF size would have to shrink it to fit.
+ */
+function crowding(g: Graph, pos: Record<string, Pos>): { issues: number; score: number; area: number } {
+  const geoms = routeEdges(g, pos, { avoid: true });
+  const spots = placeLabels(g, pos, geoms, {});
+  type Mark = Box & { own: string; label: boolean };
+  const marks: Mark[] = [];
+  for (const n of g.nodes.values()) {
+    const p = pos[n.key];
+    if (!p) continue;
+    const r = nodeRadiusFor(n), w = (n.name.length * NAME_CH) / 2, ty = p.y + r + 14;
+    marks.push({ x0: p.x - r, x1: p.x + r, y0: p.y - r, y1: p.y + r, own: n.key, label: false });
+    marks.push({ x0: p.x - w, x1: p.x + w, y0: ty - 8.5, y1: ty + 2.5, own: n.key, label: false });
   }
-  return pos;
+  spots.forEach((s, key) => {
+    const x0 = s.anchor === 'start' ? s.x - 1 : s.anchor === 'end' ? s.x - LABEL_W + 1 : s.x - LABEL_W / 2;
+    marks.push({ x0, x1: x0 + LABEL_W, y0: s.y - 13, y1: s.y + LABEL_H - 13, own: key, label: true });
+  });
+  let clash = 0;
+  for (let i = 0; i < marks.length; i++) {
+    for (let j = i + 1; j < marks.length; j++) {
+      const a = marks[i], b = marks[j];
+      if (!a.label && !b.label && a.own === b.own) continue;
+      if (boxHit(a, b)) clash++;
+    }
+  }
+  let through = 0;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const k in pos) {
+    const p = pos[k];
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  geoms.forEach((ge) => {
+    const e = g.edges.get(ge.key)!;
+    let ex0 = Infinity, ey0 = Infinity, ex1 = -Infinity, ey1 = -Infinity;
+    for (const p of ge.poly) { ex0 = Math.min(ex0, p.x); ex1 = Math.max(ex1, p.x); ey0 = Math.min(ey0, p.y); ey1 = Math.max(ey1, p.y); }
+    for (const b of ge.bends) { minX = Math.min(minX, b.x); maxX = Math.max(maxX, b.x); minY = Math.min(minY, b.y); maxY = Math.max(maxY, b.y); }
+    const eb = { x0: ex0, y0: ey0, x1: ex1, y1: ey1 };
+    for (let i = 1; i < marks.length; i += 1) {
+      const m = marks[i];
+      // names (odd node marks) and labels; never the edge's own ends / label
+      if (m.label ? m.own === ge.key : (i % 2 === 0 || m.own === e.from || m.own === e.to)) continue;
+      if (!boxHit(eb, m)) continue;
+      for (let s = 0; s < ge.poly.length - 1; s++) {
+        if (segBox(ge.poly[s], ge.poly[s + 1], m)) { through++; break; }
+      }
+    }
+  });
+  const w = maxX - minX + 2 * (R_HUB_OUTER + 40), h = maxY - minY + 2 * R_HUB_OUTER + 60;
+  const k = Math.min(REF_W / w, REF_H / h, 1.2);
+  // Shrinking the picture shrinks its text: worth it only while it buys
+  // clearly fewer clashes, and much less so once text gets small.
+  const E = g.edges.size;
+  const shrink = (8 + E * 0.5) * Math.log(1.2 / k) + E * 3 * Math.max(0, Math.log(0.75 / k));
+  return { issues: clash + through, score: clash * 4 + through * 0.5 + shrink, area: w * h };
+}
+
+/**
+ * Picks the spread of `place(along, across)` (multipliers of the density
+ * estimate) that reads best. Deterministic: a fixed grid of candidates,
+ * first best wins; skipped when the estimate is already clean.
+ */
+function spread(g: Graph, place: (along: number, across: number) => Record<string, Pos>, axes: 1 | 2): Record<string, Pos> {
+  const base = place(1, 1);
+  if (g.edges.size > SEARCH_MAX_EDGES || g.nodes.size < 3) return base;
+  const c0 = crowding(g, base);
+  if (c0.issues === 0) return base;
+  // Growing the picture, even within the canvas, moves it away from the
+  // compact estimate: a mild cost so it grows only for a clear gain.
+  const grown = (area: number) => 3 * Math.log(Math.max(1, area / c0.area));
+  let best = { pos: base, s: c0.score };
+  const fine = g.edges.size <= SEARCH_FINE_EDGES;
+  const steps = axes === 2
+    ? (fine ? [0.8, 1, 1.25, 1.55, 1.9, 2.3] : [0.8, 1, 1.4, 1.9])
+    : (fine ? [0.85, 1, 1.15, 1.3, 1.5, 1.75, 2, 2.35, 2.75] : [0.85, 1, 1.3, 1.75, 2.35]);
+  for (const a of steps) {
+    for (const b of axes === 2 ? steps : [1]) {
+      if (a === 1 && b === 1) continue;
+      const pos = place(a, b);
+      const c = crowding(g, pos);
+      const sc = c.score + grown(c.area) + c.area * 1e-7;
+      if (sc < best.s) best = { pos, s: sc };
+    }
+  }
+  return best.pos;
+}
+
+// ---------------------------------------------------------------- layered
+
+/**
+ * Positions for an ordered row, at least `gap` apart and in order, as close
+ * as possible (weighted least squares) to `want`: pool-adjacent-violators
+ * on want[i] - i·gap.
+ */
+function packAlong(want: number[], wt: number[], gap: number): number[] {
+  const blocks: Array<{ v: number; w: number; n: number }> = [];
+  want.forEach((d, i) => {
+    blocks.push({ v: d - i * gap, w: wt[i], n: 1 });
+    while (blocks.length > 1 && blocks[blocks.length - 2].v > blocks[blocks.length - 1].v) {
+      const b = blocks.pop()!, a = blocks.pop()!;
+      const w = a.w + b.w;
+      blocks.push({ v: w > 0 ? (a.v * a.w + b.v * b.w) / w : (a.v + b.v) / 2, w, n: a.n + b.n });
+    }
+  });
+  const out: number[] = [];
+  for (const b of blocks) for (let j = 0; j < b.n; j++) out.push(b.v + out.length * gap);
+  return out;
+}
+
+interface LayeredSpec {
+  /** Distance between layers. */
+  level: number;
+  /** Same-row neighbour distance inside a layer. */
+  sib: number;
+  /** Offset between the staggered rows of a wide layer. */
+  stagger: number;
+  maxPerRow: number;
+  /** Layers run left to right (rows are columns). */
+  lr: boolean;
+}
+const TD: LayeredSpec = { level: 130, sib: 92, stagger: 48, maxPerRow: 12, lr: false };
+const LR: LayeredSpec = { level: 200, sib: 56, stagger: 84, maxPerRow: 14, lr: true };
+
+function layered(g: Graph, S: LayeredSpec): Record<string, Pos> {
+  const ls = orderLayers(g, layersOf(g));
+  const band = bandLoad(g, ls);
+  const adj = adjacency(g);
+  const rowsOf = (l: string[]) => Math.ceil(l.length / S.maxPerRow);
+  const widest = ls.map((l) => Math.max(0, ...l.map((k) => nameW(g, k))));
+  // Names sit side by side (top-down) or the staggered columns hold them
+  // (left-right).
+  const sib = ls.map((_, i) => (S.lr ? S.sib : Math.max(S.sib, widest[i] + 16)));
+  const stagger = ls.map((_, i) => (S.lr ? Math.max(S.stagger, widest[i] + 18) : S.stagger));
+  const place = (fa: number, fb: number) => {
+    const sibF = sib.map((v, i) => Math.max(v * fa, S.lr ? 2 * R_HUB_OUTER + 18 : widest[i] + 14));
+    const span = ls.map((l, i) => ((l.length - 1) * sibF[i]) / rowsOf(l));
+    // A band's labels line up across its middle: as many fit side by side
+    // as its mean width holds; more need further rows, i.e. a deeper band.
+    const gap = band.map((E, i) => {
+      const room = (span[i] + span[i + 1]) / 2 + (S.lr ? LABEL_H : LABEL_W);
+      const per = Math.max(1, Math.floor(room / (S.lr ? LABEL_H + 9 : LABEL_W + 10)));
+      const rows = Math.ceil(E / per);
+      const need = S.lr ? 2 * R_HUB_OUTER + (rows * (LABEL_W + 12)) / 0.7 : 2 * R_HUB_OUTER + 30 + (rows * (LABEL_H + 9)) / 0.7;
+      return fb < 1 ? Math.max(S.level, need * fb) : Math.max(S.level, need) * fb;
+    });
+    // Along each layer: in barycenter order, `step` apart, each dot as
+    // close as it can get to the mean of its neighbours in the layer
+    // above (then below, then above again) so edges run short and steep.
+    const step = ls.map((l, i) => sibF[i] / rowsOf(l));
+    const along: Record<string, number> = {};
+    ls.forEach((l, i) => l.forEach((k, j) => { along[k] = (j - (l.length - 1) / 2) * step[i]; }));
+    for (const down of [true, false, true]) {
+      const seq = ls.map((_, i) => i);
+      if (!down) seq.reverse();
+      for (const li of seq.slice(1)) {
+        const ref = new Set(ls[down ? li - 1 : li + 1]);
+        const want: number[] = [], wt: number[] = [];
+        ls[li].forEach((k) => {
+          const ns = [...(adj.get(k) || [])].filter((m) => ref.has(m));
+          want.push(ns.length ? ns.reduce((a, m) => a + along[m], 0) / ns.length : along[k]);
+          wt.push(ns.length ? 1 : 1e-3);
+        });
+        packAlong(want, wt, step[li]).forEach((v, j) => { along[ls[li][j]] = v; });
+      }
+    }
+    const pos: Record<string, Pos> = {};
+    let acc = 0;
+    ls.forEach((l, i) => {
+      // Wide layers zig-zag over several staggered rows: the order is
+      // kept, same-row neighbours stay `sib` apart, and edges from the
+      // previous layer pass between the dots of the front row.
+      const rows = rowsOf(l);
+      l.forEach((k, j) => {
+        const across = acc + (j % rows) * stagger[i];
+        pos[k] = S.lr ? { x: across, y: along[k] } : { x: along[k], y: across };
+      });
+      acc += (rows - 1) * stagger[i] + (gap[i] || 0);
+    });
+    return pos;
+  };
+  return spread(g, place, 2);
 }
 
 // ---------------------------------------------------------------- radial / ring
@@ -237,11 +430,32 @@ function radial(g: Graph): Record<string, Pos> {
   const tree = spanningTree(g, root);
   const depthOf = (k: string) => g.nodes.get(k)!.depth;
   const counts: number[] = [];
-  for (const n of g.nodes.values()) counts[n.depth] = (counts[n.depth] || 0) + 1;
-  const R: number[] = [0];
-  for (let d = 1; d < counts.length; d++) {
-    R[d] = Math.max((R[d - 1] || 0) + RING, ((counts[d] || 0) * MIN_ARC) / (2 * Math.PI));
+  const widest: number[] = [];
+  for (const n of g.nodes.values()) {
+    counts[n.depth] = (counts[n.depth] || 0) + 1;
+    widest[n.depth] = Math.max(widest[n.depth] || 0, nameW(g, n.key));
   }
+  // Labels inside ring d: edges from the ring further in (the spokes of
+  // ring 1 included) and the chords between dots of ring d.
+  const band: number[] = [];
+  for (const e of g.edges.values()) {
+    const a = g.nodes.get(e.from), b = g.nodes.get(e.to);
+    if (!a || !b || e.from === e.to) continue;
+    const d = Math.max(a.depth, b.depth);
+    band[d] = (band[d] || 0) + 1;
+  }
+  const arcOf = (d: number) => Math.max(MIN_ARC, (widest[d] || 0) * 0.75 + 14);
+  /** Ring radii: a ring holds its dots (`fa`), the band inside it holds
+   *  its labels around its middle circle, and rings stay RING apart (`fb`). */
+  const radii = (fa: number, fb: number) => {
+    const R: number[] = [0];
+    for (let d = 1; d < counts.length; d++) {
+      const prev = R[d - 1] || 0;
+      const labels = (((band[d] || 0) * LABEL_SLOT) / (2 * Math.PI)) * fb; // middle radius they need
+      R[d] = Math.max(prev + RING * Math.max(1, fb), 2 * labels - prev, ((counts[d] || 0) * arcOf(d) * fa) / (2 * Math.PI));
+    }
+    return R;
+  };
   const weight = new Map<string, number>();
   const w = (k: string): number => {
     const ks = tree.kids.get(k) || [];
@@ -249,7 +463,7 @@ function radial(g: Graph): Record<string, Pos> {
     weight.set(k, v);
     return v;
   };
-  const allocate = () => {
+  const allocate = (R: number[]) => {
     weight.clear();
     w(root);
     const ang: Record<string, number> = { [root]: -Math.PI / 2 };
@@ -274,45 +488,50 @@ function radial(g: Graph): Record<string, Pos> {
     place(root, -Math.PI / 2 - Math.PI, -Math.PI / 2 + Math.PI);
     return ang;
   };
-  orderSiblings(g, root, tree, allocate);
-  const ang = allocate();
-  // Per ring, enforce a minimum angular gap (circular sweep) so compressed
-  // subtrees never stack dots.
-  const byDepth: string[][] = [];
-  for (const k of Object.keys(ang)) if (k !== root) (byDepth[depthOf(k)] ||= []).push(k);
-  byDepth.forEach((ring, d) => {
-    if (!ring || ring.length < 2) return;
-    const gap = MIN_ARC / R[d];
-    ring.sort((a, b) => ang[a] - ang[b]);
-    const orig = ring.map((k) => ang[k]);
-    for (let i = 1; i < ring.length; i++) {
-      if (ang[ring[i]] - ang[ring[i - 1]] < gap) ang[ring[i]] = ang[ring[i - 1]] + gap;
+  const R0 = radii(1, 1);
+  orderSiblings(g, root, tree, () => allocate(R0));
+  const placeAt = (fa: number, fb: number) => {
+    const R = radii(fa, fb);
+    const ang = allocate(R);
+    // Per ring, enforce a minimum angular gap (circular sweep) so compressed
+    // subtrees never stack dots.
+    const byDepth: string[][] = [];
+    for (const k of Object.keys(ang)) if (k !== root) (byDepth[depthOf(k)] ||= []).push(k);
+    byDepth.forEach((ring, d) => {
+      if (!ring || ring.length < 2) return;
+      const gap = (arcOf(d) * fa) / R[d];
+      ring.sort((a, b) => ang[a] - ang[b]);
+      const orig = ring.map((k) => ang[k]);
+      for (let i = 1; i < ring.length; i++) {
+        if (ang[ring[i]] - ang[ring[i - 1]] < gap) ang[ring[i]] = ang[ring[i - 1]] + gap;
+      }
+      const span = ang[ring[ring.length - 1]] - ang[ring[0]];
+      if (span > 2 * Math.PI - gap) {
+        // Too crowded to keep subtree spacing: spread evenly in that order.
+        const a0 = orig[0];
+        ring.forEach((k, i) => { ang[k] = a0 + (2 * Math.PI * i) / ring.length; });
+        return;
+      }
+      const shift = ring.reduce((s, k, i) => s + (orig[i] - ang[k]), 0) / ring.length;
+      ring.forEach((k) => { ang[k] += shift; });
+    });
+    const pos: Record<string, Pos> = { [root]: { x: 0, y: 0 } };
+    for (const k of Object.keys(ang)) {
+      if (k === root) continue;
+      const r = R[depthOf(k)] || RING;
+      pos[k] = { x: Math.cos(ang[k]) * r, y: Math.sin(ang[k]) * r };
     }
-    const span = ang[ring[ring.length - 1]] - ang[ring[0]];
-    if (span > 2 * Math.PI - gap) {
-      // Too crowded to keep subtree spacing: spread evenly in that order.
-      const a0 = orig[0];
-      ring.forEach((k, i) => { ang[k] = a0 + (2 * Math.PI * i) / ring.length; });
-      return;
+    // Nodes outside the tree (should not happen) go on an outer ring.
+    let extra = 0;
+    for (const k of g.nodes.keys()) {
+      if (pos[k]) continue;
+      const r = (R[R.length - 1] || 0) + RING;
+      const a = -Math.PI / 2 + extra++ * (MIN_ARC / r);
+      pos[k] = { x: Math.cos(a) * r, y: Math.sin(a) * r };
     }
-    const shift = ring.reduce((s, k, i) => s + (orig[i] - ang[k]), 0) / ring.length;
-    ring.forEach((k) => { ang[k] += shift; });
-  });
-  const pos: Record<string, Pos> = { [root]: { x: 0, y: 0 } };
-  for (const k of Object.keys(ang)) {
-    if (k === root) continue;
-    const r = R[depthOf(k)] || RING;
-    pos[k] = { x: Math.cos(ang[k]) * r, y: Math.sin(ang[k]) * r };
-  }
-  // Nodes outside the tree (should not happen) go on an outer ring.
-  let extra = 0;
-  for (const k of g.nodes.keys()) {
-    if (pos[k]) continue;
-    const r = (R[R.length - 1] || 0) + RING;
-    const a = -Math.PI / 2 + extra++ * (MIN_ARC / r);
-    pos[k] = { x: Math.cos(a) * r, y: Math.sin(a) * r };
-  }
-  return pos;
+    return pos;
+  };
+  return spread(g, placeAt, 2);
 }
 
 function ring(g: Graph): Record<string, Pos> {
@@ -336,22 +555,37 @@ function ring(g: Graph): Record<string, Pos> {
   };
   orderSiblings(g, root, tree, angles);
   const seq = order();
-  const r = Math.max(170, (seq.length * MIN_ARC * 1.15) / (2 * Math.PI));
-  const pos: Record<string, Pos> = { [root]: { x: 0, y: 0 } };
-  seq.forEach((k, i) => {
-    const a = -Math.PI / 2 + (2 * Math.PI * (i + 0.5)) / seq.length;
-    pos[k] = { x: Math.cos(a) * r, y: Math.sin(a) * r };
-  });
-  return pos;
+  // The circle holds its dots and names; the spokes' labels around half
+  // the radius; the chords' labels inside it.
+  let spokes = 0;
+  for (const e of g.edges.values()) if (e.from === root || e.to === root) spokes++;
+  const arc = Math.max(MIN_ARC * 1.15, ...seq.map((k) => nameW(g, k) * 0.75 + 14));
+  const chords = g.edges.size - spokes;
+  const r0 = Math.max(
+    170,
+    (seq.length * arc) / (2 * Math.PI),
+    (spokes * LABEL_SLOT) / Math.PI,
+    Math.sqrt((chords * LABEL_SLOT * LABEL_SLOT) / Math.PI),
+  );
+  const place = (f: number) => {
+    const r = r0 * f;
+    const pos: Record<string, Pos> = { [root]: { x: 0, y: 0 } };
+    seq.forEach((k, i) => {
+      const a = -Math.PI / 2 + (2 * Math.PI * (i + 0.5)) / seq.length;
+      pos[k] = { x: Math.cos(a) * r, y: Math.sin(a) * r };
+    });
+    return pos;
+  };
+  return spread(g, (f) => place(f), 1);
 }
 
 export function presetLayout(id: PresetId, g: Graph): Record<string, Pos> {
   if (g.nodes.size === 0) return {};
   switch (id) {
-    case 'layered-lr': return layeredLR(g);
+    case 'layered-lr': return layered(g, LR);
     case 'radial': return radial(g);
     case 'ring': return ring(g);
-    default: return layeredTD(g);
+    default: return layered(g, TD);
   }
 }
 
@@ -638,73 +872,99 @@ export interface LabelSpot {
   anchor: 'start' | 'middle' | 'end';
 }
 
+/** Box a label pair takes at a spot (both lines, a full-size rate). */
+function labelBox(s: { x: number; y: number; anchor: LabelSpot['anchor'] }): Box {
+  const x0 = s.anchor === 'start' ? s.x - 1 : s.anchor === 'end' ? s.x - LABEL_W + 1 : s.x - LABEL_W / 2;
+  return { x0, x1: x0 + LABEL_W, y0: s.y - 13, y1: s.y + LABEL_H - 13 };
+}
+
 /**
  * Places each edge's latency / rate label: at the stored fraction when the
- * user dragged it, otherwise near the middle, slid along the curve past
- * other dots and already placed labels; offset to the side with more room.
+ * user dragged it, otherwise near the middle on the side with more room,
+ * slid along the curve (or moved to the other side) until it covers no dot,
+ * node name or already placed label; the least covered spot otherwise.
  */
 export function placeLabels(
   g: Graph, pos: Record<string, Pos>, geoms: Map<string, EdgeGeom>, labelT: Record<string, number | undefined>,
 ): Map<string, LabelSpot> {
   const out = new Map<string, LabelSpot>();
   const nodeList = [...g.nodes.values()].filter((n) => pos[n.key]).map((n) => ({ key: n.key, p: pos[n.key], r: nodeRadiusFor(n) }));
-  const placed: Pos[] = [];
+  // Dots and the names under them.
+  const fixed: Box[] = [];
+  for (const n of g.nodes.values()) {
+    const p = pos[n.key];
+    if (!p) continue;
+    const r = nodeRadiusFor(n), w = (n.name.length * NAME_CH) / 2, ty = p.y + r + 14;
+    fixed.push({ x0: p.x - r - 2, x1: p.x + r + 2, y0: p.y - r - 2, y1: p.y + r + 2 });
+    fixed.push({ x0: p.x - w, x1: p.x + w, y0: ty - 8.5, y1: ty + 2.5 });
+  }
+  const placed: Box[] = [];
+  const covered = (b: Box) => {
+    let c = 0;
+    for (const f of fixed) if (boxHit(b, f)) c++;
+    for (const f of placed) if (boxHit(b, f)) c++;
+    return c;
+  };
+  const SLIDE = [0.5];
+  for (let step = 1; step <= 7; step++) SLIDE.push(0.5 + step * 0.05, 0.5 - step * 0.05);
   // User-placed labels first so automatic ones avoid them.
   const keys = [...geoms.keys()].sort((a, b) => (labelT[a] !== undefined ? 0 : 1) - (labelT[b] !== undefined ? 0 : 1));
   for (const key of keys) {
     const geo = geoms.get(key)!;
     const e = g.edges.get(key);
     if (!e) continue;
-    const blocked = (pt: Pos) => {
-      for (const o of nodeList) {
-        if (o.key === e.from || o.key === e.to) continue;
-        if (Math.hypot(o.p.x - pt.x, o.p.y - pt.y) < o.r + 16) return true;
-      }
-      for (const pl of placed) if (Math.abs(pl.x - pt.x) < 50 && Math.abs(pl.y - pt.y) < 26) return true;
-      return false;
-    };
-    let t = labelT[key];
-    if (t === undefined) {
-      t = 0.5;
-      if (blocked(pointAt(geo, geo.len * 0.5))) {
-        for (let step = 1; step <= 12; step++) {
-          const c1 = 0.5 + step * 0.05, c2 = 0.5 - step * 0.05;
-          if (c1 <= 0.85 && !blocked(pointAt(geo, geo.len * c1))) { t = c1; break; }
-          if (c2 >= 0.15 && !blocked(pointAt(geo, geo.len * c2))) { t = c2; break; }
-        }
-      }
-    }
-    const at = pointAt(geo, geo.len * t);
-    const nx = -at.ty, ny = at.tx;
-    // Side: the outer side of a bend (keeps the two labels of a split pair
-    // apart), otherwise the side farther from other dots.
-    let side = 1;
     const bend = geo.bends.length === 1 && !geo.custom ? geo.bends[0] : null;
-    if (bend) {
-      const dot = (bend.x - at.x) * nx + (bend.y - at.y) * ny;
-      const chordMid = { x: (geo.pts[0].x + geo.pts[geo.pts.length - 1].x) / 2, y: (geo.pts[0].y + geo.pts[geo.pts.length - 1].y) / 2 };
-      const out2 = (bend.x - chordMid.x) * nx + (bend.y - chordMid.y) * ny;
-      side = Math.abs(out2) > 1 ? Math.sign(out2) : dot >= 0 ? 1 : -1;
-    } else {
-      let bestC = -Infinity;
-      for (const s of [1, -1]) {
-        const cx = at.x + nx * 12 * s, cy = at.y + ny * 12 * s;
-        let m = Infinity;
-        for (const o of nodeList) {
-          if (o.key === e.from || o.key === e.to) continue;
-          m = Math.min(m, Math.hypot(o.p.x - cx, o.p.y - cy));
+    const spotAt = (t: number, flip: boolean): LabelSpot => {
+      const at = pointAt(geo, geo.len * t);
+      const nx = -at.ty, ny = at.tx;
+      // Side: the outer side of a bend (keeps the two labels of a split
+      // pair apart), otherwise the side farther from other dots.
+      let side = 1;
+      if (bend) {
+        const dot = (bend.x - at.x) * nx + (bend.y - at.y) * ny;
+        const chordMid = { x: (geo.pts[0].x + geo.pts[geo.pts.length - 1].x) / 2, y: (geo.pts[0].y + geo.pts[geo.pts.length - 1].y) / 2 };
+        const out2 = (bend.x - chordMid.x) * nx + (bend.y - chordMid.y) * ny;
+        side = Math.abs(out2) > 1 ? Math.sign(out2) : dot >= 0 ? 1 : -1;
+      } else {
+        let bestC = -Infinity;
+        for (const s of [1, -1]) {
+          const cx = at.x + nx * 12 * s, cy = at.y + ny * 12 * s;
+          let m = Infinity;
+          for (const o of nodeList) {
+            if (o.key === e.from || o.key === e.to) continue;
+            m = Math.min(m, Math.hypot(o.p.x - cx, o.p.y - cy));
+          }
+          for (const pl of placed) m = Math.min(m, Math.hypot((pl.x0 + pl.x1) / 2 - cx, (pl.y0 + pl.y1) / 2 - cy) + 6);
+          if (m > bestC) { bestC = m; side = s; }
         }
-        for (const pl of placed) m = Math.min(m, Math.hypot(pl.x - cx, pl.y - cy) + 6);
-        if (m > bestC) { bestC = m; side = s; }
+      }
+      if (flip) side = -side;
+      const sx = nx * side, sy = ny * side;
+      let anchor: LabelSpot['anchor'] = 'middle';
+      let off = 8 + Math.abs(sy) * 10;
+      if (Math.abs(sx) > 0.75) { anchor = sx > 0 ? 'start' : 'end'; off = 7; }
+      return { x: at.x + sx * off, y: at.y + sy * off, t, anchor };
+    };
+    let spot: LabelSpot;
+    const tUser = labelT[key];
+    if (tUser !== undefined) {
+      spot = spotAt(tUser, false);
+    } else {
+      spot = spotAt(0.5, false);
+      let best = covered(labelBox(spot));
+      for (const flip of best ? [false, true] : []) {
+        for (const t of SLIDE) {
+          if (!flip && t === 0.5) continue;
+          const c = spotAt(t, flip);
+          const n = covered(labelBox(c));
+          if (n < best) { best = n; spot = c; }
+          if (!best) break;
+        }
+        if (!best) break;
       }
     }
-    const sx = nx * side, sy = ny * side;
-    let anchor: LabelSpot['anchor'] = 'middle';
-    let off = 8 + Math.abs(sy) * 10;
-    if (Math.abs(sx) > 0.75) { anchor = sx > 0 ? 'start' : 'end'; off = 7; }
-    const spot = { x: at.x + sx * off, y: at.y + sy * off, t, anchor };
     out.set(key, spot);
-    placed.push({ x: spot.x, y: spot.y });
+    placed.push(labelBox(spot));
   }
   return out;
 }

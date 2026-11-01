@@ -84,6 +84,12 @@ func (p *Detector) settings() (interval time.Duration, servers []string, method 
 	return
 }
 
+// Servers: the configured detection servers (the built-in list when none).
+func (p *Detector) Servers() []string {
+	_, servers, _ := p.settings()
+	return servers
+}
+
 // targets lists the (interface, family) pairs worth checking.
 func (p *Detector) targets() []pubKey {
 	seen := map[pubKey]bool{}
