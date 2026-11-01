@@ -15,7 +15,7 @@ import (
 // PasswordOnlyProxies lists proxy types that authenticate by password alone
 // (no username). These need per-proxy password support and conflict detection.
 // To add a new proxy: add its key here AND in web/app/src/config/proxyRegistry.ts
-var PasswordOnlyProxies = []string{"hy2", "ss"}
+var PasswordOnlyProxies = []string{"hy2", "ss", "trojan"}
 
 // UserConfig defines a client user with auth and exit routing.
 type UserConfig struct {
@@ -37,8 +37,12 @@ type UserConfig struct {
 	ExitPolicy   string `yaml:"exit_policy,omitempty" json:"exit_policy"`
 	TrafficLimit int64  `yaml:"traffic_limit" json:"traffic_limit"` // bytes, 0=unlimited
 	TrafficUsed  int64  `yaml:"traffic_used" json:"traffic_used"`
-	ExpiryDate   string `yaml:"expiry_date,omitempty" json:"expiry_date"`
-	Enabled      bool   `yaml:"enabled" json:"enabled"`
+	// RateUp / RateDown: per-user rate limits in bytes per second (from
+	// the user / to the user), 0 = unlimited (ratelimit.go).
+	RateUp     int64  `yaml:"rate_up,omitempty" json:"rate_up"`
+	RateDown   int64  `yaml:"rate_down,omitempty" json:"rate_down"`
+	ExpiryDate string `yaml:"expiry_date,omitempty" json:"expiry_date"`
+	Enabled    bool   `yaml:"enabled" json:"enabled"`
 	// NodeAccess: with this user's hy2 credentials, a hy2scale node or an
 	// access client may use the nodes this node sees as exits (node access
 	// by user, core/proto/access.go).

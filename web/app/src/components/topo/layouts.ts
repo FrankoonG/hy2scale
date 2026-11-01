@@ -486,6 +486,22 @@ export interface RouteOpts {
   waypoints?: Record<string, Waypoint[] | undefined>;
   /** Bend straight edges that would pass through other dots. */
   avoid?: boolean;
+  /** Horizontal period of a wrapping world (map view): each edge takes
+   *  the shorter way round, dots repeat every `wrap` units. */
+  wrap?: number;
+}
+
+/**
+ * Horizontal shift of an edge's far end on a world repeating every `w`
+ * units: the end lands at most half a world away from the near end. Both
+ * directions of a pair agree (the tie at exactly half a world included).
+ */
+export function wrapDx(p: Pos, q: Pos, w: number | undefined, from: string, to: string): number {
+  if (!w) return 0;
+  const sgn = from < to ? 1 : -1;
+  const d = (q.x - p.x) * sgn;
+  const s = Math.floor(d / w + 0.5) * w; // d - s in [-w/2, w/2)
+  return -sgn * (d - s === -w / 2 ? s - w : s);
 }
 
 /**
@@ -499,18 +515,44 @@ export function routeEdges(g: Graph, pos: Record<string, Pos>, opts: RouteOpts =
   // a uniform grid so a curve only tests the obstacles near it.
   const placedNodes = [...g.nodes.values()].filter((n) => pos[n.key]);
   const stamps = new Int32Array(placedNodes.length);
+  const shifts = opts.wrap ? [0, -opts.wrap, opts.wrap] : [0];
   const obstacles = placedNodes.flatMap((n, ni) => {
-    const p = pos[n.key], r = nodeRadiusFor(n);
-    return [{ key: n.key, ni, p, r }, { key: n.key, ni, p: { x: p.x, y: p.y + r + 10 }, r: 7 }];
+    const p0 = pos[n.key], r = nodeRadiusFor(n);
+    return shifts.flatMap((dx) => {
+      const p = { x: p0.x + dx, y: p0.y };
+      return [{ key: n.key, ni, p, r }, { key: n.key, ni, p: { x: p.x, y: p.y + r + 10 }, r: 7 }];
+    });
   });
   const CELL = 64;
   const grid = new Map<string, typeof obstacles>();
+  const occupied: { cx: number; cy: number; l: typeof obstacles }[] = [];
   for (const o of obstacles) {
-    const k = `${Math.floor(o.p.x / CELL)},${Math.floor(o.p.y / CELL)}`;
+    const cx = Math.floor(o.p.x / CELL), cy = Math.floor(o.p.y / CELL);
+    const k = `${cx},${cy}`;
     let l = grid.get(k);
-    if (!l) grid.set(k, (l = []));
+    if (!l) {
+      grid.set(k, (l = []));
+      occupied.push({ cx, cy, l });
+    }
     l.push(o);
   }
+  // The obstacle lists in cells x0..x1 × y0..y1. A box larger than the
+  // occupied cells (a long line on a zoomed-in map spans millions of cells)
+  // walks the occupied cells instead.
+  const near = (x0: number, x1: number, y0: number, y1: number): (typeof obstacles)[] => {
+    const out: (typeof obstacles)[] = [];
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) > occupied.length) {
+      for (const c of occupied) if (c.cx >= x0 && c.cx <= x1 && c.cy >= y0 && c.cy <= y1) out.push(c.l);
+      return out;
+    }
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cy = y0; cy <= y1; cy++) {
+        const l = grid.get(`${cx},${cy}`);
+        if (l) out.push(l);
+      }
+    }
+    return out;
+  };
   let stamp = 0;
   const hits = (pts: Pos[], skipA: string, skipB: string, limit = Infinity): number => {
     const poly = sample(spline(pts), 10);
@@ -522,19 +564,15 @@ export function routeEdges(g: Graph, pos: Record<string, Pos>, opts: RouteOpts =
       const x0 = Math.floor((Math.min(a.x, b.x) - pad) / CELL), x1 = Math.floor((Math.max(a.x, b.x) + pad) / CELL);
       const y0 = Math.floor((Math.min(a.y, b.y) - pad) / CELL), y1 = Math.floor((Math.max(a.y, b.y) + pad) / CELL);
       const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
-      for (let cx = x0; cx <= x1; cx++) {
-        for (let cy = y0; cy <= y1; cy++) {
-          const l = grid.get(`${cx},${cy}`);
-          if (!l) continue;
-          for (const o of l) {
-            if (stamps[o.ni] === stamp || o.key === skipA || o.key === skipB) continue;
-            let t = l2 ? ((o.p.x - a.x) * dx + (o.p.y - a.y) * dy) / l2 : 0;
-            t = Math.max(0, Math.min(1, t));
-            if (Math.hypot(o.p.x - (a.x + dx * t), o.p.y - (a.y + dy * t)) < o.r + 5) {
-              // Count each dot once (its label obstacle shares the index).
-              stamps[o.ni] = stamp;
-              if (++n >= limit) return n;
-            }
+      for (const l of near(x0, x1, y0, y1)) {
+        for (const o of l) {
+          if (stamps[o.ni] === stamp || o.key === skipA || o.key === skipB) continue;
+          let t = l2 ? ((o.p.x - a.x) * dx + (o.p.y - a.y) * dy) / l2 : 0;
+          t = Math.max(0, Math.min(1, t));
+          if (Math.hypot(o.p.x - (a.x + dx * t), o.p.y - (a.y + dy * t)) < o.r + 5) {
+            // Count each dot once (its label obstacle shares the index).
+            stamps[o.ni] = stamp;
+            if (++n >= limit) return n;
           }
         }
       }
@@ -542,8 +580,9 @@ export function routeEdges(g: Graph, pos: Record<string, Pos>, opts: RouteOpts =
     return n;
   };
   for (const e of g.edges.values()) {
-    const p = pos[e.from], q = pos[e.to];
-    if (!p || !q) continue;
+    const p = pos[e.from], q0 = pos[e.to];
+    if (!p || !q0) continue;
+    const q = opts.wrap ? { x: q0.x + wrapDx(p, q0, opts.wrap, e.from, e.to), y: q0.y } : q0;
     const rA = nodeRadiusFor(g.nodes.get(e.from));
     const rB = nodeRadiusFor(g.nodes.get(e.to));
     const trim = (W: Pos[]) => {

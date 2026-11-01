@@ -22,6 +22,7 @@ const (
 	KindSOCKS5    = "socks5"
 	KindHTTP      = "http"
 	KindSS        = "ss"
+	KindTrojan    = "trojan"
 	KindHy2       = "hy2"
 	KindIKEv2     = "ikev2"
 	KindL2TP      = "l2tp"
@@ -32,7 +33,7 @@ const (
 )
 
 // Kinds lists every source kind.
-var Kinds = []string{KindLocal, KindForward, KindSOCKS5, KindHTTP, KindSS, KindHy2, KindIKEv2,
+var Kinds = []string{KindLocal, KindForward, KindSOCKS5, KindHTTP, KindSS, KindTrojan, KindHy2, KindIKEv2,
 	KindL2TP, KindOpenVPN, KindWireGuard, KindAccess, KindRelay}
 
 // Condition fields (Condition.Field).

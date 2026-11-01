@@ -9,6 +9,7 @@ import type { UserConfig, TrafficReset } from '@/api';
 import { PROXY_REGISTRY } from '@/config/proxyRegistry';
 import { useNodeStore } from '@/store/node';
 import { useDialogInit } from '@/hooks/useFormInit';
+import { RateInput, rateToForm, formToRate, type RateValue } from './RateInput';
 
 const RESET_PERIODS: TrafficReset[] = ['', 'daily', 'weekly', 'monthly'];
 
@@ -51,6 +52,8 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
   const [exitPath, setExitPath] = useState<ExitPathValue>({ paths: [''], mode: '' });
   const [exitPolicy, setExitPolicy] = useState('');
   const [trafficLimit, setTrafficLimit] = useState('');
+  const [rateUp, setRateUp] = useState<RateValue>(rateToForm(0));
+  const [rateDown, setRateDown] = useState<RateValue>(rateToForm(0));
   const [expiryDate, setExpiryDate] = useState('');
   const [resetPeriod, setResetPeriod] = useState<TrafficReset>('');
   const [resetDay, setResetDay] = useState(1);
@@ -70,6 +73,7 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
       setExitPath({ paths: [''], mode: '' });
       setExitPolicy('');
       setTrafficLimit(''); setExpiryDate(''); setEnabled(true);
+      setRateUp(rateToForm(0)); setRateDown(rateToForm(0));
       setResetPeriod(''); setResetDay(1);
       setNodeAccess(false); setAccessMode('restricted'); setAllowInternal(false);
       return;
@@ -81,6 +85,7 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
     setExitPath(apiToExitPath(editing.exit_via, editing.exit_paths, editing.exit_mode));
     setExitPolicy(editing.exit_policy || '');
     setTrafficLimit(editing.traffic_limit > 0 ? String(editing.traffic_limit / 1073741824) : '');
+    setRateUp(rateToForm(editing.rate_up)); setRateDown(rateToForm(editing.rate_down));
     setExpiryDate(editing.expiry_date || '');
     setResetPeriod(editing.traffic_reset || '');
     setResetDay(editing.traffic_reset_day || 1);
@@ -119,6 +124,8 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
       ...exitData,
       exit_policy: exitPolicy,
       traffic_limit: trafficLimit ? parseFloat(trafficLimit) * 1073741824 : 0,
+      rate_up: formToRate(rateUp),
+      rate_down: formToRate(rateDown),
       expiry_date: expiryDate || undefined,
       traffic_reset: resetPeriod,
       traffic_reset_day: resetPeriod === 'weekly' || resetPeriod === 'monthly' ? resetDay : 0,
@@ -203,6 +210,15 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
                 </FormGroup>
                 <FormGroup label={t('users.expiryDate')}>
                   <Input type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} />
+                </FormGroup>
+              </FormGrid>
+
+              <FormGrid>
+                <FormGroup label={t('users.rateUp')}>
+                  <RateInput value={rateUp} onChange={setRateUp} testId="user-rate-up" />
+                </FormGroup>
+                <FormGroup label={t('users.rateDown')}>
+                  <RateInput value={rateDown} onChange={setRateDown} testId="user-rate-down" />
                 </FormGroup>
               </FormGrid>
 

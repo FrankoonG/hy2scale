@@ -577,7 +577,7 @@ func (s *Server) deleteSharedUser(w http.ResponseWriter, r *http.Request) {
 
 // sharedProtected: the fields of a shared user only its manager changes.
 var sharedProtected = []string{"username", "password", "proxy_passwords", "proxy_disabled", "traffic_limit",
-	"expiry_date", "enabled", "node_access", "node_access_mode", "deny_internal", "traffic_reset", "traffic_reset_day"}
+	"rate_up", "rate_down", "expiry_date", "enabled", "node_access", "node_access_mode", "deny_internal", "traffic_reset", "traffic_reset_day"}
 
 func jsonZero(v any) bool {
 	switch x := v.(type) {
