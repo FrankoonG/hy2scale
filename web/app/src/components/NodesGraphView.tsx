@@ -539,7 +539,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       const b = geoBase.out[keys[0]];
       const c = { x: b.x * v.k + v.x, y: b.y * v.k + v.y };
       const ring = keys.filter((k) => k !== selfId).sort();
-      const center = keys.length > 1 && keys.includes(selfId);
+      const center = keys.includes(selfId);
       if (center) m[selfId] = c;
       if (!center && ring.length === 1) { m[ring[0]] = c; return; }
       const r = Math.max(36, (ring.length * 44) / (2 * Math.PI));
@@ -577,6 +577,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
 
   const [size, setSize] = useState({ w: 0, h: 0 });
+  const sizeRef = useRef(size);
+  sizeRef.current = size;
   useLayoutEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
@@ -1418,6 +1420,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       let globalPeak = 0;
       maxByEdgeRef.current.forEach((v) => { if (v > globalPeak) globalPeak = v; });
       const denom = Math.max(globalPeak, 10 * 1024 * 1024);
+      // Chevrons are drawn only inside the viewport (geometry coordinates:
+      // screen pixels on the map, world units otherwise): a line on a
+      // zoomed-in map can be millions of pixels long.
+      const v = viewRef.current, sz = sizeRef.current, gm = geoModeRef.current;
+      const vk = gm ? 1 : v.k, ox = gm ? 0 : v.x, oy = gm ? 0 : v.y, pad = 20;
+      const culled = sz.w > 0 && sz.h > 0;
+      const rx0 = (-pad - ox) / vk, rx1 = (sz.w + pad - ox) / vk, ry0 = (-pad - oy) / vk, ry1 = (sz.h + pad - oy) / vk;
       edgesRef.current.forEach((e) => {
         if (!e.directionKnown) return;
         const peak = Math.max(e.txRate, e.rxRate);
@@ -1430,12 +1439,36 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         const g = geomsRef.current.get(e.key);
         if (!el || !g) return;
         let d = '';
-        for (let s = st.phase; s <= g.len - CHEV_HALF_LEN; s += CHEV_SPACING) {
-          if (s < CHEV_HALF_LEN) continue;
+        const chev = (s: number) => {
           const at = pointAt(g, s);
           const bx = at.x - at.tx * CHEV_HALF_LEN, by = at.y - at.ty * CHEV_HALF_LEN;
           const nx = -at.ty, ny = at.tx;
           d += `M${(bx + nx * CHEV_HALF_WID).toFixed(1)} ${(by + ny * CHEV_HALF_WID).toFixed(1)}L${at.x.toFixed(1)} ${at.y.toFixed(1)}L${(bx - nx * CHEV_HALF_WID).toFixed(1)} ${(by - ny * CHEV_HALF_WID).toFixed(1)}`;
+        };
+        const end = g.len - CHEV_HALF_LEN;
+        // the chevron positions phase + n·spacing within [from, to]
+        let next = st.phase;
+        const run = (from: number, to: number) => {
+          let s = Math.max(next, st.phase + Math.ceil((from - st.phase) / CHEV_SPACING) * CHEV_SPACING);
+          for (; s <= Math.min(to, end); s += CHEV_SPACING) if (s >= CHEV_HALF_LEN) chev(s);
+          next = Math.max(next, s);
+        };
+        if (!culled) run(0, end);
+        else {
+          const { poly, cum } = g;
+          for (let i = 0; i < poly.length - 1; i++) {
+            // the part of this (straight) piece inside the viewport
+            const a = poly[i], b = poly[i + 1], dx = b.x - a.x, dy = b.y - a.y;
+            let t0 = 0, t1 = 1;
+            for (const [p, q] of [[-dx, a.x - rx0], [dx, rx1 - a.x], [-dy, a.y - ry0], [dy, ry1 - a.y]]) {
+              if (p === 0) { if (q < 0) t1 = -1; continue; }
+              const t = q / p;
+              if (p < 0) t0 = Math.max(t0, t); else t1 = Math.min(t1, t);
+            }
+            if (t0 > t1) continue;
+            const L = cum[i + 1] - cum[i];
+            run(cum[i] + t0 * L, cum[i] + t1 * L);
+          }
         }
         el.setAttribute('d', d);
       });
