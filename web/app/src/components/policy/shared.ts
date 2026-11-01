@@ -8,7 +8,7 @@ export type ValueInput = 'text' | 'choice' | 'user';
 
 export interface FieldInfo { field: CondField; input: ValueInput; choices?: string[]; placeholder?: string }
 
-export const SOURCE_KINDS = ['local', 'forward', 'socks5', 'http', 'ss', 'hy2', 'ikev2', 'l2tp', 'openvpn', 'wireguard', 'access', 'relay'];
+export const SOURCE_KINDS = ['local', 'forward', 'socks5', 'http', 'ss', 'trojan', 'hy2', 'ikev2', 'l2tp', 'openvpn', 'wireguard', 'access', 'relay'];
 
 /** Fields of a connection, in the order the editor offers them. */
 export const FIELDS: FieldInfo[] = [

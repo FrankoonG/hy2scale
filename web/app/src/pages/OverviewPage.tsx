@@ -197,10 +197,10 @@ function SegBar({ parts }: { parts: Part[] }) {
 const C_LIGHT = { ok: '#22c55e', bad: '#ef4444', warn: '#f59e0b', off: '#b8bfcc', pri: '#4361ee' };
 const C_DARK = { ok: '#22c55e', bad: '#f05252', warn: '#f59e0b', off: '#4b5262', pri: '#5a78f8' };
 const SVC_LIGHT: Record<string, string> = {
-  hy2: '#4361ee', socks5: '#0ea5e9', http: '#14b8a6', ss: '#8b5cf6',
+  hy2: '#4361ee', socks5: '#0ea5e9', http: '#14b8a6', ss: '#8b5cf6', trojan: '#65a30d',
   l2tp: '#f59e0b', ikev2: '#ec4899', wg: '#22c55e', openvpn: '#f97316',
 };
-const SVC_DARK: Record<string, string> = { ...SVC_LIGHT, hy2: '#5a78f8', ss: '#a78bfa' };
+const SVC_DARK: Record<string, string> = { ...SVC_LIGHT, hy2: '#5a78f8', ss: '#a78bfa', trojan: '#84cc16' };
 
 const KV = KeyValue;
 
@@ -437,6 +437,7 @@ export default function OverviewPage() {
   const { data: sessions = [] } = useQuery({ queryKey: ['sessions'], queryFn: api.getSessions, refetchInterval: 3000 });
   const { data: proxies = [] } = useQuery({ queryKey: ['proxies'], queryFn: api.getProxies, refetchInterval: 10000 });
   const { data: ss } = useQuery({ queryKey: ['ss'], queryFn: api.getSS, refetchInterval: 10000 });
+  const { data: trojan } = useQuery({ queryKey: ['trojan'], queryFn: api.getTrojan, refetchInterval: 10000 });
   const { data: l2tp } = useQuery({ queryKey: ['l2tp'], queryFn: api.getL2TP, refetchInterval: 5000 });
   const { data: ikev2 } = useQuery({ queryKey: ['ikev2'], queryFn: api.getIKEv2, refetchInterval: 5000 });
   const { data: wg } = useQuery({ queryKey: ['wireguard'], queryFn: api.getWireGuard, refetchInterval: 5000 });
@@ -505,6 +506,7 @@ export default function OverviewPage() {
     { key: 'socks5', label: t('proxies.socks5'), on: !!socks?.enabled, port: portOf(socks?.listen), devices: byProto.socks5 || 0 },
     { key: 'http', label: t('proxies.http'), on: !!http?.enabled, port: portOf(http?.listen), devices: byProto.http || 0 },
     { key: 'ss', label: t('proxies.ss'), on: !!ss?.enabled, port: portOf(ss?.listen), devices: byProto.ss || 0 },
+    { key: 'trojan', label: t('proxies.trojan'), on: !!trojan?.enabled, port: portOf(trojan?.listen), devices: byProto.trojan || 0 },
     { key: 'l2tp', label: t('proxies.l2tp'), on: !!l2tp?.enabled, running: l2tp?.running, port: portOf(l2tp?.listen), devices: l2tp?.connected || 0 },
     { key: 'ikev2', label: t('proxies.ikev2'), on: !!ikev2?.enabled, running: ikev2?.running, port: '500/4500', devices: ikev2?.connected || 0 },
     { key: 'wg', label: t('proxies.wireguard'), on: !!wg?.enabled, running: wg?.running, port: portOf(wg?.listen_port), devices: wg?.connected || 0 },

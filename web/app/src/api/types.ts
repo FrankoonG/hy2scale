@@ -218,6 +218,16 @@ export interface SSConfig {
   exit_policy?: string;
 }
 
+// ===== Trojan =====
+export interface TrojanConfig {
+  listen: string;
+  enabled: boolean;
+  /** TLS certificate id; '' = the hy2 server's certificate. */
+  cert_id: string;
+  /** host:port for connections that fail authentication; '' = close them. */
+  fallback: string;
+}
+
 // ===== L2TP =====
 export interface L2TPConfig {
   capable?: boolean;

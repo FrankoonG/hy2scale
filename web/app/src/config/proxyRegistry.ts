@@ -1,4 +1,4 @@
-import type { SSConfig, ProxyConfig } from '@/api';
+import type { SSConfig, TrojanConfig, ProxyConfig } from '@/api';
 
 /**
  * Proxy registry — single source of truth for all proxy types.
@@ -15,6 +15,7 @@ import type { SSConfig, ProxyConfig } from '@/api';
 export interface ProxyContext {
   serverPort: string;
   ssConfig?: SSConfig | null;
+  trojanConfig?: TrojanConfig | null;
   proxies: ProxyConfig[];
 }
 
@@ -72,6 +73,16 @@ export const PROXY_REGISTRY: ProxyRegistryEntry[] = [
       const method = ctx.ssConfig?.method || 'aes-256-gcm';
       return `ss://${btoa(`${method}:${password}`)}@${host}:${port}#${encodeURIComponent(username)}`;
     },
+  },
+  {
+    key: 'trojan',
+    label: 'Trojan',
+    authType: 'password',
+    category: 'l7',
+    defaultPort: '443',
+    getPort: (ctx) => ctx.trojanConfig?.listen?.replace(/.*:/, '') || '443',
+    buildUrl: ({ host, port, password, username }) =>
+      `trojan://${encodeURIComponent(password)}@${host}:${port}?security=tls&sni=${encodeURIComponent(host)}&allowInsecure=1#${encodeURIComponent(username)}`,
   },
   {
     key: 'socks5',

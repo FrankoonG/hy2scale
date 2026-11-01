@@ -1,14 +1,14 @@
 import { api } from './client';
 import type {
   NodeConfig, Stats, TopologyNode, ClientEntry, PathStatus,
-  UserConfig, TrafficReset, Session, ProxyConfig, SSConfig, L2TPConfig,
+  UserConfig, TrafficReset, Session, ProxyConfig, SSConfig, TrojanConfig, L2TPConfig,
   IKEv2Config, OpenVPNConfig, WireGuardConfig, WireGuardPeer,
   CertInfo, UISettings, PortConflict, PasswordConflicts,
   UpgradeStatus, UpgradeCheckResult, NodeEgress, NodeEgressFamily,
   PublicIPSettings,
 } from './types';
 
-export type { NodeConfig, Stats, TopologyNode, ClientEntry, PathStatus, UserConfig, TrafficReset, Session, ProxyConfig, SSConfig, L2TPConfig, IKEv2Config, OpenVPNConfig, WireGuardConfig, WireGuardPeer, CertInfo, UISettings, PortConflict, PasswordConflicts, UpgradeStatus, UpgradeCheckResult, NodeEgress, NodeEgressFamily };
+export type { NodeConfig, Stats, TopologyNode, ClientEntry, PathStatus, UserConfig, TrafficReset, Session, ProxyConfig, SSConfig, TrojanConfig, L2TPConfig, IKEv2Config, OpenVPNConfig, WireGuardConfig, WireGuardPeer, CertInfo, UISettings, PortConflict, PasswordConflicts, UpgradeStatus, UpgradeCheckResult, NodeEgress, NodeEgressFamily };
 
 // Auth
 export const login = (username: string, password: string) =>
@@ -126,6 +126,11 @@ export const deleteProxy = (id: string) =>
 export const getSS = () => api<SSConfig>('/ss');
 export const updateSS = (data: Partial<SSConfig>) =>
   api('/ss', { method: 'PUT', body: JSON.stringify(data) });
+
+// Trojan
+export const getTrojan = () => api<TrojanConfig>('/trojan');
+export const updateTrojan = (data: Partial<TrojanConfig>) =>
+  api('/trojan', { method: 'PUT', body: JSON.stringify(data) });
 
 // L2TP
 export const getL2TP = () => api<L2TPConfig>('/l2tp');
