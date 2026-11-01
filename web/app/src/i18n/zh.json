@@ -298,6 +298,7 @@
   "nodes.geo.needDb": "需要导入 IP 地理数据库",
   "nodes.geo.loadFailed": "地图数据加载失败",
   "nodes.geo.menu": "地图",
+  "nodes.geo.focusDetail": "仅节点所在国家显示细节",
   "nodes.geo.resetLines": "重置线条",
   "nodes.geo.resetLinesConfirm": "清除地图视角中所有线条的拐点和标签位置？",
   "nodes.graph.zoomIn": "放大",

@@ -298,6 +298,7 @@
   "nodes.geo.needDb": "Requires an IP geolocation database",
   "nodes.geo.loadFailed": "Map data failed to load",
   "nodes.geo.menu": "Map",
+  "nodes.geo.focusDetail": "Detail node countries only",
   "nodes.geo.resetLines": "Reset lines",
   "nodes.geo.resetLinesConfirm": "Remove every bend and label position of the map view?",
   "nodes.graph.zoomIn": "Zoom in",

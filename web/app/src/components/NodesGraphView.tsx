@@ -25,13 +25,14 @@ import {
   PRESET_IDS, presetLayout, graphSignature, routeEdges, placeLabels, pointAt, project, ghostPoints,
   toAbs, toRel, contentBounds, wrapDx, type PresetId, type Waypoint, type EdgeGeom,
 } from './topo/layouts';
-import { CanvasMenuButton, CanvasSubmenu, TopoMenuButton, TopoSubmenu, useNamePrompt, type CanvasMenuProps } from './topo/CanvasMenu';
+import { CanvasMenuButton, CanvasSubmenu, TopoMenuButton, TopoMenuCheck, TopoSubmenu, useNamePrompt, type CanvasMenuProps } from './topo/CanvasMenu';
 import { useGeoMany, useGeoStatus } from '@/hooks/useGeo';
 import type { Admin1, GeoData, MapProj, Palette } from './topo/geoMap';
 
 type GeoMod = typeof import('./topo/geoMap');
 /** The canvas that stores geo mode's custom lines (never listed). */
 const GEO_CANVAS = 'geo';
+const GEOFOCUS_STORE = 'hy2.topo.geoFocus';
 const GEO_EMPTY: GraphCanvas = { id: GEO_CANVAS, name: '', nodes: {}, edges: {} };
 const GEO_MIN_K = 0.25;
 const GEO_MAX_K = 800;
@@ -255,6 +256,19 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   const selfIP = ipOf.get(selfId);
   const selfCountry = selfIP ? geoInfos.get(selfIP)?.country?.toUpperCase() : undefined;
   const geoInfoSig = [...ipOf].map(([k, ip]) => { const g = geoInfos.get(ip); return `${k}=${g ? `${g.lat ?? ''},${g.lon ?? ''},${g.country ?? ''}` : '?'}`; }).join(';');
+
+  // Map detail only in the countries the nodes are in (cities there only,
+  // states elsewhere when zoomed in further).
+  const [geoFocus, setGeoFocusState] = useState(() => lsGet(GEOFOCUS_STORE) !== '0');
+  const setGeoFocus = (on: boolean) => { lsSet(GEOFOCUS_STORE, on ? '1' : '0'); setGeoFocusState(on); };
+  const nodeCountries = useMemo(() => {
+    const s = new Set<string>();
+    ipOf.forEach((ip) => { const c = geoInfos.get(ip)?.country; if (c) s.add(c.toUpperCase()); });
+    return s;
+    // geoInfoSig stands for geoInfos
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ipOf, geoInfoSig]);
+  const focusIso = geoFocus ? nodeCountries : undefined;
 
   // Preset layouts depend only on the graph's shape (signature), not on the
   // rates/latencies refreshed by every topology poll.
@@ -1347,10 +1361,10 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       const ctx = cv.getContext('2d');
       if (!ctx) return;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      geo.mod.drawBasemap(ctx, size.w, size.h, mapProj, view, geo.data, admin1, geoPalette(), geoLangOf(i18n.language));
+      geo.mod.drawBasemap(ctx, size.w, size.h, mapProj, view, geo.data, admin1, geoPalette(), geoLangOf(i18n.language), focusIso);
     });
     return () => cancelAnimationFrame(id);
-  }, [geoMode, geo, admin1, view, size.w, size.h, mapProj, darkReader, i18n.language, geoPalette]);
+  }, [geoMode, geo, admin1, view, size.w, size.h, mapProj, darkReader, i18n.language, geoPalette, focusIso]);
 
   const resetGeoLines = async () => {
     const ok = await confirm({
@@ -1403,7 +1417,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     const ctx = under.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
-    g.mod.drawBasemap(ctx, EW, EH, mapProj, v, g.data, admin1, geoPalette(), geoLangOf(i18n.language));
+    g.mod.drawBasemap(ctx, EW, EH, mapProj, v, g.data, admin1, geoPalette(), geoLangOf(i18n.language), focusIso);
     setGeoExport({ v, w: EW, h: EH });
     // the graph laid out for the picture, flow marks drawn
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r))));
@@ -1435,6 +1449,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   const geoMenuShell = { label: t('nodes.geo.menu'), title: t('nodes.geo.menu'), testId: 'topo-geo-menu', icon: IconGlobe };
   const geoMenuBody = (close: () => void) => (
     <>
+      <TopoMenuCheck checked={geoFocus} onChange={setGeoFocus} label={t('nodes.geo.focusDetail')} testId="geo-focus-detail" />
+      <div className="hy-dd-divider" />
       <button type="button" role="menuitem" className="hy-dropdown-item" data-testid="geo-save-image" onClick={() => { close(); saveGeoImage(); }}>{t('topo.saveImage')}</button>
       <button type="button" role="menuitem" className="hy-dropdown-item danger" data-testid="geo-reset-lines" onClick={() => { close(); resetGeoLines(); }}>{t('nodes.geo.resetLines')}</button>
     </>
