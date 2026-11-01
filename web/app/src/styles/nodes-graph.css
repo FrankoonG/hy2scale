@@ -346,10 +346,11 @@
    (touch). Ghost = insert a bend there; solid = an existing bend. */
 .hy-topo-edge.custom .hy-topo-edge-base{color:#6b5bd2;stroke-opacity:.55}
 .hy-topo-edge-hit{stroke:transparent;stroke-width:14;fill:none;vector-effect:non-scaling-stroke;pointer-events:stroke;cursor:pointer}
+/* the selected (clicked) line */
+.hy-topo-edge-sel{color:#4361ee;stroke:currentColor;stroke-width:6;stroke-opacity:.38;stroke-linecap:round;fill:none;pointer-events:none;vector-effect:non-scaling-stroke}
 .hy-topo-ghost{color:#4361ee;stroke:currentColor;fill:currentColor;fill-opacity:.14;cursor:copy}
 .hy-topo-handle{color:#4361ee;stroke:#ffffff;fill:currentColor;cursor:grab}
 .hy-topo-ghost:hover,.hy-topo-handle:hover{color:#2f4ad8}
-.hy-topo-edge-hit.sel{stroke-width:22}
 .hy-topo-grab{fill:transparent;stroke:none;pointer-events:all}
 .hy-topo-grab.ghost{cursor:copy}
 .hy-topo-grab.wp{cursor:grab}
@@ -382,6 +383,7 @@
 :root[data-theme="dark"] .hy-topo-edge.to-native .hy-topo-edge-draw{color:#eab308}
 :root[data-theme="dark"] .hy-topo-edge-draw.offline,:root[data-theme="dark"] .hy-topo-edge.offline .hy-topo-edge-base,:root[data-theme="dark"] .hy-topo-edge-x{color:#f87171}
 :root[data-theme="dark"] .hy-topo-edge-alt{color:#8ea4ff}
+:root[data-theme="dark"] .hy-topo-edge-sel{color:#6d8bff;stroke-opacity:.5}
 :root[data-theme="dark"] .hy-topo-edge-label.rate,:root[data-theme="dark"] .hy-topo-edge-label.lat-na{color:#a9b0be}
 :root[data-theme="dark"] .hy-topo-edge-label .rate-arrow-up{color:#60a5fa}
 :root[data-theme="dark"] .hy-topo-edge-label.lat-mid{color:#f59e0b}

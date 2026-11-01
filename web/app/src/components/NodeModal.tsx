@@ -29,6 +29,9 @@ interface Props {
   onClose: () => void;
   editingName: string | null;
   animateFrom?: { x: number; y: number };
+  /** New entry punched to a node reached through the mesh: its name and
+   *  the path the topology reaches it by (the signalling path). */
+  punchFor?: { name: string; signal: string } | null;
 }
 
 interface AddrRow {
@@ -91,7 +94,7 @@ function parseAddr(a: string): AddrRow {
   return m ? { host: m[1], port: m[2], bind } : { host: base, port: '', bind };
 }
 
-export default function NodeModal({ open, onClose, editingName, animateFrom }: Props) {
+export default function NodeModal({ open, onClose, editingName, animateFrom, punchFor }: Props) {
   const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -194,6 +197,12 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
     setPunchSignal(toListItems([])); setPunchRefl(toListItems([])); setPunchBinds(['']); setPunchFamily('ipv4');
     setRetryMin(''); setRetryMax(''); setProbeTimeout(''); setPunchWindow('');
     if (!editingName) {
+      if (punchFor) {
+        setName(punchFor.name);
+        setAddrItems([]);
+        setPunchSignal(toListItems([punchFor.signal]));
+        setAddrTab('punch');
+      }
       return;
     }
     // cancelled flag closes over per-effect-run scope; when the
@@ -251,7 +260,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       setShowQuic(hasQuic || hasAdv);
     });
     return () => { cancelled = true; };
-  }, [open, editingName]);
+  }, [open, editingName, punchFor]);
 
   // Sync connection mode when address count changes
   const addAddrRow = () => {
@@ -273,6 +282,11 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
   const validateAddrs = (): string[] | null => {
     setAddrError('');
     if (manualBlank && punchSet) return [];
+    if (!addrItems.length) {
+      setAddrTab('manual');
+      setAddrError(t('nodes.hostRequired'));
+      return null;
+    }
     for (const item of addrItems) {
       const host = item.host.trim();
       if (!host) {
@@ -386,11 +400,6 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
       if (bad) {
         setAddrTab('punch');
         setAddrError(t('nodes.punchPathEnd', { path: bad, name: finalName }));
-        return;
-      }
-      if (!reflectors.length) {
-        setAddrTab('punch');
-        setAddrError(t('nodes.punchReflRequired'));
         return;
       }
     }
@@ -578,6 +587,7 @@ export default function NodeModal({ open, onClose, editingName, animateFrom }: P
               onReorder={setAddrItems}
               removeLabel={t('app.delete')}
               onRemove={(item) => removeAddrItem(item.id)}
+              minItems={punchSet ? 0 : 1}
               addLabel={t('nodes.addAddress')}
               onAdd={addAddrRow}
               renderItem={(item) => (

@@ -871,9 +871,7 @@ func normalizeClient(cl *app.ClientEntry) error {
 					}
 				}
 			}
-			if len(p.Reflectors) == 0 {
-				return fmt.Errorf("punch needs at least one reflector")
-			}
+			// no reflectors: the target probes with all of its direct peers
 			for _, r := range p.Reflectors {
 				if r == "" || strings.Contains(r, "/") || r == cl.Name {
 					return fmt.Errorf("invalid reflector %q", r)
