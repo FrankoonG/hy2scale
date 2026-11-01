@@ -16,6 +16,10 @@ services:
       - ${HOST_IP}:${APP_PORT_HY2}:5565/udp
     volumes:
       - ./data/hy2scale:/data
+    # iKuai replaces ./environment with the values from option.json fields of
+    # scope "environment" on every start; fixed variables go here.
+    environment:
+      - HY2SCALE_CHILD_PARENTS=eth0
     env_file:
       - ./environment
     logging:
