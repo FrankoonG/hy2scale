@@ -12,7 +12,7 @@ import { useExitPaths } from '@/hooks/useExitPaths';
 import { usePanZoom, type View } from '@/hooks/usePanZoom';
 import {
   useConfirm, useMediaQuery, useToast, readStored, writeStored,
-  IconCopy, IconMaximize2, IconChevronLeft, IconChevronRight, IconScan, IconZoomIn, IconZoomOut, IconGlobe, IconCheck,
+  IconCopy, IconMaximize2, IconChevronLeft, IconChevronRight, IconScan, IconZoomIn, IconZoomOut, IconGlobe,
 } from '@hy2scale/ui';
 import { copyToClipboard } from '@/utils/clipboard';
 import { exportPng, imageFileName } from '@/utils/exportImage';
@@ -23,7 +23,7 @@ import {
 } from './topo/graphModel';
 import {
   PRESET_IDS, presetLayout, graphSignature, routeEdges, placeLabels, pointAt, project, ghostPoints,
-  toAbs, toRel, contentBounds, type PresetId, type Waypoint, type EdgeGeom,
+  toAbs, toRel, contentBounds, wrapDx, type PresetId, type Waypoint, type EdgeGeom,
 } from './topo/layouts';
 import { CanvasMenuButton, CanvasSubmenu, TopoMenuButton, TopoSubmenu, useNamePrompt, type CanvasMenuProps } from './topo/CanvasMenu';
 import { useGeoMany, useGeoStatus } from '@/hooks/useGeo';
@@ -33,7 +33,6 @@ type GeoMod = typeof import('./topo/geoMap');
 /** The canvas that stores geo mode's custom lines (never listed). */
 const GEO_CANVAS = 'geo';
 const GEO_EMPTY: GraphCanvas = { id: GEO_CANVAS, name: '', nodes: {}, edges: {} };
-const MAPPROJ_STORE = 'hy2.topo.mapProj';
 const GEO_MIN_K = 0.25;
 const GEO_MAX_K = 800;
 
@@ -227,8 +226,12 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   geoRef.current = geo;
   const [admin1, setAdmin1] = useState<Admin1 | null>(null);
   const admin1Loading = useRef(false);
-  const [mapProj, setMapProjState] = useState<MapProj>(() => (lsGet(MAPPROJ_STORE) === 'equalearth' ? 'equalearth' : 'mercator'));
+  const mapProj: MapProj = 'mercator';
   const mapProjRef = useRef(mapProj);
+  // While a picture is taken: the view and size the graph is laid out for.
+  const [geoExport, setGeoExport] = useState<{ v: View; w: number; h: number } | null>(null);
+  /** Copy of the world a drag started in (geo mode). */
+  const dragCopyRef = useRef(0);
   mapProjRef.current = mapProj;
   const geoCanvas = useMemo(() => (list || []).find((c) => c.id === GEO_CANVAS) || GEO_EMPTY, [list]);
   const editing = geoMode || isCustom;
@@ -430,6 +433,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   }, [setCanvases, toast, t]);
 
   // ---------------------------------------------------------------- view
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  const sizeRef = useRef(size);
+  sizeRef.current = geoExport ? { w: geoExport.w, h: geoExport.h } : size;
   const userMoved = useRef(false);
   const positionsRef = useRef<Record<string, Pos>>({});
   const clampView = useCallback((v: View): View => {
@@ -437,11 +443,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     if (!el) return v;
     const r = el.getBoundingClientRect();
     if (geoModeRef.current && geoRef.current) {
-      // Keep part of the world on screen.
-      const [[x0, y0], [x1, y1]] = geoRef.current.mod.worldBounds(mapProjRef.current);
-      const x = Math.min(r.width - CLAMP_VISIBLE - x0 * v.k, Math.max(CLAMP_VISIBLE - x1 * v.k, v.x));
-      const y = Math.min(r.height - CLAMP_VISIBLE - y0 * v.k, Math.max(CLAMP_VISIBLE - y1 * v.k, v.y));
-      return { ...v, x, y };
+      // Never past the top or bottom of the map; sideways the world
+      // repeats, x stays within one world width around the centre.
+      const [[, y0], [, y1]] = geoRef.current.mod.worldBounds(mapProjRef.current);
+      const W = geoRef.current.mod.BASE * v.k, H = (y1 - y0) * v.k;
+      const y = H <= r.height ? r.height / 2 - ((y0 + y1) / 2) * v.k : Math.min(-y0 * v.k, Math.max(r.height - y1 * v.k, v.y));
+      const c = r.width / 2 - W / 2;
+      return { ...v, x: c + ((((v.x - c) % W) + W) % W), y };
     }
     const b = contentBounds(positionsRef.current);
     if (!b || r.width <= 0 || r.height <= 0) return v;
@@ -455,9 +463,12 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   const [dragging, setDragging] = useState(false);
   const claimRef = useRef<(e: PointerEvent) => boolean>(() => false);
   const cancelDragRef = useRef<() => void>(() => {});
+  // Zoomed out the map is as tall as the canvas.
+  const geoWorldH = geo ? (() => { const [[, y0], [, y1]] = geo.mod.worldBounds(mapProj); return y1 - y0; })() : 0;
+  const geoMinK = geoWorldH && size.h ? size.h / geoWorldH : GEO_MIN_K;
   const { view, viewRef, setView, animateTo, zoomBy, consumeClick, clampK } = usePanZoom({
     ref: wrapRef,
-    minK: geoMode ? GEO_MIN_K : 0.2,
+    minK: geoMode ? geoMinK : 0.2,
     maxK: geoMode ? GEO_MAX_K : 3,
     initial: { x: 400, y: 80, k: 1 },
     isOverlay: (el) => !!el.closest('[data-overlay]'),
@@ -524,9 +535,19 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
   // Geo mode positions are on screen (dots keep their size at any zoom):
   // nodes at one place fan out around it, this node in the middle.
+  const geoView = geoExport?.v ?? view;
+  /** Width of one world copy on screen (geo mode). */
+  const geoW = geoMode && geo ? geo.mod.BASE * geoView.k : 0;
+  const geoWRef = useRef(geoW);
+  geoWRef.current = geoW;
+  /** The far end of an edge, on the side the line takes round the world. */
+  const farEnd = (pos: Record<string, Pos>, from: string, to: string): Pos | undefined => {
+    const p = pos[from], q = pos[to];
+    return p && q && geoWRef.current ? { x: q.x + wrapDx(p, q, geoWRef.current, from, to), y: q.y } : q;
+  };
   const geoPositions = useMemo<Record<string, Pos> | null>(() => {
     if (!geoMode || !geo) return null;
-    const v = view;
+    const v = geoView;
     const groups = new Map<string, string[]>();
     for (const key in geoBase.out) {
       const b = geoBase.out[key];
@@ -549,7 +570,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       });
     });
     return m;
-  }, [geoMode, geo, geoBase, selfId, view]);
+  }, [geoMode, geo, geoBase, selfId, geoView]);
   const positions = geoPositions ?? layoutPositions;
   positionsRef.current = positions;
   useEffect(() => { shownRef.current = positions; }, [positions]);
@@ -564,7 +585,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // Routing and label placement depend on the graph's shape only, so they
   // are keyed on `sig`, not on every topology poll.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const geoms = useMemo(() => routeEdges(graphRef.current, positions, { waypoints: waypointsMap, avoid: true }), [sig, positions, waypointsMap]);
+  const geoms = useMemo(() => routeEdges(graphRef.current, positions, { waypoints: waypointsMap, avoid: true, wrap: geoW }), [sig, positions, waypointsMap, geoW]);
   const geomsRef = useRef(geoms);
   geomsRef.current = geoms;
   const labelTMap = useMemo(() => {
@@ -576,9 +597,6 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   const labelSpots = useMemo(() => placeLabels(graphRef.current, positions, geoms, labelTMap), [sig, positions, geoms, labelTMap]);
 
 
-  const [size, setSize] = useState({ w: 0, h: 0 });
-  const sizeRef = useRef(size);
-  sizeRef.current = size;
   useLayoutEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
@@ -612,13 +630,23 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   }, [ready, sig, size.w, size.h, fitFor, setView, morph, loadTick, geoMode]);
 
   const fitView = () => {
-    if (geoMode) { const v = geoFit(); if (v) animateTo(v); return; }
+    if (geoMode) { const v = geoWorldFit(); if (v) animateTo(v); return; }
     userMoved.current = false;
     const v = fitFor(positionsRef.current, bendsOf(geomsRef.current));
     if (v) animateTo(v);
   };
 
   // ---------------------------------------------------------------- geo actions
+  /** The whole map height, centred on the current spot. */
+  const geoWorldFit = (): View | null => {
+    const g = geoRef.current;
+    if (!g || !size.w || !size.h) return null;
+    const [[, y0], [, y1]] = g.mod.worldBounds(mapProj);
+    const k = size.h / (y1 - y0);
+    const v = viewRef.current;
+    const cx = (size.w / 2 - v.x) / v.k; // base x now in the middle
+    return { k, x: size.w / 2 - cx * k, y: -y0 * k };
+  };
   /** The view that just holds this node's country (else the located nodes, else the world). */
   const geoFit = useCallback((): View | null => {
     const g = geoRef.current;
@@ -635,9 +663,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     const [[x0, y0], [x1, y1]] = box;
     const availH = Math.max(40, size.h - TOP_RESERVE);
     const w = Math.max(x1 - x0, 0.02), h = Math.max(y1 - y0, 0.02);
-    const k = Math.max(GEO_MIN_K, Math.min(GEO_MAX_K, Math.min((size.w - 2 * FIT_PAD) / w, (availH - 2 * FIT_PAD) / h)));
+    const k = Math.max(geoMinK, Math.min(GEO_MAX_K, Math.min((size.w - 2 * FIT_PAD) / w, (availH - 2 * FIT_PAD) / h)));
     return { k, x: size.w / 2 - ((x0 + x1) / 2) * k, y: TOP_RESERVE + availH / 2 - ((y0 + y1) / 2) * k };
-  }, [size.w, size.h, selfCountry, geoBase]);
+  }, [size.w, size.h, selfCountry, geoBase, geoMinK]);
 
   // Entering geo mode (or switching the projection) fits this node's
   // country once its location is known.
@@ -687,12 +715,6 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     wasGeo.current = geoMode;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [geoMode]);
-  const setMapProj = (p: MapProj) => {
-    if (p === mapProj) return;
-    lsSet(MAPPROJ_STORE, p);
-    geoFitPending.current = true;
-    setMapProjState(p);
-  };
 
   // States and provinces load once the map is zoomed in far enough.
   useEffect(() => {
@@ -745,7 +767,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     if (!el) return { x: 0, y: 0 };
     const r = el.getBoundingClientRect();
     // Geo mode draws on screen coordinates.
-    if (geoModeRef.current) return { x: cx - r.left, y: cy - r.top };
+    if (geoModeRef.current) return { x: cx - r.left - dragCopyRef.current * geoWRef.current, y: cy - r.top };
     const v = viewRef.current;
     return { x: (cx - r.left - v.x) / v.k, y: (cy - r.top - v.y) / v.k };
   }, [viewRef]);
@@ -921,6 +943,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
   const nodeClickSuppress = useRef(false);
   claimRef.current = (e: PointerEvent) => {
+    dragCopyRef.current = Number((e.target as Element | null)?.closest?.('[data-copy]')?.getAttribute('data-copy') || 0);
     if (!editing || !editCanvas) return false;
     const target = e.target as Element;
     const touch = e.pointerType !== 'mouse';
@@ -952,7 +975,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       const key = ghEl.getAttribute('data-edge') || '';
       const i = Number(ghEl.getAttribute('data-ghost'));
       const ge = edgesRef.current.get(key);
-      const p = ge && positionsRef.current[ge.from], q = ge && positionsRef.current[ge.to];
+      const p = ge && positionsRef.current[ge.from], q = ge && farEnd(positionsRef.current, ge.from, ge.to);
       if (!ge || !p || !q) return false;
       if ((edgeDraftRef.current[key]?.waypoints?.length || 0) >= MAX_WAYPOINTS) return false;
       const at = clientToWorld(e.clientX, e.clientY);
@@ -1020,7 +1043,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         if (!d.moved && Math.hypot(ev.clientX - d.sx, ev.clientY - d.sy) < 4) return;
         if (!d.moved) { d.moved = true; window.clearTimeout(d.timer); userMoved.current = true; }
         const ge = edgesRef.current.get(d.key);
-        const p = ge && positionsRef.current[ge.from], q = ge && positionsRef.current[ge.to];
+        const p = ge && positionsRef.current[ge.from], q = ge && farEnd(positionsRef.current, ge.from, ge.to);
         if (p && q) setWaypoint(d.key, d.i, toRel(p, q, at));
         return;
       }
@@ -1343,31 +1366,59 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     saveCanvas({}, {});
   };
 
-  // Geo mode's picture is the view as shown: the map with the graph on it.
+  // Geo mode's picture is one whole world width: the seam goes along the
+  // meridian the fewest lines cross (farthest from any dot); a line across
+  // it leaves on one side and comes back on the other.
   const saveGeoImage = async () => {
     const svg = svgRef.current;
     const g = geoRef.current;
-    if (!svg || !g || !wrapRef.current || !size.w) return;
+    if (!svg || !g || !wrapRef.current) return;
+    const B = g.mod.BASE;
+    const pts = [...nodes.keys()].map((key) => geoBase.out[key]).filter(Boolean);
+    let seam = -B / 2, bestCross = Infinity, bestGap = -1;
+    for (let i = 0; i < 360; i++) {
+      const sm = -B / 2 + (i * B) / 360;
+      let cross = 0;
+      edges.forEach((e) => {
+        const a = geoBase.out[e.from], b = geoBase.out[e.to];
+        if (!a || !b) return;
+        const bx = b.x + wrapDx(a, b, B, e.from, e.to);
+        if (Math.floor((Math.max(a.x, bx) - sm) / B) !== Math.floor((Math.min(a.x, bx) - sm) / B)) cross++;
+      });
+      let gap = B;
+      for (const p of pts) { const d = (((p.x - sm) % B) + B) % B; gap = Math.min(gap, d, B - d); }
+      if (cross < bestCross || (cross === bestCross && gap > bestGap)) { seam = sm; bestCross = cross; bestGap = gap; }
+    }
+    const EW = 1800, k = EW / B;
+    const [[, wy0], [, wy1]] = g.mod.worldBounds(mapProj);
+    const north = g.mod.project(mapProj, [0, 78])?.y ?? wy0, south = g.mod.project(mapProj, [0, -58])?.y ?? wy1;
+    const top = Math.max(wy0, Math.min(north, ...pts.map((p) => p.y - 60 / k)));
+    const bottom = Math.min(wy1, Math.max(south, ...pts.map((p) => p.y + 70 / k)));
+    const EH = Math.round((bottom - top) * k);
+    const v = { k, x: -seam * k, y: -top * k };
     const scale = 2;
     const under = document.createElement('canvas');
-    under.width = size.w * scale;
-    under.height = size.h * scale;
+    under.width = EW * scale;
+    under.height = EH * scale;
     const ctx = under.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(scale, 0, 0, scale, 0, 0);
-    g.mod.drawBasemap(ctx, size.w, size.h, mapProj, viewRef.current, g.data, admin1, geoPalette(), geoLangOf(i18n.language));
+    g.mod.drawBasemap(ctx, EW, EH, mapProj, v, g.data, admin1, geoPalette(), geoLangOf(i18n.language));
+    setGeoExport({ v, w: EW, h: EH });
+    // the graph laid out for the picture, flow marks drawn
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r))));
     try {
       await exportPng(svg, {
-        width: size.w,
-        height: size.h,
+        width: EW,
+        height: EH,
         scale,
         background: getComputedStyle(wrapRef.current).backgroundColor,
         underlay: under,
         fileName: imageFileName(`${selfName || 'hy2scale'}-map`),
         adjust: (clone) => {
           const root = clone as SVGSVGElement;
-          root.style.width = `${size.w}px`;
-          root.style.height = `${size.h}px`;
+          root.style.width = `${EW}px`;
+          root.style.height = `${EH}px`;
           root.style.position = 'static';
           const cg = root.querySelector(':scope > g') as SVGGElement | null;
           if (cg) cg.style.opacity = '1';
@@ -1376,23 +1427,14 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       });
     } catch (err: any) {
       toast.error(String(err?.message || err));
+    } finally {
+      setGeoExport(null);
     }
   };
 
-  const projLabel = (p: MapProj) => t(`nodes.geo.proj.${p}`);
-  const geoMenuShell = { label: projLabel(mapProj), title: t('nodes.geo.menu'), testId: 'topo-geo-menu', icon: IconGlobe };
+  const geoMenuShell = { label: t('nodes.geo.menu'), title: t('nodes.geo.menu'), testId: 'topo-geo-menu', icon: IconGlobe };
   const geoMenuBody = (close: () => void) => (
     <>
-      <div className="hy-topo-canvas-sec">{t('nodes.geo.projection')}</div>
-      {(['mercator', 'equalearth'] as MapProj[]).map((p) => (
-        <button key={p} type="button" role="menuitemradio" aria-checked={p === mapProj}
-          className={clsx('hy-dropdown-item', p === mapProj && 'current')} data-testid={`geo-proj-${p}`}
-          onClick={() => { close(); setMapProj(p); }}>
-          <span className="hy-dd-check">{p === mapProj && <IconCheck size={14} />}</span>
-          <span className="hy-topo-canvas-name">{projLabel(p)}</span>
-        </button>
-      ))}
-      <div className="hy-dd-divider" />
       <button type="button" role="menuitem" className="hy-dropdown-item" data-testid="geo-save-image" onClick={() => { close(); saveGeoImage(); }}>{t('topo.saveImage')}</button>
       <button type="button" role="menuitem" className="hy-dropdown-item danger" data-testid="geo-reset-lines" onClick={() => { close(); resetGeoLines(); }}>{t('nodes.geo.resetLines')}</button>
     </>
@@ -1402,6 +1444,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   const flowPathRefs = useRef(new Map<string, SVGPathElement>());
   const flowStateRef = useRef(new Map<string, { phase: number; speed: number }>());
   const flowRefCbs = useRef(new Map<string, (el: SVGPathElement | null) => void>());
+  const copiesRef = useRef<number[]>([0]);
   const getFlowRefCb = useCallback((key: string) => {
     let cb = flowRefCbs.current.get(key);
     if (!cb) {
@@ -1426,7 +1469,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       const v = viewRef.current, sz = sizeRef.current, gm = geoModeRef.current;
       const vk = gm ? 1 : v.k, ox = gm ? 0 : v.x, oy = gm ? 0 : v.y, pad = 20;
       const culled = sz.w > 0 && sz.h > 0;
-      const rx0 = (-pad - ox) / vk, rx1 = (sz.w + pad - ox) / vk, ry0 = (-pad - oy) / vk, ry1 = (sz.h + pad - oy) / vk;
+      const rxa0 = (-pad - ox) / vk, rxa1 = (sz.w + pad - ox) / vk, ry0 = (-pad - oy) / vk, ry1 = (sz.h + pad - oy) / vk;
       edgesRef.current.forEach((e) => {
         if (!e.directionKnown) return;
         const peak = Math.max(e.txRate, e.rxRate);
@@ -1435,9 +1478,14 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         st.speed += (target - st.speed) * LERP;
         st.phase = ((st.phase + st.speed * dt) % CHEV_SPACING + CHEV_SPACING) % CHEV_SPACING;
         flowStateRef.current.set(e.key, st);
-        const el = flowPathRefs.current.get(e.key);
         const g = geomsRef.current.get(e.key);
-        if (!el || !g) return;
+        if (!g) return;
+        for (const cn of copiesRef.current) {
+        const el = flowPathRefs.current.get(`${e.key}|${cn}`);
+        if (!el) continue;
+        // a copy of the world sits cn world widths to the side
+        const sx = cn * geoWRef.current;
+        const rx0 = rxa0 - sx, rx1 = rxa1 - sx;
         let d = '';
         const chev = (s: number) => {
           const at = pointAt(g, s);
@@ -1471,6 +1519,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
           }
         }
         el.setAttribute('d', d);
+        }
       });
       raf = requestAnimationFrame(loop);
     };
@@ -1510,147 +1559,157 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     return lines;
   })();
 
-  const edgeEls: ReactNode[] = [];
-  const labelEls: ReactNode[] = [];
-  const handleEls: ReactNode[] = [];
-  edges.forEach((e) => {
-    const g = geoms.get(e.key);
-    if (!g) return;
-    const fromN = nodes.get(e.from), toN = nodes.get(e.to);
-    if (geoMode) {
-      // Zoomed out, a line between dots that touch is left out.
-      const a = positions[e.from], b = positions[e.to];
-      if (a && b && Math.hypot(a.x - b.x, a.y - b.y) < nodeRadiusFor(fromN) + nodeRadiusFor(toN) + 6) return;
-    }
-    const offline = e.disabled || !!fromN?.offline || !!toN?.offline || e.segmentLatencyMs < 0;
-    const idx = activePathOrder.get(e.key);
-    const onPath = idx !== undefined;
-    const sched = pathEdgeSchedule.get(e.key);
-    const touchesNative = !!fromN?.native || !!toN?.native;
-    // into a tree reached by node access by user: dashed entry, tinted inside
-    const restrictedEntry = !!toN?.restricted && !fromN?.restricted;
-    // into a gateway reached by node access (full use): dashed, untinted
-    const invisibleEntry = !!toN?.invisible && !toN?.restricted && !!fromN?.isSelf;
-    const restrictedIn = !!toN?.restricted && !!fromN?.restricted;
-    const flip = onPath && curPath ? curPath.keys[idx!] === e.to : false;
-    const mid = pointAt(g, g.len / 2);
-    const peer = fromN?.isSelf ? toN : toN?.isSelf ? fromN : undefined;
-    edgeEls.push(
-      <g key={e.key} className={clsx('hy-topo-edge', offline && 'offline', onPath && !offline && 'on-path', touchesNative && 'to-native', restrictedEntry && 'restricted-entry', invisibleEntry && 'invisible-entry', restrictedIn && 'restricted', g.custom && 'custom', altEdges.has(e.key) && 'alt')}>
-        <path d={g.d} className="hy-topo-edge-base" strokeWidth={edgeWidth(e)} strokeDasharray={offline ? '4 3' : undefined} />
-        {altEdges.has(e.key) && <path d={g.d} className="hy-topo-edge-alt" />}
-        {onPath && (
-          <path
-            key={(curPath ? curPath.segs.join('/') : '') + ':' + idx}
-            d={flip ? g.dRev : g.d}
-            pathLength={1}
-            className={clsx('hy-topo-edge-draw', offline && 'offline')}
-            style={{
-              ['--hy-path-len' as any]: 1,
-              ['--hy-path-draw-ms' as any]: `${sched?.durationMs ?? PATH_TOTAL_MS}ms`,
-              ['--hy-path-draw-delay' as any]: `${sched?.delayMs ?? 0}ms`,
-            }}
-          />
-        )}
-        {e.directionKnown && !offline && <path className="hy-topo-edge-flow" ref={getFlowRefCb(e.key)} />}
-        {!offline && peer?.punched && (
-          <g transform={`translate(${mid.x},${mid.y})`} className="hy-topo-edge-punch" data-punched={peer.name}>
-            <title>{t('punch.ringTitle', { names: peer.punched.join(', ') })}</title>
-            <circle r={4} />
-          </g>
-        )}
-        {offline && (
-          <g transform={`translate(${mid.x},${mid.y})`} className="hy-topo-edge-x"><path d="M -4 -4 L 4 4 M -4 4 L 4 -4" /></g>
-        )}
-        {editing && (
-          <path
-            d={g.d}
-            className="hy-topo-edge-hit"
-            data-edge-key={e.key}
-            onPointerEnter={enterEdge(e.key)}
-            onPointerLeave={leaveEdge}
-          />
-        )}
-      </g>,
-    );
-
-    // Labels: segment latency above, dominant rate (with direction arrow)
-    // below; hidden on broken hops and on lines too short to hold them.
-    const spot = labelSpots.get(e.key);
-    const screenLen = g.len * k;
-    const showLatency = !offline && e.segmentLatencyMs > 0 && screenLen > 60;
-    const showRate = !offline && screenLen > 110;
-    if (spot && (showLatency || showRate)) {
-      const latCls = ({ good: 'lat-ok', med: 'lat-mid', bad: 'lat-bad' } as const)[latencyTier(e.segmentLatencyMs)];
-      const tx = e.txRate || 0, rx = e.rxRate || 0, value = Math.max(tx, rx);
-      const arrow = value > 0 ? (tx >= rx ? '↓' : '↑') : '';
-      const rateChildren = arrow
-        ? <><tspan className={tx >= rx ? 'rate-arrow-down' : 'rate-arrow-up'}>{arrow}</tspan>{fmtRate(value)}</>
-        : <>{fmtRate(value)}</>;
-      const lines: Array<{ y: number; cls: string; body: ReactNode }> = [];
-      if (showLatency) lines.push({ y: showRate ? -5 : 3, cls: latCls, body: fmtLatency(e.segmentLatencyMs) });
-      if (showRate) lines.push({ y: showLatency ? 11 : 3, cls: 'rate', body: rateChildren });
-      labelEls.push(
-        <g
-          key={e.key}
-          className={clsx('hy-topo-edge-label-group', editing && 'editable', typeof labelTMap[e.key] === 'number' && 'placed')}
-          data-label-key={editing ? e.key : undefined}
-          style={{ transform: `translate(${spot.x}px, ${spot.y}px)` }}
-        >
-          {editing && <rect className="hy-topo-edge-label-hit" x={spot.anchor === 'start' ? -2 : spot.anchor === 'end' ? -58 : -30} y={showLatency && showRate ? -15 : -7} width={60} height={showLatency && showRate ? 30 : 16} />}
-          {lines.map((l, i) => (
-            <g key={i}>
-              {!darkReader && <text x={0} y={l.y} textAnchor={spot.anchor} className="hy-topo-edge-label-halo">{l.body}</text>}
-              <text x={0} y={l.y} textAnchor={spot.anchor} className={`hy-topo-edge-label ${l.cls}`}>{l.body}</text>
+  // Geo mode: the graph is drawn in every horizontal copy of the world.
+  const copies = geoMode && geo ? geo.mod.copiesOf(geoView, (geoExport ?? size).w || 1000, geoW / 2 + 120) : [0];
+  copiesRef.current = copies;
+  const layerOf = (cn: number) => {
+    const edgeEls: ReactNode[] = [];
+    const labelEls: ReactNode[] = [];
+    const handleEls: ReactNode[] = [];
+    edges.forEach((e) => {
+      const g = geoms.get(e.key);
+      if (!g) return;
+      const fromN = nodes.get(e.from), toN = nodes.get(e.to);
+      if (geoMode) {
+        // Zoomed out, a line between dots that touch is left out.
+        const a = positions[e.from], b = farEnd(positions, e.from, e.to);
+        if (a && b && Math.hypot(a.x - b.x, a.y - b.y) < nodeRadiusFor(fromN) + nodeRadiusFor(toN) + 6) return;
+      }
+      const offline = e.disabled || !!fromN?.offline || !!toN?.offline || e.segmentLatencyMs < 0;
+      const idx = activePathOrder.get(e.key);
+      const onPath = idx !== undefined;
+      const sched = pathEdgeSchedule.get(e.key);
+      const touchesNative = !!fromN?.native || !!toN?.native;
+      // into a tree reached by node access by user: dashed entry, tinted inside
+      const restrictedEntry = !!toN?.restricted && !fromN?.restricted;
+      // into a gateway reached by node access (full use): dashed, untinted
+      const invisibleEntry = !!toN?.invisible && !toN?.restricted && !!fromN?.isSelf;
+      const restrictedIn = !!toN?.restricted && !!fromN?.restricted;
+      const flip = onPath && curPath ? curPath.keys[idx!] === e.to : false;
+      const mid = pointAt(g, g.len / 2);
+      const peer = fromN?.isSelf ? toN : toN?.isSelf ? fromN : undefined;
+      edgeEls.push(
+        <g key={e.key} className={clsx('hy-topo-edge', offline && 'offline', onPath && !offline && 'on-path', touchesNative && 'to-native', restrictedEntry && 'restricted-entry', invisibleEntry && 'invisible-entry', restrictedIn && 'restricted', g.custom && 'custom', altEdges.has(e.key) && 'alt')}>
+          <path d={g.d} className="hy-topo-edge-base" strokeWidth={edgeWidth(e)} strokeDasharray={offline ? '4 3' : undefined} />
+          {altEdges.has(e.key) && <path d={g.d} className="hy-topo-edge-alt" />}
+          {onPath && (
+            <path
+              key={(curPath ? curPath.segs.join('/') : '') + ':' + idx}
+              d={flip ? g.dRev : g.d}
+              pathLength={1}
+              className={clsx('hy-topo-edge-draw', offline && 'offline')}
+              style={{
+                ['--hy-path-len' as any]: 1,
+                ['--hy-path-draw-ms' as any]: `${sched?.durationMs ?? PATH_TOTAL_MS}ms`,
+                ['--hy-path-draw-delay' as any]: `${sched?.delayMs ?? 0}ms`,
+              }}
+            />
+          )}
+          {e.directionKnown && !offline && <path className="hy-topo-edge-flow" ref={getFlowRefCb(`${e.key}|${cn}`)} />}
+          {!offline && peer?.punched && (
+            <g transform={`translate(${mid.x},${mid.y})`} className="hy-topo-edge-punch" data-punched={peer.name}>
+              <title>{t('punch.ringTitle', { names: peer.punched.join(', ') })}</title>
+              <circle r={4} />
             </g>
-          ))}
+          )}
+          {offline && (
+            <g transform={`translate(${mid.x},${mid.y})`} className="hy-topo-edge-x"><path d="M -4 -4 L 4 4 M -4 4 L 4 -4" /></g>
+          )}
+          {editing && (
+            <path
+              d={g.d}
+              className="hy-topo-edge-hit"
+              data-edge-key={e.key}
+              onPointerEnter={enterEdge(e.key)}
+              onPointerLeave={leaveEdge}
+            />
+          )}
         </g>,
       );
-    }
 
-    if (handleKeys.has(e.key)) {
-      const wps = edgeDraft[e.key]?.waypoints || [];
-      const p = positions[e.from], q = positions[e.to];
-      const items: ReactNode[] = [];
-      if (wps.length < MAX_WAYPOINTS) {
-        for (const gh of ghostPoints(g)) {
-          items.push(<circle key={`g${gh.index}`} cx={gh.at.x} cy={gh.at.y} r={5 / k} className="hy-topo-ghost" data-ghost={gh.index} data-edge={e.key} />);
+      // Labels: segment latency above, dominant rate (with direction arrow)
+      // below; hidden on broken hops and on lines too short to hold them.
+      const spot = labelSpots.get(e.key);
+      const screenLen = g.len * k;
+      const showLatency = !offline && e.segmentLatencyMs > 0 && screenLen > 60;
+      const showRate = !offline && screenLen > 110;
+      if (spot && (showLatency || showRate)) {
+        const latCls = ({ good: 'lat-ok', med: 'lat-mid', bad: 'lat-bad' } as const)[latencyTier(e.segmentLatencyMs)];
+        const tx = e.txRate || 0, rx = e.rxRate || 0, value = Math.max(tx, rx);
+        const arrow = value > 0 ? (tx >= rx ? '↓' : '↑') : '';
+        const rateChildren = arrow
+          ? <><tspan className={tx >= rx ? 'rate-arrow-down' : 'rate-arrow-up'}>{arrow}</tspan>{fmtRate(value)}</>
+          : <>{fmtRate(value)}</>;
+        const lines: Array<{ y: number; cls: string; body: ReactNode }> = [];
+        if (showLatency) lines.push({ y: showRate ? -5 : 3, cls: latCls, body: fmtLatency(e.segmentLatencyMs) });
+        if (showRate) lines.push({ y: showLatency ? 11 : 3, cls: 'rate', body: rateChildren });
+        labelEls.push(
+          <g
+            key={e.key}
+            className={clsx('hy-topo-edge-label-group', editing && 'editable', typeof labelTMap[e.key] === 'number' && 'placed')}
+            data-label-key={editing ? e.key : undefined}
+            style={{ transform: `translate(${spot.x}px, ${spot.y}px)` }}
+          >
+            {editing && <rect className="hy-topo-edge-label-hit" x={spot.anchor === 'start' ? -2 : spot.anchor === 'end' ? -58 : -30} y={showLatency && showRate ? -15 : -7} width={60} height={showLatency && showRate ? 30 : 16} />}
+            {lines.map((l, i) => (
+              <g key={i}>
+                {!darkReader && <text x={0} y={l.y} textAnchor={spot.anchor} className="hy-topo-edge-label-halo">{l.body}</text>}
+                <text x={0} y={l.y} textAnchor={spot.anchor} className={`hy-topo-edge-label ${l.cls}`}>{l.body}</text>
+              </g>
+            ))}
+          </g>,
+        );
+      }
+
+      if (handleKeys.has(e.key)) {
+        const wps = edgeDraft[e.key]?.waypoints || [];
+        const p = positions[e.from], q = farEnd(positions, e.from, e.to);
+        const items: ReactNode[] = [];
+        if (wps.length < MAX_WAYPOINTS) {
+          for (const gh of ghostPoints(g)) {
+            items.push(<circle key={`g${gh.index}`} cx={gh.at.x} cy={gh.at.y} r={5 / k} className="hy-topo-ghost" data-ghost={gh.index} data-edge={e.key} />);
+          }
         }
+        if (p && q) {
+          wps.forEach((w, i) => {
+            const at = toAbs(p, q, w);
+            items.push(<circle key={`w${i}`} cx={at.x} cy={at.y} r={6 / k} className="hy-topo-handle" data-wp={i} data-edge={e.key} />);
+          });
+        }
+        handleEls.push(
+          <g key={e.key} className="hy-topo-handles" style={{ strokeWidth: 2 / k }} onPointerEnter={enterEdge(e.key)} onPointerLeave={leaveEdge}>{items}</g>,
+        );
       }
-      if (p && q) {
-        wps.forEach((w, i) => {
-          const at = toAbs(p, q, w);
-          items.push(<circle key={`w${i}`} cx={at.x} cy={at.y} r={6 / k} className="hy-topo-handle" data-wp={i} data-edge={e.key} />);
-        });
-      }
-      handleEls.push(
-        <g key={e.key} className="hy-topo-handles" style={{ strokeWidth: 2 / k }} onPointerEnter={enterEdge(e.key)} onPointerLeave={leaveEdge}>{items}</g>,
-      );
-    }
-  });
+    });
 
-  const nodeEls = Array.from(nodes.values()).map((n) => {
-    const p = positions[n.key];
-    if (!p) return null;
-    const transit = isTransit(n);
-    const rOuter = transit ? R_HUB_OUTER : R_SINGLE;
-    return (
-      <g
-        key={n.key}
-        data-node-key={n.key}
-        transform={`translate(${p.x},${p.y})`}
-        className={clsx(
-          'hy-topo-dot', n.isSelf && 'self', geoMode && geoBase.unlocated.has(n.key) && 'unlocated', n.disabled && 'disabled', n.offline && !n.disabled && 'offline',
-          n.nested && 'nested', n.native && 'native', n.restricted && 'restricted', n.incompatible && 'bad', selectedKey === n.key && 'selected',
-        )}
-      >
-        <circle r={rOuter} className="hy-topo-dot-outer" />
-        {transit && <circle r={R_HUB_INNER} className="hy-topo-dot-inner" />}
-        <text y={rOuter + 14} textAnchor="middle" className="hy-topo-dot-name">{n.name}</text>
-        {n.restricted && <title>{t('nodes.restrictedTitle')}</title>}
-      </g>
-    );
-  });
+    const nodeEls = Array.from(nodes.values()).map((n) => {
+      const p = positions[n.key];
+      if (!p) return null;
+      const transit = isTransit(n);
+      const rOuter = transit ? R_HUB_OUTER : R_SINGLE;
+      return (
+        <g
+          key={n.key}
+          data-node-key={n.key}
+          transform={`translate(${p.x},${p.y})`}
+          className={clsx(
+            'hy-topo-dot', n.isSelf && 'self', geoMode && geoBase.unlocated.has(n.key) && 'unlocated', n.disabled && 'disabled', n.offline && !n.disabled && 'offline',
+            n.nested && 'nested', n.native && 'native', n.restricted && 'restricted', n.incompatible && 'bad', selectedKey === n.key && 'selected',
+          )}
+        >
+          <circle r={rOuter} className="hy-topo-dot-outer" />
+          {transit && <circle r={R_HUB_INNER} className="hy-topo-dot-inner" />}
+          <text y={rOuter + 14} textAnchor="middle" className="hy-topo-dot-name">{n.name}</text>
+          {n.restricted && <title>{t('nodes.restrictedTitle')}</title>}
+        </g>
+      );
+    });
+    return { cn, edgeEls, labelEls, handleEls, nodeEls };
+  };
+  const layers = copies.map(layerOf);
+  const inCopies = (pick: (l: ReturnType<typeof layerOf>) => ReactNode) => layers.map((l) => (
+    <g key={l.cn} data-copy={l.cn} transform={l.cn ? `translate(${l.cn * geoW},0)` : undefined}>{pick(l)}</g>
+  ));
 
   // ---------------------------------------------------------------- path panel
   const pathPanel = (() => {
@@ -1781,13 +1840,14 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       onDoubleClick={onCanvasDoubleClick}
     >
       {geoMode && <canvas ref={mapRef} className="hy-topo-geo-map" data-testid="topo-geo-map" />}
+      {geoExport && <div className="hy-topo-geo-cover" />}
       <svg ref={svgRef} className="hy-topo-graph-svg" aria-hidden="true">
         <g transform={geoMode ? undefined : `translate(${view.x},${view.y}) scale(${k})`} style={{ opacity: ready ? 1 : 0, transition: 'opacity 180ms ease-out' }}>
           {grid}
-          <g className="hy-topo-edges">{edgeEls}</g>
-          <g className="hy-topo-labels">{labelEls}</g>
-          <g className="hy-topo-nodes">{nodeEls}</g>
-          <g className="hy-topo-handle-layer">{handleEls}</g>
+          <g className="hy-topo-edges">{inCopies((l) => l.edgeEls)}</g>
+          <g className="hy-topo-labels">{inCopies((l) => l.labelEls)}</g>
+          <g className="hy-topo-nodes">{inCopies((l) => l.nodeEls)}</g>
+          <g className="hy-topo-handle-layer">{inCopies((l) => l.handleEls)}</g>
         </g>
       </svg>
 
