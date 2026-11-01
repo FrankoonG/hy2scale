@@ -1,3 +1,2 @@
 TZ=Asia/Shanghai
 DEBUG=0
-HY2SCALE_CHILD_PARENTS=eth0

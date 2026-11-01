@@ -273,6 +273,8 @@ type App struct {
 
 	ifaces *ifaceManager  // child interfaces, public address detection
 
+	peerEgress *peerEgressProber // egress of peers that do not report it (peer_egress.go)
+
 	st *stores // logs and audit records on disk (storage.go)
 }
 
@@ -312,6 +314,7 @@ func New(dataDir string) (*App, error) {
 	}
 	a.punch = newPunchManager(a)
 	a.ifaces = newIfaceManager(a)
+	a.peerEgress = newPeerEgressProber(a)
 	a.refreshEgress()
 	a.installChildListen()
 	a.exit = exit.New(a.node, exitHost{a})
@@ -406,6 +409,8 @@ func (a *App) Run(ctx context.Context) error {
 	go a.node.RunAttrs(ctx)
 	go a.tree.Run(ctx)
 	a.exit.Start(ctx)
+	a.persisters.Add(1)
+	go func() { defer a.persisters.Done(); a.peerEgress.run(ctx) }()
 
 	// Stored logs and audit records (writers, retention)
 	a.runStorage(ctx)

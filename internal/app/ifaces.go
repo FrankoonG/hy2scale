@@ -315,6 +315,7 @@ func (a *App) RefreshPublicIP(name string) {
 // detection settings and restarts the interval.
 func (a *App) PublicIPSettingsChanged() {
 	a.ifaces.pub.KickAll()
+	a.peerEgress.Kick()
 }
 
 // isChildIface reports whether name is a configured child interface.

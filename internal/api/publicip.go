@@ -20,6 +20,9 @@ func (s *Server) publicIPRoutes(m *http.ServeMux) {
 		s.app.RefreshPublicIP(r.PathValue("name"))
 		writeJSON(w, map[string]any{"ok": true})
 	})
+	m.HandleFunc("GET /api/peer-egress", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, s.app.ProbedEgresses())
+	})
 }
 
 // selfEgressJSON is this node's egress for the topology.
@@ -76,6 +79,23 @@ func cleanTreeEgress(ps []relay.TreePeer) []relay.TreePeer {
 		out[i] = p
 	}
 	return out
+}
+
+// unknownEgress: a topology node's egress is not reported.
+func unknownEgress(raw json.RawMessage) bool { return raw == nil || string(raw) == "null" }
+
+// probedTreeEgress fills the probed egress of every node of a (cleaned)
+// topology subtree whose egress is not reported; a reported one is kept.
+func (s *Server) probedTreeEgress(ps []relay.TreePeer) []relay.TreePeer {
+	for i := range ps {
+		if unknownEgress(ps[i].Egress) {
+			if e, ok := s.app.ProbedEgress(ps[i].Name); ok {
+				ps[i].Egress, ps[i].EgressProbed = e, true
+			}
+		}
+		ps[i].Children = s.probedTreeEgress(ps[i].Children)
+	}
+	return ps
 }
 
 // publicIPSettings is the public_ip block of GET /api/settings/ui.

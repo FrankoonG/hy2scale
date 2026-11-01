@@ -852,6 +852,7 @@
   "overview.days": "{{count}}일",
   "nodes.egressIp": "출구 IP",
   "nodes.egressUnknown": "알 수 없음",
+  "nodes.egressProbed": "탐지",
   "iface.title": "인터페이스",
   "iface.name": "이름",
   "iface.address": "주소",
