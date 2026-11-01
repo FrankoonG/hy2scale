@@ -30,9 +30,10 @@ export default function LoginTopology() {
     const svg = svgRef.current!;
     const engine = new TopoEngine(svg, { t: (k) => tRef.current(`login.topo.${k}`), reducedMotion });
     engineRef.current = engine;
-    let swapTimer = 0;
+    let swapTimer = 0, holdS = ROTATE_S;
     const next = (first = false) => {
       const spec = generate(newSeed());
+      holdS = Math.max(ROTATE_S, spec.hold ?? 0);
       engine.show(spec, first);
       if (first) { setTags(spec.tags); return; }
       // tags: fade the list out, swap, fade back in
@@ -56,8 +57,8 @@ export default function LoginTopology() {
       if (!document.hidden) {
         engine.step(Math.min(0.05, real));
         if (!hover.current) rot += real;
-        if (fillRef.current) fillRef.current.style.width = `${Math.min(100, (rot / ROTATE_S) * 100).toFixed(2)}%`;
-        if (rot >= ROTATE_S) { rot = 0; next(); }
+        if (fillRef.current) fillRef.current.style.width = `${Math.min(100, (rot / holdS) * 100).toFixed(2)}%`;
+        if (rot >= holdS) { rot = 0; next(); }
       }
       raf = requestAnimationFrame(tick);
     };

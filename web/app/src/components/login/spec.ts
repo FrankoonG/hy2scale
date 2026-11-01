@@ -3,6 +3,8 @@
 
 export const VBW = 640;
 export const VBH = 420;
+/** Speed of a punch signal packet (view units per second). */
+export const SIGNAL_SPEED = 300;
 
 export type Role = 'self' | 'device' | 'internet' | 'admin' | 'relay' | 'exit' | 'peer' | 'remote' | 'native';
 export type LinkKind = 'access' | 'peer' | 'egress' | 'native' | 'punch';
@@ -43,7 +45,12 @@ export interface SpecLink {
 export interface Zone { x: number; y: number; w: number; h: number; label: string }
 /** A floating label; `key` is an i18n key (login.topo.chip.*), `text` literal. */
 export interface Note { x: number; y: number; text?: string; key?: string }
-export interface SpecEvent { at: number; link?: string; node?: string; state: LinkState | 'off' }
+/** Another way between a and b (via these nodes; [] = another link). */
+export interface Detour { a: string; b: string; via: string[] }
+/** With `detour`, packets on the failing part turn back to where they came from and take it. */
+export interface SpecEvent { at: number; link?: string; node?: string; state: LinkState | 'off'; detour?: Detour }
+/** One packet along `path` (it may come back the same way). */
+export interface Signal { at: number; path: string[] }
 
 /** Packets along node paths; `only` restricts parallel links by id. */
 export interface Flow {
@@ -65,6 +72,9 @@ export interface TopoSpec {
   notes: Note[];
   events: SpecEvent[];
   flows: Flow[];
+  signals?: Signal[];
+  /** Seconds the topology needs before the next one (punches take long). */
+  hold?: number;
 }
 
 /**

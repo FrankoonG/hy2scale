@@ -1,4 +1,4 @@
-import { VBH, validateSpec, type DeviceIcon, type Flow, type Note, type SpecEvent, type SpecLink, type SpecNode, type TopoSpec, type Zone } from './spec';
+import { SIGNAL_SPEED, VBH, validateSpec, type DeviceIcon, type Flow, type Note, type Signal, type SpecEvent, type SpecLink, type SpecNode, type TopoSpec, type Zone } from './spec';
 
 /*
  * generate(seed) → TopoSpec
@@ -96,6 +96,8 @@ interface ExitRoute {
 }
 
 interface Module {
+  signals?: Signal[];
+  hold?: number;
   nodes: SpecNode[];
   links: SpecLink[];
   zones?: Zone[];
@@ -188,21 +190,29 @@ const MODS: Record<Kind, ModFn> = {
       links.push({ id: p + 'a', a: peers[0].id, b: dev.id, kind: 'access' });
       zones[0] = { x: peers[0].x - 40, y: peers[0].y - 38, w: RIGHT + 24 - peers[0].x + 40, h: 92, label: 'NAT' };
     }
-    // punches: staggered, each pending for a moment before it comes up
-    const events: SpecEvent[] = [], ups: number[] = [];
-    let t = R.range(1.6, 2.4);
+    // punches, one after another: a signal goes from one end through x to
+    // the other and back (each learns the other's address), then the direct
+    // link appears pending while both ends probe, then it comes up
+    const events: SpecEvent[] = [], ups: number[] = [], signals: Signal[] = [];
+    let t = R.range(1.5, 2.0);
     const chain = ['self', ...peers.map((q) => q.id)];
+    const at = (id: string) => (id === 'self' ? S : peers.find((q) => q.id === id)!);
+    const dist = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
     for (let k = 1; k <= n; k++) {
-      const id = p + 'pp' + k, up = t + R.range(1.0, 1.5);
-      links.push({ id, a: chain[k - 1], b: chain[k], kind: 'punch', state: 'pending', appear: +t.toFixed(2), curve: R.range(-0.12, 0.12) });
+      const a = chain[k - 1], b = chain[k];
+      const trip = (2 * (dist(at(a), helper) + dist(helper, at(b)))) / SIGNAL_SPEED;
+      signals.push({ at: +t.toFixed(2), path: [a, helper.id, b, helper.id, a] });
+      const appear = t + trip, up = appear + R.range(1.0, 1.3);
+      const id = p + 'pp' + k;
+      links.push({ id, a, b, kind: 'punch', state: 'pending', appear: +appear.toFixed(2), curve: R.range(-0.12, 0.12) });
       events.push({ at: +up.toFixed(2), link: id, state: 'up' });
       ups.push(+up.toFixed(2));
-      t = up + R.range(0.2, 0.6);
+      t = up + R.range(0.3, 0.6);
     }
     const tail = dev ? [dev.id] : [];
     const last = peers[n - 1].id;
     return {
-      nodes, links, zones, events,
+      nodes, links, zones, events, signals, hold: ups[n - 1] + 2.5,
       // phase k: the first k segments are punched, x relays the rest
       ownFlows: (src) => {
         const out: Flow[] = [];
@@ -237,7 +247,8 @@ const MODS: Record<Kind, ModFn> = {
         { id: p + 'eg', a: ex.id, b: p + 'net', kind: 'egress' },
       ],
       notes: b.h >= 140 ? [{ x: r1((S.x + ex.x) / 2 + 10), y: ex.y, key: quality ? 'quality' : 'aggregate' }] : [],
-      events: quality ? [{ at: +t.toFixed(2), link: p + 'm1', state: 'degraded' }, { at: +(t + 1.1).toFixed(2), link: p + 'm1', state: 'offline' }] : [],
+      // quality: when wan1 drops, what is on it turns back and goes over wan2
+      events: quality ? [{ at: +t.toFixed(2), link: p + 'm1', state: 'degraded' }, { at: +(t + 1.1).toFixed(2), link: p + 'm1', state: 'offline', detour: { a: 'self', b: ex.id, via: [] } }] : [],
       // quality: one link at a time; aggregate: the engine alternates parallel links
       exits: [quality
         ? { path: [ex.id, p + 'net'], first: p + 'm1', only: [p + 'm1', p + 'eg'], until: +(t + 1.1).toFixed(2), then: [p + 'm2', p + 'eg'] }
@@ -251,7 +262,7 @@ const MODS: Record<Kind, ModFn> = {
     const h1: SpecNode = { id: p + 'h1', role: 'relay', x: r1(S.x + 140), y: r1(b.cy - dy) };
     const h2: SpecNode = { id: p + 'h2', role: 'relay', x: r1(S.x + 140), y: r1(b.cy + dy) };
     const ex: SpecNode = { id: p + 'x', role: 'exit', x: r1(475 + R.range(-10, 10)), y: r1(b.cy) };
-    const t = R.range(2.8, 3.6), off = t + 1.3, back = off + 0.7;
+    const t = R.range(2.8, 3.6), off = t + 1.3, back = off;
     return {
       nodes: [h1, h2, ex, { id: p + 'net', role: 'internet', x: RIGHT - 4, y: ex.y }],
       links: [
@@ -261,7 +272,9 @@ const MODS: Record<Kind, ModFn> = {
       ],
       events: [
         { at: +t.toFixed(2), link: p + 'p1', state: 'degraded' },
-        { at: +off.toFixed(2), link: p + 'p1', state: 'offline' }, { at: +off.toFixed(2), link: p + 'q1', state: 'offline' },
+        // what is on the way over h1 turns back and goes over h2
+        { at: +off.toFixed(2), link: p + 'p1', state: 'offline', detour: { a: 'self', b: ex.id, via: [h2.id] } },
+        { at: +off.toFixed(2), link: p + 'q1', state: 'offline', detour: { a: 'self', b: ex.id, via: [h2.id] } },
         { at: +off.toFixed(2), node: h1.id, state: 'off' },
       ],
       exits: [{ path: [h1.id, ex.id, p + 'net'], first: p + 'p1', until: +off.toFixed(2), alt: [h2.id, ex.id, p + 'net'], from: +back.toFixed(2) }],
@@ -386,7 +399,7 @@ function build(seed: string, W: Weights): TopoSpec {
 
   // inbound nodes
   const nodes: SpecNode[] = [{ id: 'self', role: 'self', x: S.x, y: S.y }];
-  const links: SpecLink[] = [], zones: Zone[] = [], notes: Note[] = [], events: SpecEvent[] = [], flows: Flow[] = [];
+  const links: SpecLink[] = [], zones: Zone[] = [], notes: Note[] = [], events: SpecEvent[] = [], flows: Flow[] = [], signals: Signal[] = [];
   const devs: string[] = [];
   if (inbound === 'admin') {
     nodes.push({ id: 'adm', role: 'admin', x: 58, y: S.y });
@@ -419,10 +432,10 @@ function build(seed: string, W: Weights): TopoSpec {
   }
 
   // merge modules
-  let selfZone = false;
+  let selfZone = false, hold = 0;
   for (const m of mods) {
     nodes.push(...m.nodes); links.push(...m.links);
-    zones.push(...(m.zones ?? [])); notes.push(...(m.notes ?? [])); events.push(...(m.events ?? []));
+    zones.push(...(m.zones ?? [])); notes.push(...(m.notes ?? [])); events.push(...(m.events ?? [])); signals.push(...(m.signals ?? [])); hold = Math.max(hold, m.hold ?? 0);
     if (m.selfZone) selfZone = true;
   }
   // the zone label sits under the self label
@@ -434,7 +447,7 @@ function build(seed: string, W: Weights): TopoSpec {
     const path = [src, 'self', ...e.path];
     if (e.only) return [   // quality bond: one link, then the other after it fails
       { paths: [path], dir: 'both', only: [...e.only, ...linkIdsOf(src)], until: e.until },
-      { paths: [path], dir: 'both', only: [...e.then!, ...linkIdsOf(src)], from: e.until! + 0.4 },
+      { paths: [path], dir: 'both', only: [...e.then!, ...linkIdsOf(src)], from: e.until! },
     ];
     if (e.alt) return [
       { paths: [path], dir: 'both', until: e.until },
@@ -482,5 +495,5 @@ function build(seed: string, W: Weights): TopoSpec {
   }
   if (tags.length < 3) ['quic', 'exitNode'].forEach((t) => { if (tags.length < 3 && !tags.includes(t) && (t === 'quic' || exitCount)) tags.push(t); });
 
-  return { seed, tags, nodes, links, zones, notes, events, flows };
+  return { seed, tags, nodes, links, zones, notes, events, flows, signals, hold: hold || undefined };
 }
