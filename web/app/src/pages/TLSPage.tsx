@@ -1,9 +1,9 @@
-import { type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { Card, Button, Badge, Table, useSelection, useModalState, type Column } from '@hy2scale/ui';
+import { Card, Badge, ExpandButton, Table, useSelection, useModalState, type Column } from '@hy2scale/ui';
 import ResponsiveActions from '@/components/ResponsiveActions';
 import CertModal from '@/components/CertModal';
+import CaModal from '@/components/CaModal';
 import { BulkButtons, EditSelectedButton, pickSelected } from '@/components/SelectionActions';
 import { useBulkAction } from '@/hooks/useBulkAction';
 import { ListScope } from '@/hooks/useDeselectOnBlankClick';
@@ -17,6 +17,7 @@ export default function TLSPage() {
   const { data: certs = [] } = useQuery({ queryKey: ['certs'], queryFn: api.getCerts });
 
   const edit = useModalState<CertInfo | null>();
+  const newCa = useModalState<null>();
   const selection = useSelection(certs.map((c) => c.id));
   const selected = pickSelected(certs, selection.selected, (c) => c.id);
   const bulk = useBulkAction(['certs']);
@@ -55,7 +56,9 @@ export default function TLSPage() {
           <ResponsiveActions selectedCount={selection.count} onClearSelection={selection.clear}>
             <BulkButtons selected={selected} onDelete={bulkDelete} />
             <EditSelectedButton selected={selected} onEdit={(c, e) => edit.show(c, e)} />
-            <Button size="sm" variant="primary" onClick={(e: MouseEvent) => edit.show(null, e)}>{t('tls.new')}</Button>
+            <ExpandButton variant="primary" label={t('tls.new')} moreLabel={t('app.moreActions')} testId="tls-new"
+              onClick={(e) => edit.show(null, e)}
+              actions={[{ key: 'ca', label: t('tls.newCa'), testId: 'tls-new-ca', onClick: (e) => newCa.show(null, e) }]} />
           </ResponsiveActions>
         }
         noPadding
@@ -75,6 +78,7 @@ export default function TLSPage() {
       </Card>
 
       <CertModal {...edit.modalProps} editing={edit.data ?? null} />
+      <CaModal {...newCa.modalProps} />
     </div>
   );
 }

@@ -177,6 +177,8 @@ export const generateCert = (data: { id: string; name: string; domains: string[]
   api('/tls/generate', { method: 'POST', body: JSON.stringify(data) });
 export const signCert = (data: { ca_id: string; id: string; name: string; cn: string; days?: number }) =>
   api('/tls/sign', { method: 'POST', body: JSON.stringify(data) });
+export const generateCA = (data: { id: string; name: string; cn: string; org?: string; days: number; key: string }) =>
+  api('/tls/ca', { method: 'POST', body: JSON.stringify(data) });
 export const getCertPem = (id: string) =>
   api<{ cert: string; key: string }>(`/tls/${encodeURIComponent(id)}/pem`);
 export const deleteCert = (id: string) =>

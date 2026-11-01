@@ -139,6 +139,67 @@ func (s *Store) Generate(id, name string, domains []string, days int) error {
 	return s.Import(id, name, string(certPEM), string(keyPEM))
 }
 
+// CA key types accepted by GenerateCA.
+const (
+	KeyECDSAP256 = "ecdsa-p256"
+	KeyRSA2048   = "rsa-2048"
+	KeyRSA4096   = "rsa-4096"
+)
+
+// GenerateCA creates a self-signed certificate authority (it signs leaf
+// certificates only: path length 0).
+func (s *Store) GenerateCA(id, name, cn, org string, days int, keyType string) error {
+	if days <= 0 {
+		days = 3650
+	}
+	var (
+		pub    any
+		signer any
+		keyPEM []byte
+	)
+	switch keyType {
+	case "", KeyECDSAP256:
+		k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return err
+		}
+		b, _ := x509.MarshalECPrivateKey(k)
+		pub, signer, keyPEM = &k.PublicKey, k, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: b})
+	case KeyRSA2048, KeyRSA4096:
+		bits := 2048
+		if keyType == KeyRSA4096 {
+			bits = 4096
+		}
+		k, err := rsa.GenerateKey(rand.Reader, bits)
+		if err != nil {
+			return err
+		}
+		pub, signer, keyPEM = &k.PublicKey, k, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(k)})
+	default:
+		return fmt.Errorf("unknown key type %q", keyType)
+	}
+	subject := pkix.Name{CommonName: cn}
+	if org != "" {
+		subject.Organization = []string{org}
+	}
+	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	tmpl := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               subject,
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Duration(days) * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLenZero:        true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, signer)
+	if err != nil {
+		return err
+	}
+	return s.Import(id, name, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), string(keyPEM))
+}
+
 // SignWithCA uses a CA certificate to sign a new server certificate.
 func (s *Store) SignWithCA(caID, newID, name, cn string, days int) error {
 	// Load CA cert
