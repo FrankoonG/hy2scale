@@ -373,7 +373,15 @@ type ForwardCapture struct {
 type System struct {
 	Local   LocalCapture   `yaml:"local" json:"local"`
 	Forward ForwardCapture `yaml:"forward" json:"forward"`
+	// LocalNets: destinations in the subnets of this host's interfaces are
+	// never captured, by either layer; the system routes them as before
+	// (Docker drops captured flows to its containers, which come back in
+	// on lo). nil = on.
+	LocalNets *bool `yaml:"local_nets,omitempty" json:"local_nets,omitempty"`
 }
+
+// LocalNetsDirect: the local-subnet bypass is on.
+func (s System) LocalNetsDirect() bool { return s.LocalNets == nil || *s.LocalNets }
 
 // Depth limits.
 const (
