@@ -194,10 +194,15 @@ type punchManager struct {
 	next    map[string]time.Time // route → earliest next attempt (backoff)
 	servers int                  // live punch listeners (target side)
 	inbound map[string]int       // target side: initiator → live punched connections
+	// live: route → its connections that are up. The primary loop and the
+	// route's extra loop can both hold one (the primary moves through the
+	// entry's addresses); while one is up the route shows connected, and a
+	// failed or ended dial by the other does not change that.
+	live map[string]int
 }
 
 func newPunchManager(a *App) *punchManager {
-	m := &punchManager{a: a, probes: map[string]*probeWait{}, status: map[string]*PunchStatus{}, next: map[string]time.Time{}, inbound: map[string]int{}}
+	m := &punchManager{a: a, probes: map[string]*probeWait{}, status: map[string]*PunchStatus{}, next: map[string]time.Time{}, inbound: map[string]int{}, live: map[string]int{}}
 	a.node.SetPunchHandler(m.serve)
 	return m
 }
@@ -668,6 +673,13 @@ func (a *App) dialTarget(ctx context.Context, cl ClientEntry, dialAddr string) (
 func (m *punchManager) setStatus(addr, state, reason, mapping string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.setStatusLocked(addr, state, reason, mapping)
+}
+
+func (m *punchManager) setStatusLocked(addr, state, reason, mapping string) {
+	if state != "connected" && m.live[addr] > 0 {
+		return // another connection of the route is up
+	}
 	st := m.status[addr]
 	if st == nil {
 		st = &PunchStatus{Addr: addr}
@@ -685,21 +697,29 @@ func (m *punchManager) setStatus(addr, state, reason, mapping string) {
 // Connected marks a punched route up (called by the dial loop once the
 // connection is established) and resets its backoff.
 func (m *punchManager) connected(addr string) {
-	m.setStatus(addr, "connected", "", "")
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.live[addr]++
+	m.setStatusLocked(addr, "connected", "", "")
 	delete(m.next, addr)
 	if st := m.status[addr]; st != nil {
 		st.Retries = 0
 	}
-	m.mu.Unlock()
 }
 
-// lost marks a punched route down; the next attempt waits the minimum backoff.
+// lost ends one connection of a punched route (one connected call each);
+// with none left the route is down and the next attempt waits the minimum
+// backoff.
 func (m *punchManager) lost(addr string, adv *PeerAdvanced) {
-	m.setStatus(addr, "waiting", "lost", "")
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.live[addr] > 1 {
+		m.live[addr]--
+		return
+	}
+	delete(m.live, addr)
+	m.setStatusLocked(addr, "waiting", "lost", "")
 	m.next[addr] = time.Now().Add(adv.retryMin())
-	m.mu.Unlock()
 }
 
 // Statuses lists every punched route this node is working on. Routes no
@@ -720,6 +740,7 @@ func (m *punchManager) Statuses() []PunchStatus {
 		if !live[addr] {
 			delete(m.status, addr)
 			delete(m.next, addr)
+			delete(m.live, addr)
 			continue
 		}
 		out = append(out, *s)
@@ -731,7 +752,7 @@ func (m *punchManager) fail(addr string, adv *PeerAdvanced, err error) error {
 	m.mu.Lock()
 	st := m.status[addr]
 	retries := 1
-	if st != nil {
+	if st != nil && m.live[addr] == 0 {
 		st.Retries++
 		retries = st.Retries
 	}

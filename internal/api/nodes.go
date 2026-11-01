@@ -473,26 +473,36 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 			tn.Addr = cl.PrimaryAddr()
 			addrs := cl.AllAddrs()
 			if len(addrs) > 1 {
-				ipStatuses := s.app.Node().PeerIPStatuses(name)
+				// One row per configured address, in config order: a live
+				// extra connection gives its own status and latency, the
+				// address the primary connection dials gives the primary's;
+				// any other address has no connection now. (Measurements of
+				// connections that are gone are never shown: an address
+				// that once failed as an extra and later carried the
+				// primary used to keep its timeout.)
+				extras := map[string]relay.IPStatus{}
+				for _, st := range s.app.Node().PeerIPStatuses(name) {
+					extras[st.Addr] = st
+				}
 				addrLats := s.app.Node().GetAddrLatencies(name)
-				primaryAddr := cl.PrimaryAddr()
-				// Ensure primary addr is included
-				hasPrimary := false
-				for _, s := range ipStatuses {
-					if s.Addr == primaryAddr {
-						hasPrimary = true
-						break
+				primaryDial := s.app.PrimaryDial(cl)
+				ipStatuses := make([]relay.IPStatus, 0, len(addrs))
+				for _, a := range addrs {
+					st, ok := extras[a]
+					switch {
+					case ok:
+						if ms, has := addrLats[a]; has {
+							st.LatencyMs = ms
+						}
+					case a == primaryDial && connected[name]:
+						st = relay.IPStatus{Addr: a, Status: "online"}
+						if ms, ok := s.app.Node().PrimaryLatency(name); ok {
+							st.LatencyMs = ms
+						}
+					default:
+						st = relay.IPStatus{Addr: a, Status: "offline", LatencyMs: -1}
 					}
-				}
-				if !hasPrimary {
-					primaryLat := latencyCache[name]
-					ipStatuses = append([]relay.IPStatus{{Addr: primaryAddr, Status: "online", LatencyMs: primaryLat}}, ipStatuses...)
-				}
-				// Enrich with per-addr latency
-				for i := range ipStatuses {
-					if ms, ok := addrLats[ipStatuses[i].Addr]; ok {
-						ipStatuses[i].LatencyMs = ms
-					}
+					ipStatuses = append(ipStatuses, st)
 				}
 				tn.IPStatuses = ipStatuses
 				tn.Addrs = addrs
