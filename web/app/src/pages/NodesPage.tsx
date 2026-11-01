@@ -52,6 +52,8 @@ export default function NodesPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [editSelfOpen, setEditSelfOpen] = useState(false);
   const [editingName, setEditingName] = useState<string | null>(null);
+  // Add Node opened from the Punch button: the node and its mesh path.
+  const [punchFor, setPunchFor] = useState<{ name: string; signal: string } | null>(null);
   const [clickPos, setClickPos] = useState<{ x: number; y: number } | undefined>();
   // Remote-connect modal: confirm + (auto / manual) login happens HERE on
   // the local page, then a fresh tab is opened with a token already in
@@ -91,6 +93,7 @@ export default function NodesPage() {
   const openAddNode = (e: { clientX: number; clientY: number }) => {
     setClickPos(at(e));
     setEditingName(null);
+    setPunchFor(null);
     setModalOpen(true);
   };
   const openImportLink = (e: { clientX: number; clientY: number }) => {
@@ -118,6 +121,7 @@ export default function NodesPage() {
     // the topology node's display name.
     const name = key.includes('/') ? n.name : key;
     setEditingName(name);
+    setPunchFor(null);
     setModalOpen(true);
   };
   const openEditSelfFromBar = () => {
@@ -263,6 +267,7 @@ export default function NodesPage() {
                 setEditSelfOpen(true);
               } else {
                 setEditingName(n.name);
+                setPunchFor(null);
                 setModalOpen(true);
               }
             }}
@@ -561,7 +566,29 @@ export default function NodesPage() {
         }
         const selfId = node?.node_id || '';
         const stripped = selfId && key.startsWith(selfId + '/') ? key.slice(selfId.length + 1) : key;
-        if (stripped.includes('/')) return null;
+        if (stripped.includes('/')) {
+          // A node reached through the mesh, not yet a direct peer: offer
+          // a hole-punched entry signalled along this path.
+          const target = stripped.split('/').pop() || '';
+          const nd = findData(key) || findData(stripped);
+          const selfNode = topology.find((t) => t.is_self);
+          const direct = topology.some((t) => !t.is_self && t.name === target)
+            || !!selfNode?.children?.some((c) => c.name === target);
+          if (!target || direct || target === node?.name || nd?.native) return null;
+          return (
+            <Button
+              size="sm"
+              data-testid="punch-selected-btn"
+              onClick={(e) => {
+                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                setClickPos({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+                setEditingName(null);
+                setPunchFor({ name: target, signal: stripped });
+                setModalOpen(true);
+              }}
+            >{t('nodes.punchNode')}</Button>
+          );
+        }
         const data = findData(key) || findData(stripped);
         if (!data) return null;
         // An inbound first-hop peer is one that dialed us — its
@@ -666,6 +693,7 @@ export default function NodesPage() {
         onClose={() => setModalOpen(false)}
         editingName={editingName}
         animateFrom={clickPos}
+        punchFor={punchFor}
       />
 
       <NodeImportModal

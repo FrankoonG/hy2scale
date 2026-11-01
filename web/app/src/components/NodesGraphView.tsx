@@ -1,6 +1,6 @@
 import {
   useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
-  type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode,
+  type MouseEvent as ReactMouseEvent, type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
@@ -728,14 +728,12 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       setGeoLoading(false);
     }
     setSelectedEdge(null);
-    setHoverEdge(null);
     geoFitPending.current = true;
     setGeoMode(true);
   };
   const leaveGeo = () => {
     setGeoMode(false);
     setSelectedEdge(null);
-    setHoverEdge(null);
     userMoved.current = false;
   };
   // Back from geo mode: fit the layout again.
@@ -902,19 +900,10 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     selectPath(key, chosen);
   }, [topology, selfId, selfName, selectedKey, pathIdx, currentQPath, selectPath]);
 
-  const [hoverEdge, setHoverEdge] = useState<string | null>(null);
+  // A clicked line is selected (lit); on an editable canvas only the
+  // selected line shows its bend handles.
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
-  const hoverTimer = useRef(0);
-  const enterEdge = (key: string) => (e: ReactPointerEvent) => {
-    if (e.pointerType !== 'mouse') return;
-    window.clearTimeout(hoverTimer.current);
-    setHoverEdge(key);
-  };
-  const leaveEdge = () => {
-    window.clearTimeout(hoverTimer.current);
-    hoverTimer.current = window.setTimeout(() => setHoverEdge(null), 140);
-  };
-  useEffect(() => { if (!editing) { setHoverEdge(null); setSelectedEdge(null); } }, [editing]);
+  useEffect(() => { setSelectedEdge(null); }, [editing]);
 
   // ---------------------------------------------------------------- editing (custom canvases)
   const [snap, setSnap] = useState(() => lsGet(SNAP_STORE) === '1');
@@ -1573,7 +1562,6 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   const k = geoMode ? 1 : view.k;
   const handleKeys = new Set<string>();
   if (editing) {
-    if (hoverEdge) handleKeys.add(hoverEdge);
     if (selectedEdge) handleKeys.add(selectedEdge);
     const d = dragRef.current;
     if (d && d.kind !== 'node') handleKeys.add(d.key);
@@ -1651,15 +1639,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
           {offline && (
             <g transform={`translate(${mid.x},${mid.y})`} className="hy-topo-edge-x"><path d="M -4 -4 L 4 4 M -4 4 L 4 -4" /></g>
           )}
-          {editing && (
-            <path
-              d={g.d}
-              className="hy-topo-edge-hit"
-              data-edge-key={e.key}
-              onPointerEnter={enterEdge(e.key)}
-              onPointerLeave={leaveEdge}
-            />
-          )}
+          {e.key === selectedEdge && <path d={g.d} className="hy-topo-edge-sel" />}
+          <path d={g.d} className="hy-topo-edge-hit" data-edge-key={e.key} />
         </g>,
       );
 
@@ -1700,11 +1681,10 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       if (handleKeys.has(e.key)) {
         const wps = edgeDraft[e.key]?.waypoints || [];
         const p = positions[e.from], q = farEnd(positions, e.from, e.to);
-        // The selected line comes first where lines crowd: its hit path and
-        // handles sit above every other line's, with wider grab targets.
+        // The selected line's handles sit above every label and every other
+        // line, with wider grab targets.
         const sel = e.key === selectedEdge;
         const items: ReactNode[] = [];
-        if (sel) items.push(<path key="hit" d={g.d} className="hy-topo-edge-hit sel" data-edge-key={e.key} />);
         if (wps.length < MAX_WAYPOINTS) {
           for (const gh of ghostPoints(g)) {
             if (sel) items.push(<circle key={`gg${gh.index}`} cx={gh.at.x} cy={gh.at.y} r={11 / k} className="hy-topo-grab ghost" data-ghost={gh.index} data-edge={e.key} />);
@@ -1719,7 +1699,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
           });
         }
         const el = (
-          <g key={e.key} className={clsx('hy-topo-handles', sel && 'sel')} style={{ strokeWidth: 2 / k }} onPointerEnter={enterEdge(e.key)} onPointerLeave={leaveEdge}>{items}</g>
+          <g key={e.key} className={clsx('hy-topo-handles', sel && 'sel')} style={{ strokeWidth: 2 / k }}>{items}</g>
         );
         if (sel) selHandle = el; else handleEls.push(el);
       }

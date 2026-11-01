@@ -59,7 +59,8 @@ type PunchConfig struct {
 	// Signal: mesh paths used to reach the target for signalling, in
 	// fallback order; each ends at the target.
 	Signal []string `yaml:"signal" json:"signal"`
-	// Reflectors: the target's outbound peers it probes its mapping with.
+	// Reflectors: the target's outbound peers it probes its mapping with
+	// first (empty: the target uses all of them, as it does after these).
 	Reflectors []string `yaml:"reflectors" json:"reflectors"`
 	// Binds: local interface / source per punched route ("" = auto). Each is
 	// its own route.
