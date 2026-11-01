@@ -31,7 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/FrankoonG/hy2scale/main/install.sh 
 自动识别 CPU 架构（`amd64` / `arm64` / `armv7` / `mips64le` /
 `mipsle-softfloat`），从最新 release 下载匹配的 tar 包，把二进制装到
 `/usr/local/bin/hy2scale` 并注册 systemd 服务。重复运行即原地升级。
-固定版本用 `HY2SCALE_VERSION=v1.3.3`；卸载用 `… | sudo sh -s -- --uninstall`。
+固定版本用 `HY2SCALE_VERSION=v1.4.0`；卸载用 `… | sudo sh -s -- --uninstall`。
 
 ### Docker
 
@@ -67,24 +67,24 @@ iKuai v4 用户请从 [Releases](https://github.com/FrankoonG/hy2scale/releases)
 
 ## 功能特性
 
-- 将节点连接成网状网络，通过其中任意一个节点转发流量。
-- 在交互式图形视图或表格视图中查看实时拓扑和延迟。
-- 运行 VPN / 代理服务：Hysteria 2、SOCKS5、HTTP、Shadowsocks、L2TP、IKEv2、OpenVPN、WireGuard，其中 VPN 完全运行在用户态，无需特权。
-- 打洞：位于 NAT 之后的节点之间，经双方都能到达的节点协助建立直连。
-- 多网卡节点可为每个地址指定出口网卡或源地址。
-- 按用户出口路由、流量限额、到期时间和批量管理。
-- IP 与域名路由规则将特定流量引向特定出口。
-- TLS 证书管理，内置 CA 签发。
-- 多 IP 对等节点聚合（故障转移或带宽叠加）。
-- 备份 / 恢复、容器内二进制升级（手动上传或一键在线检查），UI 支持 EN / 中文 / 한국어。
-- 单选即编辑：在任一列表中点选一行，卡片右上角即出现绿色 **Edit** 按钮作为编辑入口；点击列表外空白取消单选；长按 **+ Add Node** 可粘贴 hysteria2:// 链接导入。
+- 将节点连接成网状网络，通过其中任意一个节点转发流量，支持多层嵌套发现。
+- 实时查看整个网络：概览仪表盘、拓扑图、列表，以及按节点所在国家绘制的世界地图。
+- 运行 VPN / 代理服务：Hysteria 2、SOCKS5、HTTP、Shadowsocks、Trojan、L2TP/IPsec、IKEv2、OpenVPN（UDP 与 TCP）、WireGuard。VPN 服务器完全运行在用户态，无需特权。
+- 策略集可按用户、来源、目标、域名（TLS SNI / HTTP Host）、国家或 ASN 分流，支持嵌套流程；可透明接管本机及转发的流量。
+- 按用户设置出口（单一路径、质量优先故障转移、聚合，或策略集）、流量限额与周期重置、上行 / 下行限速、到期时间。
+- 多地址对等节点、NAT 后节点之间的打洞直连、按地址指定出口网卡或源地址；接口页面支持子接口和逐接口的公网 IP 检测。
+- TLS 证书管理，内置证书颁发机构（CA）。
+- 每条连接的审计记录、系统日志，以及网络工具（Ping、路由追踪、吞吐量测试、终端）。
+- 备份 / 恢复、带签名校验的应用内升级，界面支持 EN / 中文 / 한국어。
 
 ## 截图
 
-拓扑图与列表视图，展示新加坡本地节点与多地远程节点的对等关系：
+以新加坡的本地节点（`sg-home`）为中心，对等节点分布在东京、大阪、首尔、香港、洛杉矶、法兰克福、阿姆斯特丹、多伦多和伦敦：
 
-![节点 — 图形视图](.github/assets/nodes-graph.png)
-![节点 — 列表视图](.github/assets/nodes-table.png)
+![概览](.github/assets/overview.png)
+![节点 — 拓扑图](.github/assets/nodes-graph.png)
+![节点 — 地图](.github/assets/nodes-map.png)
+![节点 — 列表](.github/assets/nodes-table.png)
 
 ## 构建
 
