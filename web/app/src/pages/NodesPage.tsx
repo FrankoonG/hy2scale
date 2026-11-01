@@ -367,6 +367,7 @@ export default function NodesPage() {
         const line = (f: api.NodeEgressFamily | null, fam: string) => f == null ? null : (
           <div className="iface-line" data-fam={fam} key={fam}>
             {!f.ok ? <span className="iface-bad">{t('iface.unavailable')}</span> : f.ip ? <PublicIP ip={f.ip} /> : <span>—</span>}
+            {n.egress_probed && f.ok && <span className="iface-tag faint" data-testid="egress-probed">{t('nodes.egressProbed')}</span>}
           </div>
         );
         const lines = [line(e.ipv4, 'ipv4'), line(e.ipv6, 'ipv6')].filter(Boolean);

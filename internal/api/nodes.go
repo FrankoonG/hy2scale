@@ -327,6 +327,9 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 		Invisible  bool            `json:"invisible,omitempty"`
 		Attrs      proto.Attrs     `json:"attrs,omitempty"`
 		Egress     json.RawMessage `json:"egress"`
+		// EgressProbed: Egress was probed by this node (the peer does not
+		// report it).
+		EgressProbed bool `json:"egress_probed,omitempty"`
 		// Punched: who set up the hole-punched connection(s) to this peer
 		// (this node's name and/or the peer's).
 		Punched  []string      `json:"punched,omitempty"`
@@ -568,7 +571,12 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 	}
 	for i := range result {
 		result[i].Egress, result[i].Attrs = cleanEgress(result[i].Egress), cleanAttrs(result[i].Attrs)
-		result[i].Children = cleanTreeEgress(result[i].Children)
+		result[i].Children = s.probedTreeEgress(cleanTreeEgress(result[i].Children))
+		if !result[i].IsSelf && unknownEgress(result[i].Egress) {
+			if e, ok := s.app.ProbedEgress(result[i].Name); ok {
+				result[i].Egress, result[i].EgressProbed = e, true
+			}
+		}
 	}
 	writeJSON(w, result)
 }
