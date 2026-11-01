@@ -741,6 +741,19 @@ func (n *Node) GetLatency(peerName string) int {
 	return -1
 }
 
+// PrimaryLatency is the last ping of a peer's primary connection in ms
+// (sub-millisecond counts as 1, -1 failed), without the per-address average
+// GetLatency gives; ok is false before the first ping.
+func (n *Node) PrimaryLatency(peerName string) (int, bool) {
+	n.latencyMu.RLock()
+	defer n.latencyMu.RUnlock()
+	ms, ok := n.latencies[peerName]
+	if ok && ms == 0 {
+		ms = 1
+	}
+	return ms, ok
+}
+
 // GetAddrLatencies returns per-address latency for a multi-addr peer.
 func (n *Node) GetAddrLatencies(peerName string) map[string]int {
 	n.latencyMu.RLock()
@@ -766,33 +779,44 @@ func (n *Node) setAddrLatency(peerName, addr string, ms int) {
 }
 
 // probeExtraConns pings each extra QUIC connection and stores per-addr latency.
+// The connections are taken under the lock and their status is written back
+// by address: an extra can be removed (and the slices shift) while a ping is
+// in flight, and an index taken before it would mark another address.
 func (n *Node) probeExtraConns(name string, p *peer) {
-	if len(p.extraConns) == 0 {
-		return
+	type extra struct {
+		c    hyclient.Client
+		addr string
 	}
+	n.mu.RLock()
+	list := make([]extra, 0, len(p.extraConns))
 	for i, ec := range p.extraConns {
-		if ec == nil {
-			continue
+		if ec != nil && i < len(p.connAddrs) && p.connAddrs[i] != "" {
+			list = append(list, extra{ec, p.connAddrs[i]}) // extras only, parallel to extraConns (see AddConn)
 		}
-		addr := ""
-		if i < len(p.connAddrs) {
-			addr = p.connAddrs[i] // extras only, parallel to extraConns (see AddConn)
-		}
-		if addr == "" {
-			continue
-		}
-		rtt := n.pingClient(ec)
+	}
+	n.mu.RUnlock()
+	for _, x := range list {
+		rtt := n.pingClient(x.c)
+		status, ms := "online", -1
 		if rtt >= 0 {
-			n.setAddrLatency(name, addr, int(rtt.Milliseconds()))
-			// Update status to online
-			if i < len(p.connStatuses) {
-				p.connStatuses[i] = "online"
-			}
+			ms = max(1, int(rtt.Milliseconds())) // measured: sub-millisecond is not "unknown"
 		} else {
-			n.setAddrLatency(name, addr, -1)
-			if i < len(p.connStatuses) {
-				p.connStatuses[i] = "offline"
+			status = "offline"
+		}
+		n.mu.Lock()
+		live := false
+		for i, a := range p.connAddrs {
+			if a == x.addr && i < len(p.extraConns) && p.extraConns[i] == x.c {
+				live = true
+				if i < len(p.connStatuses) {
+					p.connStatuses[i] = status
+				}
+				break
 			}
+		}
+		n.mu.Unlock()
+		if live {
+			n.setAddrLatency(name, x.addr, ms)
 		}
 	}
 }
@@ -2434,6 +2458,10 @@ func (n *Node) RemovePeerConn(name, addr string) {
 			if i < len(p.connStatuses) {
 				p.connStatuses = append(p.connStatuses[:i:i], p.connStatuses[i+1:]...)
 			}
+			// its last measurement describes a connection that is gone
+			n.latencyMu.Lock()
+			delete(n.addrLatencies[name], addr)
+			n.latencyMu.Unlock()
 			return
 		}
 	}

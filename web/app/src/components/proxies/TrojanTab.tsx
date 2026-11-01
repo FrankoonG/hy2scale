@@ -28,12 +28,13 @@ export default function TrojanTab() {
     if (d) {
       setEnabled(d.enabled);
       setListen(d.listen || DEFAULT_LISTEN);
-      setCertId(d.cert_id || '');
+      setCertId(d.cert_id || 'default');
       setFallback(d.fallback || '');
     }
   });
 
   const handleSave = async () => {
+    if (!certs.some((c) => c.id === certId && !!c.key_file)) { toast.error(t('trojan.certRequired')); return; }
     setLoading(true);
     try {
       await api.updateTrojan({ listen: listen.trim(), enabled, cert_id: certId, fallback: fallback.trim() });
@@ -47,10 +48,8 @@ export default function TrojanTab() {
     }
   };
 
-  const certOptions = [
-    { value: '', label: t('trojan.certDefault') },
-    ...certs.filter((c) => !!c.key_file).map((c) => ({ value: c.id, label: `${c.name} (${c.subject})` })),
-  ];
+  const certOptions = certs.filter((c) => !!c.key_file).map((c) => ({ value: c.id, label: `${c.name} (${c.subject})` }));
+  if (!certOptions.some((o) => o.value === certId)) certOptions.unshift({ value: certId, label: '—' });
 
   return (
     <Card fill={1} title={t('trojan.title')}>
@@ -63,7 +62,7 @@ export default function TrojanTab() {
             <Input value={listen} onChange={(e) => setListen(e.target.value)} placeholder={DEFAULT_LISTEN} data-testid="trojan-listen" />
           </FormGroup>
         </FormRow>
-        <FormGroup label={t('trojan.cert')} testId="trojan-cert">
+        <FormGroup label={t('trojan.cert')} required testId="trojan-cert">
           <Select value={certId} onChange={(e) => setCertId(e.target.value)} options={certOptions} />
         </FormGroup>
         <FormGroup label={t('trojan.fallback')} hint={t('trojan.fallbackHint')}>

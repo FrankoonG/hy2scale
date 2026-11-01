@@ -184,8 +184,12 @@ func (s *Server) updateTrojanConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if tc.CertID != "" {
-		if _, err := s.app.TLS().TLSConfig(tc.CertID); err != nil {
+	if tc.Enabled || tc.CertID != "" {
+		id := tc.CertID
+		if id == "" {
+			id = app.TrojanDefaultCert
+		}
+		if _, err := s.app.TLS().TLSConfig(id); err != nil {
 			http.Error(w, "certificate: "+err.Error(), 400)
 			return
 		}

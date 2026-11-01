@@ -430,7 +430,7 @@
   "trojan.title": "Trojan 服务器",
   "trojan.listen": "监听地址",
   "trojan.cert": "TLS 证书",
-  "trojan.certDefault": "hy2 服务器证书",
+  "trojan.certRequired": "请选择证书",
   "trojan.fallback": "回落地址",
   "trojan.fallbackHint": "接收认证失败的连接。",
   "trojan.saved": "Trojan 已保存",

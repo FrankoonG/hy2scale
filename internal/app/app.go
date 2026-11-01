@@ -1546,6 +1546,17 @@ func (a *App) connectLoop(ctx context.Context, cl ClientEntry) {
 	}
 }
 
+// PrimaryDial is the address the primary connection of entry cl dials (it
+// moves on through the entry's addresses when a connection ends).
+func (a *App) PrimaryDial(cl ClientEntry) string {
+	if v, ok := a.primaryDial.Load(cl.Addr); ok {
+		if s, _ := v.(string); s != "" {
+			return s
+		}
+	}
+	return cl.PrimaryAddr()
+}
+
 // connectExtraLoop manages a secondary QUIC connection to an additional IP of the same peer.
 // It doesn't register with relay — just attaches the QUIC client to the existing peer's extra conns.
 // isPrimaryDial: is addr the one cl's primary connection currently dials?
@@ -1682,6 +1693,9 @@ func (a *App) connectExtraLoop(ctx context.Context, cl ClientEntry, extraAddr st
 			select {
 			case <-ctx.Done():
 				c.Close()
+				if IsPunchAddr(extraAddr) {
+					a.punch.lost(extraAddr, cl.Advanced)
+				}
 				return
 			case <-ticker.C:
 				// (A connected extra stays even if the primary has moved onto
