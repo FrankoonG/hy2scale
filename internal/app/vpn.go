@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,7 +62,8 @@ type L2TPConfig struct {
 // OpenVPNConfig holds the OpenVPN server configuration.
 type OpenVPNConfig struct {
 	Enabled bool   `yaml:"enabled" json:"enabled"`
-	Port    int    `yaml:"port" json:"port"`             // UDP, default 1194
+	Port    int    `yaml:"port" json:"port"`             // default 1194
+	Proto   string `yaml:"proto,omitempty" json:"proto"` // transport: "udp" (default), "tcp", or "both" on one port
 	Pool    string `yaml:"pool" json:"pool"`             // e.g. "10.8.0.1/24"
 	Pool6   string `yaml:"pool6,omitempty" json:"pool6"` // IPv6 prefix, e.g. "fd00:8::1/64"; "" = default
 	CertID  string `yaml:"cert_id" json:"cert_id"`       // CA cert ID: the server cert is signed from it
@@ -84,6 +87,20 @@ type OpenVPNConfig struct {
 
 	// RotateKey (API only) replaces the static key.
 	RotateKey bool `yaml:"-" json:"rotate_key,omitempty"`
+}
+
+// OpenVPN transports.
+const (
+	OpenVPNUDP  = "udp"
+	OpenVPNTCP  = "tcp"
+	OpenVPNBoth = "both"
+)
+
+func (c OpenVPNConfig) proto() string {
+	if c.Proto == "" {
+		return OpenVPNUDP
+	}
+	return c.Proto
 }
 
 // OpenVPN control channel modes.
@@ -120,6 +137,11 @@ func NewOpenVPNStaticKey() string {
 func (c *OpenVPNConfig) Check() error {
 	if c.Port < 0 || c.Port > 65535 {
 		return errors.New("invalid port")
+	}
+	switch c.Proto {
+	case "", OpenVPNUDP, OpenVPNTCP, OpenVPNBoth:
+	default:
+		return fmt.Errorf("unknown transport %q (udp, tcp, both)", c.Proto)
 	}
 	if c.ListenIP != "" {
 		if _, err := netip.ParseAddr(c.ListenIP); err != nil {
@@ -636,15 +658,34 @@ func (a *App) StartOpenVPN(cfg OpenVPNConfig) error {
 		shape = dataplane.DefaultShapeBytes
 	}
 	bindIP := net.ParseIP(cfg.ListenIP)
+	// Routing is pushed, so clients set up by hand (no profile) get it too.
+	ipv6 := boolOr(cfg.TunnelIPv6, true)
+	full := boolOr(cfg.FullTunnel, true)
+	var routes []netip.Prefix
+	if !full {
+		for _, r := range cfg.Routes {
+			if p, err := netip.ParsePrefix(strings.TrimSpace(r)); err == nil && (p.Addr().Is4() || ipv6) {
+				routes = append(routes, p)
+			}
+		}
+	}
 	err = a.startVPN("openvpn", []netip.Addr{gw, gw6}, cfg.mtuVal(), resolve, func(n *vpnNet) (vpnServer, error) {
 		return openvpn.NewServer(openvpn.ServerConfig{
 			CA:         caPEM,
 			Cert:       certPEM,
 			Key:        keyPEM,
 			ListenPort: cfg.port(),
-			TLSCrypt:   tlsCrypt,
-			TLSAuth:    tlsAuth,
-			Auth:       cfg.Auth,
+			Proto:      cfg.proto(),
+			ListenStream: func(port int) (net.Listener, error) {
+				return sockmark.ListenConfig(net.ListenConfig{}).Listen(context.Background(), "tcp",
+					net.JoinHostPort(cfg.ListenIP, strconv.Itoa(port)))
+			},
+			RedirectGateway: full,
+			RedirectIPv6:    full && ipv6,
+			PushRoutes:      routes,
+			TLSCrypt:        tlsCrypt,
+			TLSAuth:         tlsAuth,
+			Auth:            cfg.Auth,
 			// profiles use key-direction 1
 			KeyDirection: 1,
 			Shape:        shape,
@@ -669,7 +710,7 @@ func (a *App) StartOpenVPN(cfg OpenVPNConfig) error {
 		})
 	})
 	if err == nil {
-		log.Printf("[openvpn] userspace server on udp/%d (pool %s %s)", cfg.port(), cidr, cidr6)
+		log.Printf("[openvpn] userspace server on %s/%d (pool %s %s)", cfg.proto(), cfg.port(), cidr, cidr6)
 	}
 	return err
 }
@@ -734,37 +775,24 @@ func (a *App) OpenVPNProfile(endpoint string) (string, error) {
 		return "", err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "client\ndev tun\nproto udp\nremote %s %d\n", endpoint, cfg.port())
+	b.WriteString("client\ndev tun\n")
+	switch cfg.proto() {
+	case OpenVPNTCP:
+		fmt.Fprintf(&b, "proto tcp\nremote %s %d\n", endpoint, cfg.port())
+	case OpenVPNBoth: // UDP first, TCP when it does not get through
+		fmt.Fprintf(&b, "remote %s %d udp\nremote %s %d tcp\n", endpoint, cfg.port(), endpoint, cfg.port())
+	default:
+		fmt.Fprintf(&b, "proto udp\nremote %s %d\n", endpoint, cfg.port())
+	}
 	b.WriteString("nobind\npersist-key\npersist-tun\nresolv-retry infinite\n")
 	// the server pushes tun-mtu only to clients that apply it (2.6+); older
 	// ones take it from here
 	fmt.Fprintf(&b, "tun-mtu %d\n", cfg.mtuVal())
-	// both families into the tunnel: the server pushes an IPv6 address and
-	// gateway, and IPv6 left outside the tunnel would leak on dual-stack clients
+	// redirect-gateway / routes are pushed by the server
 	b.WriteString("remote-cert-tls server\nauth-user-pass\n")
-	ipv6 := boolOr(cfg.TunnelIPv6, true)
-	if boolOr(cfg.FullTunnel, true) {
-		if ipv6 {
-			b.WriteString("redirect-gateway def1 ipv6\n")
-		} else {
-			b.WriteString("redirect-gateway def1\n")
-		}
-	} else {
-		// split tunnel: only these networks go through the tunnel
-		for _, r := range cfg.Routes {
-			p, err := netip.ParsePrefix(strings.TrimSpace(r))
-			if err != nil {
-				continue
-			}
-			if p.Addr().Is4() {
-				m := net.CIDRMask(p.Bits(), 32)
-				fmt.Fprintf(&b, "route %s %s\n", p.Masked().Addr(), net.IP(m).String())
-			} else if ipv6 {
-				fmt.Fprintf(&b, "route-ipv6 %s\n", p.Masked())
-			}
-		}
-	}
-	b.WriteString("data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305\n")
+	// the server's data cipher; every client version reads "cipher"
+	// (2.5+ add it to data-ciphers, OpenVPN 3 and 2.4 negotiate it)
+	b.WriteString("cipher AES-256-GCM\n")
 	if cfg.Control == OpenVPNTLSAuth && cfg.Auth != "" {
 		fmt.Fprintf(&b, "auth %s\n", strings.ToUpper(cfg.Auth))
 	}

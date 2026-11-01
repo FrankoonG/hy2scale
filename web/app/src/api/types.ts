@@ -267,6 +267,8 @@ export interface OpenVPNConfig {
   connected?: number;
   enabled: boolean;
   port: number;
+  /** transport: udp (default), tcp, or both on one port */
+  proto?: 'udp' | 'tcp' | 'both';
   pool: string;
   pool6?: string;
   cert_id: string;

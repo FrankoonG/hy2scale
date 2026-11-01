@@ -266,6 +266,7 @@ func (s *Server) getOpenVPNConfig(w http.ResponseWriter, r *http.Request) {
 		"connected":     s.app.VPNClientCount("openvpn"),
 		"enabled":       false,
 		"port":          1194,
+		"proto":         "udp",
 		"pool":          "10.8.0.1/24",
 		"pool6":         app.DefaultOpenVPNPool6,
 		"cert_id":       "",
@@ -284,6 +285,7 @@ func (s *Server) getOpenVPNConfig(w http.ResponseWriter, r *http.Request) {
 	if c := cfg.OpenVPN; c != nil {
 		result["enabled"] = c.Enabled
 		result["port"] = c.Port
+		result["proto"] = orDefault(c.Proto, "udp")
 		result["pool"] = c.Pool
 		result["pool6"] = orDefault(c.Pool6, app.DefaultOpenVPNPool6)
 		result["cert_id"] = c.CertID
