@@ -1,10 +1,11 @@
-// Add-on proxies: SOCKS5 / HTTP / SS and the VPN servers (IKEv2, L2TP, OpenVPN).
+// Add-on proxies: SOCKS5 / HTTP / SS / Trojan and the VPN servers (IKEv2, L2TP, OpenVPN).
 
 package api
 
 import (
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 
@@ -20,6 +21,9 @@ func (s *Server) proxyRoutes(m *http.ServeMux) {
 	// SS config
 	m.HandleFunc("GET /api/ss", s.getSSConfig)
 	m.HandleFunc("PUT /api/ss", s.updateSSConfig)
+	// Trojan config
+	m.HandleFunc("GET /api/trojan", s.getTrojanConfig)
+	m.HandleFunc("PUT /api/trojan", s.updateTrojanConfig)
 	// L2TP config
 	m.HandleFunc("GET /api/l2tp", s.getL2TPConfig)
 	m.HandleFunc("PUT /api/l2tp", s.updateL2TPConfig)
@@ -144,6 +148,52 @@ func (s *Server) updateSSConfig(w http.ResponseWriter, r *http.Request) {
 		c.SS = &ss
 	})
 	go s.app.RestartSS()
+	writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func (s *Server) getTrojanConfig(w http.ResponseWriter, r *http.Request) {
+	cfg := s.app.Store().Get()
+	if cfg.Trojan == nil {
+		writeJSON(w, app.TrojanConfig{})
+		return
+	}
+	writeJSON(w, cfg.Trojan)
+}
+
+func (s *Server) updateTrojanConfig(w http.ResponseWriter, r *http.Request) {
+	var tc app.TrojanConfig
+	if err := json.NewDecoder(r.Body).Decode(&tc); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	tc.Listen = strings.TrimSpace(tc.Listen)
+	tc.Fallback = strings.TrimSpace(tc.Fallback)
+	if tc.Enabled && tc.Listen == "" {
+		http.Error(w, "listen required", 400)
+		return
+	}
+	if tc.Listen != "" {
+		if _, _, err := net.SplitHostPort(tc.Listen); err != nil {
+			http.Error(w, "listen: "+err.Error(), 400)
+			return
+		}
+	}
+	if tc.Fallback != "" {
+		if _, _, err := net.SplitHostPort(tc.Fallback); err != nil {
+			http.Error(w, "fallback: "+err.Error(), 400)
+			return
+		}
+	}
+	if tc.CertID != "" {
+		if _, err := s.app.TLS().TLSConfig(tc.CertID); err != nil {
+			http.Error(w, "certificate: "+err.Error(), 400)
+			return
+		}
+	}
+	s.app.Store().Update(func(c *app.Config) {
+		c.Trojan = &tc
+	})
+	go s.app.RestartTrojan()
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
