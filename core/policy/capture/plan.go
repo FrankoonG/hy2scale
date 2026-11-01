@@ -31,6 +31,9 @@ type Spec struct {
 	MeshListen string
 	// MeshPeers: resolved peer addresses ("ip:ports", IPv6 bracketed).
 	MeshPeers []string
+	// LocalNets: subnets of this host's interfaces (CIDRs, both families),
+	// never captured by either layer.
+	LocalNets []string
 }
 
 // LocalSpec is layer 1.
@@ -139,6 +142,11 @@ func installFamily(s Spec, v6 bool) ([]Cmd, error) {
 		m("-A", chain, "-m", "addrtype", "--dst-type", "LOCAL", "-j", "RETURN")
 		for _, d := range excluded(v6) {
 			m("-A", chain, "-d", d, "-j", "RETURN")
+		}
+		for _, n := range s.LocalNets {
+			if p, err := netip.ParsePrefix(n); err == nil && p.Addr().Is6() == v6 {
+				m("-A", chain, "-d", p.String(), "-j", "RETURN")
+			}
 		}
 	}
 

@@ -108,6 +108,8 @@
   "policy.directEntryHint": "Policy set for direct traffic and system traffic.",
   "policy.directEntryBadge": "Direct entry",
   "policy.maxDepth": "Max policy depth",
+  "policy.localNets": "Local subnets direct",
+  "policy.localNetsHint": "Destinations in this host's interface subnets are never intercepted.",
   "policy.layerLocal": "This node's traffic",
   "policy.layerLocalHint": "Connections opened by programs on this node.",
   "policy.layerForward": "Forwarded traffic",

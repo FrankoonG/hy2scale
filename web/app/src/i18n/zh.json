@@ -108,6 +108,8 @@
   "policy.directEntryHint": "处理直连流量和系统流量的策略集。",
   "policy.directEntryBadge": "直连入口",
   "policy.maxDepth": "最大策略层数",
+  "policy.localNets": "本机网段直连",
+  "policy.localNetsHint": "本机网卡网段内的目标不被拦截。",
   "policy.layerLocal": "本机流量",
   "policy.layerLocalHint": "本机程序主动发起的连接。",
   "policy.layerForward": "转发流量",

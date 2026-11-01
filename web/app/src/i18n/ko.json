@@ -108,6 +108,8 @@
   "policy.directEntryHint": "직접 연결 및 시스템 트래픽을 처리할 정책 세트입니다.",
   "policy.directEntryBadge": "직접 연결 입구",
   "policy.maxDepth": "최대 정책 깊이",
+  "policy.localNets": "로컬 서브넷 직접 연결",
+  "policy.localNetsHint": "이 호스트 인터페이스 서브넷의 대상은 가로채지 않습니다.",
   "policy.layerLocal": "이 노드의 트래픽",
   "policy.layerLocalHint": "이 노드의 프로그램이 여는 연결입니다.",
   "policy.layerForward": "전달 트래픽",
