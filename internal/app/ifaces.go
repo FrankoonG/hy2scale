@@ -311,6 +311,12 @@ func (a *App) RefreshPublicIP(name string) {
 	a.ifaces.pub.DetectNow(name)
 }
 
+// PublicIPSettingsChanged re-detects every interface with the new
+// detection settings and restarts the interval.
+func (a *App) PublicIPSettingsChanged() {
+	a.ifaces.pub.KickAll()
+}
+
 // isChildIface reports whether name is a configured child interface.
 func (a *App) isChildIface(name string) bool { return a.ifaces.IsChild(name) }
 

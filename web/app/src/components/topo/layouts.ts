@@ -505,12 +505,34 @@ export function routeEdges(g: Graph, pos: Record<string, Pos>, opts: RouteOpts =
   });
   const CELL = 64;
   const grid = new Map<string, typeof obstacles>();
+  const occupied: { cx: number; cy: number; l: typeof obstacles }[] = [];
   for (const o of obstacles) {
-    const k = `${Math.floor(o.p.x / CELL)},${Math.floor(o.p.y / CELL)}`;
+    const cx = Math.floor(o.p.x / CELL), cy = Math.floor(o.p.y / CELL);
+    const k = `${cx},${cy}`;
     let l = grid.get(k);
-    if (!l) grid.set(k, (l = []));
+    if (!l) {
+      grid.set(k, (l = []));
+      occupied.push({ cx, cy, l });
+    }
     l.push(o);
   }
+  // The obstacle lists in cells x0..x1 × y0..y1. A box larger than the
+  // occupied cells (a long line on a zoomed-in map spans millions of cells)
+  // walks the occupied cells instead.
+  const near = (x0: number, x1: number, y0: number, y1: number): (typeof obstacles)[] => {
+    const out: (typeof obstacles)[] = [];
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) > occupied.length) {
+      for (const c of occupied) if (c.cx >= x0 && c.cx <= x1 && c.cy >= y0 && c.cy <= y1) out.push(c.l);
+      return out;
+    }
+    for (let cx = x0; cx <= x1; cx++) {
+      for (let cy = y0; cy <= y1; cy++) {
+        const l = grid.get(`${cx},${cy}`);
+        if (l) out.push(l);
+      }
+    }
+    return out;
+  };
   let stamp = 0;
   const hits = (pts: Pos[], skipA: string, skipB: string, limit = Infinity): number => {
     const poly = sample(spline(pts), 10);
@@ -522,19 +544,15 @@ export function routeEdges(g: Graph, pos: Record<string, Pos>, opts: RouteOpts =
       const x0 = Math.floor((Math.min(a.x, b.x) - pad) / CELL), x1 = Math.floor((Math.max(a.x, b.x) + pad) / CELL);
       const y0 = Math.floor((Math.min(a.y, b.y) - pad) / CELL), y1 = Math.floor((Math.max(a.y, b.y) + pad) / CELL);
       const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
-      for (let cx = x0; cx <= x1; cx++) {
-        for (let cy = y0; cy <= y1; cy++) {
-          const l = grid.get(`${cx},${cy}`);
-          if (!l) continue;
-          for (const o of l) {
-            if (stamps[o.ni] === stamp || o.key === skipA || o.key === skipB) continue;
-            let t = l2 ? ((o.p.x - a.x) * dx + (o.p.y - a.y) * dy) / l2 : 0;
-            t = Math.max(0, Math.min(1, t));
-            if (Math.hypot(o.p.x - (a.x + dx * t), o.p.y - (a.y + dy * t)) < o.r + 5) {
-              // Count each dot once (its label obstacle shares the index).
-              stamps[o.ni] = stamp;
-              if (++n >= limit) return n;
-            }
+      for (const l of near(x0, x1, y0, y1)) {
+        for (const o of l) {
+          if (stamps[o.ni] === stamp || o.key === skipA || o.key === skipB) continue;
+          let t = l2 ? ((o.p.x - a.x) * dx + (o.p.y - a.y) * dy) / l2 : 0;
+          t = Math.max(0, Math.min(1, t));
+          if (Math.hypot(o.p.x - (a.x + dx * t), o.p.y - (a.y + dy * t)) < o.r + 5) {
+            // Count each dot once (its label obstacle shares the index).
+            stamps[o.ni] = stamp;
+            if (++n >= limit) return n;
           }
         }
       }

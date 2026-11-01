@@ -139,6 +139,7 @@ func (s *Server) updatePublicIPSettings(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	s.app.Store().Update(func(c *app.Config) { applyPublicIPSettings(c, &pc) })
+	s.app.PublicIPSettingsChanged()
 	writeJSON(w, map[string]string{"status": "ok", "note": "applied live"})
 }
 
@@ -228,6 +229,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, own int) {
 			applyPublicIPSettings(c, body.PublicIP)
 		}
 	})
+	if body.PublicIP != nil {
+		s.app.PublicIPSettingsChanged()
+	}
 	// Hot-reload resolver snapshot on any DNS-resolver field touch +
 	// purge cache so the new config takes effect on next call.
 	// `body.DNS` is included because the resolver now reads its

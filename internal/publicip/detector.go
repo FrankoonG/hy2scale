@@ -169,6 +169,16 @@ func (p *Detector) Run(ctx context.Context, n *node.Node) {
 					go p.detect(k)
 				}
 			}
+			if name == "" { // all re-checked: the next full round is one (current) interval away
+				if !full.Stop() {
+					select {
+					case <-full.C:
+					default:
+					}
+				}
+				interval, _, _ = p.settings()
+				full.Reset(interval)
+			}
 		case <-poll.C:
 			for _, k := range p.targets() {
 				loc := p.localAddrs(k.iface)
