@@ -1,0 +1,226 @@
+name: Build
+
+# Development builds: every push to main or a version branch (and manual
+# runs) builds the same outputs as a release — binaries, archives, Docker
+# image tarballs and iKuai packages — and keeps them as workflow artifacts.
+# Nothing is signed (no environment, no secrets) and nothing is published;
+# releases stay with release.yml on a release tag.
+on:
+  push:
+    branches:
+      - main
+      - "v[0-9]*"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: build-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.27"
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      label: ${{ steps.v.outputs.label }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: internal/api/server.go
+          sparse-checkout-cone-mode: false
+      - id: v
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          VERSION="$(sed -n 's/^const Version = "\([0-9A-Za-z.-]*\)"$/\1/p' internal/api/server.go)"
+          [ -n "$VERSION" ] || { echo "::error::no version constant"; exit 1; }
+          {
+            echo "version=$VERSION"
+            echo "label=${VERSION}-dev.${SHA:0:7}"
+          } >> "$GITHUB_OUTPUT"
+
+  frontend:
+    name: Build web UI
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+
+      # Dependencies' install scripts never run.
+      - name: Build
+        run: |
+          set -eux
+          (cd web/ui-framework && npm ci --ignore-scripts && npm run build)
+          (cd web/app && npm ci --ignore-scripts && npm run build)
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: web-static
+          path: web/app/dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: [version, frontend]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { platform: linux-amd64, goarch: amd64 }
+          - { platform: linux-arm64, goarch: arm64 }
+          - { platform: linux-armv7, goarch: arm, goarm: "7" }
+          - { platform: linux-mips64le, goarch: mips64le }
+          - { platform: linux-mipsle-softfloat, goarch: mipsle, gomips: softfloat }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # The binary embeds the UI built from this commit.
+      - name: Use the built web UI
+        run: rm -rf internal/web/static
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: web-static
+          path: internal/web/static
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Build binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          GOMIPS: ${{ matrix.gomips }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -eu
+          go build -trimpath -ldflags="-s -w" -o "hy2scale-${PLATFORM}" ./cmd/node
+          sha256sum "hy2scale-${PLATFORM}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bin-${{ matrix.platform }}
+          path: hy2scale-${{ matrix.platform }}
+          if-no-files-found: error
+          retention-days: 1
+
+  package:
+    name: Package archives
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions: {}
+    env:
+      LABEL: ${{ needs.version.outputs.label }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: bin-*
+          path: bin
+          merge-multiple: true
+      - name: Archive
+        run: |
+          set -eu
+          mkdir -p out
+          cd bin
+          for f in hy2scale-*; do
+            chmod 0755 "$f"
+            tar czf "../out/$f.tar.gz" "$f"
+          done
+          cd ../out && sha256sum *.tar.gz | tee SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: binaries-${{ env.LABEL }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 30
+
+  docker:
+    name: Docker + ipkg (${{ matrix.arch }})
+    needs: [version, build]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { arch: amd64, arch_label: x86, platform: linux/amd64, runner: ubuntu-latest }
+          - { arch: arm64, arch_label: arm64, platform: linux/arm64, runner: ubuntu-24.04-arm }
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      LABEL: ${{ needs.version.outputs.label }}
+      ARCH: ${{ matrix.arch }}
+      ARCH_LABEL: ${{ matrix.arch_label }}
+      PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-${{ matrix.arch }}
+          path: build
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Build image
+        run: |
+          set -eu
+          docker buildx build --platform "$PLATFORM" --build-arg BIN=unsigned \
+            --tag "frankoong/hy2scale:${LABEL}" --tag hy2scale:ikuai --load .
+          docker run --rm hy2scale:ikuai -version
+
+      - name: Export image
+        run: docker save "frankoong/hy2scale:${LABEL}" | gzip > "docker-image-${ARCH}.tar.gz"
+
+      - name: Build ipkg
+        run: |
+          set -eu
+          # The ipkg manifest version must be plain X.Y.Z (iKuai rejects -rc1).
+          IPKG_VERSION="${VERSION%%-*}"
+          sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${IPKG_VERSION}\"/" ipkg/hy2scale/manifest.json
+          docker save hy2scale:ikuai | gzip > ipkg/hy2scale/docker_image.tar.gz
+          (cd ipkg && tar czf "hy2scale-${ARCH_LABEL}-${LABEL}.ipkg" hy2scale/)
+          rm -f ipkg/hy2scale/docker_image.tar.gz
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: docker-image-${{ matrix.arch }}-${{ env.LABEL }}
+          path: docker-image-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ipkg-${{ matrix.arch_label }}-${{ env.LABEL }}
+          path: ipkg/hy2scale-${{ matrix.arch_label }}-${{ env.LABEL }}.ipkg
+          if-no-files-found: error
+          retention-days: 30
