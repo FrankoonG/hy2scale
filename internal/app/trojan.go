@@ -9,7 +9,6 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -39,8 +38,8 @@ import (
 type TrojanConfig struct {
 	Listen  string `yaml:"listen" json:"listen"`
 	Enabled bool   `yaml:"enabled" json:"enabled"`
-	// CertID: TLS certificate from the node's store. Empty = the hy2
-	// server's certificate.
+	// CertID: TLS certificate from the node's store. Empty = the store's
+	// "default" certificate.
 	CertID string `yaml:"cert_id,omitempty" json:"cert_id"`
 	// Fallback: host:port that streams failing authentication are passed
 	// to unchanged (decrypted). Empty = close them.
@@ -113,26 +112,21 @@ func (a *App) RestartTrojan() {
 	}
 }
 
-// trojanTLS: the server TLS config for a certificate of the store, or the
-// hy2 server's certificate (read per handshake) when id is empty.
+// TrojanDefaultCert is the certificate a Trojan config without one uses.
+const TrojanDefaultCert = "default"
+
+// trojanTLS: the server TLS config for a certificate of the store (the
+// "default" one when id is empty).
 func (a *App) trojanTLS(id string) (*tls.Config, error) {
-	if id != "" {
-		c, err := a.tls.TLSConfig(id)
-		if err != nil {
-			return nil, err
-		}
-		c.MinVersion = tls.VersionTLS12
-		return c, nil
+	if id == "" {
+		id = TrojanDefaultCert
 	}
-	return &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-			if c := a.serverCert.Load(); c != nil {
-				return c, nil
-			}
-			return nil, errors.New("no hy2 server certificate")
-		},
-	}, nil
+	c, err := a.tls.TLSConfig(id)
+	if err != nil {
+		return nil, err
+	}
+	c.MinVersion = tls.VersionTLS12
+	return c, nil
 }
 
 func trojanHash(password string) string {

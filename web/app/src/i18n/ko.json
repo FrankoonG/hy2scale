@@ -430,7 +430,7 @@
   "trojan.title": "Trojan 서버",
   "trojan.listen": "수신 주소",
   "trojan.cert": "TLS 인증서",
-  "trojan.certDefault": "hy2 서버 인증서",
+  "trojan.certRequired": "인증서를 선택하세요",
   "trojan.fallback": "폴백 주소",
   "trojan.fallbackHint": "인증에 실패한 연결을 받습니다.",
   "trojan.saved": "Trojan 저장됨",
