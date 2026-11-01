@@ -100,6 +100,7 @@ html[data-darkreader-scheme="dark"] .lg-page{--lg-svg-surface:#202224}
 /* packets: upload / download, as on the overview chart */
 .lg-tsvg .pk .up{color:#4361ee;fill:currentColor}
 .lg-tsvg .pk .down{color:#16a34a;fill:currentColor}
+.lg-tsvg .pk .sig{color:#9333ea;fill:currentColor}
 .lg-tsvg .pk .halo{fill-opacity:.2}
 
 /* native dark theme (Dark Reader is locked out there) */
@@ -127,6 +128,7 @@ html[data-darkreader-scheme="dark"] .lg-page{--lg-svg-surface:#202224}
 :root[data-theme="dark"] .lg-tsvg .tn .qa{color:#fbbf24}
 :root[data-theme="dark"] .lg-tsvg .pk .up{color:#7a92fa}
 :root[data-theme="dark"] .lg-tsvg .pk .down{color:#4ade80}
+:root[data-theme="dark"] .lg-tsvg .pk .sig{color:#c084fc}
 
 /* ---- right panel */
 .lg-right{position:relative;display:flex;align-items:center;justify-content:center;padding:72px 24px 48px;min-width:0}
