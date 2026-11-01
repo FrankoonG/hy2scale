@@ -430,7 +430,7 @@
   "trojan.title": "Trojan Server",
   "trojan.listen": "Listen Address",
   "trojan.cert": "TLS Certificate",
-  "trojan.certDefault": "hy2 server certificate",
+  "trojan.certRequired": "Select a certificate",
   "trojan.fallback": "Fallback Address",
   "trojan.fallbackHint": "Receives connections that fail authentication.",
   "trojan.saved": "Trojan saved",
