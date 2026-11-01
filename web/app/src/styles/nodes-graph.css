@@ -349,6 +349,11 @@
 .hy-topo-ghost{color:#4361ee;stroke:currentColor;fill:currentColor;fill-opacity:.14;cursor:copy}
 .hy-topo-handle{color:#4361ee;stroke:#ffffff;fill:currentColor;cursor:grab}
 .hy-topo-ghost:hover,.hy-topo-handle:hover{color:#2f4ad8}
+.hy-topo-edge-hit.sel{stroke-width:22}
+.hy-topo-grab{fill:transparent;stroke:none;pointer-events:all}
+.hy-topo-grab.ghost{cursor:copy}
+.hy-topo-grab.wp{cursor:grab}
+.hy-topo-grab:hover+.hy-topo-ghost,.hy-topo-grab:hover+.hy-topo-handle{color:#2f4ad8}
 .hy-topo-edge-label-group.editable{cursor:grab}
 .hy-topo-edge-label-hit{fill:transparent;pointer-events:all}
 .hy-topo-edge-label-group.editable:hover .hy-topo-edge-label-hit,.hy-topo-edge-label-group.placed .hy-topo-edge-label-hit{fill:#4361ee;fill-opacity:.06}
