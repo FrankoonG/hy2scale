@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import type { TopologyNode, GraphCanvas, GraphCanvasEdge } from '@/api';
 import * as api from '@/api';
-import { getBasePath } from '@/api/client';
+import { getBasePath, liveStream } from '@/api/client';
 import { fmtRate } from '@/hooks/useFormat';
 import { useExitPaths } from '@/hooks/useExitPaths';
 import { usePanZoom, type View } from '@/hooks/usePanZoom';
@@ -121,15 +121,14 @@ function resolveOverlap(key: string, pos: Pos, others: Record<string, Pos>, node
 function useGraphCanvases() {
   const [canvases, setCanvases] = useState<GraphCanvas[] | null>(null);
   useEffect(() => {
-    const token = sessionStorage.getItem('token:' + getBasePath()) || '';
-    const es = new EventSource(getBasePath() + '/api/graph-canvases/stream?token=' + encodeURIComponent(token));
-    es.onmessage = (ev) => {
-      try {
-        const data = JSON.parse(ev.data);
-        if (data && Array.isArray(data.canvases)) setCanvases(data.canvases as GraphCanvas[]);
-      } catch { /* ignore malformed */ }
-    };
-    return () => es.close();
+    let gone = false;
+    let got = false;
+    const take = (d: any) => { if (!gone && d && Array.isArray(d.canvases)) { got = true; setCanvases(d.canvases as GraphCanvas[]); } };
+    const fetchOnce = () => { api.getGraphCanvases().then((d) => { if (!got) take(d); }, () => { /* the next try brings it */ }); };
+    const stop = liveStream('/graph-canvases/stream', take, () => { got = false; fetchOnce(); });
+    // a slow first frame (a proxy, a busy connection pool): ask once directly
+    const slow = window.setTimeout(() => { if (!got) fetchOnce(); }, 700);
+    return () => { gone = true; window.clearTimeout(slow); stop(); };
   }, []);
   return { canvases, setCanvases };
 }
