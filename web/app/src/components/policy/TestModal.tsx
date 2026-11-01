@@ -6,7 +6,7 @@ import { testPolicy, type PolicyConfig, type PolicyTestResult } from '@/api/poli
 import * as api from '@/api';
 import { SOURCE_KINDS, describeTerminal } from './shared';
 
-const USER_KINDS = new Set(['socks5', 'http', 'ss', 'hy2', 'ikev2', 'l2tp', 'openvpn', 'access']);
+const USER_KINDS = new Set(['socks5', 'http', 'ss', 'trojan', 'hy2', 'ikev2', 'l2tp', 'openvpn', 'access']);
 
 /** Dry run: which rules a connection would pass through, and where it ends. */
 export default function TestModal({ open, onClose, animateFrom, cfg }: {
