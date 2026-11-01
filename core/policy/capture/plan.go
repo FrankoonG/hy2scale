@@ -264,6 +264,11 @@ func installFamily(s Spec, v6 bool) ([]Cmd, error) {
 		Cmd{Tool: ipt, Args: []string{"rule", "add", "fwmark", hex(MarkRoute) + "/0xffffffff", "lookup", RouteTable, "priority", RulePriority}},
 		Cmd{Tool: ipt, Args: []string{"route", "replace", "local", def, "dev", "lo", "table", RouteTable}},
 	)
+	// The taken-over packets are delivered to our listeners through the
+	// filter INPUT chain with their original destination: a host firewall
+	// with an INPUT DROP policy (ufw, firewalld) would drop every new flow
+	// from a forwarded interface. Only packets this capture marked pass.
+	out = append(out, Cmd{Tool: tool, Args: []string{"-t", "filter", "-I", "INPUT", "1", "-m", "mark", "--mark", hex(MarkRoute), "-j", "ACCEPT"}})
 	// hooks last: nothing is captured before the chains are complete
 	m("-I", "PREROUTING", "1", "-j", chainPre)
 	if local {
@@ -328,6 +333,7 @@ func Teardown() []Cmd {
 		o := func(repeat bool, args ...string) {
 			out = append(out, Cmd{Tool: tool, Args: args, Repeat: repeat, Optional: true})
 		}
+		o(true, "-t", "filter", "-D", "INPUT", "-m", "mark", "--mark", hex(MarkRoute), "-j", "ACCEPT")
 		o(true, "-t", "mangle", "-D", "PREROUTING", "-j", chainPre)
 		o(true, "-t", "mangle", "-D", "OUTPUT", "-j", chainOut)
 		for _, ch := range allChains {
