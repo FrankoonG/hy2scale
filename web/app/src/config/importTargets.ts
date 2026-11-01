@@ -57,13 +57,14 @@ export const IMPORT_TARGETS = {
   },
   users: {
     sheet: 'users',
-    headers: ['username', 'password', 'exit_via', 'exit_mode', 'traffic_limit_gb', 'expiry_date', 'enabled'],
+    headers: ['username', 'password', 'exit_via', 'exit_mode', 'traffic_limit_gb', 'rate_up', 'rate_down', 'expiry_date', 'enabled'],
     titleKey: 'import.importUsers',
     queryKey: 'users',
     exportRows: async () => (await api.getUsers()).map((u) => ({
       username: u.username, password: u.password,
       exit_via: u.exit_paths?.join(',') || u.exit_via || '',
       exit_mode: u.exit_mode || '', traffic_limit_gb: u.traffic_limit ? u.traffic_limit / GiB : 0,
+      rate_up: u.rate_up || 0, rate_down: u.rate_down || 0,
       expiry_date: u.expiry_date || '', enabled: u.enabled ? 'yes' : 'no',
     })),
     importRow: async (row, overwrite, cache) => {
@@ -73,6 +74,8 @@ export const IMPORT_TARGETS = {
         exit_via: p[0] || '', exit_paths: p.length > 1 ? p : undefined,
         exit_mode: row.exit_mode || undefined,
         traffic_limit: (Number(row.traffic_limit_gb) || 0) * GiB,
+        rate_up: Math.max(0, Math.round(Number(row.rate_up) || 0)),
+        rate_down: Math.max(0, Math.round(Number(row.rate_down) || 0)),
         expiry_date: row.expiry_date || undefined,
         enabled: row.enabled !== 'no',
       };

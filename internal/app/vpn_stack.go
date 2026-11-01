@@ -426,6 +426,7 @@ func (a *App) relayVPNUDP(n *vpnNet, conn *gonet.UDPConn, route vpnRoute, srcIP 
 			}
 			refresh()
 			af.Add(int64(k), 0)
+			a.userRate(route.user).wait(true, k)
 			if _, e := remote.Write(buf[:k]); e != nil {
 				return
 			}
@@ -439,6 +440,7 @@ func (a *App) relayVPNUDP(n *vpnNet, conn *gonet.UDPConn, route vpnRoute, srcIP 
 		}
 		refresh()
 		af.Add(0, int64(k))
+		a.userRate(route.user).wait(false, k)
 		if _, e := conn.Write(buf[:k]); e != nil {
 			break
 		}

@@ -285,6 +285,9 @@ func (a *App) handleSSUDPPacket(
 		af := flow.af
 		flow.mu.Unlock()
 
+		if !a.userRate(u.Username).allow(true, len(payload)) {
+			return // over the user's rate limit: dropped
+		}
 		af.Add(int64(len(payload)), 0)
 		if _, werr := upstream.Write(payload); werr != nil {
 			// Drop on write failure — upstream conn may have died.
@@ -330,7 +333,7 @@ func (a *App) ssUDPForward(
 	username := flow.username
 	af := flow.af
 	flow.mu.Unlock()
-	if upstream == nil || a.overTrafficLimit(username) {
+	if upstream == nil || a.overTrafficLimit(username) || !a.userRate(username).allow(true, len(payload)) {
 		return
 	}
 	af.Add(int64(len(payload)), 0)
@@ -414,6 +417,7 @@ func (a *App) ssUDPReverse(
 		if a.overTrafficLimit(username) {
 			continue // over the limit: replies are dropped
 		}
+		a.userRate(username).wait(false, n)
 		ct := aead.Seal(nil, zeroNonce, plain, nil)
 		out := make([]byte, 0, len(replySalt)+len(ct))
 		out = append(out, replySalt...)
