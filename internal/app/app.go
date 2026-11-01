@@ -260,6 +260,8 @@ type App struct {
 	vpnMux       *vpnmux.Mux
 	usersMu       sync.RWMutex
 	userIndex     map[string]*UserConfig           // username → user (for fast auth lookup)
+	ratesMu       sync.RWMutex
+	rates         map[string]*userRate // per-user rate limits (ratelimit.go)
 	pwConflicted  map[string]map[string]bool       // username → proxy → conflicted
 	pwConflictAll map[string]map[string][]string   // proxy → password → []usernames (for API)
 	trafficDirty  sync.Map                         // username → true (needs flush)
@@ -847,6 +849,7 @@ func (a *App) rebuildUserIndex() {
 	a.pwConflicted = conflicted
 	a.pwConflictAll = proxyPwUsers
 	a.usersMu.Unlock()
+	a.syncUserRates(cfg.Users)
 }
 
 // IsPasswordConflicted returns true if the user has a password collision on the given proxy.

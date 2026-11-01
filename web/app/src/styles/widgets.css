@@ -165,3 +165,8 @@
 .ovpn-sec{margin-top:6px;padding-top:12px;border-top:1px solid var(--border-light);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted)}
 .ovpn-key{display:flex;align-items:center;gap:10px}
 .hy-seg.ovpn-seg{width:max-content;align-self:flex-start;justify-self:start}
+
+/* ====== Rate input (amount + unit) ====== */
+.hy-rate-input{display:flex;gap:8px}
+.hy-rate-input>.hy-input{flex:1;min-width:0}
+.hy-rate-input>.hy-select-wrap{flex:0 0 96px;width:96px}

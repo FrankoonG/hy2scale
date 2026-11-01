@@ -157,6 +157,9 @@ export interface UserConfig {
   exit_policy?: string;
   traffic_limit: number;
   traffic_used: number;
+  /** Rate limits in bytes per second (from / to the user); 0 = unlimited. */
+  rate_up?: number;
+  rate_down?: number;
   /** Automatic reset of traffic_used at 00:00 node time; '' = never. */
   traffic_reset?: TrafficReset;
   /** weekly: ISO weekday 1 (Mon)..7 (Sun); monthly: 1..31 (clamped to the month). */
