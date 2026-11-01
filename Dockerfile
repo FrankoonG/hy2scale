@@ -36,6 +36,12 @@ ARG TARGETARCH
 COPY release/hy2scale-linux-${TARGETARCH} /hy2scale
 COPY release/hy2scale-linux-${TARGETARCH}.sig /hy2scale.sig
 
+# Development builds (--build-arg BIN=unsigned, .github/workflows/build.yml):
+# the binary built by that workflow, unsigned.
+FROM scratch AS bin-unsigned
+ARG TARGETARCH
+COPY build/hy2scale-linux-${TARGETARCH} /hy2scale
+
 FROM bin-${BIN} AS bin
 
 # Build iptables 1.8.3 from source (Alpine's 1.8.10 incompatible with some kernels)
