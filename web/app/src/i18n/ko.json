@@ -298,6 +298,7 @@
   "nodes.geo.needDb": "IP 위치 데이터베이스 필요",
   "nodes.geo.loadFailed": "지도 데이터를 불러오지 못했습니다",
   "nodes.geo.menu": "지도",
+  "nodes.geo.focusDetail": "노드가 있는 국가만 상세 표시",
   "nodes.geo.resetLines": "선 초기화",
   "nodes.geo.resetLinesConfirm": "지도 보기의 모든 꺾임점과 레이블 위치를 지울까요?",
   "nodes.graph.zoomIn": "확대",

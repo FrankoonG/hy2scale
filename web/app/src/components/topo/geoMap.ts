@@ -4,7 +4,7 @@
 // "base" coordinates — the projection at a fixed scale around (0, 0) — so
 // the canvas view (screen = base × k + offset) pans and zooms them like any
 // other topology layout. The world repeats horizontally every BASE units.
-import { geoArea, geoMercator, geoPath, type GeoProjection } from 'd3-geo';
+import { geoArea, geoContains, geoMercator, geoPath, type GeoProjection } from 'd3-geo';
 import { feature, mesh } from 'topojson-client';
 import type { Feature, FeatureCollection, Geometry, MultiLineString, Position } from 'geojson';
 import type { Topology } from 'topojson-specification';
@@ -19,7 +19,7 @@ interface Named { en: string; zh?: string; ko?: string }
 interface Props extends Named { iso: string; lx: number; ly: number; ml: number }
 
 export interface Country { iso: string; names: Named; label: [number, number]; ml: number; f: Feature<Geometry, Props> }
-interface Region { names: Named; label: [number, number]; ml: number; f: Feature<Geometry, Props> }
+interface Region { iso: string; names: Named; label: [number, number]; ml: number; f: Feature<Geometry, Props> }
 /** [lon, lat, scalerank, capital, en, zh, ko] */
 type City = [number, number, number, number, string, string, string];
 
@@ -83,7 +83,7 @@ export async function loadAdmin1(base: string): Promise<Admin1> {
   const fc = layer(t);
   const obj = t.objects[Object.keys(t.objects)[0]];
   return {
-    regions: fc.features.map((f) => ({ names: f.properties, label: [f.properties.lx, f.properties.ly], ml: f.properties.ml ?? 8, f })),
+    regions: fc.features.map((f) => ({ iso: String(f.properties.iso || ''), names: f.properties, label: [f.properties.lx, f.properties.ly], ml: f.properties.ml ?? 8, f })),
     lines: linesOf(mesh(t, obj as any, (a, b) => a !== b) as MultiLineString),
   };
 }
@@ -173,6 +173,22 @@ export interface Palette { ocean: string; land: string; border: string; region: 
 /** Web-map zoom level of the view (world = 256 × 2^z px). */
 export const zoomLevel = (k: number) => Math.log2((BASE * k) / 256);
 
+/**
+ * Whether a point lies in one of the focus countries; cached per point
+ * object and focus set (cities and admin1 lines carry no country).
+ */
+const inFocusCache = new WeakMap<object, { sig: string; v: boolean }>();
+function inFocus(key: object, lonlat: [number, number], focus: Country[], sig: string): boolean {
+  const c = inFocusCache.get(key);
+  if (c && c.sig === sig) return c.v;
+  const v = focus.some((f) => geoContains(f.f, lonlat));
+  inFocusCache.set(key, { sig, v });
+  return v;
+}
+
+/** Extra zoom levels before states show outside the focus countries. */
+const OUTSIDE_FOCUS_Z = 2;
+
 /** The horizontal copies of the world that view `v` (w px wide) shows:
  *  copy n is the world shifted by n × BASE × k. */
 export function copiesOf(v: { x: number; k: number }, w: number, extra = 0): number[] {
@@ -193,15 +209,21 @@ export function copiesOf(v: { x: number; k: number }, w: number, extra = 0): num
 export function drawBasemap(
   ctx: CanvasRenderingContext2D, w: number, h: number, kind: MapProj, v: { x: number; y: number; k: number },
   data: GeoData, admin1: Admin1 | null, pal: Palette, lang: Lang,
+  /** Countries (ISO codes) that get full detail: cities only there, states
+   *  elsewhere only zoomed in further. Undefined: every country. */
+  focusIso?: Set<string>,
 ) {
   const z = zoomLevel(v.k);
+  const focus = focusIso ? [...focusIso].map((i) => data.byIso.get(i)).filter((c): c is Country => !!c) : null;
+  const sig = focus ? [...focusIso!].sort().join(',') : '';
+  const lineIn = (l: Line) => !focus || inFocus(l, l.coords[l.coords.length >> 1] as [number, number], focus, sig);
   const W = BASE * v.k;
   const copies = copiesOf(v, w).map((n) => ({ x: v.x + n * W, y: v.y, k: v.k }));
   const onScreen = (vn: { x: number; y: number; k: number }, [[x0, y0], [x1, y1]]: Box, pad = 0) =>
     x1 * vn.k + vn.x >= -pad && x0 * vn.k + vn.x <= w + pad && y1 * vn.k + vn.y >= -pad && y0 * vn.k + vn.y <= h + pad;
-  const strokeLines = (path: ReturnType<typeof geoPath>, vn: { x: number; y: number; k: number }, lines: Line[]) => {
+  const strokeLines = (path: ReturnType<typeof geoPath>, vn: { x: number; y: number; k: number }, lines: Line[], keep?: (l: Line) => boolean) => {
     ctx.beginPath();
-    for (const l of lines) if (onScreen(vn, l.b, 2)) path({ type: 'LineString', coordinates: l.coords });
+    for (const l of lines) if (onScreen(vn, l.b, 2) && (!keep || keep(l))) path({ type: 'LineString', coordinates: l.coords });
     ctx.stroke();
   };
 
@@ -224,7 +246,7 @@ export function drawBasemap(
       ctx.strokeStyle = pal.region;
       ctx.lineWidth = 0.6;
       ctx.setLineDash([3, 2]);
-      strokeLines(path, vn, admin1.lines);
+      strokeLines(path, vn, admin1.lines, focus && z < 3.2 + OUTSIDE_FOCUS_Z ? lineIn : undefined);
       ctx.setLineDash([]);
     }
 
@@ -267,6 +289,7 @@ export function drawBasemap(
       for (const { proj } of projs) {
         const p = proj([c[0], c[1]]);
         if (!p || p[0] < -20 || p[0] > w + 20 || p[1] < -20 || p[1] > h + 20) continue;
+        if (focus && !inFocus(c, [c[0], c[1]], focus, sig)) break;
         const label = (lang === 'zh' && c[5]) || (lang === 'ko' && c[6]) || c[4];
         if (!text(label, p[0] + 5, p[1] + 4, `${c[3] ? 600 : 400} 11px system-ui, sans-serif`, pal.city, 'left')) continue;
         ctx.beginPath();
@@ -291,7 +314,8 @@ export function drawBasemap(
   // states
   if (admin1 && z >= 4.5) {
     for (const r of admin1.regions) {
-      if (z + 1.5 < r.ml) continue;
+      const extra = focusIso && !focusIso.has(r.iso) ? OUTSIDE_FOCUS_Z : 0;
+      if (z + 1.5 < r.ml + extra || z < 4.5 + extra) continue;
       const bb = boundsOf(kind, r.f);
       for (const { vn, proj } of projs) {
         if (!onScreen(vn, bb)) continue;
