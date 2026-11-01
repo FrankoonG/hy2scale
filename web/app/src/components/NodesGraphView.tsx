@@ -148,6 +148,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   const { nodes, edges } = useMemo(() => buildGraph(topology, selfId, selfName), [topology, selfId, selfName]);
   const graph = useMemo(() => ({ nodes, edges }), [nodes, edges]);
   const sig = useMemo(() => graphSignature(graph), [graph]);
+  /** The node set alone: auto layouts follow it, not edge changes. */
+  const nodeSet = useMemo(() => [...nodes.keys()].sort().join('|'), [nodes]);
   const graphRef = useRef(graph);
   graphRef.current = graph;
   const nodesRef = useRef(nodes);
@@ -269,19 +271,37 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   }, [ipOf, geoInfoSig]);
   const focusIso = geoFocus ? nodeCountries : undefined;
 
-  // Preset layouts depend only on the graph's shape (signature), not on the
-  // rates/latencies refreshed by every topology poll.
-  const layoutCache = useRef(new Map<string, Record<string, Pos>>());
+  // Preset layouts stay put while the view is open: edges coming and going
+  // (or flapping) never move a dot. A layout is computed again only when a
+  // node appears that it has never placed; a known node coming back takes
+  // its old spot (or one next to a neighbour if it had none).
+  const frozenRef = useRef(new Map<PresetId, { pos: Record<string, Pos>; known: Set<string>; keys: string; out: Record<string, Pos> }>());
   const layoutFor = useCallback((id: PresetId): Record<string, Pos> => {
-    const k = id + '#' + sig;
-    let v = layoutCache.current.get(k);
-    if (!v) {
-      if (layoutCache.current.size > 16) layoutCache.current.clear();
-      v = presetLayout(id, graphRef.current);
-      layoutCache.current.set(k, v);
+    const g = graphRef.current;
+    const keys = [...g.nodes.keys()];
+    let f = frozenRef.current.get(id);
+    if (!f || keys.some((k) => !f!.known.has(k))) {
+      const pos = presetLayout(id, g);
+      f = { pos: { ...pos }, known: new Set([...(f?.known || []), ...keys]), keys: '', out: {} };
+      frozenRef.current.set(id, f);
     }
-    return v;
-  }, [sig]);
+    if (f.keys === nodeSet) return f.out;
+    const out: Record<string, Pos> = {};
+    for (const k of keys) if (f.pos[k]) out[k] = f.pos[k];
+    for (const k of keys) {
+      if (out[k]) continue;
+      let near: Pos | undefined;
+      for (const e of g.edges.values()) {
+        const o = e.from === k ? e.to : e.to === k ? e.from : '';
+        if (o && out[o]) { near = { x: out[o].x + 60, y: out[o].y + 60 }; break; }
+      }
+      out[k] = resolveOverlap(k, near || { x: 0, y: 0 }, out, g.nodes);
+      f.pos[k] = out[k];
+    }
+    f.keys = nodeSet;
+    f.out = out;
+    return out;
+  }, [nodeSet]);
   const presetPos = useMemo(() => layoutFor(presetId), [layoutFor, presetId]);
   const fallbackPos = useMemo(() => layoutFor('layered'), [layoutFor]);
 
@@ -497,9 +517,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     const m: Record<string, Pos> = {};
     for (const k of nodesRef.current.keys()) m[k] = overrides[k] || fallbackPos[k] || { x: 0, y: 0 };
     return m;
-    // The node set is part of `sig`; topology polls don't move anything.
+    // Only the node set matters here; topology polls don't move anything.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isCustom, presetPos, overrides, sig, fallbackPos]);
+  }, [isCustom, presetPos, overrides, nodeSet, fallbackPos]);
 
   // Canvas switch: dots glide from where they were to the new layout.
   const [morph, setMorph] = useState<{ from: Record<string, Pos>; p: number } | null>(null);
@@ -638,9 +658,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     if (!ready || userMoved.current || morph || geoMode) return;
     const v = fitFor(targetPos, bendsOf(geomsRef.current));
     if (v) setView(v);
-    // targetPos is read on purpose only when the shape or size changes.
+    // targetPos is read on purpose only when the node set or size changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, sig, size.w, size.h, fitFor, setView, morph, loadTick, geoMode]);
+  }, [ready, nodeSet, size.w, size.h, fitFor, setView, morph, loadTick, geoMode]);
 
   const fitView = () => {
     if (geoMode) { const v = geoWorldFit(); if (v) animateTo(v); return; }
@@ -1581,6 +1601,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     const edgeEls: ReactNode[] = [];
     const labelEls: ReactNode[] = [];
     const handleEls: ReactNode[] = [];
+    let selHandle: ReactNode = null;
     edges.forEach((e) => {
       const g = geoms.get(e.key);
       if (!g) return;
@@ -1679,23 +1700,31 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       if (handleKeys.has(e.key)) {
         const wps = edgeDraft[e.key]?.waypoints || [];
         const p = positions[e.from], q = farEnd(positions, e.from, e.to);
+        // The selected line comes first where lines crowd: its hit path and
+        // handles sit above every other line's, with wider grab targets.
+        const sel = e.key === selectedEdge;
         const items: ReactNode[] = [];
+        if (sel) items.push(<path key="hit" d={g.d} className="hy-topo-edge-hit sel" data-edge-key={e.key} />);
         if (wps.length < MAX_WAYPOINTS) {
           for (const gh of ghostPoints(g)) {
+            if (sel) items.push(<circle key={`gg${gh.index}`} cx={gh.at.x} cy={gh.at.y} r={11 / k} className="hy-topo-grab ghost" data-ghost={gh.index} data-edge={e.key} />);
             items.push(<circle key={`g${gh.index}`} cx={gh.at.x} cy={gh.at.y} r={5 / k} className="hy-topo-ghost" data-ghost={gh.index} data-edge={e.key} />);
           }
         }
         if (p && q) {
           wps.forEach((w, i) => {
             const at = toAbs(p, q, w);
+            if (sel) items.push(<circle key={`ww${i}`} cx={at.x} cy={at.y} r={12 / k} className="hy-topo-grab wp" data-wp={i} data-edge={e.key} />);
             items.push(<circle key={`w${i}`} cx={at.x} cy={at.y} r={6 / k} className="hy-topo-handle" data-wp={i} data-edge={e.key} />);
           });
         }
-        handleEls.push(
-          <g key={e.key} className="hy-topo-handles" style={{ strokeWidth: 2 / k }} onPointerEnter={enterEdge(e.key)} onPointerLeave={leaveEdge}>{items}</g>,
+        const el = (
+          <g key={e.key} className={clsx('hy-topo-handles', sel && 'sel')} style={{ strokeWidth: 2 / k }} onPointerEnter={enterEdge(e.key)} onPointerLeave={leaveEdge}>{items}</g>
         );
+        if (sel) selHandle = el; else handleEls.push(el);
       }
     });
+    if (selHandle) handleEls.push(selHandle);
 
     const nodeEls = Array.from(nodes.values()).map((n) => {
       const p = positions[n.key];

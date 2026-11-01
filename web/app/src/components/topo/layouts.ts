@@ -185,7 +185,9 @@ function segBox(a: Pos, b: Pos, bx: Box): boolean {
 /**
  * How hard a placement is to read, as the view would draw it: text or dots
  * overlapping (heavy), lines running through labels and names (light), and
- * how much a canvas of REF size would have to shrink it to fit.
+ * how much a canvas of REF size would have to shrink it to fit. Nodes weigh
+ * more than edges: dots and names of different nodes covering each other
+ * cost most, a node and an edge label less, two edge labels least.
  */
 function crowding(g: Graph, pos: Record<string, Pos>): { issues: number; score: number; area: number } {
   const geoms = routeEdges(g, pos, { avoid: true });
@@ -203,12 +205,14 @@ function crowding(g: Graph, pos: Record<string, Pos>): { issues: number; score: 
     const x0 = s.anchor === 'start' ? s.x - 1 : s.anchor === 'end' ? s.x - LABEL_W + 1 : s.x - LABEL_W / 2;
     marks.push({ x0, x1: x0 + LABEL_W, y0: s.y - 13, y1: s.y + LABEL_H - 13, own: key, label: true });
   });
-  let clash = 0;
+  let clash = 0, clashW = 0;
   for (let i = 0; i < marks.length; i++) {
     for (let j = i + 1; j < marks.length; j++) {
       const a = marks[i], b = marks[j];
       if (!a.label && !b.label && a.own === b.own) continue;
-      if (boxHit(a, b)) clash++;
+      if (!boxHit(a, b)) continue;
+      clash++;
+      clashW += a.label && b.label ? 1.5 : a.label || b.label ? 3 : 6;
     }
   }
   let through = 0;
@@ -237,9 +241,10 @@ function crowding(g: Graph, pos: Record<string, Pos>): { issues: number; score: 
   const k = Math.min(REF_W / w, REF_H / h, 1.2);
   // Shrinking the picture shrinks its text: worth it only while it buys
   // clearly fewer clashes, and much less so once text gets small.
-  const E = g.edges.size;
-  const shrink = (8 + E * 0.5) * Math.log(1.2 / k) + E * 3 * Math.max(0, Math.log(0.75 / k));
-  return { issues: clash + through, score: clash * 4 + through * 0.5 + shrink, area: w * h };
+  // (text to keep legible: names count more than edge labels)
+  const T = g.nodes.size * 0.6 + g.edges.size * 0.3;
+  const shrink = (8 + T) * Math.log(1.2 / k) + T * 6 * Math.max(0, Math.log(0.75 / k));
+  return { issues: clash + through, score: clashW + through * 0.5 + shrink, area: w * h };
 }
 
 /**
