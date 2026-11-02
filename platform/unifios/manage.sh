@@ -63,12 +63,18 @@ case "$cmd" in
     ensure
     ;;
   setup)
-    # Called by install.sh after it placed a new binary.
-    ensure
+    # Called by install.sh after it placed a new binary: one (re)start.
+    [ -x "$BIN" ] || err "binary ${BIN} not found"
+    copy_units
+    [ "$changed" -eq 0 ] || systemctl daemon-reload
+    systemctl enable hy2scale.service hy2scale-ensure.timer >/dev/null 2>&1
     systemctl restart hy2scale.service
+    systemctl is-active --quiet hy2scale-ensure.timer || systemctl start hy2scale-ensure.timer
     ;;
   status)
     printf 'version  %s\n' "$("$BIN" --version 2>/dev/null || echo '?')"
+    # an in-app upgrade, run instead of the binary above while newer
+    [ -x "${ROOT}/data/bin/hy2scale" ] && printf 'stored   %s\n' "$("${ROOT}/data/bin/hy2scale" --version 2>/dev/null || echo '?')"
     printf 'service  %s\n' "$(systemctl is-active hy2scale.service 2>/dev/null || true)"
     printf 'timer    %s\n' "$(systemctl is-active hy2scale-ensure.timer 2>/dev/null || true)"
     ;;
