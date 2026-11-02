@@ -211,6 +211,9 @@ func (m *Manager) Apply(o Options) error {
 	if spec.Local != nil && o.MeshAddrs != nil {
 		spec.MeshListen, spec.MeshPeers = resolveMesh(o.MeshAddrs())
 	}
+	if !spec.Empty() && sys.LocalNetsDirect() {
+		spec.LocalNets = LocalNets()
+	}
 
 	if m.installed && reflect.DeepEqual(spec, m.spec) {
 		m.status = withActive(st, spec)

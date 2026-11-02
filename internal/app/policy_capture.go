@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/FrankoonG/hy2scale/core/dnsproxy"
 	"github.com/FrankoonG/hy2scale/core/policy"
@@ -51,11 +52,35 @@ func (a *App) captureManager() *capture.Manager {
 }
 
 // startPolicyCapture installs the capture (and first removes what a
-// previous process left behind).
+// previous process, 1.3.x included, left behind).
 func (a *App) startPolicyCapture() {
+	cleanupV13Rules()
 	a.captureManager()
 	captureApp.Store(a)
 	a.reloadPolicyCapture()
+	go a.watchLocalNets()
+}
+
+// watchLocalNets re-applies the capture when the subnets of the host's
+// interfaces change (a Docker network created or removed, an address
+// added), so the local-subnet bypass follows them.
+func (a *App) watchLocalNets() {
+	last := strings.Join(capture.LocalNets(), ",")
+	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-a.appCtx.Done():
+			return
+		case <-t.C:
+		}
+		cur := strings.Join(capture.LocalNets(), ",")
+		if cur == last || captureApp.Load() != a {
+			continue
+		}
+		last = cur
+		a.reloadPolicyCapture()
+	}
 }
 
 // stopPolicyCapture removes the capture at exit.

@@ -31,6 +31,9 @@ type Spec struct {
 	MeshListen string
 	// MeshPeers: resolved peer addresses ("ip:ports", IPv6 bracketed).
 	MeshPeers []string
+	// LocalNets: subnets of this host's interfaces (CIDRs, both families),
+	// never captured by either layer.
+	LocalNets []string
 }
 
 // LocalSpec is layer 1.
@@ -139,6 +142,11 @@ func installFamily(s Spec, v6 bool) ([]Cmd, error) {
 		m("-A", chain, "-m", "addrtype", "--dst-type", "LOCAL", "-j", "RETURN")
 		for _, d := range excluded(v6) {
 			m("-A", chain, "-d", d, "-j", "RETURN")
+		}
+		for _, n := range s.LocalNets {
+			if p, err := netip.ParsePrefix(n); err == nil && p.Addr().Is6() == v6 {
+				m("-A", chain, "-d", p.String(), "-j", "RETURN")
+			}
 		}
 	}
 
@@ -256,6 +264,11 @@ func installFamily(s Spec, v6 bool) ([]Cmd, error) {
 		Cmd{Tool: ipt, Args: []string{"rule", "add", "fwmark", hex(MarkRoute) + "/0xffffffff", "lookup", RouteTable, "priority", RulePriority}},
 		Cmd{Tool: ipt, Args: []string{"route", "replace", "local", def, "dev", "lo", "table", RouteTable}},
 	)
+	// The taken-over packets are delivered to our listeners through the
+	// filter INPUT chain with their original destination: a host firewall
+	// with an INPUT DROP policy (ufw, firewalld) would drop every new flow
+	// from a forwarded interface. Only packets this capture marked pass.
+	out = append(out, Cmd{Tool: tool, Args: []string{"-t", "filter", "-I", "INPUT", "1", "-m", "mark", "--mark", hex(MarkRoute), "-j", "ACCEPT"}})
 	// hooks last: nothing is captured before the chains are complete
 	m("-I", "PREROUTING", "1", "-j", chainPre)
 	if local {
@@ -320,6 +333,7 @@ func Teardown() []Cmd {
 		o := func(repeat bool, args ...string) {
 			out = append(out, Cmd{Tool: tool, Args: args, Repeat: repeat, Optional: true})
 		}
+		o(true, "-t", "filter", "-D", "INPUT", "-m", "mark", "--mark", hex(MarkRoute), "-j", "ACCEPT")
 		o(true, "-t", "mangle", "-D", "PREROUTING", "-j", chainPre)
 		o(true, "-t", "mangle", "-D", "OUTPUT", "-j", chainOut)
 		for _, ch := range allChains {

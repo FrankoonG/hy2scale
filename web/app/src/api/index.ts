@@ -58,7 +58,7 @@ export const getBuildInfo = () => api<BuildInfo>('/build-info');
 // computed in the browser; only custom canvases are stored on the server,
 // shared by every session and pushed live over SSE.
 export interface GraphWaypoint { u: number; v: number }
-export interface GraphCanvasEdge { waypoints?: GraphWaypoint[]; label_t?: number }
+export interface GraphCanvasEdge { waypoints?: GraphWaypoint[]; label_t?: number; wrap?: number }
 export interface GraphCanvas {
   id: string;
   name: string;
