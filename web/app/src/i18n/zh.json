@@ -96,6 +96,8 @@
   "policy.deleteConfirm": "删除 {{name}}？",
   "policy.inUse": "正在被使用：{{refs}}",
   "policy.usedBy": "被引用",
+  "rules.topo.noExit": "未指定出口的用户和代理",
+  "rules.topo.otherwise": "否则",
   "policy.refKind.user": "用户",
   "policy.refKind.proxy": "代理",
   "policy.refKind.wireguard": "WireGuard",
