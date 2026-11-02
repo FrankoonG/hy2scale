@@ -1,0 +1,11 @@
+[Unit]
+Description=Keep hy2scale installed and running
+RequiresMountsFor=/data/hy2scale
+# Retry until a run succeeds (StartLimitIntervalSec must sit in [Unit]).
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /data/hy2scale/manage.sh on-boot
+Restart=on-failure
+RestartSec=5m
