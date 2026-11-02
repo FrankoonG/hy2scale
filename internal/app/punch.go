@@ -229,6 +229,29 @@ type punchReply struct {
 	// credentials (system or a user's password) instead of the token
 	// (1.4.0+), so the punched link can be a full peer or node access.
 	Creds bool `json:"creds,omitempty"`
+	// Why: the precise cause of a refusal (1.4.1+); Reason stays what
+	// older initiators understand.
+	Why string `json:"why,omitempty"`
+}
+
+// peerReason is the status code of a target's refusal, from the target's
+// side: its own probing failures (symmetric NAT, reflectors) are told
+// apart from this node's, and a refusal names the setting when the target
+// says so (older targets only answer "refused").
+func peerReason(rep punchReply) string {
+	if rep.Why != "" {
+		return rep.Why
+	}
+	code, _, _ := strings.Cut(rep.Reason, ":")
+	switch code {
+	case errPunchRefused.Error():
+		return code
+	case errPunchSymmetric.Error():
+		return "peer_symmetric"
+	case errPunchNoReflect.Error():
+		return "peer_no_reflector"
+	}
+	return "peer_error"
 }
 
 // call sends one request along path (the last element is the node that
@@ -491,7 +514,7 @@ func (m *punchManager) handlePunch(req punchMsg) punchReply {
 	cfg := m.a.store.Get()
 	if !cfg.AcceptPunch {
 		log.Printf("[punch] request from %q refused: accept_punch is off", req.From)
-		return punchReply{Reason: errPunchRefused.Error()}
+		return punchReply{Reason: errPunchRefused.Error(), Why: "accept_off"}
 	}
 	if !ValidPunchFamily(req.Family) {
 		return punchReply{Reason: "bad_request"}
@@ -840,7 +863,7 @@ func (m *punchManager) prepare(ctx context.Context, cl ClientEntry, addr string)
 			continue
 		}
 		if !rep.OK {
-			lastErr = errors.New(rep.Reason)
+			lastErr = fmt.Errorf("%s: target answered %q", peerReason(rep), rep.Reason)
 			break // the target's answer does not depend on the path
 		}
 		theirs, err := net.ResolveUDPAddr(network, rep.Addr)
