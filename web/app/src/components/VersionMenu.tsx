@@ -31,7 +31,7 @@ export default function VersionMenu({ version, limited }: { version: string; lim
       <button ref={btn} type="button" className="version-menu-btn" aria-haspopup="dialog" aria-expanded={open}
         data-testid="version-menu" title={update ? t('version.updateAvailable') : undefined}
         onClick={() => setOpen((v) => !v)}>
-        <VersionBadge version={version} limited={limited} update={update} />
+        <VersionBadge version={version} limited={limited} update={update} selfBuilt={arch?.official === false} />
       </button>
       {createPortal(
         <AnimatePresence>
@@ -41,6 +41,12 @@ export default function VersionMenu({ version, limited }: { version: string; lim
               <dl className="version-menu-rows">
                 <dt>{t('settings.currentVersion')}</dt>
                 <dd>v{version}{arch && <span className="version-menu-arch">{arch.os}/{arch.arch}</span>}</dd>
+                {arch && typeof arch.official === 'boolean' && (
+                  <>
+                    <dt>{t('build.origin')}</dt>
+                    <dd data-testid="version-build">{arch.official ? t('build.official') : t('build.selfBuilt')}</dd>
+                  </>
+                )}
                 {status?.latest && (
                   <>
                     <dt>{t('settings.latestVersion')}</dt>
