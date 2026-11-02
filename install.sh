@@ -11,9 +11,16 @@
 #   curl -fsSL https://raw.githubusercontent.com/FrankoonG/hy2scale/main/install.sh | sudo sh -s -- --uninstall
 #
 # Env overrides:
-#   HY2SCALE_VERSION   release tag to install (default: latest)
-#   HY2SCALE_DATA_DIR  data dir (default /var/lib/hy2scale)
-#   HY2SCALE_BIN       binary path (default /usr/local/bin/hy2scale)
+#   HY2SCALE_VERSION     release tag to install (default: latest)
+#   HY2SCALE_DATA_DIR    data dir (default /var/lib/hy2scale)
+#   HY2SCALE_BIN         binary path (default /usr/local/bin/hy2scale)
+#   HY2SCALE_PLATFORM    auto (default) | linux | unifios
+#   HY2SCALE_SCRIPT_REF  git ref the platform files come from (default main)
+#
+# UniFi OS (detected automatically) installs everything under /data/hy2scale,
+# which survives firmware updates, and is managed afterwards with
+# /data/hy2scale/manage.sh (status / update / uninstall). Files under
+# platform/unifios/ in the repository.
 
 set -eu
 
@@ -24,13 +31,17 @@ BIN_PATH="${HY2SCALE_BIN:-/usr/local/bin/hy2scale}"
 SVC_NAME="hy2scale"
 SVC_PATH="/etc/systemd/system/${SVC_NAME}.service"
 PORT=5565
+PLATFORM="${HY2SCALE_PLATFORM:-auto}"
+SCRIPT_REF="${HY2SCALE_SCRIPT_REF:-main}"
+UNIFI_ROOT="/data/hy2scale"
+UNIFI_FILES="manage.sh units/hy2scale.service units/hy2scale-ensure.service units/hy2scale-ensure.timer"
 
 UNINSTALL=0
 for arg in "$@"; do
   case "$arg" in
     --uninstall|--remove) UNINSTALL=1 ;;
     -h|--help)
-      sed -n 's/^# \{0,1\}//p' "$0" | sed -n '2,12p'
+      sed -n 's/^# \{0,1\}//p' "$0" | sed -n '2,22p'
       exit 0 ;;
   esac
 done
@@ -51,6 +62,24 @@ for cmd in curl tar gzip uname mktemp install grep; do
   command -v "$cmd" >/dev/null 2>&1 || err "$cmd not found in PATH"
 done
 
+# ─── 1b. platform ──────────────────────────────────────────────────────────
+case "$PLATFORM" in
+  auto)
+    if command -v ubnt-device-info >/dev/null 2>&1 && [ -d /data ]; then
+      PLATFORM=unifios
+    else
+      PLATFORM=linux
+    fi ;;
+  linux | unifios) ;;
+  *) err "unknown HY2SCALE_PLATFORM: $PLATFORM (auto, linux or unifios)" ;;
+esac
+if [ "$PLATFORM" = unifios ]; then
+  [ -d /run/systemd/system ] || err "UniFi OS install needs systemd"
+  DATA_DIR="${UNIFI_ROOT}/data"
+  BIN_PATH="${UNIFI_ROOT}/hy2scale"
+  info "Platform: UniFi OS (installing under ${UNIFI_ROOT})"
+fi
+
 # ─── 2. architecture detection ────────────────────────────────────────────
 RAW_ARCH="$(uname -m)"
 case "$RAW_ARCH" in
@@ -69,6 +98,10 @@ case "$RAW_ARCH" in
 esac
 
 # ─── 3. uninstall path ────────────────────────────────────────────────────
+if [ "$UNINSTALL" -eq 1 ] && [ "$PLATFORM" = unifios ]; then
+  [ -f "${UNIFI_ROOT}/manage.sh" ] || err "${UNIFI_ROOT}/manage.sh not found — nothing to uninstall"
+  exec sh "${UNIFI_ROOT}/manage.sh" uninstall
+fi
 if [ "$UNINSTALL" -eq 1 ]; then
   info "Uninstalling hy2scale…"
   if command -v systemctl >/dev/null 2>&1; then
@@ -123,6 +156,76 @@ info "Checksum OK"
 tar -xzf "${TMP_DIR}/${TARBALL}" -C "${TMP_DIR}"
 EXTRACTED="${TMP_DIR}/hy2scale-${ARCH}"
 [ -f "$EXTRACTED" ] || err "expected binary at ${EXTRACTED} not found in tarball"
+
+# ─── 6b. UniFi OS: binary, platform files and units under /data ──────────
+if [ "$PLATFORM" = unifios ]; then
+  # Platform files come from the repository (HY2SCALE_PLATFORM_SRC: a local
+  # directory with the same layout, for offline installs and tests).
+  mkdir -p "${TMP_DIR}/platform/units"
+  for f in $UNIFI_FILES; do
+    name="$(basename "$f")"
+    if [ -n "${HY2SCALE_PLATFORM_SRC:-}" ]; then
+      cp "${HY2SCALE_PLATFORM_SRC}/${name}" "${TMP_DIR}/platform/${f}"         || err "${HY2SCALE_PLATFORM_SRC}/${name} not found"
+    else
+      curl -fsSL "https://raw.githubusercontent.com/${REPO}/${SCRIPT_REF}/platform/unifios/${name}"         -o "${TMP_DIR}/platform/${f}" || err "could not download platform/unifios/${name} (ref ${SCRIPT_REF})"
+    fi
+  done
+
+  if systemctl is-active --quiet "$SVC_NAME" 2>/dev/null; then
+    info "Stopping existing $SVC_NAME service for in-place upgrade…"
+    systemctl stop "$SVC_NAME"
+  fi
+  mkdir -p "${UNIFI_ROOT}/units" "$DATA_DIR"
+  install -m 0755 "$EXTRACTED" "$BIN_PATH"
+  if [ -f "${EXTRACTED}.sig" ]; then
+    install -m 0644 "${EXTRACTED}.sig" "${BIN_PATH}.sig"
+  else
+    rm -f "${BIN_PATH}.sig"
+  fi
+  install -m 0755 "${TMP_DIR}/platform/manage.sh" "${UNIFI_ROOT}/manage.sh"
+  for u in hy2scale.service hy2scale-ensure.service hy2scale-ensure.timer; do
+    install -m 0644 "${TMP_DIR}/platform/units/${u}" "${UNIFI_ROOT}/units/${u}"
+  done
+  printf '%s
+' "$SCRIPT_REF" > "${UNIFI_ROOT}/.script-ref"
+  info "Binary installed at $BIN_PATH"
+
+  sh "${UNIFI_ROOT}/manage.sh" setup
+  sleep 2
+  if systemctl is-active --quiet "$SVC_NAME"; then
+    info "Service is active."
+  else
+    warn "Service did not stay active. Inspect with: journalctl -u $SVC_NAME -n 50 --no-pager"
+  fi
+
+  HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  [ -n "$HOST_IP" ] || HOST_IP="<host>"
+  printf '
+'
+  printf '[32m✓ hy2scale %s installed (UniFi OS).[0m
+' "$(echo "$VERSION" | sed 's/^v//')"
+  printf '
+'
+  printf '  Binary    %s
+' "$BIN_PATH"
+  printf '  Data dir  %s
+' "$DATA_DIR"
+  printf '  Service   %s (enabled, running; restored by hy2scale-ensure.timer)
+' "$SVC_NAME"
+  printf '  Logs      journalctl -u %s -f
+' "$SVC_NAME"
+  printf '  Web UI    https://%s:%s/scale  (login: admin / admin — forces password change on first login)
+' "$HOST_IP" "$PORT"
+  printf '  Manage    %s/manage.sh status | update | uninstall
+' "$UNIFI_ROOT"
+  printf '
+'
+  warn "Open UDP $PORT to the gateway in UniFi Network (firewall policy) if other nodes connect to this one."
+  if command -v ss >/dev/null 2>&1 && ss -lun 2>/dev/null | grep -qE ':(500|4500)[[:space:]]'; then
+    warn "UDP 500/4500 is in use by UniFi's own VPN — leave hy2scale's IKEv2 and L2TP off."
+  fi
+  exit 0
+fi
 
 # ─── 7. install binary (stop service first if upgrading) ──────────────────
 if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "$SVC_NAME" 2>/dev/null; then
