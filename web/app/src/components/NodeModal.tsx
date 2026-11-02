@@ -10,6 +10,7 @@ import type { ClientEntry, CertInfo, TopologyNode } from '@/api';
 import { useNodeStore } from '@/store/node';
 import { OrderedList, toListItems, fromListItems, type ListItem } from '@/components/OrderedList';
 import { buildHy2Url, canExportAsHy2Url, copyToClipboard } from '@/utils/buildHy2Url';
+import { remoteFetch, sessionFor, useRemoteAccess } from '@/utils/remoteAuth';
 
 // Characters that would corrupt nested qualified paths (`/`), look weird in
 // topology display (whitespace), or upset YAML/CLI consumers (control chars).
@@ -98,6 +99,33 @@ export default function NodeModal({ open, onClose, editingName, animateFrom, pun
   const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
+
+  // Punching a node this tab can already manage (relay trust / a sign-in in
+  // the last 30 min): its server password can be filled from it. The TLS
+  // side stays as is (punch entries skip verification by default).
+  const punchChain = useMemo(() => (punchFor ? punchFor.signal.split('/').filter(Boolean) : []), [punchFor]);
+  const punchRemote = useMemo(() => new Map(punchFor && punchChain.length ? [[punchFor.name, punchChain]] : []),
+    [punchFor, punchChain]);
+  const remoteReady = useRemoteAccess(punchRemote, open && !!punchFor && !(window as any).__PROXY__).has(punchFor?.name || '');
+  const [filling, setFilling] = useState(false);
+  const fillFromRemote = async () => {
+    if (!punchFor) return;
+    const s = sessionFor(punchFor.name, punchChain);
+    if (!s) { toast.error(t('nodes.remoteCredsNone')); return; }
+    setFilling(true);
+    try {
+      const r = await remoteFetch(s.chain, '/node', {}, s.auth.token);
+      if (!r.ok) throw new Error((await r.text()).trim() || `HTTP ${r.status}`);
+      const pw = (await r.json())?.server?.password;
+      if (!pw) throw new Error(t('nodes.remoteCredsNone'));
+      setPassword(pw);
+      toast.success(t('nodes.remoteCredsFilled'));
+    } catch (e: any) {
+      toast.error(String(e?.message || e));
+    } finally {
+      setFilling(false);
+    }
+  };
 
   const [loading, setLoading] = useState(false);
   const [name, setName] = useState('');
@@ -608,7 +636,16 @@ export default function NodeModal({ open, onClose, editingName, animateFrom, pun
         </FormGroup>
 
         <FormGroup label={t('nodes.password')} required={!manualBlank || !punchSet}>
-          <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} />
+            </div>
+            {remoteReady && (
+              <Button type="button" size="sm" variant="ghost" loading={filling} onClick={fillFromRemote} data-testid="punch-fill-remote">
+                {t('nodes.useRemoteCreds')}
+              </Button>
+            )}
+          </div>
         </FormGroup>
 
         <FormGrid>

@@ -210,6 +210,10 @@
 .hy-topo-dot.offline .hy-topo-dot-inner{color:#dc2626}
 .hy-topo-dot.offline .hy-topo-dot-name{color:#b91c1c}
 .hy-topo-dot-name{font-size:11px;font-weight:600;color:#1f2328;fill:currentColor;font-family:var(--mono)}
+/* UNLOCKED — a live remote session (relay trust / a sign-in here): the key
+   badge of the login page's demo, upper right of the dot. */
+.hy-topo-unlock-bg{color:#ffffff;fill:currentColor;stroke:#4361ee;stroke-opacity:.55;stroke-width:1}
+.hy-topo-unlock-key{color:#4361ee}
 .hy-topo-dot.self .hy-topo-dot-name{color:#4361ee}
 
 /* Edges: base line thickness encodes peak throughput. Flowing dashed
@@ -366,6 +370,8 @@
 :root[data-theme="dark"] .hy-topo-dot-inner{color:#c9d6f0}
 :root[data-theme="dark"] .hy-topo-dot.self .hy-topo-dot-inner{color:#6d8bff}
 :root[data-theme="dark"] .hy-topo-dot-name{color:#e3e6ed}
+:root[data-theme="dark"] .hy-topo-unlock-bg{color:#1b1f27;stroke:#6d8bff}
+:root[data-theme="dark"] .hy-topo-unlock-key{color:#8ea4ff}
 :root[data-theme="dark"] .hy-topo-dot.self .hy-topo-dot-name{color:#8ea4ff}
 :root[data-theme="dark"] .hy-topo-dot.native .hy-topo-dot-inner,:root[data-theme="dark"] .hy-topo-dot.native .hy-topo-dot-name{color:#fbbf24}
 :root[data-theme="dark"] .hy-topo-dot.restricted .hy-topo-dot-outer{color:#2dd4bf}

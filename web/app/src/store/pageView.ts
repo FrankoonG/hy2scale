@@ -6,13 +6,15 @@ import { readStored, writeStored } from '@hy2scale/ui';
  * a page is the switch; the topology view takes the whole content area.
  */
 export type PageView = 'list' | 'topo';
-export const TOPO_PAGES = ['nodes', 'interfaces'] as const;
+export const TOPO_PAGES = ['nodes', 'interfaces', 'rules'] as const;
 export type TopoPage = (typeof TOPO_PAGES)[number];
 
 const KEY = (page: string) => `hy-view:${page}`;
 
 // Nodes used to persist under its own key; honour it once.
 function initial(page: TopoPage): PageView {
+  // Rules always open on the list (the graph is experimental).
+  if (page === 'rules') return 'list';
   const v = readStored(KEY(page));
   if (v === 'list' || v === 'topo') return v;
   if (page === 'nodes') {
@@ -20,7 +22,7 @@ function initial(page: TopoPage): PageView {
     if (old === 'list') return 'list';
     if (old === 'graph') return 'topo';
   }
-  // Both pages open on their topology the first time.
+  // Both open on their topology the first time.
   return 'topo';
 }
 
@@ -31,9 +33,9 @@ interface PageViewState {
 }
 
 export const usePageViewStore = create<PageViewState>((set, get) => ({
-  views: { nodes: initial('nodes'), interfaces: initial('interfaces') },
+  views: { nodes: initial('nodes'), interfaces: initial('interfaces'), rules: initial('rules') },
   setView: (page, v) => {
-    writeStored(KEY(page), v);
+    if (page !== 'rules') writeStored(KEY(page), v);
     set({ views: { ...get().views, [page]: v } });
   },
   toggle: (page) => get().setView(page, get().views[page] === 'topo' ? 'list' : 'topo'),

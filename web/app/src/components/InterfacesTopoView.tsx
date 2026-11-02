@@ -250,6 +250,7 @@ export default function InterfacesTopoView({
               </span>
             );
           })}
+          {x.role && <span className="iface-tag" data-testid="topo-role">{t(`iface.role.${x.role}`)}</span>}
           <IfaceTypeBadge iface={x} />
         </div>
         <div className="iface-topo-card-lines">

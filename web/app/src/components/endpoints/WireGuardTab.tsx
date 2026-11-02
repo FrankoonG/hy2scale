@@ -116,7 +116,13 @@ function WireGuardPanels({ wgQ }: { wgQ: UseQueryResult<api.WireGuardConfig> }) 
       </Card>
 
       <WgPeerModal {...edit.modalProps} editing={edit.data ?? null} suggestIPs={suggestIPs} />
-      <WgPeerConfigModal {...config.modalProps} config={config.data} />
+      <WgPeerConfigModal {...config.modalProps} config={config.data}
+        onEdit={(name, from) => {
+          const p = peers.find((x) => x.name === name);
+          if (!p) return;
+          config.close();
+          edit.show(p, from);
+        }} />
       {ie.modal}
     </div>
   );

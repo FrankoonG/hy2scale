@@ -11,6 +11,8 @@
 .tool-bar{display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px 14px}
 .tool-field{display:flex;flex-direction:column;gap:6px;min-width:0}
 .tool-field.grow{flex:1 1 240px}
+.tool-paths{flex:1 1 100%;min-width:0}
+.tool-paths .hy-form-group{margin-bottom:0}
 .tool-field-label{font-size:12px;font-weight:500;color:var(--text-secondary)}
 .tool-num{width:90px}
 .tool-toggle{display:flex;align-items:center;height:36px}

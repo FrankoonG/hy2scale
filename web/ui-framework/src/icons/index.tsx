@@ -214,6 +214,12 @@ export const IconZoomIn = icon('zoom-in', <>
 export const IconZoomOut = icon('zoom-out', <>
   <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" /><path d="M8 11h6" />
 </>);
+export const IconUndo = icon('undo-2', <>
+  <path d="M9 14 4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11" />
+</>);
+export const IconRedo = icon('redo-2', <>
+  <path d="m15 14 5-5-5-5" /><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13" />
+</>);
 export const IconLayoutGrid = icon('layout-grid', <>
   <rect width="7" height="7" x="3" y="3" rx="1" /><rect width="7" height="7" x="14" y="3" rx="1" />
   <rect width="7" height="7" x="14" y="14" rx="1" /><rect width="7" height="7" x="3" y="14" rx="1" />

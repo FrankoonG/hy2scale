@@ -131,8 +131,8 @@ func expectedAsset() string {
 	return fmt.Sprintf("hy2scale-%s.tar.gz", buildsig.Platform())
 }
 
-// semverGreater compares two MAJOR.MINOR.PATCH strings (no pre-release /
-// build metadata) and returns true iff a > b. Used to gate the
+// semverGreater compares two versions by SemVer precedence (see
+// selfupdate.Newer) and returns true iff a > b. Used to gate the
 // "update available" flag — without this we'd happily offer a downgrade
 // when a v1.3.1 release sits at /releases/latest while we're already on
 // v1.3.2 (the existing `latest != Version` check returns true for any
@@ -239,8 +239,8 @@ func (s *Server) checkUpdate(w http.ResponseWriter, r *http.Request) {
 // download is already running returns the current snapshot without
 // starting a duplicate.
 func (s *Server) startDownload(w http.ResponseWriter, r *http.Request) {
-	if !isRunningInDocker() {
-		http.Error(w, "online update is only available in Docker deployments", 403)
+	if !canSelfUpgrade() {
+		http.Error(w, "online update needs a supervisor (Docker or a systemd service)", 403)
 		return
 	}
 	j := s.upgrade
@@ -463,8 +463,8 @@ func (s *Server) streamUpgradeEvents(w http.ResponseWriter, r *http.Request) {
 // handler — the heavy lifting (extract, verify, rename, restart) lives in
 // readUpgradeArchive / installUpgrade so both code paths stay in lock-step.
 func (s *Server) applyDownloadedUpgrade(w http.ResponseWriter, r *http.Request) {
-	if !isRunningInDocker() {
-		http.Error(w, "upgrade via web is only available in Docker deployments", 403)
+	if !canSelfUpgrade() {
+		http.Error(w, "upgrade via web needs a supervisor (Docker or a systemd service)", 403)
 		return
 	}
 	j := s.upgrade

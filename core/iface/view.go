@@ -50,6 +50,7 @@ type Usable struct {
 type IfaceView struct {
 	Name            string                 `json:"name"`
 	Kind            string                 `json:"kind"` // physical | system | child
+	Role            string                 `json:"role,omitempty"` // UniFi OS: wan | lan
 	Parent          string                 `json:"parent"`
 	Container       bool                   `json:"container"`
 	Type            string                 `json:"type,omitempty"` // link type (vnic.LinkType); child interfaces: ""
@@ -100,6 +101,16 @@ func (m *Manager) systemIfaceView(ifi net.Interface, routes *routeInfo) IfaceVie
 	if CanParent(ifi.Name) {
 		v.Kind = "physical"
 		v.CanHaveChildren = true
+	}
+	if u := unifiNet(); u != nil && u.Managed(ifi.Name) {
+		// UniFi OS: its own model of ports, switch and networks.
+		switch {
+		case u.Port(ifi.Name):
+			v.Kind, v.Type = "physical", "ethernet"
+		case u.Internal(ifi.Name):
+			v.Kind = "system"
+		}
+		v.Role = u.Role(ifi.Name)
 	}
 	v.IPv4 = IfaceFamilyView{Mode: "system", State: "ok", Addrs: []IfaceAddr{}, DNS: []string{}}
 	v.IPv6 = IfaceFamilyView{Mode: "system", State: "ok", Addrs: []IfaceAddr{}, DNS: []string{}}
@@ -236,7 +247,7 @@ func (m *Manager) View() InterfacesView {
 		v := m.systemIfaceView(ifi, routes)
 		fill(&v)
 		out.Interfaces = append(out.Interfaces, v)
-		if v.Kind == "physical" && phys == "" {
+		if v.CanHaveChildren && phys == "" {
 			phys = ifi.Name
 		}
 	}
