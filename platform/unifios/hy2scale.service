@@ -1,0 +1,27 @@
+[Unit]
+Description=hy2scale — Hysteria 2 mesh relay
+Documentation=https://github.com/FrankoonG/hy2scale
+After=network-online.target
+Wants=network-online.target
+# /data holds the binary and the data dir.
+RequiresMountsFor=/data/hy2scale
+
+[Service]
+Type=simple
+ExecStart=/data/hy2scale/hy2scale --data /data/hy2scale/data
+Restart=always
+RestartSec=3
+LimitNOFILE=1048576
+KillMode=mixed
+TimeoutStopSec=10
+# The gateway's own services come first. The Go runtime collects harder
+# near GOMEMLIMIT; MemoryHigh throttles, MemoryMax ends only this service
+# (Restart= brings it back). OOMScoreAdjust keeps UniFi's earlyoom from
+# picking hy2scale first without making it unkillable.
+Environment=GOMEMLIMIT=200MiB
+MemoryHigh=400M
+MemoryMax=600M
+OOMScoreAdjust=-500
+
+[Install]
+WantedBy=multi-user.target
