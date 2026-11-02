@@ -13,6 +13,8 @@ const KEY = (page: string) => `hy-view:${page}`;
 
 // Nodes used to persist under its own key; honour it once.
 function initial(page: TopoPage): PageView {
+  // Rules always open on the list (the graph is experimental).
+  if (page === 'rules') return 'list';
   const v = readStored(KEY(page));
   if (v === 'list' || v === 'topo') return v;
   if (page === 'nodes') {
@@ -20,8 +22,8 @@ function initial(page: TopoPage): PageView {
     if (old === 'list') return 'list';
     if (old === 'graph') return 'topo';
   }
-  // Nodes and interfaces open on their topology the first time, rules on its list.
-  return page === 'rules' ? 'list' : 'topo';
+  // Both open on their topology the first time.
+  return 'topo';
 }
 
 interface PageViewState {
@@ -33,7 +35,7 @@ interface PageViewState {
 export const usePageViewStore = create<PageViewState>((set, get) => ({
   views: { nodes: initial('nodes'), interfaces: initial('interfaces'), rules: initial('rules') },
   setView: (page, v) => {
-    writeStored(KEY(page), v);
+    if (page !== 'rules') writeStored(KEY(page), v);
     set({ views: { ...get().views, [page]: v } });
   },
   toggle: (page) => get().setView(page, get().views[page] === 'topo' ? 'list' : 'topo'),
