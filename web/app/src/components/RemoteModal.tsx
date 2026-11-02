@@ -27,7 +27,7 @@ const RESTART_WAIT = 180_000;
 
 type Via = 'trust' | 'password';
 interface Auth { token: string; via: Via; exp: number }
-interface RemoteInfo { version: string; os: string; arch: string; inDocker: boolean; official?: boolean }
+interface RemoteInfo { version: string; os: string; arch: string; inDocker: boolean; upgradable: boolean; official?: boolean }
 type Op =
   | { kind: 'idle' }
   | { kind: 'checking' }
@@ -178,7 +178,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
       const r = await rfetch('/system/arch', {}, token);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
-      if (alive.current) setInfo({ version: d.version, os: d.os, arch: d.arch, inDocker: !!d.in_docker, official: d.official });
+      if (alive.current) setInfo({ version: d.version, os: d.os, arch: d.arch, inDocker: !!d.in_docker, upgradable: !!(d.upgradable ?? d.in_docker), official: d.official });
     } catch {
       if (alive.current) setInfo(null);
     }
@@ -266,7 +266,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
     try {
       const r = await rfetch('/system/arch', {}, a.token);
       const d = await r.json();
-      setInfo({ version: d.version, os: d.os, arch: d.arch, inDocker: !!d.in_docker, official: d.official });
+      setInfo({ version: d.version, os: d.os, arch: d.arch, inDocker: !!d.in_docker, upgradable: !!(d.upgradable ?? d.in_docker), official: d.official });
       setOp({ kind: 'done', from, to: d.version });
     } catch {
       setOp({ kind: 'done', from, to: '' });
@@ -381,7 +381,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
   const busy = op.kind === 'checking' || op.kind === 'downloading' || op.kind === 'pushing' || op.kind === 'restarting';
   const platform = info ? `${info.os}/${info.arch}` : '';
   const localPlatform = local ? `${local.os}/${local.arch}` : '';
-  const upgradeBlock = info && !info.inDocker ? t('remote.notContainer') : '';
+  const upgradeBlock = info && !info.upgradable ? t('remote.notContainer') : '';
   const pushBlock = upgradeBlock || (!info || !local ? '…'
     : localPlatform !== platform ? t('remote.platformDiffers', { platform })
       : !versionGreater(local.version, info.version) ? t('remote.notNewer') : '');

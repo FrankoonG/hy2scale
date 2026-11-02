@@ -22,7 +22,7 @@ export default function UpgradeTab() {
               <Badge>{archInfo.version}</Badge>
             </div>
           )}
-          {archInfo?.in_docker ? (
+          {(archInfo?.upgradable ?? archInfo?.in_docker) ? (
             <>
               <Hint>{t('settings.upgradeDesc')}</Hint>
               {/* Online update; the package upload below covers offline / private builds. */}

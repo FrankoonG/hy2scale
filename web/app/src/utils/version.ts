@@ -9,14 +9,34 @@ export function versionAtLeast(version: string, min: string): boolean {
   return true;
 }
 
-// Strictly newer x.y.z ("1.3.2" > "1.3.1"); false when either side is not
-// three numeric parts. Mirrors the backend's semverGreater upgrade gate.
+// SemVer precedence, a > b: a release beats its own pre-releases
+// ("1.4.1" > "1.4.1-dev.x"), pre-releases compare field by field, build
+// metadata is ignored; false when either side is malformed. Mirrors the
+// backend's selfupdate.Newer upgrade gate.
 export function versionGreater(a: string, b: string): boolean {
-  const pa = a.split('.').map((s) => parseInt(s, 10));
-  const pb = b.split('.').map((s) => parseInt(s, 10));
-  if (pa.length !== 3 || pb.length !== 3 || pa.some(isNaN) || pb.some(isNaN)) return false;
+  const parse = (s: string) => {
+    s = s.replace(/^v/, '').split('+')[0];
+    const dash = s.indexOf('-');
+    const pre = dash === -1 ? [] : s.slice(dash + 1).split('.');
+    const core = (dash === -1 ? s : s.slice(0, dash)).split('.');
+    if (core.length !== 3 || core.some((x) => !/^\d+$/.test(x)) || (dash !== -1 && pre.some((x) => !x))) return null;
+    return { core: core.map(Number), pre };
+  };
+  const x = parse(a), y = parse(b);
+  if (!x || !y) return false;
   for (let i = 0; i < 3; i++) {
-    if (pa[i] !== pb[i]) return pa[i] > pb[i];
+    if (x.core[i] !== y.core[i]) return x.core[i] > y.core[i];
   }
-  return false;
+  if (!x.pre.length) return y.pre.length > 0;
+  if (!y.pre.length) return false;
+  for (let i = 0; i < Math.min(x.pre.length, y.pre.length); i++) {
+    const p = x.pre[i], q = y.pre[i];
+    if (p === q) continue;
+    const pn = /^\d+$/.test(p), qn = /^\d+$/.test(q);
+    if (pn && qn) return Number(p) > Number(q);
+    if (pn) return false; // numeric identifiers sort first
+    if (qn) return true;
+    return p > q;
+  }
+  return x.pre.length > y.pre.length;
 }

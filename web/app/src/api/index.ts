@@ -246,7 +246,7 @@ export const uploadRestore = async (file: File) => {
 };
 
 // Upgrade
-export const getSystemArch = () => api<{ os: string; arch: string; version: string; binary: string; binary_size?: number; in_docker: boolean; official?: boolean }>('/system/arch');
+export const getSystemArch = () => api<{ os: string; arch: string; version: string; binary: string; binary_size?: number; in_docker: boolean; upgradable?: boolean; official?: boolean }>('/system/arch');
 /** Thrown when an official node is offered a binary that is not an official build (HTTP 409). */
 export class UnofficialBuildError extends Error {
   constructor(public status: string, public reason: string) { super(reason || status); }

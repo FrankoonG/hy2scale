@@ -80,9 +80,9 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
       // current hostname (typed once by the operator to reach this UI,
       // therefore externally reachable from where they sit).
       setShareHost(isWildcardHost(ip) ? (typeof window !== 'undefined' ? bareHost(window.location.hostname) : '') : ip);
-      // Resolve tls_cert path to cert id: /data/tls/{id}.crt → id
+      // tls_cert is a path in the node's TLS store: <data>/tls/{id}.crt → id
       const certPath = node.server?.tls_cert || '';
-      const certMatch = certPath.match(/\/data\/tls\/(.+)\.crt$/);
+      const certMatch = certPath.match(/\/tls\/([^/]+)\.crt$/);
       setTlsCertId(certMatch ? certMatch[1] : '');
     }
   });
@@ -133,8 +133,9 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
     setLoading(true);
     try {
       const listen = joinHostPort(listenIp.trim() || '0.0.0.0', listenPort.trim() || '5565');
-      const tls_cert = tlsCertId ? `/data/tls/${tlsCertId}.crt` : '';
-      const tls_key = tlsCertId ? `/data/tls/${tlsCertId}.key` : '';
+      // The store ID; the node maps it to its own TLS directory.
+      const tls_cert = tlsCertId || '';
+      const tls_key = '';
       await api.updateNode({
         node_id: nodeId.trim(),
         server: { listen, password, tls_cert, tls_key },
