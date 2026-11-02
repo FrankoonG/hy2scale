@@ -72,7 +72,7 @@ func (m *ifaceManager) apply(cfg Config) {
 
 // IfaceRef is something that uses an interface.
 type IfaceRef struct {
-	Type    string `json:"type"` // egress | node_address
+	Type    string `json:"type"` // egress | punch | node_address
 	Family  string `json:"family,omitempty"`
 	Node    string `json:"node,omitempty"`
 	Address string `json:"address,omitempty"`
@@ -88,6 +88,9 @@ func refsTo(cfg *Config, name string) []IfaceRef {
 		if cfg.Egress.IPv6 == name {
 			refs = append(refs, IfaceRef{Type: "egress", Family: "ipv6"})
 		}
+	}
+	if cfg.PunchBind != "" && bindIface(cfg.PunchBind) == name {
+		refs = append(refs, IfaceRef{Type: "punch"})
 	}
 	for _, cl := range cfg.Clients {
 		for _, a := range clientAddrList(cl) {
@@ -149,7 +152,31 @@ func (a *App) InterfaceRefs(name string) []IfaceRef {
 }
 
 // Interfaces is GET /api/interfaces.
-func (a *App) Interfaces() InterfacesView { return a.ifaces.View() }
+func (a *App) Interfaces() InterfacesView {
+	v := a.ifaces.View()
+	cfg := a.store.Get()
+	v.Punch, v.PunchEnabled = cfg.PunchBind, cfg.AcceptPunch
+	return v
+}
+
+// SetPunchInterface sets the interface punched connections to this node use
+// ("" = default route). A change closes the punched connections to us; the
+// initiators punch again through the new interface.
+func (a *App) SetPunchInterface(name string) error {
+	name = strings.TrimSpace(name)
+	if err := ValidPunchBind(name); err != nil {
+		return err
+	}
+	changed := false
+	a.store.Update(func(c *Config) {
+		changed = c.PunchBind != name
+		c.PunchBind = name
+	})
+	if changed {
+		a.DropInboundPunches()
+	}
+	return nil
+}
 
 // CreateInterface adds a child interface.
 func (a *App) CreateInterface(c InterfaceConfig) (InterfaceConfig, error) {
@@ -213,6 +240,9 @@ func (a *App) UpdateInterface(name string, c InterfaceConfig) (InterfaceConfig, 
 
 // moveIfaceRefs points everything that uses interface from at to.
 func moveIfaceRefs(cfg *Config, from, to string) {
+	if bindIface(cfg.PunchBind) == from {
+		cfg.PunchBind = to + cfg.PunchBind[len(from):]
+	}
 	if cfg.Egress != nil {
 		if cfg.Egress.IPv4 == from {
 			cfg.Egress.IPv4 = to
@@ -341,7 +371,10 @@ func (a *App) BindableInterfaces() []IfaceInfo {
 
 // installChildListen lets node addresses bound to a child interface open
 // their UDP socket on it.
-func (a *App) installChildListen() { childListen = a.ifaces.ChildListen }
+func (a *App) installChildListen() {
+	childListen = a.ifaces.ChildListen
+	childListenPort = a.ifaces.ChildListenPort
+}
 
 // SelfEgress reports this node's egress (the publicip add-on).
 func (a *App) SelfEgress() publicip.SelfEgress { return a.ifaces.pub.Self() }

@@ -58,6 +58,20 @@ func (s *Server) registerInterfaceRoutes(authed *http.ServeMux) {
 		}
 		writeJSON(w, map[string]any{"ok": true})
 	})
+	authed.HandleFunc("PUT /api/punch-interface", func(w http.ResponseWriter, r *http.Request) {
+		var b struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := s.app.SetPunchInterface(b.Name); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true})
+	})
 	authed.HandleFunc("PUT /api/egress", func(w http.ResponseWriter, r *http.Request) {
 		var e app.EgressConfig
 		if err := json.NewDecoder(r.Body).Decode(&e); err != nil {

@@ -194,6 +194,10 @@ type Config struct {
 	// direct (hole-punched) connection to it. Off by default; like relay
 	// trust, the mesh handshake is the trust boundary.
 	AcceptPunch bool `yaml:"accept_punch,omitempty" json:"accept_punch,omitempty"`
+	// PunchBind: the interface (and source address) punches to this node
+	// use on this side — "eth1", "w2", "eth1/192.0.2.5"; "" = the default
+	// route. A source of the other family than a punch is left out.
+	PunchBind string `yaml:"punch_bind,omitempty" json:"punch_bind,omitempty"`
 
 	// DNSResolver routes hy2scale's own internal name lookups (rules-engine
 	// `applyDomainRule`, future call sites) through a clean upstream DNS

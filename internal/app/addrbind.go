@@ -96,6 +96,10 @@ var bindDeviceWarn sync.Once
 // the App; ok=false when iface is not a child interface).
 var childListen func(iface string, raddr net.IP) (pc net.PacketConn, ok bool, err error)
 
+// childListenPort opens a UDP socket of a family at a local port on a
+// running child interface (set by the App; ok=false when iface is not one).
+var childListenPort func(iface string, v6 bool, port int) (pc net.PacketConn, ok bool, err error)
+
 // listen opens the UDP socket a connection to raddr uses.
 func (b addrBind) listen(raddr net.IP) (net.PacketConn, error) {
 	if b.none() {
@@ -111,10 +115,13 @@ func (b addrBind) listen(raddr net.IP) (net.PacketConn, error) {
 
 // listenAt opens a UDP socket with the binding on a given local port (0 =
 // any). network narrows the family ("udp4") when the caller needs one.
-func (b addrBind) listenAt(raddr net.IP, port int, network string) (*net.UDPConn, error) {
-	if b.iface != "" && childListen != nil {
-		if _, ok, _ := childListen(b.iface, nil); ok {
-			return nil, fmt.Errorf("hole punching is not supported on built-in interface %s", b.iface)
+func (b addrBind) listenAt(raddr net.IP, port int, network string) (net.PacketConn, error) {
+	// a built-in child has its own stack and address: the socket lives there
+	if b.iface != "" && childListenPort != nil {
+		v6 := network == "udp6" || (network == "udp" && raddr != nil && raddr.To4() == nil) ||
+			(b.src != nil && b.src.To4() == nil)
+		if pc, ok, err := childListenPort(b.iface, v6, port); ok {
+			return pc, err
 		}
 	}
 	laddr := &net.UDPAddr{Port: port}
@@ -158,7 +165,7 @@ func (b addrBind) listenAt(raddr net.IP, port int, network string) (*net.UDPConn
 	if err != nil {
 		return nil, err
 	}
-	return pc.(*net.UDPConn), nil
+	return pc, nil
 }
 
 // ifaceAddrFor is an address of iface in raddr's family, or nil.
