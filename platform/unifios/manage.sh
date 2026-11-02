@@ -7,7 +7,10 @@
 #   manage.sh on-boot             restore and start the units (run by the
 #                                 hy2scale-ensure timer; safe to run any time)
 #
-# Layout: /data/hy2scale/{hy2scale,hy2scale.sig,manage.sh,units/,data/}.
+# Layout: /data/hy2scale/{hy2scale,hy2scale.sig,manage.sh,units/,data/,env}.
+# env (optional, yours): extra environment for the service, e.g.
+#   HY2SCALE_CHILD_PARENTS=eth0.131
+# then: systemctl restart hy2scale
 # /data survives reboots and firmware updates; the unit files are copied
 # (not linked) into /etc/systemd/system so systemd can read them early in
 # boot, and on-boot puts them back if they go missing.

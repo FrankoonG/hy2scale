@@ -9,6 +9,8 @@ RequiresMountsFor=/data/hy2scale
 [Service]
 Type=simple
 ExecStart=/data/hy2scale/hy2scale --data /data/hy2scale/data
+# Local settings (e.g. HY2SCALE_CHILD_PARENTS=eth0.131); kept by updates.
+EnvironmentFile=-/data/hy2scale/env
 Restart=always
 RestartSec=3
 LimitNOFILE=1048576
