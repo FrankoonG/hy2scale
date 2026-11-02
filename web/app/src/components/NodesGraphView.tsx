@@ -454,7 +454,8 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         .map((w) => ({ u: Math.round(w.u * 1e4) / 1e4, v: Math.round(w.v * 1e4) / 1e4 }));
       const lt = typeof e.label_t === 'number' && Number.isFinite(e.label_t) ? Math.max(0, Math.min(1, Math.round(e.label_t * 1e4) / 1e4)) : undefined;
       if (!wps.length && lt === undefined) continue;
-      cleanEdges[k] = { ...(wps.length ? { waypoints: wps } : {}), ...(lt !== undefined ? { label_t: lt } : {}) };
+      const wrap = wps.length && (e.wrap === 1 || e.wrap === -1) ? e.wrap : undefined;
+      cleanEdges[k] = { ...(wps.length ? { waypoints: wps } : {}), ...(lt !== undefined ? { label_t: lt } : {}), ...(wrap ? { wrap } : {}) };
     }
     for (const k of new Set([...Object.keys(prevEdges), ...Object.keys(cleanEdges)])) {
       pendingEdges.current.set(k, { json: JSON.stringify(cleanEdges[k] ?? null), at: now });
@@ -573,10 +574,14 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   const geoW = geoMode && geo ? geo.mod.BASE * geoView.k : 0;
   const geoWRef = useRef(geoW);
   geoWRef.current = geoW;
-  /** The far end of an edge, on the side the line takes round the world. */
-  const farEnd = (pos: Record<string, Pos>, from: string, to: string): Pos | undefined => {
+  /** The far end of an edge, on the side the line takes round the world
+   *  (its nearest copy, moved by the edge's wrap worlds). */
+  const farEnd = (pos: Record<string, Pos>, from: string, to: string, key?: string): Pos | undefined => {
     const p = pos[from], q = pos[to];
-    return p && q && geoWRef.current ? { x: q.x + wrapDx(p, q, geoWRef.current, from, to), y: q.y } : q;
+    const W = geoWRef.current;
+    if (!p || !q || !W) return q;
+    const shift = key ? edgeDraftRef.current[key]?.wrap || 0 : 0;
+    return { x: q.x + wrapDx(p, q, W, from, to) + shift * W, y: q.y };
   };
   const geoPositions = useMemo<Record<string, Pos> | null>(() => {
     if (!geoMode || !geo) return null;
@@ -618,7 +623,13 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   // Routing and label placement depend on the graph's shape only, so they
   // are keyed on `sig`, not on every topology poll.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const geoms = useMemo(() => routeEdges(graphRef.current, positions, { waypoints: waypointsMap, avoid: true, wrap: geoW }), [sig, positions, waypointsMap, geoW]);
+  const shiftMap = useMemo(() => {
+    if (!geoMode) return undefined;
+    const m: Record<string, number | undefined> = {};
+    for (const k in edgeDraft) if (edgeDraft[k].wrap) m[k] = edgeDraft[k].wrap;
+    return m;
+  }, [geoMode, edgeDraft]);
+  const geoms = useMemo(() => routeEdges(graphRef.current, positions, { waypoints: waypointsMap, avoid: true, wrap: geoW, shift: shiftMap }), [sig, positions, waypointsMap, geoW, shiftMap]);
   const geomsRef = useRef(geoms);
   geomsRef.current = geoms;
   const labelTMap = useMemo(() => {
@@ -930,7 +941,35 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   };
   const deleteWaypoint = (key: string, i: number) => {
     setWaypoint(key, i, null);
+    rewrap(key);
     saveCanvas(overridesRef.current, edgeDraftRef.current);
+  };
+  /** Map view: the line ends at the copy of its target nearest to its last
+   *  bend (this world or the next one either way), the bends staying where
+   *  they are; with no bend it takes the nearest copy again. */
+  const rewrap = (key: string) => {
+    const W = geoWRef.current;
+    const ge = edgesRef.current.get(key);
+    const pos = positionsRef.current;
+    const p = ge && pos[ge.from], q0 = ge && pos[ge.to];
+    if (!W || !ge || !p || !q0) return;
+    const cur = edgeDraftRef.current[key] || {};
+    const k0 = cur.wrap || 0;
+    const qOf = (k: number) => ({ x: q0.x + wrapDx(p, q0, W, ge.from, ge.to) + k * W, y: q0.y });
+    const abs = (cur.waypoints || []).map((w) => toAbs(p, qOf(k0), w));
+    let k = 0;
+    if (abs.length) {
+      const last = abs[abs.length - 1];
+      const dist = (c: number) => Math.hypot(last.x - qOf(c).x, last.y - qOf(c).y);
+      k = k0;
+      for (const c of [-1, 0, 1]) if (dist(c) < dist(k) - 1) k = c;
+    }
+    if (k === k0) return;
+    putEdge(key, (c) => {
+      const n: EdgeData = { ...c, waypoints: abs.map((a) => toRel(p, qOf(k), a)) };
+      if (k) n.wrap = k; else delete n.wrap;
+      return n;
+    });
   };
   const resetLabel = (key: string) => {
     putEdge(key, (cur) => { const c = { ...cur }; delete c.label_t; return c; });
@@ -997,7 +1036,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       const key = ghEl.getAttribute('data-edge') || '';
       const i = Number(ghEl.getAttribute('data-ghost'));
       const ge = edgesRef.current.get(key);
-      const p = ge && positionsRef.current[ge.from], q = ge && farEnd(positionsRef.current, ge.from, ge.to);
+      const p = ge && positionsRef.current[ge.from], q = ge && farEnd(positionsRef.current, ge.from, ge.to, key);
       if (!ge || !p || !q) return false;
       if ((edgeDraftRef.current[key]?.waypoints?.length || 0) >= MAX_WAYPOINTS) return false;
       const at = clientToWorld(e.clientX, e.clientY);
@@ -1065,8 +1104,11 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
         if (!d.moved && Math.hypot(ev.clientX - d.sx, ev.clientY - d.sy) < 4) return;
         if (!d.moved) { d.moved = true; window.clearTimeout(d.timer); userMoved.current = true; }
         const ge = edgesRef.current.get(d.key);
-        const p = ge && positionsRef.current[ge.from], q = ge && farEnd(positionsRef.current, ge.from, ge.to);
-        if (p && q) setWaypoint(d.key, d.i, toRel(p, q, at));
+        const p = ge && positionsRef.current[ge.from], q = ge && farEnd(positionsRef.current, ge.from, ge.to, d.key);
+        if (p && q) {
+          setWaypoint(d.key, d.i, toRel(p, q, at));
+          rewrap(d.key);
+        }
         return;
       }
       const g = geomsRef.current.get(d.key);
@@ -1090,6 +1132,11 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       }
       if (d.kind === 'wp') window.clearTimeout(d.timer);
       busyEdges.current.delete(d.key);
+      if (d.moved) {
+        // the click that ends a drag keeps the line selected
+        nodeClickSuppress.current = true;
+        window.setTimeout(() => { nodeClickSuppress.current = false; }, 0);
+      }
       if (d.moved || (d.kind === 'wp' && d.inserted)) saveCanvas(overridesRef.current, edgeDraftRef.current);
     };
     window.addEventListener('pointermove', onMove);
@@ -1404,7 +1451,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       edges.forEach((e) => {
         const a = geoBase.out[e.from], b = geoBase.out[e.to];
         if (!a || !b) return;
-        const bx = b.x + wrapDx(a, b, B, e.from, e.to);
+        const bx = b.x + wrapDx(a, b, B, e.from, e.to) + (edgeDraftRef.current[e.key]?.wrap || 0) * B;
         if (Math.floor((Math.max(a.x, bx) - sm) / B) !== Math.floor((Math.min(a.x, bx) - sm) / B)) cross++;
       });
       let gap = B;
@@ -1583,7 +1630,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
   })();
 
   // Geo mode: the graph is drawn in every horizontal copy of the world.
-  const copies = geoMode && geo ? geo.mod.copiesOf(geoView, (geoExport ?? size).w || 1000, geoW / 2 + 120) : [0];
+  // a line reaches half a world from its dot, or 1.5 when moved by a wrap
+  const reach = shiftMap && Object.keys(shiftMap).length ? 1.5 : 0.5;
+  const copies = geoMode && geo ? geo.mod.copiesOf(geoView, (geoExport ?? size).w || 1000, geoW * reach + 120) : [0];
   copiesRef.current = copies;
   const layerOf = (cn: number) => {
     const edgeEls: ReactNode[] = [];
@@ -1596,7 +1645,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
       const fromN = nodes.get(e.from), toN = nodes.get(e.to);
       if (geoMode) {
         // Zoomed out, a line between dots that touch is left out.
-        const a = positions[e.from], b = farEnd(positions, e.from, e.to);
+        const a = positions[e.from], b = farEnd(positions, e.from, e.to, e.key);
         if (a && b && Math.hypot(a.x - b.x, a.y - b.y) < nodeRadiusFor(fromN) + nodeRadiusFor(toN) + 6) return;
       }
       const offline = e.disabled || !!fromN?.offline || !!toN?.offline || e.segmentLatencyMs < 0;
@@ -1680,7 +1729,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
 
       if (handleKeys.has(e.key)) {
         const wps = edgeDraft[e.key]?.waypoints || [];
-        const p = positions[e.from], q = farEnd(positions, e.from, e.to);
+        const p = positions[e.from], q = farEnd(positions, e.from, e.to, e.key);
         // The selected line's handles sit above every label and every other
         // line, with wider grab targets.
         const sel = e.key === selectedEdge;

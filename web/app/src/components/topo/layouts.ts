@@ -728,6 +728,9 @@ export interface RouteOpts {
   /** Horizontal period of a wrapping world (map view): each edge takes
    *  the shorter way round, dots repeat every `wrap` units. */
   wrap?: number;
+  /** Map view: worlds an edge's far end is moved by from that nearest
+   *  copy (-1..1), per edge key. */
+  shift?: Record<string, number | undefined>;
 }
 
 /**
@@ -821,7 +824,7 @@ export function routeEdges(g: Graph, pos: Record<string, Pos>, opts: RouteOpts =
   for (const e of g.edges.values()) {
     const p = pos[e.from], q0 = pos[e.to];
     if (!p || !q0) continue;
-    const q = opts.wrap ? { x: q0.x + wrapDx(p, q0, opts.wrap, e.from, e.to), y: q0.y } : q0;
+    const q = opts.wrap ? { x: q0.x + wrapDx(p, q0, opts.wrap, e.from, e.to) + (opts.shift?.[e.key] || 0) * opts.wrap, y: q0.y } : q0;
     const rA = nodeRadiusFor(g.nodes.get(e.from));
     const rB = nodeRadiusFor(g.nodes.get(e.to));
     const trim = (W: Pos[]) => {
