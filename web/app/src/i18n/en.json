@@ -96,6 +96,8 @@
   "policy.deleteConfirm": "Delete {{name}}?",
   "policy.inUse": "In use by: {{refs}}",
   "policy.usedBy": "Used by",
+  "rules.topo.noExit": "Users and proxies without an exit",
+  "rules.topo.otherwise": "Otherwise",
   "policy.refKind.user": "User",
   "policy.refKind.proxy": "Proxy",
   "policy.refKind.wireguard": "WireGuard",

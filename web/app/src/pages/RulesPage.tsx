@@ -6,6 +6,8 @@ import SetModal from '@/components/policy/SetModal';
 import DirectModal from '@/components/policy/DirectModal';
 import TestModal from '@/components/policy/TestModal';
 import { refsText } from '@/components/policy/RefsLine';
+import RulesTopoView from '@/components/policy/RulesTopoView';
+import { usePageView } from '@/store/pageView';
 import type { SetKind } from '@/components/policy/shared';
 
 /**
@@ -19,6 +21,7 @@ export default function RulesPage() {
   const edit = useModalState<{ kind: SetKind; set: PolicySet | ConditionSet | null }>();
   const direct = useModalState();
   const test = useModalState();
+  const [view] = usePageView('rules');
 
   type Row = { kind: SetKind; set: PolicySet | ConditionSet };
   const rows: Row[] = [
@@ -48,6 +51,35 @@ export default function RulesPage() {
     qc.invalidateQueries({ queryKey: ['policy'] });
   };
 
+  const buttons = (
+    <div className="button-row">
+      <Button onClick={(e) => direct.show(undefined, e)} data-testid="rules-direct">{t('policy.direct')}</Button>
+      <Button onClick={(e) => test.show(undefined, e)} data-testid="rules-test">{t('policy.test')}</Button>
+      <ExpandButton variant="primary" label={`+ ${t('policy.newPolicy')}`} moreLabel={t('app.moreActions')}
+        testId="rules-new-policy"
+        onClick={(e) => edit.show({ kind: 'policy', set: null }, e)}
+        actions={[{ key: 'condition', label: t('policy.newCondition'), testId: 'rules-new-condition',
+          onClick: (e) => edit.show({ kind: 'condition', set: null }, e) }]} />
+    </div>
+  );
+  const modals = (
+    <>
+      <SetModal {...edit.modalProps} kind={edit.data?.kind ?? 'policy'} editing={edit.data?.set ?? null} cfg={cfg} />
+      <DirectModal {...direct.modalProps} cfg={cfg} />
+      <TestModal {...test.modalProps} cfg={cfg} />
+    </>
+  );
+
+  if (view === 'topo') {
+    return (
+      <div className="hy-topo-full">
+        <RulesTopoView cfg={cfg} actions={buttons}
+          onEdit={(set, from) => edit.show({ kind: 'policy', set }, from)} />
+        {modals}
+      </div>
+    );
+  }
+
   return (
     <div className="hy-page rules-page" data-testid="rules-page">
       {cfg?.migrated_notice && (
@@ -61,25 +93,13 @@ export default function RulesPage() {
         title={t('policy.sets')}
         count={rows.length}
         noPadding
-        actions={(
-          <div className="button-row">
-            <Button onClick={(e) => direct.show(undefined, e)} data-testid="rules-direct">{t('policy.direct')}</Button>
-            <Button onClick={(e) => test.show(undefined, e)} data-testid="rules-test">{t('policy.test')}</Button>
-            <ExpandButton variant="primary" label={`+ ${t('policy.newPolicy')}`} moreLabel={t('app.moreActions')}
-              testId="rules-new-policy"
-              onClick={(e) => edit.show({ kind: 'policy', set: null }, e)}
-              actions={[{ key: 'condition', label: t('policy.newCondition'), testId: 'rules-new-condition',
-                onClick: (e) => edit.show({ kind: 'condition', set: null }, e) }]} />
-          </div>
-        )}
+        actions={buttons}
       >
         <Table id="policy.sets" columns={cols} data={rows} rowKey={(r) => r.set.id}
           emptyText={t('policy.noSets')}
           onRowClick={(r, _i, o) => edit.show({ kind: r.kind, set: r.set }, o)} />
       </Card>
-      <SetModal {...edit.modalProps} kind={edit.data?.kind ?? 'policy'} editing={edit.data?.set ?? null} cfg={cfg} />
-      <DirectModal {...direct.modalProps} cfg={cfg} />
-      <TestModal {...test.modalProps} cfg={cfg} />
+      {modals}
     </div>
   );
 }

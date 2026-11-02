@@ -6,7 +6,7 @@ import { readStored, writeStored } from '@hy2scale/ui';
  * a page is the switch; the topology view takes the whole content area.
  */
 export type PageView = 'list' | 'topo';
-export const TOPO_PAGES = ['nodes', 'interfaces'] as const;
+export const TOPO_PAGES = ['nodes', 'interfaces', 'rules'] as const;
 export type TopoPage = (typeof TOPO_PAGES)[number];
 
 const KEY = (page: string) => `hy-view:${page}`;
@@ -20,8 +20,8 @@ function initial(page: TopoPage): PageView {
     if (old === 'list') return 'list';
     if (old === 'graph') return 'topo';
   }
-  // Both pages open on their topology the first time.
-  return 'topo';
+  // Nodes and interfaces open on their topology the first time, rules on its list.
+  return page === 'rules' ? 'list' : 'topo';
 }
 
 interface PageViewState {
@@ -31,7 +31,7 @@ interface PageViewState {
 }
 
 export const usePageViewStore = create<PageViewState>((set, get) => ({
-  views: { nodes: initial('nodes'), interfaces: initial('interfaces') },
+  views: { nodes: initial('nodes'), interfaces: initial('interfaces'), rules: initial('rules') },
   setView: (page, v) => {
     writeStored(KEY(page), v);
     set({ views: { ...get().views, [page]: v } });

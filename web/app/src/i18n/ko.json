@@ -96,6 +96,8 @@
   "policy.deleteConfirm": "{{name}}을(를) 삭제할까요?",
   "policy.inUse": "사용 중: {{refs}}",
   "policy.usedBy": "사용처",
+  "rules.topo.noExit": "출구를 지정하지 않은 사용자와 프록시",
+  "rules.topo.otherwise": "그 외",
   "policy.refKind.user": "사용자",
   "policy.refKind.proxy": "프록시",
   "policy.refKind.wireguard": "WireGuard",
