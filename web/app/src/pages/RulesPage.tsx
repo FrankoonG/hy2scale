@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, Button, Card, ExpandButton, Table, useModalState, type Column } from '@hy2scale/ui';
@@ -7,6 +7,7 @@ import SetModal from '@/components/policy/SetModal';
 import DirectModal from '@/components/policy/DirectModal';
 import TestModal from '@/components/policy/TestModal';
 import { refsText } from '@/components/policy/RefsLine';
+import { useRulesImportExport } from '@/components/policy/RulesImportExport';
 import { usePageView } from '@/store/pageView';
 import type { SetKind } from '@/components/policy/shared';
 
@@ -23,7 +24,10 @@ export default function RulesPage() {
   const edit = useModalState<{ kind: SetKind; set: PolicySet | ConditionSet | null }>();
   const direct = useModalState();
   const test = useModalState();
-  const [view] = usePageView('rules');
+  const [view, setView] = usePageView('rules');
+  const io = useRulesImportExport(cfg);
+  // leaving the page returns it to the list: entering always shows the list
+  useEffect(() => () => setView('list'), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   type Row = { kind: SetKind; set: PolicySet | ConditionSet };
   const rows: Row[] = [
@@ -61,7 +65,7 @@ export default function RulesPage() {
         testId="rules-new-policy"
         onClick={(e) => edit.show({ kind: 'policy', set: null }, e)}
         actions={[{ key: 'condition', label: t('policy.newCondition'), testId: 'rules-new-condition',
-          onClick: (e) => edit.show({ kind: 'condition', set: null }, e) }]} />
+          onClick: (e) => edit.show({ kind: 'condition', set: null }, e) }, ...io.actions]} />
     </div>
   );
   const modals = (
@@ -69,6 +73,7 @@ export default function RulesPage() {
       <SetModal {...edit.modalProps} kind={edit.data?.kind ?? 'policy'} editing={edit.data?.set ?? null} cfg={cfg} />
       <DirectModal {...direct.modalProps} cfg={cfg} />
       <TestModal {...test.modalProps} cfg={cfg} />
+      {io.modal}
     </>
   );
 
