@@ -1,0 +1,10 @@
+[Unit]
+Description=Check hy2scale after boot and periodically
+
+[Timer]
+OnBootSec=2m
+OnUnitActiveSec=1h
+Unit=hy2scale-ensure.service
+
+[Install]
+WantedBy=timers.target
