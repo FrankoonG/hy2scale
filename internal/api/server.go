@@ -283,7 +283,7 @@ func (s *Server) Start(ctx context.Context) error {
 // --- Node ---
 
 // Version is the application version. Update this on each release.
-const Version = "1.4.0"
+const Version = "1.4.1"
 
 func init() {
 	app.AppVersion = Version
