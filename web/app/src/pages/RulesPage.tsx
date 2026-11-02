@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Badge, Button, Card, ExpandButton, Table, useModalState, type Column } from '@hy2scale/ui';
@@ -6,9 +7,10 @@ import SetModal from '@/components/policy/SetModal';
 import DirectModal from '@/components/policy/DirectModal';
 import TestModal from '@/components/policy/TestModal';
 import { refsText } from '@/components/policy/RefsLine';
-import RulesTopoView from '@/components/policy/RulesTopoView';
 import { usePageView } from '@/store/pageView';
 import type { SetKind } from '@/components/policy/shared';
+
+const RulesGraph = lazy(() => import('@/components/policy/graph/RulesGraph'));
 
 /**
  * Rules: one list of policy sets (where connections go, or whether they
@@ -73,8 +75,10 @@ export default function RulesPage() {
   if (view === 'topo') {
     return (
       <div className="hy-topo-full">
-        <RulesTopoView cfg={cfg} actions={buttons}
-          onEdit={(set, from) => edit.show({ kind: 'policy', set }, from)} />
+        <Suspense fallback={null}>
+          <RulesGraph cfg={cfg} onDirect={(e) => direct.show(undefined, e)}
+            actions={<Button onClick={(e) => test.show(undefined, e)} data-testid="rules-test">{t('policy.test')}</Button>} />
+        </Suspense>
         {modals}
       </div>
     );
