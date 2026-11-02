@@ -31,7 +31,9 @@ curl -fsSL https://raw.githubusercontent.com/FrankoonG/hy2scale/main/install.sh 
 自动识别 CPU 架构（`amd64` / `arm64` / `armv7` / `mips64le` /
 `mipsle-softfloat`），从最新 release 下载匹配的 tar 包，把二进制装到
 `/usr/local/bin/hy2scale` 并注册 systemd 服务。重复运行即原地升级。
-固定版本用 `HY2SCALE_VERSION=v1.4.1`；卸载用 `… | sudo sh -s -- --uninstall`。
+固定版本用 `HY2SCALE_VERSION=v1.4.2`；卸载用 `… | sudo sh -s -- --uninstall`。
+在 UniFi OS 网关上（以 root 运行）会装到 `/data/hy2scale`，固件升级后依然保留
+（[详见](https://github.com/FrankoonG/hy2scale/wiki/Installation-zh#unifi-os)）。
 
 ### Docker
 
