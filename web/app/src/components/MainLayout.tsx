@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import {
   AppLayout, Sidebar, Topbar, useMediaQuery, useStoredState, boolCodec, type IconComponent,
   IconLayoutDashboard, IconWaypoints, IconEthernetPort, IconSplit, IconUsers, IconServer, IconPlug,
-  IconShieldCheck, IconScrollText, IconSettings, IconList, IconNetwork, IconWrench, IconClipboardList,
+  IconShieldCheck, IconScrollText, IconSettings, IconList, IconNetwork, IconWrench, IconClipboardList, useConfirm,
 } from '@hy2scale/ui';
 import { useAuthStore } from '@/store/auth';
 import { useNodeStore } from '@/store/node';
@@ -66,6 +66,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
   const activePage = navKeys.find((k) => location.pathname.startsWith(navPaths[k])) || 'overview';
   const views = usePageViewStore((s) => s.views);
   const toggleView = usePageViewStore((s) => s.toggle);
+  const confirm = useConfirm();
   const switchable = isTopoPage(activePage);
   const view = switchable ? views[activePage] : 'list';
   const pageTitle = switchable ? (
@@ -74,7 +75,13 @@ export default function MainLayout({ children }: { children: ReactNode }) {
       className="hy-view-switch"
       data-testid="view-switch"
       title={t(view === 'topo' ? 'app.viewList' : 'app.viewTopo')}
-      onClick={() => toggleView(activePage)}
+      onClick={async () => {
+        // the rules graph is experimental: confirmed on every switch to it
+        if (activePage === 'rules' && view === 'list' && !await confirm({
+          title: t('rules.graph.experimentalTitle'), message: t('rules.graph.experimentalMsg'), confirmText: t('rules.graph.experimentalGo'),
+        })) return;
+        toggleView(activePage);
+      }}
     >
       {t(`nav.${activePage}` as any)}
       {view === 'topo' ? <IconList /> : <IconNetwork />}

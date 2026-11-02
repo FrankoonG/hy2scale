@@ -16,10 +16,12 @@ interface Props {
   onClose: () => void;
   animateFrom?: { x: number; y: number };
   config: WgPeerConfig | undefined;
+  /** Opens the peer's edit dialog from the button's centre. */
+  onEdit?: (name: string, from: { x: number; y: number }) => void;
 }
 
 /** A peer's client config: QR code, text, download. */
-export default function WgPeerConfigModal({ open, onClose, animateFrom, config }: Props) {
+export default function WgPeerConfigModal({ open, onClose, animateFrom, config, onEdit }: Props) {
   const { t } = useTranslation();
 
   // Release each QR object URL once the next config replaces it (or on unmount).
@@ -42,7 +44,14 @@ export default function WgPeerConfigModal({ open, onClose, animateFrom, config }
       footer={
         <>
           <Button onClick={onClose}>{t('app.close')}</Button>
-          <Button variant="primary" onClick={download}>{t('wg.downloadConf')}</Button>
+          <Button onClick={download}>{t('wg.downloadConf')}</Button>
+          {onEdit && config && (
+            <Button variant="primary" data-testid="wg-peer-edit"
+              onClick={(ev) => {
+                const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+                onEdit(config.name, { x: r.left + r.width / 2, y: r.top + r.height / 2 });
+              }}>{t('app.edit')}</Button>
+          )}
         </>
       }
     >

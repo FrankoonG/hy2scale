@@ -9,6 +9,7 @@ import * as api from '@/api';
 import { sha256, getSessionHash, getSavedCredentials } from '@/hooks/useAuth';
 import { versionGreater } from '@/utils/version';
 import { fmtBytes } from '@/hooks/useFormat';
+import { REMOTE_TTL, readRemoteAuth, writeRemoteAuth } from '@/utils/remoteAuth';
 
 /*
  * Remote node dialog: sign in to a node reached through the mesh, then
@@ -22,12 +23,11 @@ import { fmtBytes } from '@/hooks/useFormat';
  * remote session too. Operations (bottom) stay greyed out until signed in.
  */
 
-const REMOTE_TTL = 30 * 60 * 1000;
 const RESTART_WAIT = 180_000;
 
 type Via = 'trust' | 'password';
 interface Auth { token: string; via: Via; exp: number }
-interface RemoteInfo { version: string; os: string; arch: string; inDocker: boolean; official?: boolean }
+interface RemoteInfo { version: string; os: string; arch: string; inDocker: boolean; upgradable: boolean; official?: boolean }
 type Op =
   | { kind: 'idle' }
   | { kind: 'checking' }
@@ -48,19 +48,8 @@ interface Props {
   animateFrom?: { x: number; y: number };
 }
 
-const storeKey = (chain: string[]) => `hy-remote:${chain.join('/')}`;
-const readAuth = (chain: string[]): Auth | null => {
-  try {
-    const a = JSON.parse(sessionStorage.getItem(storeKey(chain)) || 'null') as Auth | null;
-    return a && a.token && a.exp > Date.now() ? a : null;
-  } catch { return null; }
-};
-const writeAuth = (chain: string[], a: Auth | null) => {
-  try {
-    if (a) sessionStorage.setItem(storeKey(chain), JSON.stringify(a));
-    else sessionStorage.removeItem(storeKey(chain));
-  } catch { /* storage unavailable */ }
-};
+const readAuth = (chain: string[]): Auth | null => readRemoteAuth(chain);
+const writeAuth = (chain: string[], a: Auth | null) => writeRemoteAuth(chain, a);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const mmss = (ms: number) => {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -178,7 +167,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
       const r = await rfetch('/system/arch', {}, token);
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const d = await r.json();
-      if (alive.current) setInfo({ version: d.version, os: d.os, arch: d.arch, inDocker: !!d.in_docker, official: d.official });
+      if (alive.current) setInfo({ version: d.version, os: d.os, arch: d.arch, inDocker: !!d.in_docker, upgradable: !!(d.upgradable ?? d.in_docker), official: d.official });
     } catch {
       if (alive.current) setInfo(null);
     }
@@ -266,7 +255,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
     try {
       const r = await rfetch('/system/arch', {}, a.token);
       const d = await r.json();
-      setInfo({ version: d.version, os: d.os, arch: d.arch, inDocker: !!d.in_docker, official: d.official });
+      setInfo({ version: d.version, os: d.os, arch: d.arch, inDocker: !!d.in_docker, upgradable: !!(d.upgradable ?? d.in_docker), official: d.official });
       setOp({ kind: 'done', from, to: d.version });
     } catch {
       setOp({ kind: 'done', from, to: '' });
@@ -381,7 +370,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
   const busy = op.kind === 'checking' || op.kind === 'downloading' || op.kind === 'pushing' || op.kind === 'restarting';
   const platform = info ? `${info.os}/${info.arch}` : '';
   const localPlatform = local ? `${local.os}/${local.arch}` : '';
-  const upgradeBlock = info && !info.inDocker ? t('remote.notContainer') : '';
+  const upgradeBlock = info && !info.upgradable ? t('remote.notContainer') : '';
   const pushBlock = upgradeBlock || (!info || !local ? '…'
     : localPlatform !== platform ? t('remote.platformDiffers', { platform })
       : !versionGreater(local.version, info.version) ? t('remote.notNewer') : '');

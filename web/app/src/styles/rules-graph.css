@@ -1,0 +1,100 @@
+/* Rules graph editor (React Flow). Toolbar reuses the topology classes
+   (interfaces-topo.css); node sizes must match graph/layout.ts. Colour
+   bars are ::before backgrounds so Dark Reader keeps them visible. */
+.rg-wrap{position:relative;flex:1;min-height:0;overflow:hidden;background:var(--bg)}
+.rg-wrap .react-flow{background:var(--bg);--xy-background-pattern-color-props:var(--border)}
+.rg-topbar .button-row{display:flex;gap:8px;align-items:center}
+.rg-sep{width:1px;height:18px;background:var(--border);margin:0 2px}
+.rg-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;margin-left:6px;padding:0 5px;border-radius:9px;background:rgba(255,255,255,.25);font-size:11px;font-weight:700}
+.rg-wrap .rg-minimap{border:1px solid var(--border);border-radius:6px;overflow:hidden;--xy-minimap-background-color-props:var(--surface);--xy-minimap-mask-background-color-props:rgba(67,97,238,.07);--xy-minimap-mask-stroke-color-props:#4361ee;--xy-minimap-mask-stroke-width-props:1;--xy-minimap-node-background-color-props:var(--border);--xy-minimap-node-stroke-color-props:transparent}
+
+/* nodes */
+.rg-node{position:relative;box-sizing:border-box;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.06);font-size:12px}
+.rg-node.is-sel{border-color:#4361ee;box-shadow:0 0 0 2px rgba(67,97,238,.25)}
+.rg-node.is-error{border-color:#ef4444}
+.rg-ellip{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rg-node::before{content:"";position:absolute;pointer-events:none}
+
+.rg-set{width:220px;height:52px;padding:6px 12px 0;overflow:visible}
+.rg-set::before{left:-1px;right:-1px;top:-1px;height:4px;border-radius:8px 8px 0 0;background-color:#4361ee}
+.rg-set.is-condition::before{background-color:#8b5cf6}
+.rg-set-kind{display:flex;align-items:center;gap:6px;font-size:10.5px;font-weight:600;color:var(--text-secondary);margin-top:2px}
+.rg-set-name{font-size:13px;font-weight:700;margin-top:2px}
+.rg-tag{font-size:10px;font-weight:600;color:#4361ee;border:1px solid rgba(67,97,238,.35);border-radius:4px;padding:0 4px}
+
+.rg-rule{width:250px;height:62px;padding:8px 12px}
+.rg-rule.is-off{opacity:.5}
+.rg-rule.is-off .rg-rule-head>.rg-ellip{text-decoration:line-through}
+.rg-rule.is-orphan{border-style:dashed}
+.rg-rule-head{display:flex;align-items:center;gap:6px;font-weight:600}
+.rg-rule-cond{margin-top:4px;font-size:11.5px;color:var(--text-secondary)}
+.rg-idx{flex-shrink:0;font-family:var(--mono);font-size:10.5px;color:#7a8294}
+.rg-port-label{position:absolute;font-size:10px;font-weight:600;color:#7a8294;white-space:nowrap;pointer-events:none}
+.rg-port-label.is-match{left:100%;top:50%;margin:-17px 0 0 8px;color:#3b82f6}
+.rg-port-label.is-else{top:100%;left:50%;margin:3px 0 0 9px}
+
+.rg-end{display:flex;align-items:center;gap:8px;width:220px;height:38px;padding:0 10px 0 14px;font-family:var(--mono);font-size:11.5px;font-weight:600}
+.rg-end::before{left:0;top:0;bottom:0;width:4px;border-radius:7px 0 0 7px;background-color:#9ca3af}
+.rg-end.is-exit::before{background-color:#3b82f6}
+.rg-end.is-iface::before{background-color:#8b5cf6}
+.rg-end.is-deny{color:#b91c1c}
+.rg-end.is-deny::before{background-color:#ef4444}
+.rg-end.is-default::before,.rg-end.is-true::before{background-color:#10b981}
+.rg-end.is-false::before{background-color:#9ca3af}
+.rg-end>.rg-ellip{flex:1}
+.rg-end-mode{flex-shrink:0;font-family:var(--font);font-size:10px;font-weight:600;color:var(--text-secondary)}
+
+.rg-src{width:190px;padding:6px 10px 6px 14px}
+.rg-src::before{left:0;top:0;bottom:0;width:4px;border-radius:7px 0 0 7px;background-color:#9aa8f5}
+.rg-src.is-direct::before{background-color:#4361ee}
+.rg-src.is-locked{border-style:dashed}
+.rg-src.is-locked::before{background-color:#9ca3af}
+.rg-src-head{display:flex;align-items:center;gap:6px;height:20px;font-size:11px;font-weight:600;color:var(--text-secondary)}
+.rg-count{font-family:var(--mono);font-size:10px;color:#7a8294}
+.rg-src-line{height:17px;line-height:17px;font-family:var(--mono);font-size:11.5px}
+.rg-src-line.is-empty{font-family:var(--font);color:var(--text-muted);font-style:italic}
+
+.rg-err{position:absolute;bottom:100%;left:0;margin-bottom:4px;padding:1px 6px;border-radius:4px;background-color:#ef4444;color:#fff;font-family:var(--font);font-size:10.5px;font-weight:600;white-space:nowrap;pointer-events:none}
+
+/* handles */
+.rg-wrap .react-flow__handle.rg-h{width:10px;height:10px;border:2px solid var(--surface);background-color:#9ca3af}
+.rg-wrap .react-flow__handle.rg-h-match{background-color:#3b82f6}
+.rg-wrap .react-flow__handle.rg-h-ref,.rg-wrap .react-flow__handle.rg-h-cond{background-color:#8b5cf6;width:8px;height:8px}
+.rg-wrap .react-flow__handle.rg-h:hover{transform:scale(1.25)}
+.rg-wrap .react-flow__handle.rg-h.react-flow__handle-left:hover,.rg-wrap .react-flow__handle.rg-h.react-flow__handle-right:hover{transform:translate(0,-50%) scale(1.25)}
+.rg-wrap .react-flow__handle.rg-h.react-flow__handle-top:hover,.rg-wrap .react-flow__handle.rg-h.react-flow__handle-bottom:hover{transform:translate(-50%,0) scale(1.25)}
+.rg-wrap .react-flow__handle.connectingto{background-color:#10b981}
+.rg-wrap .react-flow__handle.connectingfrom{background-color:#4361ee}
+
+/* edges */
+.rg-wrap .react-flow__edge-path{stroke:#9ca3af;stroke-width:1.6}
+.rg-wrap .react-flow__edge.is-match .react-flow__edge-path{stroke:#3b82f6}
+.rg-wrap .react-flow__edge.is-call .react-flow__edge-path{stroke:#f59e0b;stroke-width:2}
+.rg-wrap .react-flow__edge.is-src .react-flow__edge-path{stroke:#9aa8f5;stroke-dasharray:5 4}
+.rg-wrap .react-flow__edge.is-start .react-flow__edge-path{stroke:#6b7280}
+.rg-wrap .react-flow__edge.is-ref .react-flow__edge-path{stroke:#8b5cf6;stroke-dasharray:2 4;stroke-width:1.4}
+.rg-wrap .react-flow__edge.is-ghost .react-flow__edge-path{stroke:#c4c9d4;stroke-dasharray:4 5;stroke-width:1.2}
+.rg-wrap .react-flow__edge.selected .react-flow__edge-path,.rg-wrap .react-flow__edge:focus .react-flow__edge-path{stroke:#4361ee;stroke-width:3}
+.rg-wrap .react-flow__connection-path{stroke:#4361ee;stroke-width:2}
+
+/* add menu */
+.rg-menu{position:absolute;z-index:6;min-width:170px;max-height:70%;overflow:auto;padding:4px;border:1px solid var(--border);border-radius:8px;background:var(--surface);box-shadow:0 6px 20px rgba(0,0,0,.12)}
+.rg-menu-group+.rg-menu-group{border-top:1px solid var(--border-light);margin-top:4px;padding-top:4px}
+.rg-menu-title{padding:4px 8px 2px;font-size:10.5px;font-weight:600;color:var(--text-muted)}
+.rg-menu-item{display:block;width:100%;padding:6px 10px;border:0;border-radius:5px;background:transparent;color:var(--text);font:inherit;font-size:12.5px;text-align:left;cursor:pointer}
+.rg-menu-item:hover{background-color:var(--primary-light);color:var(--primary)}
+
+/* inspector */
+.rg-inspector{position:absolute;z-index:4;top:54px;right:12px;bottom:12px;width:360px;display:flex;flex-direction:column;border:1px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:0 6px 24px rgba(0,0,0,.1)}
+.rg-inspector-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border-light);font-size:13px;font-weight:700}
+.rg-inspector-x{display:inline-flex;padding:4px;border:0;border-radius:5px;background:transparent;color:var(--text-secondary);cursor:pointer}
+.rg-inspector-x:hover{background-color:var(--surface-hover)}
+.rg-inspector-x svg{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.rg-inspector-body{flex:1;min-height:0;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:14px}
+.rg-inspector-foot{padding:10px 14px;border-top:1px solid var(--border-light);display:flex;justify-content:flex-end}
+.rg-inspector-note{font-size:12px;color:var(--text-muted)}
+.rg-inspector-list{font-family:var(--mono);font-size:12px;line-height:20px}
+
+:root[data-theme="dark"] .rg-end.is-deny{color:#f87171}
+:root[data-theme="dark"] .rg-wrap .react-flow__edge.is-ghost .react-flow__edge-path{stroke:#4b5260}
+:root[data-theme="dark"] .rg-menu,:root[data-theme="dark"] .rg-inspector{box-shadow:0 6px 24px rgba(0,0,0,.4)}

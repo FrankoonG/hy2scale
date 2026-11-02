@@ -58,7 +58,7 @@ export default function VersionMenu({ version, limited }: { version: string; lim
                 )}
               </dl>
               {status?.state === 'error' && status.error && <div className="version-menu-error">{status.error}</div>}
-              {arch?.in_docker ? (
+              {(arch?.upgradable ?? arch?.in_docker) ? (
                 <div className="version-menu-actions">
                   <UpdateButton size="sm" />
                   <Button size="sm" variant="ghost" onClick={(e) => { setOpen(false); upload.show(undefined, e.currentTarget); }}>

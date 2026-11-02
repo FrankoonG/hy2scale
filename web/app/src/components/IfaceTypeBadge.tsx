@@ -17,8 +17,8 @@ export function ifaceType(x: IfaceEntry): IfaceType {
   return 'virtual';
 }
 
-/** Hidden by default: anything that is neither a NIC nor one of our sub-interfaces. */
-export const isHiddenIface = (x: IfaceEntry) => x.kind !== 'physical' && x.kind !== 'child';
+/** Hidden by default: anything that is neither a NIC, one of our sub-interfaces nor a router's WAN / LAN. */
+export const isHiddenIface = (x: IfaceEntry) => x.kind !== 'physical' && x.kind !== 'child' && !x.role;
 
 /** Coloured link-type badge shown beside an interface name. */
 export default function IfaceTypeBadge({ iface }: { iface: IfaceEntry }) {

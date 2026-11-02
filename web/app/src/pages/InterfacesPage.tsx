@@ -251,6 +251,7 @@ export default function InterfacesPage() {
                 onClick={(e) => openEdit(x, e)}>{x.name}</button>
             : <span className="iface-name">{x.name}</span>}
           <IfaceTypeBadge iface={x} />
+          {x.role && <span className="iface-tag" data-testid="tag-role">{t(`iface.role.${x.role}`)}</span>}
           {child && <span className="iface-tag" data-testid="tag-mode">{t(x.mode === 'system' ? 'iface.modeSystem' : 'iface.modeBuiltin')}</span>}
           {child && x.vlan?.enabled && <span className="iface-tag" data-testid="tag-vlan">{t('iface.vlanTag', { id: x.vlan.id })}</span>}
           {child && x.enabled === false && <span className="iface-tag off">{t('iface.disabledTag')}</span>}

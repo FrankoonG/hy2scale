@@ -170,3 +170,4 @@
 .hy-rate-input{display:flex;gap:8px}
 .hy-rate-input>.hy-input{flex:1;min-width:0}
 .hy-rate-input>.hy-select-wrap{flex:0 0 96px;width:96px}
+.import-error{margin-top:4px;font-size:12px;font-weight:400;color:var(--red);word-break:break-word}

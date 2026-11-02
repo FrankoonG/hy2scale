@@ -128,11 +128,38 @@ func SpeedHandler(dial ChainDialer) http.HandlerFunc {
 		var run func(Emit) error
 		switch q.Get("mode") {
 		case "node":
-			chain, err := checkChain(q.Get("chain"))
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
+			// chain = one path; paths (comma-separated) + exit_mode
+			// quality | aggregate = several, as for a user's exit
+			var paths [][]string
+			raw := []string{q.Get("chain")}
+			if q.Has("paths") {
+				raw = strings.Split(q.Get("paths"), ",")
+			}
+			if len(raw) > 8 {
+				http.Error(w, "at most 8 paths", http.StatusBadRequest)
 				return
 			}
+			for _, s := range raw {
+				chain, err := checkChain(s)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				paths = append(paths, chain)
+			}
+			exitMode := q.Get("exit_mode")
+			if exitMode != "" && exitMode != "quality" && exitMode != "aggregate" {
+				http.Error(w, "exit_mode must be quality or aggregate", http.StatusBadRequest)
+				return
+			}
+			if len(paths) > 1 && exitMode == "" {
+				exitMode = "quality"
+			}
+			names := make([]string, len(paths))
+			for i, p := range paths {
+				names[i] = strings.Join(p, "/")
+			}
+			chain := paths[0]
 			dir := q.Get("dir")
 			if dir == "" {
 				dir = "down"
@@ -142,8 +169,18 @@ func SpeedHandler(dial ChainDialer) http.HandlerFunc {
 				return
 			}
 			run = func(emit Emit) error {
-				if emit(Event{"type": "start", "mode": "node", "target": strings.Join(chain, "/"), "dir": dir}) != nil {
+				start := Event{"type": "start", "mode": "node", "target": strings.Join(names, ","), "dir": dir}
+				if len(paths) > 1 {
+					start["exit_mode"], start["paths"] = exitMode, names
+				}
+				if emit(start) != nil {
 					return nil
+				}
+				switch {
+				case len(paths) > 1 && exitMode == "aggregate":
+					return SpeedAggregate(r.Context(), dial, paths, dir, secs, emit)
+				case len(paths) > 1:
+					return SpeedQuality(r.Context(), dial, paths, dir, secs, emit)
 				}
 				d := func(ctx context.Context, addr string) (net.Conn, error) { return dial(ctx, chain, addr) }
 				return SpeedNode(r.Context(), d, dir, secs, emit)

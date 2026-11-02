@@ -15,6 +15,8 @@ interface ExitPathListProps {
   value: ExitPathValue;
   onChange: (val: ExitPathValue) => void;
   label?: string;
+  /** Row placeholder (default: the user form's hint, empty = direct). */
+  placeholder?: string;
 }
 
 interface PathItem {
@@ -46,7 +48,7 @@ export function pathHasMultiConn(topology: TopologyNode[], path: string, selfId?
   return false;
 }
 
-export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
+export function ExitPathList({ value, onChange, label, placeholder }: ExitPathListProps) {
   const { t } = useTranslation();
   // Several lists can share a form (policy rules): one radio group each.
   const radioName = `exitMode-${useId()}`;
@@ -222,7 +224,7 @@ export function ExitPathList({ value, onChange, label }: ExitPathListProps) {
             options={exitPaths}
             value={item.value}
             onChange={(val) => updateItem(item.id, val)}
-            placeholder={t('users.exitViaHint')}
+            placeholder={placeholder ?? t('users.exitViaHint')}
           />
         )}
       />

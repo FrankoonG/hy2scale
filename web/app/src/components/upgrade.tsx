@@ -37,7 +37,7 @@ export const hasUpdate = (s: api.UpgradeStatus | null) => !!s?.latest && version
  *  latest version checks once. */
 export function useUpgradeFeed() {
   const { data: arch } = useSystemArch();
-  const enabled = !!arch?.in_docker;
+  const enabled = !!(arch?.upgradable ?? arch?.in_docker);
   const { status, checking, setStatus, setChecking } = useUpgradeStore();
 
   useEffect(() => {

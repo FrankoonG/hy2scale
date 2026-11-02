@@ -55,15 +55,17 @@ var ifaceNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,14}$`)
 // although the kernel does not call them physical — e.g. the veth uplink of
 // an LXC container.
 func CanParent(name string) bool {
-	if vnic.IsPhysical(name) {
-		return true
-	}
 	for _, n := range strings.Split(os.Getenv("HY2SCALE_CHILD_PARENTS"), ",") {
 		if strings.TrimSpace(n) == name && name != "" {
 			return true
 		}
 	}
-	return false
+	// UniFi OS says which of its interfaces lead to a network of their own
+	// (WANs, standalone ports); switch ports and bridge members don't.
+	if u := unifiNet(); u != nil && u.Managed(name) {
+		return u.Parent(name)
+	}
+	return vnic.IsPhysical(name)
 }
 
 // NameFree: no kernel interface or configured child is called name.

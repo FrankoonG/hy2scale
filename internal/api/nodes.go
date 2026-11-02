@@ -138,6 +138,10 @@ func (s *Server) updateNode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
+	if body.Server != nil {
+		// A store ID or a path from an older UI → this node's TLS store files.
+		body.Server.TLSCert, body.Server.TLSKey = s.app.ServerTLSPaths(body.Server.TLSCert, body.Server.TLSKey)
+	}
 	// Validate server password
 	if body.Server != nil && body.Server.Listen != "" && len(body.Server.Password) < 6 {
 		http.Error(w, "server password must be at least 6 characters", 400)

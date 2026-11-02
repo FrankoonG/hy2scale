@@ -25,11 +25,15 @@ export type MtrLine =
   | { type: 'error'; error: string }
   | { type: 'done' };
 
+/** One path of an aggregate speed test. */
+export interface SpeedPath { path: string; bytes: number; mbps: number; error?: string }
+
 export type SpeedLine =
-  | { type: 'start'; mode: string; target?: string; dir?: string }
-  | { type: 'progress'; elapsed_ms: number; bytes: number; mbps: number; cur_mbps?: number }
+  | { type: 'start'; mode: string; target?: string; dir?: string; exit_mode?: string; paths?: string[] }
+  | { type: 'path'; path: string }
+  | { type: 'progress'; elapsed_ms: number; bytes: number; mbps: number; cur_mbps?: number; paths?: SpeedPath[] }
   | { type: 'error'; error: string }
-  | { type: 'done'; bytes: number; seconds: number; mbps: number };
+  | { type: 'done'; bytes: number; seconds: number; mbps: number; paths?: SpeedPath[] };
 
 /**
  * Streams an NDJSON tool endpoint: `onLine` per object, until the stream

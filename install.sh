@@ -165,9 +165,11 @@ if [ "$PLATFORM" = unifios ]; then
   for f in $UNIFI_FILES; do
     name="$(basename "$f")"
     if [ -n "${HY2SCALE_PLATFORM_SRC:-}" ]; then
-      cp "${HY2SCALE_PLATFORM_SRC}/${name}" "${TMP_DIR}/platform/${f}"         || err "${HY2SCALE_PLATFORM_SRC}/${name} not found"
+      cp "${HY2SCALE_PLATFORM_SRC}/${name}" "${TMP_DIR}/platform/${f}" \
+        || err "${HY2SCALE_PLATFORM_SRC}/${name} not found"
     else
-      curl -fsSL "https://raw.githubusercontent.com/${REPO}/${SCRIPT_REF}/platform/unifios/${name}"         -o "${TMP_DIR}/platform/${f}" || err "could not download platform/unifios/${name} (ref ${SCRIPT_REF})"
+      curl -fsSL "https://raw.githubusercontent.com/${REPO}/${SCRIPT_REF}/platform/unifios/${name}" \
+        -o "${TMP_DIR}/platform/${f}" || err "could not download platform/unifios/${name} (ref ${SCRIPT_REF})"
     fi
   done
 
@@ -186,8 +188,7 @@ if [ "$PLATFORM" = unifios ]; then
   for u in hy2scale.service hy2scale-ensure.service hy2scale-ensure.timer; do
     install -m 0644 "${TMP_DIR}/platform/units/${u}" "${UNIFI_ROOT}/units/${u}"
   done
-  printf '%s
-' "$SCRIPT_REF" > "${UNIFI_ROOT}/.script-ref"
+  printf '%s\n' "$SCRIPT_REF" > "${UNIFI_ROOT}/.script-ref"
   info "Binary installed at $BIN_PATH"
 
   sh "${UNIFI_ROOT}/manage.sh" setup
@@ -198,28 +199,23 @@ if [ "$PLATFORM" = unifios ]; then
     warn "Service did not stay active. Inspect with: journalctl -u $SVC_NAME -n 50 --no-pager"
   fi
 
-  HOST_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  [ -n "$HOST_IP" ] || HOST_IP="<host>"
-  printf '
-'
-  printf '[32m✓ hy2scale %s installed (UniFi OS).[0m
-' "$(echo "$VERSION" | sed 's/^v//')"
-  printf '
-'
-  printf '  Binary    %s
-' "$BIN_PATH"
-  printf '  Data dir  %s
-' "$DATA_DIR"
-  printf '  Service   %s (enabled, running; restored by hy2scale-ensure.timer)
-' "$SVC_NAME"
-  printf '  Logs      journalctl -u %s -f
-' "$SVC_NAME"
-  printf '  Web UI    https://%s:%s/scale  (login: admin / admin — forces password change on first login)
-' "$HOST_IP" "$PORT"
-  printf '  Manage    %s/manage.sh status | update | uninstall
-' "$UNIFI_ROOT"
-  printf '
-'
+  # The LAN side: addresses of the gateway's bridges (its networks).
+  LAN_IPS="$(ip -4 -o addr show 2>/dev/null | awk '$2 ~ /^br/ {split($4, a, "/"); print a[1]}')"
+  [ -n "$LAN_IPS" ] || LAN_IPS="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  [ -n "$LAN_IPS" ] || LAN_IPS="<host>"
+  printf '\n'
+  printf '\033[32m✓ hy2scale %s installed (UniFi OS).\033[0m\n' "$(echo "$VERSION" | sed 's/^v//')"
+  printf '\n'
+  printf '  Binary    %s\n' "$BIN_PATH"
+  printf '  Data dir  %s\n' "$DATA_DIR"
+  printf '  Service   %s (enabled, running; restored by hy2scale-ensure.timer)\n' "$SVC_NAME"
+  printf '  Logs      journalctl -u %s -f\n' "$SVC_NAME"
+  for ip in $LAN_IPS; do
+    printf '  Web UI    https://%s:%s/scale\n' "$ip" "$PORT"
+  done
+  printf '  Login     admin / admin (a new password is required at first login)\n'
+  printf '  Manage    %s/manage.sh status | update | uninstall\n' "$UNIFI_ROOT"
+  printf '\n'
   warn "Open UDP $PORT to the gateway in UniFi Network (firewall policy) if other nodes connect to this one."
   if command -v ss >/dev/null 2>&1 && ss -lun 2>/dev/null | grep -qE ':(500|4500)[[:space:]]'; then
     warn "UDP 500/4500 is in use by UniFi's own VPN — leave hy2scale's IKEv2 and L2TP off."
@@ -308,7 +304,7 @@ if [ "$HAS_SYSTEMD" -eq 1 ]; then
   printf '  Service   %s (enabled, running)\n' "$SVC_PATH"
   printf '  Logs      journalctl -u %s -f\n' "$SVC_NAME"
 fi
-printf '  Web UI    http://%s:%s/scale  (login: admin / admin — forces password change on first login)\n' "$HOST_IP" "$PORT"
+printf '  Web UI    https://%s:%s/scale  (login: admin / admin — forces password change on first login)\n' "$HOST_IP" "$PORT"
 printf '\n'
 printf '  Uninstall curl -fsSL https://raw.githubusercontent.com/%s/main/install.sh | sudo sh -s -- --uninstall\n' "$REPO"
 printf '\n'

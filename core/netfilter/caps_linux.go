@@ -208,6 +208,11 @@ func run(name string, args ...string) error {
 
 // CheckHostNetwork returns true if the container appears to be running with --network host.
 func CheckHostNetwork() bool {
+	// Not in a container at all (systemd install, a router's own OS):
+	// the node is on the host network by definition.
+	if !inContainer() {
+		return true
+	}
 	// In host network mode the container sees host-level interfaces like
 	// docker0, br-xxx, real NICs. In bridge/custom network mode, these
 	// are NOT visible — only eth0 (veth) + lo + any TUN/ipsec/ppp
@@ -218,6 +223,27 @@ func CheckHostNetwork() bool {
 		name := e.Name()
 		if name == "docker0" || strings.HasPrefix(name, "br-") {
 			return true
+		}
+	}
+	return false
+}
+
+// inContainer: the process runs inside a container runtime.
+func inContainer() bool {
+	for _, f := range []string{"/.dockerenv", "/run/.containerenv"} {
+		if _, err := os.Stat(f); err == nil {
+			return true
+		}
+	}
+	if os.Getenv("container") != "" {
+		return true
+	}
+	if b, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		s := string(b)
+		for _, k := range []string{"docker", "containerd", "kubepods", "/lxc", "libpod"} {
+			if strings.Contains(s, k) {
+				return true
+			}
 		}
 	}
 	return false
