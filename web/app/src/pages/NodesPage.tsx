@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -28,6 +28,7 @@ import { fmtPunchAddr, punchesFor } from '@/utils/punch';
 import VersionBadge from '@/components/VersionBadge';
 import { boldMarkup } from '@/utils/richText';
 import { PublicIP } from '@/components/CountryFlag';
+import { remoteChains, useRemoteAccess } from '@/utils/remoteAuth';
 
 export default function NodesPage() {
   const { t } = useTranslation();
@@ -47,6 +48,10 @@ export default function NodesPage() {
   const confirm = useConfirm();
   const queryClient = useQueryClient();
   const { node, topology, setTopology, syncingNodes, setSyncing, clearSyncing } = useNodeStore();
+  // Nodes one click away (relay trust / a remote sign-in in this tab); not
+  // from inside another node's UI, which has no further remote hop.
+  const remoteMap = useMemo(() => remoteChains(topology), [topology]);
+  const unlocked = useRemoteAccess(remoteMap, !(window as any).__PROXY__);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
@@ -629,6 +634,7 @@ export default function NodesPage() {
       actions={actionsFor}
       topology={topology}
       selfId={node?.node_id || ''}
+      unlocked={unlocked}
       selfName={node?.name}
       selectedQPath={selection.count === 1 ? Array.from(selection.selected)[0] : null}
       onSelectQPath={(qpath) => {
