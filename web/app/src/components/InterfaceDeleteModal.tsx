@@ -47,6 +47,8 @@ export default function InterfaceDeleteModal({ open, onClose, targets, candidate
     if (r.type === 'egress') {
       const fam = (r as any).family === 'ipv6' ? 'IPv6' : 'IPv4';
       text = t('iface.refEgress', { fam });
+    } else if (r.type === 'punch') {
+      text = t('iface.refPunch');
     } else if (r.type === 'node_address') {
       text = t('iface.refNode', { node: (r as any).node, address: (r as any).address });
     }

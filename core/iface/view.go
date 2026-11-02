@@ -79,6 +79,11 @@ type InterfacesView struct {
 	} `json:"capability"`
 	Egress     EgressConfig `json:"egress"`
 	Interfaces []IfaceView  `json:"interfaces"`
+	// Punch: the interface punched connections to this node use ("" =
+	// default route); PunchEnabled: this node accepts punches. Filled by
+	// the app (hole punching is not part of the interface manager).
+	Punch        string `json:"punch"`
+	PunchEnabled bool   `json:"punch_enabled"`
 }
 
 // isContainerIface: interfaces Docker / CNI create for containers.
