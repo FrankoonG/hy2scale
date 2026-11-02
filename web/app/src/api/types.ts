@@ -431,6 +431,8 @@ export interface IfaceEntry {
   container?: boolean;
   /** Link type: ethernet, wlan, bridge, veth, vlan, tun, … (system interfaces). */
   type?: string;
+  /** UniFi OS: the interface's role in the gateway's own network. */
+  role?: 'wan' | 'lan';
   up: boolean;
   mac: string;
   mtu: number;

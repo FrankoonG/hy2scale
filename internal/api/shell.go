@@ -156,6 +156,14 @@ func (s *Server) uploadRestore(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
+// canSelfUpgrade: the node can take an in-app upgrade — a supervisor
+// (container runtime, or a systemd service such as the installer's) starts
+// the process again after the upgrade exits it, and the stored binary takes
+// over at that start (internal/selfupdate).
+func canSelfUpgrade() bool {
+	return isRunningInDocker() || os.Getenv("INVOCATION_ID") != ""
+}
+
 func isRunningInDocker() bool {
 	if _, err := os.Stat("/.dockerenv"); err == nil {
 		return true
@@ -183,6 +191,7 @@ func (s *Server) getSystemArch(w http.ResponseWriter, r *http.Request) {
 		"binary":      filepath.Base(self),
 		"binary_size": size,
 		"in_docker":   isRunningInDocker(),
+		"upgradable":  canSelfUpgrade(),
 		"official":    buildsig.Self().Status == buildsig.Official,
 	})
 }
@@ -283,8 +292,8 @@ func (s *Server) getBuildInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) uploadUpgrade(w http.ResponseWriter, r *http.Request) {
-	if !isRunningInDocker() {
-		http.Error(w, "upgrade via web is only available in Docker deployments", 403)
+	if !canSelfUpgrade() {
+		http.Error(w, "upgrade via web needs a supervisor (Docker or a systemd service)", 403)
 		return
 	}
 	// Limit to 200MB
@@ -456,7 +465,7 @@ func installUpgrade(a *upgradeArchive, dataDir string, allowUnofficial bool) err
 		sig, want = a.sig, a.check.Manifest.Version
 	}
 	log.Printf("[upgrade] installing a binary: %s %s", a.check.Status, a.check.Reason)
-	if isRunningInDocker() {
+	if canSelfUpgrade() {
 		return selfupdate.Install(dataDir, a.bin, Version, sig, want)
 	}
 

@@ -1284,6 +1284,7 @@ func (a *App) restartServer() error {
 		a.srvCancel()
 		time.Sleep(500 * time.Millisecond)
 	}
+	a.fixServerTLSPaths()
 	cfg := a.store.Get()
 	if cfg.Server == nil || cfg.Server.Listen == "" {
 		setPortHopRedirect("") // server off: drop its port redirect too

@@ -152,27 +152,39 @@ func readFile(p string) string {
 	return string(b)
 }
 
-// Newer compares two MAJOR.MINOR.PATCH strings and returns true iff a > b.
-// A pre-release suffix on the patch field is ignored; anything malformed is
+// Newer compares two versions MAJOR.MINOR.PATCH[-PRERELEASE][+BUILD] by
+// SemVer precedence and returns true iff a > b: a release is newer than its
+// own pre-releases (1.4.1 > 1.4.1-dev.x), pre-releases compare field by
+// field (rc.2 > rc.1), build metadata is ignored. Anything malformed is
 // "not newer".
 func Newer(a, b string) bool {
-	parse := func(s string) ([3]int, bool) {
-		var v [3]int
-		parts := strings.SplitN(strings.TrimPrefix(s, "v"), ".", 3)
+	type ver struct {
+		core [3]int
+		pre  []string
+	}
+	parse := func(s string) (ver, bool) {
+		var v ver
+		s = strings.TrimPrefix(s, "v")
+		if i := strings.IndexByte(s, '+'); i != -1 {
+			s = s[:i]
+		}
+		if i := strings.IndexByte(s, '-'); i != -1 {
+			if i == len(s)-1 {
+				return v, false
+			}
+			v.pre = strings.Split(s[i+1:], ".")
+			s = s[:i]
+		}
+		parts := strings.Split(s, ".")
 		if len(parts) != 3 {
 			return v, false
 		}
 		for i, p := range parts {
-			if i == 2 {
-				if dash := strings.IndexAny(p, "-+"); dash != -1 {
-					p = p[:dash]
-				}
-			}
 			n, err := strconv.Atoi(p)
-			if err != nil {
+			if err != nil || n < 0 {
 				return v, false
 			}
-			v[i] = n
+			v.core[i] = n
 		}
 		return v, true
 	}
@@ -181,10 +193,34 @@ func Newer(a, b string) bool {
 	if !ok1 || !ok2 {
 		return false
 	}
-	for i := range x {
-		if x[i] != y[i] {
-			return x[i] > y[i]
+	for i := range x.core {
+		if x.core[i] != y.core[i] {
+			return x.core[i] > y.core[i]
 		}
 	}
-	return false
+	switch {
+	case len(x.pre) == 0:
+		return len(y.pre) > 0
+	case len(y.pre) == 0:
+		return false
+	}
+	for i := 0; i < len(x.pre) && i < len(y.pre); i++ {
+		p, q := x.pre[i], y.pre[i]
+		if p == q {
+			continue
+		}
+		pn, perr := strconv.Atoi(p)
+		qn, qerr := strconv.Atoi(q)
+		switch {
+		case perr == nil && qerr == nil:
+			return pn > qn
+		case perr == nil:
+			return false // numeric identifiers sort first
+		case qerr == nil:
+			return true
+		default:
+			return p > q
+		}
+	}
+	return len(x.pre) > len(y.pre)
 }

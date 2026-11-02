@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -61,7 +62,69 @@ func loadRoutes() *routeInfo {
 		}
 		f.Close()
 	}
+	policyGateways(r)
 	return r
+}
+
+// policyGateways adds the default gateways of interfaces whose default
+// route lives in another routing table (policy routing, e.g. UniFi OS keeps
+// each WAN's default route in its own table and none in main). Main-table
+// gateways win.
+func policyGateways(r *routeInfo) {
+	for _, fam := range []int{unix.AF_INET, unix.AF_INET6} {
+		gws := r.gateway4
+		if fam == unix.AF_INET6 {
+			gws = r.gateway6
+		}
+		b, err := syscall.NetlinkRIB(unix.RTM_GETROUTE, fam)
+		if err != nil {
+			continue
+		}
+		msgs, err := syscall.ParseNetlinkMessage(b)
+		if err != nil {
+			continue
+		}
+		for _, m := range msgs {
+			if m.Header.Type != unix.RTM_NEWROUTE || len(m.Data) < unix.SizeofRtMsg {
+				continue
+			}
+			rt := (*unix.RtMsg)(unsafe.Pointer(&m.Data[0]))
+			if rt.Dst_len != 0 || rt.Type != unix.RTN_UNICAST {
+				continue
+			}
+			attrs, err := syscall.ParseNetlinkRouteAttr(&m)
+			if err != nil {
+				continue
+			}
+			table := uint32(rt.Table)
+			var gw net.IP
+			oif := 0
+			for _, at := range attrs {
+				switch at.Attr.Type {
+				case unix.RTA_TABLE:
+					if len(at.Value) >= 4 {
+						table = *(*uint32)(unsafe.Pointer(&at.Value[0]))
+					}
+				case unix.RTA_GATEWAY:
+					gw = net.IP(at.Value)
+				case unix.RTA_OIF:
+					if len(at.Value) >= 4 {
+						oif = int(*(*uint32)(unsafe.Pointer(&at.Value[0])))
+					}
+				}
+			}
+			if table == unix.RT_TABLE_MAIN || table == unix.RT_TABLE_LOCAL || gw == nil || oif == 0 {
+				continue
+			}
+			ifi, err := net.InterfaceByIndex(oif)
+			if err != nil || gws[ifi.Name] != "" {
+				continue
+			}
+			if a, ok := netip.AddrFromSlice(gw); ok && !a.IsUnspecified() {
+				gws[ifi.Name] = a.Unmap().String()
+			}
+		}
+	}
 }
 
 func le32(h string) netip.Addr {
