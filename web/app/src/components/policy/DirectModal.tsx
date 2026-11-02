@@ -15,6 +15,7 @@ import { parseValues } from './shared';
 const DEFAULT_SYSTEM: PolicySystem = {
   local: { enabled: false, dns: true, on_stop: 'open' },
   forward: { enabled: false, interfaces: [], sources: [], dns: true, on_stop: 'open' },
+  local_nets: true,
 };
 
 /** "Direct": the policy set direct traffic enters, and system interception. */
@@ -38,7 +39,7 @@ export default function DirectModal({ open, onClose, animateFrom, cfg }: {
     setDirect(cfg?.direct || '');
     setDepth(String(cfg?.max_depth || 16));
     const s = cfg?.system || DEFAULT_SYSTEM;
-    setSys({ local: { ...DEFAULT_SYSTEM.local, ...s.local }, forward: { ...DEFAULT_SYSTEM.forward, ...s.forward } });
+    setSys({ local: { ...DEFAULT_SYSTEM.local, ...s.local }, forward: { ...DEFAULT_SYSTEM.forward, ...s.forward }, local_nets: s.local_nets !== false });
     setSources((s.forward?.sources || []).join('\n'));
   });
 
@@ -93,6 +94,9 @@ export default function DirectModal({ open, onClose, animateFrom, cfg }: {
             <Input type="number" min={2} max={64} value={depth} onChange={(e) => setDepth(e.target.value)} />
           </FormGroup>
         </FormGrid>
+        <FormGroup label={t('policy.localNets')} hint={t('policy.localNetsHint')}>
+          <Toggle checked={sys.local_nets !== false} onChange={(e) => setSys((s) => ({ ...s, local_nets: e.target.checked }))} data-testid="direct-local-nets" />
+        </FormGroup>
 
         <section className={clsx('direct-sec', off(local) && 'locked')} data-testid="direct-local">
           <div className="direct-sec-head">

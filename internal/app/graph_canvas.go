@@ -44,6 +44,9 @@ type GraphCanvasEdge struct {
 	// LabelT places the latency/rate label along the drawn line (0..1 of
 	// its length). Nil means automatic placement.
 	LabelT *float64 `yaml:"label_t,omitempty" json:"label_t,omitempty"`
+	// Wrap (map view): worlds the far end is moved by from its nearest
+	// copy, -1..1; the line then crosses into the next copy of the map.
+	Wrap int `yaml:"wrap,omitempty" json:"wrap,omitempty"`
 }
 
 // GraphCanvas is one named custom layout.
@@ -95,6 +98,9 @@ func ValidateGraphCanvas(c GraphCanvas) error {
 		if e.LabelT != nil && (!finite(*e.LabelT) || *e.LabelT < 0 || *e.LabelT > 1) {
 			return fmt.Errorf("invalid label position on edge %q", k)
 		}
+		if e.Wrap < -1 || e.Wrap > 1 {
+			return fmt.Errorf("invalid wrap on edge %q", k)
+		}
 	}
 	return nil
 }
@@ -110,7 +116,7 @@ func cloneGraphCanvas(c GraphCanvas) GraphCanvas {
 	if len(c.Edges) > 0 {
 		out.Edges = make(map[string]GraphCanvasEdge, len(c.Edges))
 		for k, v := range c.Edges {
-			e := GraphCanvasEdge{}
+			e := GraphCanvasEdge{Wrap: v.Wrap}
 			if len(v.Waypoints) > 0 {
 				e.Waypoints = append([]GraphWaypoint(nil), v.Waypoints...)
 			}

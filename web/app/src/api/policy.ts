@@ -37,7 +37,7 @@ export type ConditionSet = PolicySet;
 export type OnStop = 'open' | 'block';
 export interface SystemLocal { enabled: boolean; dns: boolean; on_stop: OnStop }
 export interface SystemForward { enabled: boolean; interfaces: string[]; sources: string[]; dns: boolean; on_stop: OnStop }
-export interface PolicySystem { local: SystemLocal; forward: SystemForward }
+export interface PolicySystem { local: SystemLocal; forward: SystemForward; local_nets?: boolean }
 
 export interface PolicyConfig {
   max_depth: number;
