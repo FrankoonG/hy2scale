@@ -32,6 +32,7 @@ type Manager struct {
 	sys       policy.System
 	hb        *Heartbeat
 	hbCancel  context.CancelFunc
+	grCancel  context.CancelFunc // the guard of the installed rules
 	lns       map[string]io2 // "tcp4:12390" → listener
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -216,7 +217,7 @@ func (m *Manager) Apply(o Options) error {
 	}
 
 	if m.installed && reflect.DeepEqual(spec, m.spec) {
-		m.status = withActive(st, spec)
+		m.status = withActive(withRepairs(st, m.status), spec)
 		return nil
 	}
 	m.teardownLocked()
@@ -259,10 +260,19 @@ func (m *Manager) Apply(o Options) error {
 		return err
 	}
 	m.spec, m.installed = spec, true
-	m.status = withActive(st, spec)
+	m.status = withActive(withRepairs(st, m.status), spec)
+	gctx, gcancel := context.WithCancel(m.ctx)
+	m.grCancel = gcancel
+	go m.guard(gctx)
 	log.Printf("[capture] installed: local=%v forward=%v ipv6=%v heartbeat=%v cgroup=%q",
 		spec.Local != nil, spec.Forward != nil, spec.V6, spec.NeedsHeartbeat(), spec.Cgroup)
 	return nil
+}
+
+// withRepairs carries the repair counters over to a new status.
+func withRepairs(st, prev Status) Status {
+	st.Repairs, st.LastRepair, st.LastRepaired = prev.Repairs, prev.LastRepair, prev.LastRepaired
+	return st
 }
 
 func withActive(st Status, s Spec) Status {
@@ -283,6 +293,10 @@ func withError(st Status, s Spec, err error) Status {
 
 // teardownLocked removes every rule, route and heartbeat set.
 func (m *Manager) teardownLocked() {
+	if m.grCancel != nil {
+		m.grCancel()
+		m.grCancel = nil
+	}
 	if m.hbCancel != nil {
 		m.hbCancel()
 		m.hbCancel = nil
