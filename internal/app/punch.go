@@ -194,6 +194,9 @@ type punchManager struct {
 	status  map[string]*PunchStatus
 	next    map[string]time.Time // route → earliest next attempt (backoff)
 	servers int                  // live punch listeners (target side)
+	// listeners: the live punch listeners (target side), closed together
+	// when this side's punch interface changes
+	listeners map[*punchListener]struct{}
 	inbound map[string]int       // target side: initiator → live punched connections
 	// live: route → its connections that are up. The primary loop and the
 	// route's extra loop can both hold one (the primary moves through the
@@ -203,7 +206,7 @@ type punchManager struct {
 }
 
 func newPunchManager(a *App) *punchManager {
-	m := &punchManager{a: a, probes: map[string]*probeWait{}, status: map[string]*PunchStatus{}, next: map[string]time.Time{}, inbound: map[string]int{}, live: map[string]int{}}
+	m := &punchManager{a: a, probes: map[string]*probeWait{}, status: map[string]*PunchStatus{}, next: map[string]time.Time{}, inbound: map[string]int{}, live: map[string]int{}, listeners: map[*punchListener]struct{}{}}
 	a.node.SetPunchHandler(m.serve)
 	return m
 }
@@ -471,7 +474,7 @@ func portOf(addr string) string {
 }
 
 // quicProbe runs one hy2 login with the probe token from sock and closes it.
-func quicProbe(sock *net.UDPConn, raddr *net.UDPAddr, token string, timeout time.Duration) {
+func quicProbe(sock net.PacketConn, raddr *net.UDPAddr, token string, timeout time.Duration) {
 	defer sock.Close()
 	c, _, err := hyclient.NewClient(&hyclient.Config{
 		ConnFactory: oneConn{sock},
@@ -486,19 +489,19 @@ func quicProbe(sock *net.UDPConn, raddr *net.UDPAddr, token string, timeout time
 }
 
 // oneConn hands hysteria a socket we already bound.
-type oneConn struct{ c *net.UDPConn }
+type oneConn struct{ c net.PacketConn }
 
 func (o oneConn) New(net.Addr) (net.PacketConn, error) { return o.c, nil }
 
 // punchPackets are non-QUIC (first byte 0) datagrams that open NAT filters.
-func punchPackets(sock *net.UDPConn, to []*net.UDPAddr, window time.Duration, stop <-chan struct{}) {
+func punchPackets(sock net.PacketConn, to []*net.UDPAddr, window time.Duration, stop <-chan struct{}) {
 	pkt := []byte{0, 'h', '2', 's', 'p'}
 	t := time.NewTicker(100 * time.Millisecond)
 	defer t.Stop()
 	end := time.Now().Add(window)
 	for time.Now().Before(end) {
 		for _, a := range to {
-			sock.WriteToUDP(pkt, a)
+			sock.WriteTo(pkt, a)
 		}
 		select {
 		case <-stop:
@@ -520,6 +523,11 @@ func (m *punchManager) handlePunch(req punchMsg) punchReply {
 		return punchReply{Reason: "bad_request"}
 	}
 	network := punchNet(req.Family)
+	bind, err := punchBindFor(cfg.PunchBind, network)
+	if err != nil {
+		log.Printf("[punch] request from %q: punch interface %q: %v", req.From, cfg.PunchBind, err)
+		return punchReply{Reason: "bind"}
+	}
 	var to []*net.UDPAddr
 	for _, s := range req.Mappings {
 		if ua, err := net.ResolveUDPAddr(network, s); err == nil && ipInNet(ua.IP, network) {
@@ -546,13 +554,14 @@ func (m *punchManager) handlePunch(req punchMsg) punchReply {
 			refl = append(refl, c.Name)
 		}
 	}
-	mapped, port, err := m.probeSelf(ctx, refl, addrBind{}, network, 5*time.Second)
+	mapped, port, err := m.probeSelf(ctx, refl, bind, network, 5*time.Second)
 	if err != nil {
 		log.Printf("[punch] request from %q: probing %v: %v", req.From, req.Reflectors, err)
 		return punchReply{Reason: err.Error()}
 	}
-	sock, err := addrBind{}.listenAt(nil, port, network)
+	sock, err := bind.listenAt(nil, port, network)
 	if err != nil {
+		log.Printf("[punch] request from %q: listen%s: %v", req.From, bind, err)
 		return punchReply{Reason: "bind"}
 	}
 	token := randToken()
@@ -622,11 +631,12 @@ func (p *punchListener) close() {
 				delete(p.m.inbound, p.from)
 			}
 			p.m.mu.Unlock()
+			log.Printf("[punch] %q: punched connection closed", p.from)
 		}
 	})
 }
 
-func (m *punchManager) startPunchServer(sock *net.UDPConn, cert tls.Certificate, token, from string, window time.Duration) (<-chan struct{}, error) {
+func (m *punchManager) startPunchServer(sock net.PacketConn, cert tls.Certificate, token, from string, window time.Duration) (<-chan struct{}, error) {
 	ctx, cancel := context.WithCancel(m.a.appCtx)
 	sysPw := ""
 	if sc := m.a.store.Get().Server; sc != nil {
@@ -644,10 +654,12 @@ func (m *punchManager) startPunchServer(sock *net.UDPConn, cert tls.Certificate,
 		sock.Close()
 		m.mu.Lock()
 		m.servers--
+		delete(m.listeners, pl)
 		m.mu.Unlock()
 	}
 	m.mu.Lock()
 	m.servers++
+	m.listeners[pl] = struct{}{}
 	m.mu.Unlock()
 	go srv.Serve()
 	// nobody came within the window (+ handshake slack): give the port back
@@ -663,6 +675,56 @@ func (m *punchManager) startPunchServer(sock *net.UDPConn, cert tls.Certificate,
 	return pl.stop, nil
 }
 
+// punchBindFor is the binding of punch_bind for a punch over network
+// ("udp4"/"udp6"): "" = none; a source of the other family is dropped
+// (the interface still applies).
+func punchBindFor(spec, network string) (addrBind, error) {
+	if spec == "" {
+		return addrBind{}, nil
+	}
+	_, b, err := splitAddrBind("x:1#" + spec)
+	if err != nil {
+		return addrBind{}, err
+	}
+	if b.src != nil && !ipInNet(b.src, network) {
+		b.src = nil
+		if b.iface == "" {
+			return addrBind{}, nil
+		}
+	}
+	return b, nil
+}
+
+// ValidPunchBind checks a punch_bind value ("" = default route).
+func ValidPunchBind(spec string) error {
+	if spec == "" {
+		return nil
+	}
+	_, err := punchBindFor(spec, "udp4")
+	return err
+}
+
+// DropInboundPunches closes every punched connection to this node: the
+// initiators punch again (with the current punch interface).
+func (a *App) DropInboundPunches() {
+	m := a.punch
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	ls := make([]*punchListener, 0, len(m.listeners))
+	for pl := range m.listeners {
+		ls = append(ls, pl)
+	}
+	m.mu.Unlock()
+	for _, pl := range ls {
+		pl.close()
+	}
+	if len(ls) > 0 {
+		log.Printf("[punch] punch interface changed: closed %d punched connection(s)", len(ls))
+	}
+}
+
 // ---------------------------------------------------------------- initiator
 
 // punchDial is what a dial loop needs to connect a punched route.
@@ -670,7 +732,7 @@ type punchDial struct {
 	addr     *net.UDPAddr
 	factory  hyclient.ConnFactory
 	password string
-	sock     *net.UDPConn
+	sock     net.PacketConn
 }
 
 // dialTarget resolves a dial address: a punched route is punched first.

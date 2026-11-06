@@ -62,6 +62,8 @@ export default function InterfacesPage() {
   // Visible set: NICs and sub-interfaces; the rest only on request.
   const list = showHidden ? all : all.filter((x) => !isHiddenIface(x));
   const egress: Egress = data?.egress || { ipv4: '', ipv6: '' };
+  // the punch interface is shown only while this node accepts punches
+  const punchIface = data?.punch_enabled ? (data.punch || '').split('/')[0] : null;
 
   const [detail, setDetail] = useState<string | null>(null);
   const [detailFrom, setDetailFrom] = useState<{ x: number; y: number } | undefined>();
@@ -107,6 +109,18 @@ export default function InterfacesPage() {
     }
   };
   const switchEgress = (fam: IfaceFamilyKey, name: string) => putEgress({ ...egress, [fam]: name });
+  const putPunch = async (name: string) => {
+    setEgressBusy(true);
+    try {
+      await api.setPunchInterface(name);
+      invalidate();
+    } catch (e: any) {
+      toast.error(String(e.message || e));
+    } finally {
+      setEgressBusy(false);
+    }
+  };
+  const canPunch = (x: IfaceEntry) => x.up && !!(x.ipv4?.addrs?.length || x.ipv6?.addrs?.length);
   const clearEgress = async (fam: IfaceFamilyKey) => {
     const ok = await confirm({
       title: t('iface.clearEgressTitle', { fam: FAM_LABEL[fam] }),
@@ -252,6 +266,7 @@ export default function InterfacesPage() {
             : <span className="iface-name">{x.name}</span>}
           <IfaceTypeBadge iface={x} />
           {x.role && <span className="iface-tag" data-testid="tag-role">{t(`iface.role.${x.role}`)}</span>}
+          {punchIface === x.name && <span className="iface-tag punch" data-testid="tag-punch">{t('iface.punchTag')}</span>}
           {child && <span className="iface-tag" data-testid="tag-mode">{t(x.mode === 'system' ? 'iface.modeSystem' : 'iface.modeBuiltin')}</span>}
           {child && x.vlan?.enabled && <span className="iface-tag" data-testid="tag-vlan">{t('iface.vlanTag', { id: x.vlan.id })}</span>}
           {child && x.enabled === false && <span className="iface-tag off">{t('iface.disabledTag')}</span>}
@@ -354,7 +369,14 @@ export default function InterfacesPage() {
               onClick={() => switchEgress(fam, one.name)}>{t('iface.egressSet', { fam: FAM_LABEL[fam] })}</Button>
           : null
     ));
-    if (selKind !== 'child') return <>{egressBtns}{refreshBtn}</>;
+    const punchBtn = one && punchIface !== null && (
+      punchIface === one.name
+        ? <Button size="sm" disabled={egressBusy} data-testid="punch-clear" onClick={() => putPunch('')}>{t('iface.punchClear')}</Button>
+        : canPunch(one)
+          ? <Button size="sm" disabled={egressBusy} data-testid="punch-set" onClick={() => putPunch(one.name)}>{t('iface.punchSet')}</Button>
+          : null
+    );
+    if (selKind !== 'child') return <>{egressBtns}{punchBtn}{refreshBtn}</>;
     const hasDisabled = selectedItems.some((x) => x.enabled === false);
     const hasEnabled = selectedItems.some((x) => x.enabled !== false);
     const dhcp = selectedItems.filter((x) => x.enabled !== false && x.ipv4?.mode === 'dhcp');
@@ -363,6 +385,7 @@ export default function InterfacesPage() {
       {hasEnabled && <Button size="sm" onClick={() => setEnabled(selectedItems, false)} data-testid="bulk-disable">{t('app.bulkDisable')}</Button>}
       {dhcp.length > 0 && <Button size="sm" onClick={() => dhcp.forEach((x) => renew(x))} data-testid="bulk-renew">{t('iface.renew')}</Button>}
       {egressBtns}
+      {punchBtn}
       {refreshBtn}
       <Button size="sm" variant="danger" data-testid="bulk-delete"
         onClick={(e) => { setClickPos(anchorOf(e)); setDeleting(selectedItems); }}>{t('app.bulkDelete')}</Button>
@@ -467,6 +490,7 @@ export default function InterfacesPage() {
         <InterfacesTopoView
           list={list}
           egress={egress}
+          punchIface={punchIface}
           loaded={!!data || isError}
           emptyText={emptyText}
           selection={selection}

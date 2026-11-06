@@ -455,6 +455,10 @@ export interface InterfacesResponse {
   capability: { children: boolean; reason: string };
   egress: Egress;
   interfaces: IfaceEntry[];
+  /** Interface punched connections to this node use ('' = default route). */
+  punch?: string;
+  /** This node accepts punched connections. */
+  punch_enabled?: boolean;
 }
 // Body of POST /interfaces and PUT /interfaces/{name}.
 export interface ChildIfaceBody {
@@ -470,6 +474,7 @@ export interface ChildIfaceBody {
 }
 export type IfaceReference =
   | { type: 'egress'; family: IfaceFamilyKey }
+  | { type: 'punch' }
   | { type: 'node_address'; node: string; address: string }
   | { type: string; [k: string]: any };
 
