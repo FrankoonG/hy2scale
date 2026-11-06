@@ -9,7 +9,6 @@ import * as api from '@/api';
 import type { ClientEntry, CertInfo, TopologyNode } from '@/api';
 import { useNodeStore } from '@/store/node';
 import { OrderedList, toListItems, fromListItems, type ListItem } from '@/components/OrderedList';
-import { buildHy2Url, canExportAsHy2Url, copyToClipboard } from '@/utils/buildHy2Url';
 import { remoteFetch, sessionFor, useRemoteAccess } from '@/utils/remoteAuth';
 
 // Characters that would corrupt nested qualified paths (`/`), look weird in
@@ -372,46 +371,6 @@ export default function NodeModal({ open, onClose, editingName, animateFrom, pun
     return trimmed;
   };
 
-  const handleExport = async () => {
-    const addrs = validateAddrs();
-    if (!addrs) return;
-    if (!addrs.length) {
-      toast.error(t('nodes.exportNotShareable'));
-      return;
-    }
-    const finalName = resolveName(addrs);
-    if (!finalName) return;
-    if (!password.trim()) {
-      toast.error(t('nodes.passRequired'));
-      return;
-    }
-    // First address only — the share-URL format has no native multi-addr
-    // slot. validateAddrs returned the formatted list (IPv6-bracketed).
-    if (!canExportAsHy2Url(addrs[0])) {
-      toast.error(t('nodes.exportNotShareable'));
-      return;
-    }
-    let url: string;
-    try {
-      url = buildHy2Url({
-        name: finalName,
-        addr: addrs[0],
-        password: password.trim(),
-        sni: sni.trim() || undefined,
-        insecure: insecure || undefined,
-        max_tx: maxTx ? Math.round(parseFloat(maxTx) * 125000) : undefined,
-        max_rx: maxRx ? Math.round(parseFloat(maxRx) * 125000) : undefined,
-        fast_open: fastOpen || undefined,
-      });
-    } catch {
-      toast.error(t('nodes.exportNotShareable'));
-      return;
-    }
-    const ok = await copyToClipboard(url);
-    if (ok) toast.success(t('nodes.exportCopied'));
-    else toast.error(t('nodes.exportFailed'));
-  };
-
   const handleSubmit = async () => {
     const addrs = validateAddrs();
     if (!addrs) return;
@@ -529,11 +488,6 @@ export default function NodeModal({ open, onClose, editingName, animateFrom, pun
       footer={
         <>
           <Button onClick={onClose}>{t('app.cancel')}</Button>
-          {editingName && (
-            <Button onClick={handleExport} data-testid="export-hy2-url">
-              {t('nodes.exportUrl')}
-            </Button>
-          )}
           <Button variant="primary" onClick={handleSubmit} loading={loading}>
             {editingName ? t('app.save') : t('nodes.connect')}
           </Button>

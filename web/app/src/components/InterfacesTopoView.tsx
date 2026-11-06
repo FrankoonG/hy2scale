@@ -31,6 +31,8 @@ type Sel = ReturnType<typeof useSelection>;
 interface Props {
   list: IfaceEntry[];
   egress: Egress;
+  /** The punch interface (null: this node does not accept punches). */
+  punchIface?: string | null;
   loaded: boolean;
   emptyText: ReactNode;
   selection: Sel;
@@ -61,7 +63,7 @@ const FIT_PAD_X = 32;
 const FIT_PAD_Y = 16;
 
 export default function InterfacesTopoView({
-  list, egress, loaded, emptyText, selection, actions, hostName,
+  list, egress, punchIface, loaded, emptyText, selection, actions, hostName,
   egressWarning, onOpenDetail, showHidden, onShowHidden, hiddenCount,
 }: Props) {
   const { t } = useTranslation();
@@ -251,6 +253,7 @@ export default function InterfacesTopoView({
             );
           })}
           {x.role && <span className="iface-tag" data-testid="topo-role">{t(`iface.role.${x.role}`)}</span>}
+          {punchIface === x.name && <span className="iface-tag punch" data-testid="topo-punch">{t('iface.punchTag')}</span>}
           <IfaceTypeBadge iface={x} />
         </div>
         <div className="iface-topo-card-lines">

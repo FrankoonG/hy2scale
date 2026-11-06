@@ -111,6 +111,12 @@ type Status struct {
 	Local     LayerStatus     `json:"local"`
 	Forward   LayerStatus     `json:"forward"`
 	Heartbeat HeartbeatStatus `json:"heartbeat"`
+	// Repairs: times pieces of the installed capture were found removed by
+	// another program and put back; LastRepair (unix seconds) and
+	// LastRepaired name the latest.
+	Repairs      int    `json:"repairs,omitempty"`
+	LastRepair   int64  `json:"last_repair,omitempty"`
+	LastRepaired string `json:"last_repaired,omitempty"`
 }
 
 // DNSHandler answers DNS queries taken over on port 53 (core/dnsproxy).

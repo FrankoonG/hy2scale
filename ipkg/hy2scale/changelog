@@ -1,3 +1,9 @@
+v1.4.3
+- System traffic capture puts back rules another program removed (e.g. systemd-networkd restarted by an unattended upgrade)
+- Punch interface: a node accepting punches chooses the interface they use (Interfaces page); changing it re-punches
+- Hole punching on built-in child interfaces
+- hy2scale:// node links: all public addresses and punch relays; the import detects hy2scale and hysteria2 links
+
 v1.4.2
 - UniFi OS gateways: interfaces follow the gateway's network setup (ports, LANs, WANs with child interfaces); install script platform under /data
 - Default gateways from policy-routing tables; host network detected outside containers; server certificate paths fixed for non-Docker installs

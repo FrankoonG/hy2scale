@@ -4,7 +4,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Modal, Button, Textarea, FormGroup, FormStack, Hint, KeyValueList, KeyValue, useToast } from '@hy2scale/ui';
 import * as api from '@/api';
 import type { ClientEntry } from '@/api';
-import { parseHy2Url, type ParsedHy2 } from '@/utils/parseHy2Url';
+import { useNodeStore } from '@/store/node';
+import { joinAddr, parseNodeLink, punchSignalPaths, type ParsedLink } from '@/utils/nodeLink';
 
 interface Props {
   open: boolean;
@@ -12,14 +13,25 @@ interface Props {
   animateFrom?: { x: number; y: number };
 }
 
-// NodeImportModal lets the user paste a hysteria2:// (or hy2://) URI and
-// import it as an outbound client without filling out the full form by
-// hand. Reached via long-press on the "Add Node" button. Live-parses on
-// every keystroke so the preview reflects what would be imported.
+/** What an import creates, and how the punch would be signalled. */
+interface Plan {
+  kind: ParsedLink['kind'];
+  entry: ClientEntry;
+  /** the link offers punching but no signalling path is reachable from here */
+  punchUnreachable: boolean;
+  ignored: string[];
+}
+
+// NodeImportModal: paste a node link — a hy2scale:// link (all public
+// addresses, punch signalling through nodes both sides reach) or a
+// hysteria2:// / hy2:// link — and add it as an outbound node. The kind is
+// detected from the text. Reached via the "Add Node" button's menu.
 export default function NodeImportModal({ open, onClose, animateFrom }: Props) {
   const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
+  const exitPaths = useNodeStore((s) => s.exitPaths);
+  const selfId = useNodeStore((s) => s.node?.node_id);
 
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
@@ -31,37 +43,49 @@ export default function NodeImportModal({ open, onClose, animateFrom }: Props) {
     }
   }, [open]);
 
-  const parsed = useMemo<ParsedHy2 | null>(() => parseHy2Url(url), [url]);
-
-  const buildEntry = (p: ParsedHy2): ClientEntry => {
-    const addr = p.host.includes(':') && !p.host.startsWith('[')
-      ? `[${p.host}]:${p.port}`
-      : `${p.host}:${p.port}`;
-    return {
-      name: p.name || addr,
-      addr,
-      password: p.password,
-      sni: p.sni || undefined,
-      insecure: p.insecure || undefined,
-      max_tx: p.upMbps ? Math.round(p.upMbps * 125000) : undefined,
-      max_rx: p.downMbps ? Math.round(p.downMbps * 125000) : undefined,
-      fast_open: p.fastOpen || undefined,
+  const plan = useMemo<Plan | null>(() => {
+    const p = parseNodeLink(url);
+    if (!p) return null;
+    if (p.kind === 'hy2') {
+      const h = p.hy2;
+      const addr = joinAddr(h.host, h.port);
+      return {
+        kind: 'hy2', punchUnreachable: false, ignored: h.unsupportedNotes,
+        entry: {
+          name: h.name || addr, addr, password: h.password,
+          sni: h.sni || undefined, insecure: h.insecure || undefined,
+          max_tx: h.upMbps ? Math.round(h.upMbps * 125000) : undefined,
+          max_rx: h.downMbps ? Math.round(h.downMbps * 125000) : undefined,
+          fast_open: h.fastOpen || undefined,
+        } as ClientEntry,
+      };
+    }
+    const l = p.link;
+    const signal = l.punch ? punchSignalPaths(l.name, l.punch.via, exitPaths, selfId) : [];
+    const entry = {
+      name: l.name, addr: l.addrs[0] || '', password: l.password,
+      sni: l.sni || undefined, insecure: l.insecure || undefined,
     } as ClientEntry;
-  };
+    if (l.addrs.length > 1) entry.addrs = l.addrs;
+    if (signal.length) entry.punch = { signal, reflectors: [] } as ClientEntry['punch'];
+    return { kind: 'hy2scale', entry, punchUnreachable: !!l.punch && !signal.length, ignored: [] };
+  }, [url, exitPaths, selfId]);
+
+  const usable = !!plan && (!!plan.entry.addr || !!plan.entry.punch);
 
   const handleImport = async () => {
-    if (!parsed) {
+    if (!plan || !usable) {
       toast.error(t('nodes.importParseFail'));
       return;
     }
-    if (!parsed.password) {
+    if (!plan.entry.password) {
       toast.error(t('nodes.passRequired'));
       return;
     }
     setLoading(true);
     try {
-      await api.createClient(buildEntry(parsed));
-      toast.success(t('nodes.saved', { name: parsed.name || `${parsed.host}:${parsed.port}` }));
+      await api.createClient(plan.entry);
+      toast.success(t('nodes.saved', { name: plan.entry.name }));
       queryClient.invalidateQueries({ queryKey: ['topology'] });
       onClose();
     } catch (e: any) {
@@ -71,6 +95,8 @@ export default function NodeImportModal({ open, onClose, animateFrom }: Props) {
     }
   };
 
+  const e = plan?.entry;
+  const addrs = e ? (e.addrs?.length ? e.addrs : e.addr ? [e.addr] : []) : [];
   return (
     <Modal
       open={open}
@@ -80,7 +106,7 @@ export default function NodeImportModal({ open, onClose, animateFrom }: Props) {
       footer={
         <>
           <Button onClick={onClose}>{t('app.cancel')}</Button>
-          <Button variant="primary" onClick={handleImport} loading={loading} disabled={!parsed}>
+          <Button variant="primary" onClick={handleImport} loading={loading} disabled={!usable} data-testid="node-import-btn">
             {t('nodes.importBtn')}
           </Button>
         </>
@@ -90,7 +116,7 @@ export default function NodeImportModal({ open, onClose, animateFrom }: Props) {
         <FormGroup label={t('nodes.importHint')} required>
           <Textarea
             value={url}
-            onChange={(e) => setUrl(e.target.value)}
+            onChange={(ev) => setUrl(ev.target.value)}
             placeholder={t('nodes.importPlaceholder')}
             rows={4}
             monospace
@@ -98,25 +124,26 @@ export default function NodeImportModal({ open, onClose, animateFrom }: Props) {
           />
         </FormGroup>
 
-        {url.trim() && !parsed && (
+        {url.trim() && !plan && (
           <div className="hy-warn-banner">{t('nodes.importParseFail')}</div>
         )}
 
-        {parsed && (
+        {plan && e && (
           <FormGroup label={t('nodes.importPreview')}>
             <KeyValueList variant="compact" className="import-preview" testId="hy2-import-preview">
-              <Row label={t('nodes.address')} value={`${parsed.host}:${parsed.port}`} mono />
-              <Row label={t('nodes.password')} value={parsed.password ? mask(parsed.password) : '—'} mono />
-              {parsed.name && <Row label={t('nodes.importLabel')} value={parsed.name} />}
-              {parsed.sni && <Row label={t('nodes.sni')} value={parsed.sni} mono />}
-              {parsed.insecure !== undefined && <Row label={t('nodes.skipVerify')} value={parsed.insecure ? '✓' : '—'} />}
-              {parsed.upMbps !== undefined && <Row label={t('nodes.upload')} value={`${parsed.upMbps} Mbps`} />}
-              {parsed.downMbps !== undefined && <Row label={t('nodes.download')} value={`${parsed.downMbps} Mbps`} />}
-              {parsed.fastOpen && <Row label={t('nodes.fastOpen')} value="✓" />}
-              {parsed.unsupportedNotes.length > 0 && (
-                <Hint className="hint-gap">{t('nodes.importIgnored', { fields: parsed.unsupportedNotes.join(', ') })}</Hint>
-              )}
+              <Row label={t('nodes.importKind')} value={plan.kind === 'hy2scale' ? 'hy2scale' : 'Hysteria 2'} />
+              <Row label={t('nodes.importLabel')} value={e.name} />
+              <Row label={t('nodes.address')} value={addrs.join(', ') || '—'} mono />
+              <Row label={t('nodes.password')} value={e.password ? mask(e.password) : '—'} mono />
+              {e.sni && <Row label={t('nodes.sni')} value={e.sni} mono />}
+              <Row label={t('nodes.skipVerify')} value={e.insecure ? '✓' : '—'} />
+              {e.max_tx !== undefined && <Row label={t('nodes.upload')} value={`${Math.round(e.max_tx / 125000)} Mbps`} />}
+              {e.max_rx !== undefined && <Row label={t('nodes.download')} value={`${Math.round(e.max_rx / 125000)} Mbps`} />}
+              {e.fast_open && <Row label={t('nodes.fastOpen')} value="✓" />}
+              {e.punch && <Row label={t('nodes.addrPunch')} value={e.punch.signal.join(', ')} mono />}
             </KeyValueList>
+            {plan.punchUnreachable && <div data-testid="import-punch-unreachable"><Hint className="hint-gap">{t('nodes.importPunchUnreachable')}</Hint></div>}
+            {plan.ignored.length > 0 && <Hint className="hint-gap">{t('nodes.importIgnored', { fields: plan.ignored.join(', ') })}</Hint>}
           </FormGroup>
         )}
       </FormStack>

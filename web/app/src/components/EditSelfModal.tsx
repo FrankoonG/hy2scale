@@ -5,7 +5,8 @@ import { Modal, Button, Input, PasswordInput, Select, Toggle, FormGroup, FormGri
 import * as api from '@/api';
 import { useNodeStore } from '@/store/node';
 import { useDialogInit } from '@/hooks/useFormInit';
-import { buildHy2Url, canExportAsHy2Url, copyToClipboard } from '@/utils/buildHy2Url';
+import { canExportAsHy2Url, copyToClipboard } from '@/utils/buildHy2Url';
+import { buildScaleLink } from '@/utils/nodeLink';
 
 // IPv6 hosts are kept bare in the inputs ("::", "2001:db8::1") and
 // bracketed only when joined with a port.
@@ -39,11 +40,14 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
   const [listenPort, setListenPort] = useState('');
   const [password, setPassword] = useState('');
   const [tlsCertId, setTlsCertId] = useState('');
-  // Share host for the export URL. listenIp is usually a wildcard
-  // (`0.0.0.0` / `::`) which a remote client cannot dial, so we keep
-  // a separate field. Defaults to the browser's current hostname —
-  // which is, by definition, an address that just reached this node.
+  // Share host for the exported link; empty = this node's public egress
+  // addresses (never the browser's host: through a remote session that is
+  // the managing node's).
   const [shareHost, setShareHost] = useState('');
+  const topology = useNodeStore((s) => s.topology);
+  const self = topology.find((n) => n.is_self);
+  const publicHosts = [self?.egress?.ipv4, self?.egress?.ipv6].filter((f) => f?.ok && f.ip).map((f) => f!.ip);
+  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getUISettings, enabled: open });
   // Exported URL: skip certificate verification by default — a node without
   // a TLS certificate from the TLS page serves a self-signed one.
   const [exportInsecure, setExportInsecure] = useState(true);
@@ -76,10 +80,8 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
       setListenIp(ip);
       setListenPort(match ? match[2] : '5565');
       setPassword(node.server?.password || '');
-      // Default share host: bound IP if non-wildcard, else the browser's
-      // current hostname (typed once by the operator to reach this UI,
-      // therefore externally reachable from where they sit).
-      setShareHost(isWildcardHost(ip) ? (typeof window !== 'undefined' ? bareHost(window.location.hostname) : '') : ip);
+      // a specific bound address is the share host; otherwise the public addresses
+      setShareHost(isWildcardHost(ip) ? '' : ip);
       // tls_cert is a path in the node's TLS store: <data>/tls/{id}.crt → id
       const certPath = node.server?.tls_cert || '';
       const certMatch = certPath.match(/\/tls\/([^/]+)\.crt$/);
@@ -87,11 +89,20 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
     }
   });
 
+  // Nodes this one is connected to: an importer can signal a punch through
+  // them (only when this node accepts punched connections).
+  const punchVia = () => {
+    if (!settings?.accept_punch) return [];
+    const direct = [...(self?.children || []), ...topology.filter((n) => !n.is_self)];
+    return [...new Set(direct.filter((n) => n.connected && !n.native && !n.disabled).map((n) => n.name))].slice(0, 8);
+  };
+
   const handleExport = async () => {
-    const host = shareHost.trim();
     const port = listenPort.trim();
-    const addr = host && port ? joinHostPort(host, port) : '';
-    if (!canExportAsHy2Url(addr)) {
+    const hosts = shareHost.trim() ? [shareHost.trim()] : publicHosts;
+    const addrs = port ? hosts.map((h) => joinHostPort(h, port)).filter((a) => canExportAsHy2Url(a)) : [];
+    const via = punchVia();
+    if (!addrs.length && !via.length) {
       toast.error(t('nodes.exportNotShareable'));
       return;
     }
@@ -99,20 +110,13 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
       toast.error(t('nodes.passRequired'));
       return;
     }
-    let url: string;
-    try {
-      url = buildHy2Url({
-        name: nodeId.trim() || node?.name || 'self',
-        addr,
-        password,
-        insecure: exportInsecure || undefined,
-        // Self exports rarely want to advertise a custom SNI; let
-        // the recipient set it if they need to.
-      });
-    } catch {
-      toast.error(t('nodes.exportNotShareable'));
-      return;
-    }
+    const url = buildScaleLink({
+      name: nodeId.trim() || node?.name || 'self',
+      addrs,
+      password,
+      insecure: exportInsecure || undefined,
+      punch: via.length ? { via } : undefined,
+    });
     const ok = await copyToClipboard(url);
     if (ok) toast.success(t('nodes.exportCopied'));
     else toast.error(t('nodes.exportFailed'));
@@ -212,7 +216,8 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
             <Input
               value={shareHost}
               onChange={(e) => setShareHost(e.target.value)}
-              placeholder={typeof window !== 'undefined' ? window.location.hostname : ''}
+              placeholder={publicHosts.join(', ') || t('nodes.shareHostNone')}
+              data-testid="share-host"
             />
           </FormGroup>
           <FormGroup label={t('nodes.skipVerify')}>

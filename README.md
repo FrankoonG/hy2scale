@@ -32,7 +32,7 @@ Auto-detects the CPU architecture (`amd64`, `arm64`, `armv7`, `mips64le`,
 `mipsle-softfloat`), downloads the matching tarball from the latest
 release, installs the binary to `/usr/local/bin/hy2scale`, and registers
 a systemd service. Re-running upgrades in place. Pin a version with
-`HY2SCALE_VERSION=v1.4.2`; uninstall with `… | sudo sh -s -- --uninstall`.
+`HY2SCALE_VERSION=v1.4.3`; uninstall with `… | sudo sh -s -- --uninstall`.
 On UniFi OS gateways (run as root) it installs under `/data/hy2scale`, kept across
 firmware updates ([details](https://github.com/FrankoonG/hy2scale/wiki/Installation#unifi-os)).
 

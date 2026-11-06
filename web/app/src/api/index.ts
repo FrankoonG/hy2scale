@@ -203,6 +203,8 @@ export const renewIface = (name: string) =>
   api(`/interfaces/${encodeURIComponent(name)}/renew`, { method: 'POST' });
 export const refreshPublicIP = (name: string) =>
   api(`/interfaces/${encodeURIComponent(name)}/public-ip`, { method: 'POST' });
+export const setPunchInterface = (name: string) =>
+  api('/punch-interface', { method: 'PUT', body: JSON.stringify({ name }) });
 export const setEgress = (data: import('./types').Egress) =>
   api('/egress', { method: 'PUT', body: JSON.stringify(data) });
 

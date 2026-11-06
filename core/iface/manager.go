@@ -219,3 +219,22 @@ func (m *Manager) ChildListen(iface string, raddr net.IP) (net.PacketConn, bool,
 	pc, err := i.ListenPacket(network, laddr)
 	return pc, true, err
 }
+
+// ChildListenPort opens a UDP socket of family v6/v4 on child interface
+// iface at local port (0 = any) — hole punching reuses one port for its
+// probes and the punch. ok=false: iface is not a child interface.
+func (m *Manager) ChildListenPort(iface string, v6 bool, port int) (net.PacketConn, bool, error) {
+	if !m.IsChild(iface) {
+		return nil, false, nil
+	}
+	i := m.Child(iface)
+	if i == nil {
+		return nil, true, fmt.Errorf("interface %s is not running", iface)
+	}
+	network, any := "udp4", netip.IPv4Unspecified()
+	if v6 {
+		network, any = "udp6", netip.IPv6Unspecified()
+	}
+	pc, err := i.ListenPacket(network, netip.AddrPortFrom(any, uint16(port)))
+	return pc, true, err
+}
