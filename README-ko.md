@@ -32,7 +32,7 @@ CPU 아키텍처(`amd64` / `arm64` / `armv7` / `mips64le` /
 `mipsle-softfloat`)를 자동 감지해 최신 릴리스의 해당 tar 파일을 받고,
 `/usr/local/bin/hy2scale`에 바이너리를 설치한 뒤 systemd 서비스를
 등록합니다. 다시 실행하면 그대로 업그레이드. 버전을 고정하려면
-`HY2SCALE_VERSION=v1.4.3`, 제거하려면 `… | sudo sh -s -- --uninstall`.
+`HY2SCALE_VERSION=v1.4.4`, 제거하려면 `… | sudo sh -s -- --uninstall`.
 UniFi OS 게이트웨이에서는(root로 실행) 펌웨어 업데이트 후에도 남는 `/data/hy2scale`에
 설치합니다([자세히](https://github.com/FrankoonG/hy2scale/wiki/Installation-ko#unifi-os)).
 

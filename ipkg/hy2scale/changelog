@@ -1,3 +1,10 @@
+v1.4.4
+- Shared users: a user shared to other nodes is held by all of them alike (any holder edits, shares on, leaves or deletes it everywhere; traffic summed against one limit); "Accept shared users" setting
+- Automatic update (off by default): daily at a set time; optionally fetched from a node that already runs the new release
+- User details dialog has the list's actions (enable, reset traffic, share, delete)
+- Tools: Stop really stops; the throughput line animates each sample; terminal copy / paste / select all keys
+- Nodes behind one NAT are no longer taken for a rename; a node whose registration was dropped registers again
+
 v1.4.3
 - System traffic capture puts back rules another program removed (e.g. systemd-networkd restarted by an unattended upgrade)
 - Punch interface: a node accepting punches chooses the interface they use (Interfaces page); changing it re-punches
