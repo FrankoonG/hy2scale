@@ -2,12 +2,12 @@ import { useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Card, Button, ExpandButton, Badge, Table, Tooltip, IconCircleAlert, useToast, useConfirm, useSelection, useModalState, type Column,
+  Card, Button, ExpandButton, Badge, Table, Tooltip, IconCircleAlert, useToast, useSelection, useModalState, type Column,
 } from '@hy2scale/ui';
 import type { UserConfig, Session, PasswordConflicts } from '@/api';
 import * as api from '@/api';
 import { GiB } from '@/hooks/useFormat';
-import { useBulkAction } from '@/hooks/useBulkAction';
+import { useUserActions, isLeaving } from '@/hooks/useUserActions';
 import { ListScope } from '@/hooks/useDeselectOnBlankClick';
 import { isPast } from '@/utils/date';
 import { ExitViaCell, exitViaSortValue } from '@/components/ExitViaCell';
@@ -27,7 +27,6 @@ export default function UsersPage() {
   const { t } = useTranslation();
   const ie = useImportExport('users');
   const toast = useToast();
-  const confirm = useConfirm();
   const queryClient = useQueryClient();
 
   const edit = useModalState<string | null>();      // user id; null = new user
@@ -61,36 +60,9 @@ export default function UsersPage() {
 
   const selection = useSelection(users.map((u) => u.id));
   const selected = pickSelected(users, selection.selected, (u) => u.id);
-  const bulk = useBulkAction(['users']);
-
-  const bulkToggle = (enabled: boolean) => bulk(selection.selected, (id) => api.toggleUser(id, enabled),
-    { label: enabled ? t('app.bulkEnable') : t('app.bulkDisable') });
-  const bulkReset = () => bulk(selection.selected, (id) => api.resetTraffic(id), {
-    label: t('users.bulkResetTraffic'),
-    confirm: { title: t('users.resetTitle'), message: t('users.resetConfirm'), confirmText: t('users.reset') },
-  });
-  // On a shared user, delete = leave (this node only).
-  const leaving = selected.length > 0 && selected.every((u) => u.shared);
-  const bulkDelete = () => bulk(selection.selected, (id) => api.deleteUser(id), leaving ? {
-    label: t('users.leave'),
-    confirm: { title: t('users.leave'), message: t('users.leaveConfirm'), confirmText: t('users.leave'), danger: true },
-  } : {
-    label: t('app.bulkDelete'),
-    confirm: { title: t('app.bulkDelete'), message: t('app.bulkDeleteConfirm', { count: selection.count }), confirmText: t('app.delete'), danger: true },
-  });
+  const actions = useUserActions();
+  const leaving = isLeaving(selected);
   const one = selected.length === 1 ? selected[0] : null;
-  const deleteEverywhere = async (u: UserConfig) => {
-    const ok = await confirm({
-      title: t('users.deleteEverywhere'), message: t('users.deleteEverywhereConfirm', { name: u.username }),
-      confirmText: t('users.deleteEverywhere'), cancelText: t('app.cancel'), danger: true,
-    });
-    if (!ok) return;
-    try {
-      await api.deleteUserEverywhere(u.id);
-      toast.success(t('users.deletedEverywhere', { name: u.username }));
-      queryClient.invalidateQueries({ queryKey: ['users'] });
-    } catch (e: any) { toast.error(String(e?.message || e)); }
-  };
 
   const userColumns: Column<UserConfig>[] = [
     {
@@ -169,12 +141,13 @@ export default function UsersPage() {
         count={users.length}
         actions={
           <ResponsiveActions selectedCount={selection.count} onClearSelection={selection.clear}>
-            <BulkButtons selected={selected} isEnabled={(u) => u.enabled} onToggle={bulkToggle} onDelete={bulkDelete}
+            <BulkButtons selected={selected} isEnabled={(u) => u.enabled}
+              onToggle={(enabled) => actions.toggle(selected, enabled)} onDelete={() => actions.remove(selected)}
               deleteLabel={leaving ? t('users.leave') : undefined}>
-              <Button size="sm" onClick={bulkReset}>{t('users.bulkResetTraffic')}</Button>
+              <Button size="sm" onClick={() => actions.reset(selected)}>{t('users.bulkResetTraffic')}</Button>
               {one && <Button size="sm" data-testid="user-share" onClick={(e) => share.show(one.id, e)}>{t('users.share')}</Button>}
               {one?.shared && (
-                <Button size="sm" variant="danger" data-testid="user-delete-everywhere" onClick={() => deleteEverywhere(one)}>
+                <Button size="sm" variant="danger" data-testid="user-delete-everywhere" onClick={() => actions.deleteEverywhere(one)}>
                   {t('users.deleteEverywhere')}
                 </Button>
               )}
@@ -220,6 +193,7 @@ export default function UsersPage() {
         conflicts={infoUser ? conflicts[infoUser.username] : undefined}
         onKick={handleKick}
         onEdit={(u, from) => { info.close(); edit.show(u.id, from); }}
+        onShare={(u, from) => share.show(u.id, from)}
       />
     </div>
   );
