@@ -35,6 +35,7 @@ export interface SystemValues extends Record<NumKey, string> {
   dns: string;
   relay_admin_passthrough: boolean;
   accept_punch: boolean;
+  accept_shared_users: boolean;
   dns_resolver_enabled: boolean;
   public_method: 'public' | 'peer+public';
   public_interval: string;
@@ -51,6 +52,7 @@ function systemFrom(s?: UISettings): SystemValues {
     dns: s?.dns || '',
     relay_admin_passthrough: !!s?.relay_admin_passthrough,
     accept_punch: !!s?.accept_punch,
+    accept_shared_users: !!s?.accept_shared_users,
     dns_resolver_enabled: !!s?.dns_resolver_enabled,
     public_method: pip?.method === 'peer+public' ? 'peer+public' : 'public',
     public_interval: String(pip?.interval || 600),
@@ -61,7 +63,7 @@ function systemFrom(s?: UISettings): SystemValues {
 /** System sub-pages, each saving only its own fields. */
 export type SystemSection = 'network' | 'dns' | 'nested';
 const SECTION_KEYS: Record<SystemSection, (keyof SystemValues)[]> = {
-  network: ['relay_admin_passthrough', 'accept_punch', 'path_loss_grace_s', 'public_method', 'public_interval', 'public_servers'],
+  network: ['relay_admin_passthrough', 'accept_punch', 'accept_shared_users', 'path_loss_grace_s', 'public_method', 'public_interval', 'public_servers'],
   dns: ['dns', 'dns_resolver_enabled', 'dns_resolver_cache_ttl', 'dns_resolver_negative_ttl', 'dns_resolver_cache_size', 'dns_resolver_query_timeout_ms'],
   nested: NESTED_KEYS,
 };
@@ -102,6 +104,7 @@ export function useSystemForm(settingsQ: UseQueryResult<UISettings>) {
       return {
         relay_admin_passthrough: v.relay_admin_passthrough,
         accept_punch: v.accept_punch,
+        accept_shared_users: v.accept_shared_users,
         path_loss_grace_s: intOr(v.path_loss_grace_s, 'path_loss_grace_s'),
         public_ip: { method: v.public_method, interval, servers },
       };

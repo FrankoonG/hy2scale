@@ -7,6 +7,7 @@ import {
   useToast, type Column, type DetailItem,
 } from '@hy2scale/ui';
 import type { UserConfig, Session } from '@/api';
+import type { SharedMember, SharedMemberState } from '@/api/types';
 import * as api from '@/api';
 import { useNodeStore } from '@/store/node';
 import { PROXY_REGISTRY, DETAIL_PROXIES, type ProxyContext } from '@/config/proxyRegistry';
@@ -163,6 +164,7 @@ function DetailsTab({ user, sessions, conflicts, onKick }: {
   return (
     <FormStack gap={16}>
       <DetailGrid variant="plain" items={fields} />
+      {user.shared && <SharedMembers members={user.shared.members} />}
       <div>
         <FieldLabel>{t('devices.title')} ({sessions.length})</FieldLabel>
         <Table
@@ -175,6 +177,51 @@ function DetailsTab({ user, sessions, conflicts, onKick }: {
         />
       </div>
     </FormStack>
+  );
+}
+
+const STATE_BADGE: Record<SharedMemberState, 'green' | 'muted' | 'red' | 'orange'> = {
+  synced: 'green', pending: 'muted', error: 'red', unreachable: 'orange',
+};
+
+/** The nodes holding a shared user: sync state and traffic counted on each. */
+function SharedMembers({ members }: { members: SharedMember[] }) {
+  const { t } = useTranslation();
+  const columns: Column<SharedMember>[] = ([
+    {
+      key: 'name', title: t('users.memberNode'), sortValue: (m) => m.name,
+      render: (m) => (
+        <span className="name-with-mark">
+          {m.name}
+          {m.self && <Badge variant="blue">{t('users.thisNode')}</Badge>}
+        </span>
+      ),
+    },
+    {
+      key: 'state', title: t('users.memberSync'), sortValue: (m) => m.state,
+      render: (m) => (m.self
+        ? <span className="text-muted">—</span>
+        : <Badge variant={STATE_BADGE[m.state] || 'muted'}>{t(`users.memberState.${m.state}`, { defaultValue: m.state })}</Badge>),
+    },
+    { key: 'used', title: t('users.memberUsed'), sortValue: (m) => m.used, render: (m) => <span className="mono">{fmtBytes(m.used)}</span> },
+    {
+      key: 'error', title: t('users.memberError'),
+      render: (m) => (m.error && (m.state === 'error' || m.state === 'unreachable')
+        ? <span className="cell-small text-bad">{m.error}</span>
+        : <span className="text-muted">—</span>),
+    },
+  ] as Column<SharedMember>[]).map((c) => ({ ...c, hideable: false }));
+  return (
+    <div data-testid="shared-members">
+      <FieldLabel>{t('users.members')} ({members.length})</FieldLabel>
+      <Table
+        id="users.detail.members"
+        columns={columns}
+        data={members}
+        rowKey={(m) => m.node_id || m.name}
+        paginate={false}
+      />
+    </div>
   );
 }
 

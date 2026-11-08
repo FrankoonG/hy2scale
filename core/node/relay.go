@@ -981,6 +981,10 @@ func (n *Node) SetNodeID(id string) { n.nodeID = id }
 // SetInstanceID sets the installation id sent in the register handshake.
 func (n *Node) SetInstanceID(id string) { n.instanceID = id }
 
+// InstallationID: the persistent installation id set by SetInstanceID (not
+// the per-process InstanceID of node access).
+func (n *Node) InstallationID() string { return n.instanceID }
+
 // NodeID returns the local stable identifier configured via SetNodeID.
 func (n *Node) NodeID() string { return n.nodeID }
 

@@ -68,6 +68,8 @@ export interface TopologyNode {
   egress?: NodeEgress | null;
   // egress found by this node through the peer (it does not report one)
   egress_probed?: boolean;
+  // the node's attributes (e.g. shared_users: true)
+  attrs?: Record<string, unknown>;
 }
 
 export interface NodeEgressFamily { ip: string; ok: boolean }
@@ -178,6 +180,27 @@ export interface UserConfig {
   node_access_mode?: 'restricted' | 'full';
   /** flows may not reach internal destinations */
   deny_internal?: boolean;
+  /** Present for a user held by several nodes; traffic_used is then the total. */
+  shared?: SharedInfo;
+}
+
+export type SharedMemberState = 'synced' | 'pending' | 'error' | 'unreachable';
+export interface SharedMember {
+  name: string;
+  node_id?: string;
+  /** this node */
+  self?: boolean;
+  /** traffic counted on that node (bytes) */
+  used: number;
+  state: SharedMemberState;
+  error?: string;
+  synced_at?: string;
+}
+export interface SharedInfo {
+  members: SharedMember[];
+  total_used: number;
+  /** start of the current traffic period (RFC 3339) */
+  period_start?: string;
 }
 
 /** Password conflict info: username → proxy → list of conflicting usernames */
@@ -370,6 +393,7 @@ export interface UISettings {
   // local password / token check. Trust boundary becomes the relay handshake.
   relay_admin_passthrough: boolean;
   accept_punch?: boolean;
+  accept_shared_users?: boolean;
   // DNS resolver (relay-routed) — reroutes hy2scale's own internal name
   // lookups (rules-engine domain rules etc.) through a clean upstream
   // DNS reachable via the rule's own exit, so a polluted local

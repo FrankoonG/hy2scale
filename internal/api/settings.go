@@ -61,6 +61,7 @@ func (s *Server) nodeSettings(cfg app.Config) map[string]any {
 		"max_response_bytes": lim.MaxResponseBytes,
 		"max_fetch_fan_out":  lim.MaxFetchFanOut,
 		"accept_punch":       cfg.AcceptPunch,
+		"accept_shared_users": cfg.AcceptSharedUsers,
 		// Off by default: management requests arriving through the mesh
 		// still need a token.
 		"relay_admin_passthrough": cfg.RelayAdminPassthrough,
@@ -102,6 +103,7 @@ type settingsBody struct {
 	MaxFetchFanOut        *int    `json:"max_fetch_fan_out"`
 	RelayAdminPassthrough *bool   `json:"relay_admin_passthrough"`
 	AcceptPunch           *bool   `json:"accept_punch"`
+	AcceptSharedUsers     *bool   `json:"accept_shared_users"`
 	// DNS resolver (relay-routed) — see app.DNSResolverConfig docs.
 	// No separate upstream knob: the resolver uses the top-level
 	// `dns` field above, same as VPN-client DNS push does.
@@ -159,6 +161,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, own int) {
 	}
 	if own&ownNode == 0 {
 		body.DNS, body.PathLossGraceS, body.AcceptPunch, body.RelayAdminPassthrough = nil, nil, nil, nil
+		body.AcceptSharedUsers = nil
 		body.MaxNestedDepth, body.MaxResponseNodes, body.MaxCacheEntries, body.MaxResponseBytes, body.MaxFetchFanOut = nil, nil, nil, nil, nil
 		body.DNSResolverEnabled, body.DNSResolverCacheTTL, body.DNSResolverNegativeTTL = nil, nil, nil
 		body.DNSResolverCacheSize, body.DNSResolverQueryTimeoutMs = nil, nil
@@ -207,6 +210,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, own int) {
 		if body.AcceptPunch != nil {
 			c.AcceptPunch = *body.AcceptPunch
 		}
+		if body.AcceptSharedUsers != nil {
+			c.AcceptSharedUsers = *body.AcceptSharedUsers
+		}
 		if body.DNSResolverEnabled != nil {
 			// Store as *bool so a future GET keeps round-tripping the
 			// explicit choice; never collapses back to "unset → default".
@@ -231,6 +237,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, own int) {
 	})
 	if body.PublicIP != nil {
 		s.app.PublicIPSettingsChanged()
+	}
+	if body.AcceptSharedUsers != nil {
+		s.app.ApplySharedAttr()
 	}
 	// Hot-reload resolver snapshot on any DNS-resolver field touch +
 	// purge cache so the new config takes effect on next call.
