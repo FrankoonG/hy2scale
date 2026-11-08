@@ -6,10 +6,10 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"encoding/hex"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -216,9 +216,12 @@ type Config struct {
 	// peer; a different NodeID from the same installation is a rename.
 	KnownInstances map[string]string `yaml:"known_instances,omitempty" json:"known_instances,omitempty"`
 
-	// SharedDeletes: shared users still to delete on target nodes (a target
-	// removed, or the user deleted here, while the target was unreachable).
-	SharedDeletes []SharedDelete `yaml:"shared_deletes,omitempty" json:"-"`
+	// AcceptSharedUsers: other nodes may share users to this one (the
+	// first share still needs relay trust or a session here).
+	AcceptSharedUsers bool `yaml:"accept_shared_users,omitempty" json:"accept_shared_users,omitempty"`
+	// SharedTombs: shared users deleted everywhere, kept until every
+	// member still holding one has been told.
+	SharedTombs []SharedTomb `yaml:"shared_tombs,omitempty" json:"-"`
 }
 
 // DNSResolverConfig: see exit.ResolverConfig.
@@ -273,6 +276,11 @@ type App struct {
 	pwConflicted  map[string]map[string]bool       // username → proxy → conflicted
 	pwConflictAll map[string]map[string][]string   // proxy → password → []usernames (for API)
 	trafficDirty  sync.Map                         // username → true (needs flush)
+	// shared users (shared_users.go): the hybrid logical clock, and the
+	// sync told of every change (set by the api server)
+	hlcMu        sync.Mutex
+	hlcLast      int64
+	SharedNotify func(gid string)
 	Sessions     *SessionManager
 
 	ifaces *ifaceManager  // child interfaces, public address detection
@@ -835,8 +843,13 @@ func (a *App) UpdateProxy(pc ProxyConfig) error {
 func (a *App) rebuildUserIndex() {
 	cfg := a.store.Get()
 	index := make(map[string]*UserConfig, len(cfg.Users))
+	self := a.node.InstallationID()
 	for i := range cfg.Users {
-		index[cfg.Users[i].Username] = &cfg.Users[i]
+		u := &cfg.Users[i]
+		if u.Shared != nil {
+			atomic.StoreInt64(&u.RemoteUsed, remoteUsed(u, self))
+		}
+		index[u.Username] = u
 	}
 
 	// Build password conflict maps for password-only proxies.
@@ -953,7 +966,7 @@ func (a *App) LookupUser(username, password, proxy string) (*UserConfig, error) 
 			return nil, fmt.Errorf("user expired")
 		}
 	}
-	if u.TrafficLimit > 0 && u.TrafficUsed >= u.TrafficLimit {
+	if u.OverLimit() {
 		return nil, fmt.Errorf("traffic limit exceeded")
 	}
 	return u, nil
@@ -978,6 +991,7 @@ func (a *App) AddUser(u UserConfig) error {
 }
 
 func (a *App) UpdateUser(id string, u UserConfig) error {
+	var sharedGID string
 	var oldPassword string
 	var oldProxyPw map[string]string
 	var oldProxyDisabled []string
@@ -1000,10 +1014,13 @@ func (a *App) UpdateUser(id string, u UserConfig) error {
 						u.TrafficResetFrom = TrafficNow().Format(time.RFC3339)
 					}
 				}
-				u.ShareTargets = existing.ShareTargets
-				u.ShareRev = existing.ShareRev
-				u.ShareResetRev = existing.ShareResetRev
-				u.SharedFrom = existing.SharedFrom
+				u.Shared = existing.Shared
+				if u.Shared != nil {
+					// a shared user's period runs on UTC boundaries (shared_users.go)
+					u.TrafficResetFrom = existing.TrafficResetFrom
+					a.sharedStamp(&c.Users[i], &u, false)
+					sharedGID = u.Shared.GID
+				}
 				c.Users[i] = u
 				return
 			}
@@ -1011,6 +1028,10 @@ func (a *App) UpdateUser(id string, u UserConfig) error {
 	})
 	if err == nil {
 		a.rebuildUserIndex()
+		if sharedGID != "" {
+			a.applySharedEpochs()
+			a.sharedChanged(sharedGID)
+		}
 		// If credentials OR per-proxy access changed, disconnect all active
 		// sessions for this user. ProxyDisabled changing means a previously
 		// permitted protocol is now revoked — keeping the in-flight tunnel
@@ -1032,10 +1053,6 @@ func (a *App) RemoveUser(id string) error {
 	err := a.store.Update(func(c *Config) {
 		for i, u := range c.Users {
 			if u.ID == id {
-				// a user shared out is deleted on its targets too
-				for _, t := range u.ShareTargets {
-					addSharedDelete(c, SharedDelete{Target: t, UserID: u.ID})
-				}
 				c.Users = append(c.Users[:i], c.Users[i+1:]...)
 				return
 			}
@@ -1048,25 +1065,42 @@ func (a *App) RemoveUser(id string) error {
 }
 
 func (a *App) ToggleUser(id string, enabled bool) error {
+	var gid string
 	err := a.store.Update(func(c *Config) {
 		for i, u := range c.Users {
 			if u.ID == id {
-				c.Users[i].Enabled = enabled
+				nu := u
+				nu.Enabled = enabled
+				if nu.Shared != nil {
+					a.sharedStamp(&c.Users[i], &nu, false)
+					gid = nu.Shared.GID
+				}
+				c.Users[i].Enabled, c.Users[i].Shared = nu.Enabled, nu.Shared
 				return
 			}
 		}
 	})
 	if err == nil {
 		a.rebuildUserIndex()
+		a.sharedChanged(gid)
 	}
 	return err
 }
 
 func (a *App) ResetUserTraffic(id string) error {
+	var gid string
 	a.usersMu.RLock()
 	err := a.store.Update(func(c *Config) {
 		for i, u := range c.Users {
 			if u.ID == id {
+				if u.Shared != nil {
+					// a new period for every holder (applySharedEpochs)
+					nu := u
+					a.sharedStamp(&c.Users[i], &nu, true)
+					c.Users[i].Shared = nu.Shared
+					gid = nu.Shared.GID
+					return
+				}
 				if live, ok := a.userIndex[u.Username]; ok {
 					atomic.StoreInt64(&live.TrafficUsed, 0)
 				}
@@ -1079,6 +1113,10 @@ func (a *App) ResetUserTraffic(id string) error {
 	a.usersMu.RUnlock()
 	if err == nil {
 		a.rebuildUserIndex()
+		if gid != "" {
+			a.applySharedEpochs()
+			a.sharedChanged(gid)
+		}
 	}
 	return err
 }
@@ -2549,7 +2587,7 @@ func (a *hy2Auth) Authenticate(addr net.Addr, auth string, tx uint64) (bool, str
 				}
 			}
 			// Check traffic limit
-			if u.TrafficLimit > 0 && u.TrafficUsed >= u.TrafficLimit {
+			if u.OverLimit() {
 				return false, ""
 			}
 			return true, "user:" + u.Username

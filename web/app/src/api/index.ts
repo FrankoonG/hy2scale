@@ -105,6 +105,22 @@ export const toggleUser = (id: string, enabled: boolean) =>
 export const resetTraffic = (id: string) =>
   api(`/users/${encodeURIComponent(id)}/reset-traffic`, { method: 'PUT' });
 
+// Shared users: errors answer either plain text or {error}.
+async function sharedCall(path: string, body?: unknown) {
+  try {
+    return await api(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
+  } catch (e: any) {
+    let msg = String(e?.message || e);
+    try { const j = JSON.parse(msg); if (j?.error) msg = String(j.error); } catch { /* plain text */ }
+    throw new Error(msg.trim());
+  }
+}
+/** Shares the user to the node at the end of `chain`; `token`: a session of that node. */
+export const shareUser = (id: string, chain: string[], token?: string) =>
+  sharedCall(`/users/${encodeURIComponent(id)}/share`, token ? { chain, token } : { chain });
+export const deleteUserEverywhere = (id: string) =>
+  sharedCall(`/users/${encodeURIComponent(id)}/delete-everywhere`);
+
 // Sessions
 export const getSessions = async (): Promise<Session[]> => {
   const res = await api<{ devices: Session[]; total: number }>('/sessions');

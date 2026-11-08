@@ -161,8 +161,9 @@ func TrafficResetNextOf(u *UserConfig, now time.Time) string {
 // reset.
 func (a *App) ApplyTrafficResets(now time.Time) []string {
 	need := false
+	a.applySharedEpochs()
 	for _, u := range a.store.Get().Users {
-		if u.TrafficReset == "" {
+		if u.TrafficReset == "" || u.Shared != nil {
 			continue
 		}
 		since, ok := u.resetSince()
@@ -180,7 +181,7 @@ func (a *App) ApplyTrafficResets(now time.Time) []string {
 	err := a.store.Update(func(c *Config) {
 		for i := range c.Users {
 			u := &c.Users[i]
-			if u.TrafficReset == "" {
+			if u.TrafficReset == "" || u.Shared != nil {
 				continue
 			}
 			since, ok := u.resetSince()

@@ -290,7 +290,7 @@ func (a *App) vpnUser(name, proto string) *UserConfig {
 			return nil
 		}
 	}
-	if u.TrafficLimit > 0 && u.TrafficUsed >= u.TrafficLimit {
+	if u.OverLimit() {
 		return nil
 	}
 	return u

@@ -9,12 +9,14 @@ interface BulkProps<T> {
   isEnabled?: (row: T) => boolean;
   onToggle?: (enabled: boolean) => void;
   onDelete?: () => void;
+  /** Overrides the Delete button's text. */
+  deleteLabel?: string;
   /** Extra bulk buttons, between Disable and Delete. */
   children?: ReactNode;
 }
 
 /** Enable / Disable / … / Delete for the selected rows of a list. */
-export function BulkButtons<T>({ selected, isEnabled, onToggle, onDelete, children }: BulkProps<T>) {
+export function BulkButtons<T>({ selected, isEnabled, onToggle, onDelete, deleteLabel, children }: BulkProps<T>) {
   const { t } = useTranslation();
   if (selected.length === 0) return null;
   const toggles = onToggle && isEnabled;
@@ -23,7 +25,7 @@ export function BulkButtons<T>({ selected, isEnabled, onToggle, onDelete, childr
       {toggles && selected.some((r) => !isEnabled(r)) && <Button size="sm" onClick={() => onToggle(true)}>{t('app.bulkEnable')}</Button>}
       {toggles && selected.some((r) => isEnabled(r)) && <Button size="sm" onClick={() => onToggle(false)}>{t('app.bulkDisable')}</Button>}
       {children}
-      {onDelete && <Button size="sm" variant="danger" onClick={onDelete}>{t('app.bulkDelete')}</Button>}
+      {onDelete && <Button size="sm" variant="danger" onClick={onDelete}>{deleteLabel ?? t('app.bulkDelete')}</Button>}
     </>
   );
 }

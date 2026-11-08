@@ -25,11 +25,10 @@ func (s *Server) userRoutes(m *http.ServeMux) {
 	m.HandleFunc("PUT /api/users/{id}/toggle", s.toggleUserAPI)
 	m.HandleFunc("GET /api/users/conflicts", s.getUserConflicts)
 	m.HandleFunc("PUT /api/users/{id}/reset-traffic", s.resetUserTrafficAPI)
-	// Shared users (shared_users.go): manager side, and detaching a
-	// received user on this node.
-	m.HandleFunc("GET /api/users/{id}/share", s.getUserShare)
-	m.HandleFunc("PUT /api/users/{id}/share", s.putUserShare)
-	m.HandleFunc("POST /api/users/{id}/detach", s.detachUserAPI)
+	// Shared users (shared_users.go): a first share to another node, and
+	// deletion on every holder (DELETE above: this node only).
+	m.HandleFunc("POST /api/users/{id}/share", s.shareUser)
+	m.HandleFunc("POST /api/users/{id}/delete-everywhere", s.deleteUserEverywhere)
 	s.startShareSync()
 }
 
@@ -38,6 +37,8 @@ type userView struct {
 	app.UserConfig
 	// TrafficResetNext (RFC3339): the next periodic reset, computed.
 	TrafficResetNext string `json:"traffic_reset_next,omitempty"`
+	// Shared: set for a shared user (traffic_used is then its total).
+	Shared *sharedView `json:"shared,omitempty"`
 }
 
 func (s *Server) userByID(id string) (app.UserConfig, bool) {
@@ -47,15 +48,6 @@ func (s *Server) userByID(id string) (app.UserConfig, bool) {
 		}
 	}
 	return app.UserConfig{}, false
-}
-
-// refuseShared answers 403 for a user received from a manager.
-func refuseShared(w http.ResponseWriter, u app.UserConfig) bool {
-	if u.SharedFrom == nil {
-		return false
-	}
-	http.Error(w, "shared user: managed by "+u.SharedFrom.ManagerName(), 403)
-	return true
 }
 
 // validateTrafficReset normalizes the reset period of u (false: answered 400).
@@ -90,7 +82,12 @@ func (s *Server) getUsers(w http.ResponseWriter, r *http.Request) {
 	now := app.TrafficNow()
 	users := make([]userView, 0, len(cfg.Users))
 	for i := range cfg.Users {
-		users = append(users, userView{UserConfig: cfg.Users[i], TrafficResetNext: app.TrafficResetNextOf(&cfg.Users[i], now)})
+		v := userView{UserConfig: cfg.Users[i], TrafficResetNext: app.TrafficResetNextOf(&cfg.Users[i], now)}
+		if v.Shared = s.sharedViewOf(cfg.Users[i]); v.Shared != nil {
+			v.TrafficUsed = v.Shared.TotalUsed
+			v.TrafficResetNext = app.SharedNextReset(&cfg.Users[i], now)
+		}
+		users = append(users, v)
 	}
 	writeJSON(w, users)
 }
@@ -123,7 +120,7 @@ func (s *Server) addUserAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	// server-managed
 	u.TrafficResetAt, u.TrafficResetFrom = "", ""
-	u.ShareTargets, u.ShareRev, u.ShareResetRev, u.SharedFrom = nil, 0, 0, nil
+	u.Shared = nil
 	// Block the user/server-password collision from the user-side too
 	// (the inverse check lives in updateNode).
 	if cur := s.app.Store().Get(); cur.Server != nil && cur.Server.Password != "" && cur.Server.Password == u.Password {
@@ -161,11 +158,6 @@ func (s *Server) updateUserAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u.ID = id
-	cur, exists := s.userByID(id)
-	if exists && cur.SharedFrom != nil {
-		s.updateSharedUserExit(w, cur, u, raw)
-		return
-	}
 	if !validateTrafficReset(w, &u) {
 		return
 	}
@@ -194,27 +186,25 @@ func (s *Server) updateUserAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.shareChanged(id, false)
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 func (s *Server) removeUserAPI(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	cur, exists := s.userByID(id)
-	if exists && refuseShared(w, cur) {
+	if cur, ok := s.userByID(id); ok && cur.Shared != nil {
+		// a shared user: this node leaves, the others keep it
+		rec, key, err := s.app.LeaveShared(id)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		s.shares().forget(rec.GID)
+		s.tellLeft(rec, key)
+		writeJSON(w, map[string]string{"status": "ok"})
 		return
 	}
 	if err := s.app.RemoveUser(id); err != nil {
 		http.Error(w, err.Error(), 500)
-		return
-	}
-	s.shareSyncTargets(id, cur.ShareTargets)
-	writeJSON(w, map[string]string{"status": "ok"})
-}
-
-func (s *Server) detachUserAPI(w http.ResponseWriter, r *http.Request) {
-	if err := s.app.DetachSharedUser(r.PathValue("id")); err != nil {
-		http.Error(w, err.Error(), 400)
 		return
 	}
 	writeJSON(w, map[string]string{"status": "ok"})
@@ -229,26 +219,18 @@ func (s *Server) toggleUserAPI(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 400)
 		return
 	}
-	if cur, ok := s.userByID(id); ok && refuseShared(w, cur) {
-		return
-	}
 	if err := s.app.ToggleUser(id, body.Enabled); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.shareChanged(id, false)
 	writeJSON(w, map[string]string{"status": "ok"})
 }
 
 func (s *Server) resetUserTrafficAPI(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if cur, ok := s.userByID(id); ok && refuseShared(w, cur) {
-		return
-	}
 	if err := s.app.ResetUserTraffic(id); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	s.shareChanged(id, true)
 	writeJSON(w, map[string]string{"status": "ok"})
 }
