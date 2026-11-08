@@ -40,7 +40,14 @@ export interface SystemValues extends Record<NumKey, string> {
   public_method: 'public' | 'peer+public';
   public_interval: string;
   public_servers: ListItem[];
+  auto_update_enabled: boolean;
+  auto_update_time: string;
+  auto_update_from_peers: boolean;
 }
+
+/** Default time of the daily automatic update (node local time). */
+export const AUTO_UPDATE_TIME = '04:00';
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 const numStrings = (s?: Partial<UISettings>) =>
   Object.fromEntries((Object.keys(SYSTEM_DEFAULTS) as NumKey[]).map((k) => [k, String((s?.[k] as number) || SYSTEM_DEFAULTS[k])])) as Record<NumKey, string>;
@@ -57,20 +64,24 @@ function systemFrom(s?: UISettings): SystemValues {
     public_method: pip?.method === 'peer+public' ? 'peer+public' : 'public',
     public_interval: String(pip?.interval || 600),
     public_servers: toListItems(pip?.servers || []),
+    auto_update_enabled: !!s?.auto_update_enabled,
+    auto_update_time: s?.auto_update_time || AUTO_UPDATE_TIME,
+    auto_update_from_peers: !!s?.auto_update_from_peers,
   };
 }
 
 /** System sub-pages, each saving only its own fields. */
-export type SystemSection = 'network' | 'dns' | 'nested';
+export type SystemSection = 'network' | 'dns' | 'nested' | 'update';
 const SECTION_KEYS: Record<SystemSection, (keyof SystemValues)[]> = {
   network: ['relay_admin_passthrough', 'accept_punch', 'accept_shared_users', 'path_loss_grace_s', 'public_method', 'public_interval', 'public_servers'],
   dns: ['dns', 'dns_resolver_enabled', 'dns_resolver_cache_ttl', 'dns_resolver_negative_ttl', 'dns_resolver_cache_size', 'dns_resolver_query_timeout_ms'],
   nested: NESTED_KEYS,
+  update: ['auto_update_enabled', 'auto_update_time', 'auto_update_from_peers'],
 };
 
 const intOr = (v: string, k: NumKey) => parseInt(v) || SYSTEM_DEFAULTS[k];
 
-/** Network, DNS and nested-discovery sub-pages: one state, per-section saves. */
+/** Network, DNS, nested-discovery and automatic-update sub-pages: one state, per-section saves. */
 export function useSystemForm(settingsQ: UseQueryResult<UISettings>) {
   const { t } = useTranslation();
   const toast = useToast();
@@ -119,11 +130,24 @@ export function useSystemForm(settingsQ: UseQueryResult<UISettings>) {
         dns_resolver_query_timeout_ms: intOr(v.dns_resolver_query_timeout_ms, 'dns_resolver_query_timeout_ms'),
       };
     }
+    if (sec === 'update') {
+      const time = v.auto_update_time.trim();
+      if (!HHMM.test(time)) {
+        toast.error(t('settings.autoUpdateTimeInvalid'));
+        return null;
+      }
+      return {
+        auto_update_enabled: v.auto_update_enabled,
+        auto_update_time: time,
+        auto_update_from_peers: v.auto_update_from_peers,
+      };
+    }
     return Object.fromEntries(NESTED_KEYS.map((k) => [k, intOr(v[k], k)])) as Partial<UISettings>;
   };
 
   // All hot-reloadable: DNS (read at handshake time), nested limits, the DNS
-  // resolver (cache purged on save; upstreams = `dns`), public IP, punch.
+  // resolver (cache purged on save; upstreams = `dns`), public IP, punch,
+  // the automatic-update schedule.
   const save = async (sec: SystemSection) => {
     const body = payload(sec);
     if (!body) return;

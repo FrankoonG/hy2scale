@@ -663,22 +663,45 @@ func (a *App) initialExit(exitNode string) (string, []string, string) {
 	return paths[0], paths, mode
 }
 
-// PathsTo: the paths this node can reach the node target by — through
-// connected peers (never node access by user), nested-enabled hops, no node
-// twice and never this node — fastest first.
+// ReachPath: a path to a node this node can reach (Lat: summed latency in
+// ms; an inbound first hop without a measurement counts 10 s).
+type ReachPath struct {
+	Hops    []string
+	Lat     int
+	Version string
+}
+
+// Path: the hops joined.
+func (r ReachPath) Path() string { return strings.Join(r.Hops, "/") }
+
+// Reachable: every path this node can reach a node by — through connected
+// peers (never node access by user), nested-enabled hops, no node twice and
+// never this node — fastest first.
+func (a *App) Reachable() []ReachPath {
+	return a.reach("")
+}
+
+// PathsTo: the paths to the node target (Reachable), fastest first.
 func (a *App) PathsTo(target string) []string {
 	self, selfID := a.node.Name(), a.store.Get().NodeID
 	if target == "" || target == self || target == selfID {
 		return nil
 	}
-	type cand struct {
-		hops []string
-		lat  int
+	var paths []string
+	for _, r := range a.reach(target) {
+		if r.Hops[len(r.Hops)-1] == target {
+			paths = append(paths, r.Path())
+		}
 	}
-	var out []cand
-	var level []cand
+	return paths
+}
+
+// reach walks the paths; stop: a node not walked past ("" = none).
+func (a *App) reach(stop string) []ReachPath {
+	self, selfID := a.node.Name(), a.store.Get().NodeID
+	var out, level []ReachPath
 	for _, p := range a.node.Peers() {
-		if p.Invisible || p.Restricted || p.Native || p.Name == self || p.Name == selfID {
+		if p.Invisible || p.Restricted || p.Name == self || p.Name == selfID {
 			continue
 		}
 		// an inbound peer has no latency of its own: known, but last
@@ -689,23 +712,19 @@ func (a *App) PathsTo(target string) []string {
 		if lat < 0 {
 			lat = 10_000
 		}
-		level = append(level, cand{hops: []string{p.Name}, lat: lat})
-	}
-	seenTop := map[string]bool{}
-	for _, c := range level {
-		seenTop[c.hops[0]] = true
+		level = append(level, ReachPath{Hops: []string{p.Name}, Lat: lat, Version: p.Version})
 	}
 	const maxDepth = 6
 	for depth := 1; depth <= maxDepth && len(level) > 0; depth++ {
-		var next []cand
+		var next []ReachPath
 		for _, c := range level {
-			path := strings.Join(c.hops, "/")
+			path := c.Path()
 			if a.exit.PathDisabled(path) {
 				continue
 			}
-			last := c.hops[len(c.hops)-1]
-			if last == target {
-				out = append(out, c)
+			out = append(out, c)
+			last := c.Hops[len(c.Hops)-1]
+			if last == stop {
 				continue
 			}
 			kids, ok := a.node.PeersOfCached(path)
@@ -713,40 +732,45 @@ func (a *App) PathsTo(target string) []string {
 				continue
 			}
 			for _, k := range kids {
-				if k.Name == "" || k.Name == self || k.Name == selfID || k.LatencyMs < 0 || k.Native && k.Name != target {
+				if k.Name == "" || k.Name == self || k.Name == selfID || k.LatencyMs < 0 {
 					continue
 				}
 				dup := false
-				for _, h := range c.hops {
+				for _, h := range c.Hops {
 					if h == k.Name {
 						dup = true
 					}
 				}
-				hops := append(append([]string(nil), c.hops...), k.Name)
+				hops := append(append([]string(nil), c.Hops...), k.Name)
 				if dup || !a.exit.Authorised(hops) {
 					continue
 				}
-				next = append(next, cand{hops: hops, lat: c.lat + k.LatencyMs})
+				next = append(next, ReachPath{Hops: hops, Lat: c.Lat + k.LatencyMs, Version: k.Version})
 			}
 		}
 		level = next
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].lat != out[j].lat {
-			return out[i].lat < out[j].lat
+	// a native (plain hysteria) node relays nothing: only as the last hop
+	keep := out[:0]
+	for _, r := range out {
+		ok := true
+		for i := 0; i < len(r.Hops)-1; i++ {
+			if p, found := a.exit.NodeInfoAt(r.Hops[:i+1]); found && p.Native {
+				ok = false
+			}
 		}
-		return len(out[i].hops) < len(out[j].hops)
-	})
-	paths := make([]string, 0, len(out))
-	seen := map[string]bool{}
-	for _, c := range out {
-		p := strings.Join(c.hops, "/")
-		if !seen[p] {
-			seen[p] = true
-			paths = append(paths, p)
+		if ok {
+			keep = append(keep, r)
 		}
 	}
-	return paths
+	out = keep
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Lat != out[j].Lat {
+			return out[i].Lat < out[j].Lat
+		}
+		return len(out[i].Hops) < len(out[j].Hops)
+	})
+	return out
 }
 
 // UnshareIfAlone turns a shared user without other members back into a

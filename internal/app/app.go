@@ -222,6 +222,32 @@ type Config struct {
 	// SharedTombs: shared users deleted everywhere, kept until every
 	// member still holding one has been told.
 	SharedTombs []SharedTomb `yaml:"shared_tombs,omitempty" json:"-"`
+
+	// AutoUpdate: install new releases by themselves (internal/api
+	// autoupdate.go). Off by default.
+	AutoUpdate AutoUpdateConfig `yaml:"auto_update,omitempty" json:"auto_update,omitempty"`
+}
+
+// AutoUpdateConfig: automatic update to new releases.
+type AutoUpdateConfig struct {
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled"`
+	// Time: when to look for one each day, "HH:MM" node local time
+	// ("" = 04:00).
+	Time string `yaml:"time,omitempty" json:"time"`
+	// FromPeers: when the release cannot be fetched, get it from a node
+	// that already runs it (the fastest path first).
+	FromPeers bool `yaml:"from_peers,omitempty" json:"from_peers"`
+}
+
+// AutoUpdateDefaultTime: the update time when none is set.
+const AutoUpdateDefaultTime = "04:00"
+
+// UpdateTime: Time, or the default.
+func (c AutoUpdateConfig) UpdateTime() string {
+	if c.Time == "" {
+		return AutoUpdateDefaultTime
+	}
+	return c.Time
 }
 
 // DNSResolverConfig: see exit.ResolverConfig.

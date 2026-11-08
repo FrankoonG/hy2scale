@@ -410,6 +410,22 @@ export interface UISettings {
   dns_resolver_cache_size: number;        // entries, default 1024
   dns_resolver_query_timeout_ms: number;  // ms, default 3000
   public_ip?: PublicIPSettings;
+  // Daily automatic update (PUT /settings/node).
+  auto_update_enabled?: boolean;
+  auto_update_time?: string;          // "HH:MM", 24h, node local time; default "04:00"
+  auto_update_from_peers?: boolean;   // download failed: fetch from a node already on the new version
+  // Read-only.
+  auto_update_supported?: boolean;    // false: this node cannot update itself (no supervisor)
+  auto_update_last?: AutoUpdateLast;
+}
+
+/** The last automatic-update run. */
+export interface AutoUpdateLast {
+  at: string; // RFC3339
+  result: 'updated' | 'up_to_date' | 'failed';
+  version?: string;
+  source?: string;
+  error?: string;
 }
 
 // Public-IP detection (GET/PUT /settings/ui). Empty servers = built-in list.
