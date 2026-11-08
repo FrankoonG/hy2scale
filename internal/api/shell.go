@@ -39,6 +39,7 @@ func (s *Server) shellRoutes(m *http.ServeMux) {
 	// /download starts a server-side download whose progress every session
 	// observes via /events (SSE); /apply swaps in the downloaded binary.
 	m.HandleFunc("GET /api/upgrade/check", s.checkUpdate)
+	s.startAutoUpdate()
 	m.HandleFunc("POST /api/upgrade/download", s.startDownload)
 	m.HandleFunc("GET /api/upgrade/status", s.getUpgradeStatus)
 	m.HandleFunc("GET /api/upgrade/events", s.streamUpgradeEvents)

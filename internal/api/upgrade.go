@@ -164,50 +164,13 @@ func (s *Server) checkUpdate(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", githubLatestURL, nil)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "hy2scale/"+Version)
-	resp, err := http.DefaultClient.Do(req)
+	rel, err := fetchLatestRelease(ctx)
 	if err != nil {
-		j.markError("check failed: " + err.Error())
+		j.markError(err.Error())
 		http.Error(w, err.Error(), 502)
 		return
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		j.markError(fmt.Sprintf("github status %d: %s", resp.StatusCode, string(body)))
-		http.Error(w, fmt.Sprintf("github status %d", resp.StatusCode), 502)
-		return
-	}
-
-	var rel struct {
-		TagName string `json:"tag_name"`
-		Assets  []struct {
-			Name               string `json:"name"`
-			BrowserDownloadURL string `json:"browser_download_url"`
-			Size               int64  `json:"size"`
-		} `json:"assets"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		j.markError("parse: " + err.Error())
-		http.Error(w, err.Error(), 502)
-		return
-	}
-
-	// Strip leading "v" from tag — release tooling tags are vX.Y.Z but our
-	// in-process Version constant is bare X.Y.Z.
-	latest := strings.TrimPrefix(rel.TagName, "v")
-	wanted := expectedAsset()
-	var url string
-	var size int64
-	for _, a := range rel.Assets {
-		if a.Name == wanted {
-			url = a.BrowserDownloadURL
-			size = a.Size
-			break
-		}
-	}
+	latest, wanted, url, size := rel.Version, rel.Asset, rel.URL, rel.Size
 
 	j.mu.Lock()
 	j.Latest = latest
@@ -232,6 +195,52 @@ func (s *Server) checkUpdate(w http.ResponseWriter, r *http.Request) {
 		// "latest"). Asset URL also has to exist for the local platform.
 		"update_available": url != "" && latest != "" && semverGreater(latest, Version),
 	})
+}
+
+// latestRelease: the latest stable release and this platform's asset of it
+// (URL "" when it has none).
+type latestRelease struct {
+	Version, Asset, URL string
+	Size                int64
+}
+
+// fetchLatestRelease asks GitHub for the latest stable release
+// (/releases/latest leaves prereleases out).
+func fetchLatestRelease(ctx context.Context) (latestRelease, error) {
+	var out latestRelease
+	req, _ := http.NewRequestWithContext(ctx, "GET", githubLatestURL, nil)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "hy2scale/"+Version)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return out, fmt.Errorf("check failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return out, fmt.Errorf("github status %d: %s", resp.StatusCode, string(body))
+	}
+	var rel struct {
+		TagName string `json:"tag_name"`
+		Assets  []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+			Size               int64  `json:"size"`
+		} `json:"assets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return out, fmt.Errorf("parse: %v", err)
+	}
+	// release tags are vX.Y.Z, Version is bare X.Y.Z
+	out.Version = strings.TrimPrefix(rel.TagName, "v")
+	out.Asset = expectedAsset()
+	for _, a := range rel.Assets {
+		if a.Name == out.Asset {
+			out.URL, out.Size = a.BrowserDownloadURL, a.Size
+			break
+		}
+	}
+	return out, nil
 }
 
 // startDownload kicks off a background download of the asset URL recorded by

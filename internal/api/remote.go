@@ -370,6 +370,66 @@ func (s *Server) dialRemoteAPI(ctx context.Context, chain []string) (net.Conn, i
 	return conn, 0, nil
 }
 
+// ownBinary: this node's running binary (symlinks resolved).
+func ownBinary() (string, error) {
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	return exe, err
+}
+
+func ownBinarySize() (int64, error) {
+	exe, err := ownBinary()
+	if err != nil {
+		return 0, err
+	}
+	fi, err := os.Stat(exe)
+	if err != nil {
+		return 0, err
+	}
+	return fi.Size(), nil
+}
+
+// writeOwnArchive writes this node's binary as an upgrade archive: a
+// gzipped tar with "hy2scale" (the name every version takes as its own
+// platform's) and, for an official build, its release signature.
+func writeOwnArchive(w io.Writer) error {
+	exe, err := ownBinary()
+	if err != nil {
+		return err
+	}
+	f, err := os.Open(exe)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	sig, _ := os.ReadFile(buildsig.SigPath(exe))
+	gz := gzip.NewWriter(w)
+	tw := tar.NewWriter(gz)
+	err = tw.WriteHeader(&tar.Header{Name: "hy2scale", Mode: 0o755, Size: fi.Size(), ModTime: fi.ModTime(), Typeflag: tar.TypeReg})
+	if err == nil {
+		_, err = io.Copy(tw, f)
+	}
+	if err == nil && len(sig) > 0 {
+		err = tw.WriteHeader(&tar.Header{Name: "hy2scale.sig", Mode: 0o644, Size: int64(len(sig)), ModTime: fi.ModTime(), Typeflag: tar.TypeReg})
+		if err == nil {
+			_, err = tw.Write(sig)
+		}
+	}
+	if err == nil {
+		err = tw.Close()
+	}
+	if err == nil {
+		err = gz.Close()
+	}
+	return err
+}
+
 // pushBinary installs this node's own binary on a remote node: the binary
 // is packed as an upgrade archive and posted to the remote's upgrade
 // endpoint over the management stream, signed in with the remote session
@@ -398,25 +458,6 @@ func (s *Server) pushBinary(w http.ResponseWriter, r *http.Request) {
 	}
 	s.mu.RUnlock()
 
-	exe, err := os.Executable()
-	if err == nil {
-		exe, err = filepath.EvalSymlinks(exe)
-	}
-	var f *os.File
-	if err == nil {
-		f, err = os.Open(exe)
-	}
-	if err != nil {
-		http.Error(w, "own binary: "+err.Error(), 500)
-		return
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		http.Error(w, "own binary: "+err.Error(), 500)
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
 	defer cancel()
 	conn, code, err := s.dialRemoteAPI(ctx, chain)
@@ -427,36 +468,14 @@ func (s *Server) pushBinary(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 	go func() { <-ctx.Done(); conn.Close() }()
 
-	// Its release signature goes along, so an official build stays one.
-	sig, _ := os.ReadFile(buildsig.SigPath(exe))
-
 	pr, pw := io.Pipe()
 	defer pr.Close()
-	go func() {
-		gz := gzip.NewWriter(pw)
-		tw := tar.NewWriter(gz)
-		// Plain "hy2scale": the name every version takes as its own platform's.
-		err := tw.WriteHeader(&tar.Header{
-			Name: "hy2scale", Mode: 0o755,
-			Size: fi.Size(), ModTime: fi.ModTime(), Typeflag: tar.TypeReg,
-		})
-		if err == nil {
-			_, err = io.Copy(tw, f)
-		}
-		if err == nil && len(sig) > 0 {
-			err = tw.WriteHeader(&tar.Header{Name: "hy2scale.sig", Mode: 0o644, Size: int64(len(sig)), ModTime: fi.ModTime(), Typeflag: tar.TypeReg})
-			if err == nil {
-				_, err = tw.Write(sig)
-			}
-		}
-		if err == nil {
-			err = tw.Close()
-		}
-		if err == nil {
-			err = gz.Close()
-		}
-		pw.CloseWithError(err)
-	}()
+	size, err := ownBinarySize()
+	if err != nil {
+		http.Error(w, "own binary: "+err.Error(), 500)
+		return
+	}
+	go func() { pw.CloseWithError(writeOwnArchive(pw)) }()
 
 	target := "http://127.0.0.1:5565/scale/api/upgrade"
 	if body.AllowUnofficial {
@@ -478,13 +497,13 @@ func (s *Server) pushBinary(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-	log.Printf("[upgrade] pushed own binary (%s, %d bytes) to %s: %d", Version, fi.Size(), strings.Join(chain, "/"), resp.StatusCode)
+	log.Printf("[upgrade] pushed own binary (%s, %d bytes) to %s: %d", Version, size, strings.Join(chain, "/"), resp.StatusCode)
 	out := map[string]any{
 		"ok":      resp.StatusCode == 200,
 		"status":  resp.StatusCode,
 		"message": strings.TrimSpace(string(msg)),
 		"version": Version,
-		"bytes":   fi.Size(),
+		"bytes":   size,
 	}
 	// The remote runs an official build and this one is not: its warning.
 	var un struct {

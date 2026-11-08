@@ -62,6 +62,12 @@ func (s *Server) nodeSettings(cfg app.Config) map[string]any {
 		"max_fetch_fan_out":  lim.MaxFetchFanOut,
 		"accept_punch":       cfg.AcceptPunch,
 		"accept_shared_users": cfg.AcceptSharedUsers,
+		// automatic update (autoupdate.go)
+		"auto_update_enabled":    cfg.AutoUpdate.Enabled,
+		"auto_update_time":       cfg.AutoUpdate.UpdateTime(),
+		"auto_update_from_peers": cfg.AutoUpdate.FromPeers,
+		"auto_update_supported":  canSelfUpgrade(),
+		"auto_update_last":       s.autoUpdateLast(),
 		// Off by default: management requests arriving through the mesh
 		// still need a token.
 		"relay_admin_passthrough": cfg.RelayAdminPassthrough,
@@ -104,6 +110,9 @@ type settingsBody struct {
 	RelayAdminPassthrough *bool   `json:"relay_admin_passthrough"`
 	AcceptPunch           *bool   `json:"accept_punch"`
 	AcceptSharedUsers     *bool   `json:"accept_shared_users"`
+	AutoUpdateEnabled     *bool   `json:"auto_update_enabled"`
+	AutoUpdateTime        *string `json:"auto_update_time"`
+	AutoUpdateFromPeers   *bool   `json:"auto_update_from_peers"`
 	// DNS resolver (relay-routed) — see app.DNSResolverConfig docs.
 	// No separate upstream knob: the resolver uses the top-level
 	// `dns` field above, same as VPN-client DNS push does.
@@ -162,9 +171,16 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, own int) {
 	if own&ownNode == 0 {
 		body.DNS, body.PathLossGraceS, body.AcceptPunch, body.RelayAdminPassthrough = nil, nil, nil, nil
 		body.AcceptSharedUsers = nil
+		body.AutoUpdateEnabled, body.AutoUpdateTime, body.AutoUpdateFromPeers = nil, nil, nil
 		body.MaxNestedDepth, body.MaxResponseNodes, body.MaxCacheEntries, body.MaxResponseBytes, body.MaxFetchFanOut = nil, nil, nil, nil, nil
 		body.DNSResolverEnabled, body.DNSResolverCacheTTL, body.DNSResolverNegativeTTL = nil, nil, nil
 		body.DNSResolverCacheSize, body.DNSResolverQueryTimeoutMs = nil, nil
+	}
+	if body.AutoUpdateTime != nil {
+		if _, err := time.Parse("15:04", *body.AutoUpdateTime); err != nil || len(*body.AutoUpdateTime) != 5 {
+			http.Error(w, "auto_update_time must be HH:MM", 400)
+			return
+		}
 	}
 	nestedTouched := body.MaxNestedDepth != nil || body.MaxResponseNodes != nil ||
 		body.MaxCacheEntries != nil || body.MaxResponseBytes != nil || body.MaxFetchFanOut != nil
@@ -212,6 +228,15 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, own int) {
 		}
 		if body.AcceptSharedUsers != nil {
 			c.AcceptSharedUsers = *body.AcceptSharedUsers
+		}
+		if body.AutoUpdateEnabled != nil {
+			c.AutoUpdate.Enabled = *body.AutoUpdateEnabled
+		}
+		if body.AutoUpdateTime != nil {
+			c.AutoUpdate.Time = *body.AutoUpdateTime
+		}
+		if body.AutoUpdateFromPeers != nil {
+			c.AutoUpdate.FromPeers = *body.AutoUpdateFromPeers
 		}
 		if body.DNSResolverEnabled != nil {
 			// Store as *bool so a future GET keeps round-tripping the
