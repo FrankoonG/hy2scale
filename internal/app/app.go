@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/hex"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -16,6 +17,7 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -206,15 +208,13 @@ type Config struct {
 	// default: hy2scale falls back to net.LookupHost (host's resolv.conf).
 	DNSResolver DNSResolverConfig `yaml:"dns_resolver,omitempty" json:"dns_resolver,omitempty"`
 
-	// KnownInboundIDs persists the last NodeID seen at each source IP for
-	// inbound peers. Used by the inbound-identity sync path
-	// (docs/peer-identity-sync-bugs.md Bug B) to detect when a peer that
-	// previously connected from the same IP now reports a different NodeID
-	// — the inbound counterpart of the outbound rename signal carried by
-	// cfg.Clients[].Addr. Auto-populated on every inbound register; no
-	// operator-facing UI. Map key is the remote IP (no port), value is the
-	// NodeID the peer announced on its most recent connection from that IP.
+	// KnownInboundIDs: the source-IP → NodeID record of 1.4.3 and earlier
+	// (renames were guessed by source IP, which broke nodes behind one
+	// NAT). Read only to be dropped.
 	KnownInboundIDs map[string]string `yaml:"known_inbound_ids,omitempty" json:"known_inbound_ids,omitempty"`
+	// KnownInstances: installation id → NodeID last seen from that inbound
+	// peer; a different NodeID from the same installation is a rename.
+	KnownInstances map[string]string `yaml:"known_instances,omitempty" json:"known_instances,omitempty"`
 
 	// SharedDeletes: shared users still to delete on target nodes (a target
 	// removed, or the user deleted here, while the target was unreachable).
@@ -294,6 +294,7 @@ func New(dataDir string) (*App, error) {
 	// were the same field-on-disk after the schema merge.
 	node := relay.NewNode(cfg.NodeID, cfg.ExitNode)
 	node.SetNodeID(cfg.NodeID) // expose stable id to register handshakes
+	node.SetInstanceID(instanceID(dataDir))
 	histPath := ""
 	if dataDir != "" {
 		histPath = dataDir + "/history.json"
@@ -442,6 +443,9 @@ func (a *App) Run(ctx context.Context) error {
 	// Bug B. Fires inside relay.handleRegister after the meta exchange, lets
 	// us detect inbound peer NodeID changes (using source IP as stable handle).
 	a.node.SetOnInboundIdentity(a.handleInboundIdentity)
+	if a.store.Get().KnownInboundIDs != nil {
+		a.store.Update(func(c *Config) { c.KnownInboundIDs = nil })
+	}
 
 	// Start hy2 server if configured — check port first
 	if cfg.Server != nil {
@@ -1130,95 +1134,94 @@ func (a *App) StartTrafficFlusher(ctx context.Context) {
 // --- Nested-identity sync (inbound peer NodeID change detection) ---
 //
 // Outbound NodeID renames are handled inside dialClient's AttachTo callback
-// using cfg.Clients[].Addr as the stable handle. Inbound peers have no
-// equivalent stable handle in operator-provided config (operators never
-// pre-register inbound peers — they appear at runtime when they dial in).
-// We therefore use the source IP as the stable handle: persist
-// cfg.KnownInboundIDs[remoteIP] = NodeID-last-seen-from-that-IP. On the
-// next inbound register, if the same IP reports a different NodeID and the
-// previously-seen NodeID is no longer an active peer (so this is NOT a
-// NAT-shared-IP scenario where two different peers happen to share an
-// egress IP), we treat it as a rename and rewrite cfg.Peers keys,
-// cfg.Proxies.ExitVia/ExitPaths, and cfg.Users.ExitVia/ExitPaths — exactly
-// what the outbound AttachTo callback does.
-//
-// See docs/peer-identity-sync-bugs.md Bug B.
-func (a *App) handleInboundIdentity(declaredName, nodeID, remoteIP string) {
-	if nodeID == "" || remoteIP == "" {
+// using cfg.Clients[].Addr as the stable handle. Inbound peers send the id
+// of their installation (1.4.4+): the same installation under a new NodeID
+// is a rename, and cfg.Peers keys and proxies' / users' exit paths follow
+// it. Peers that send no installation id are never renamed — a source IP
+// cannot tell a renamed node from another node behind the same NAT.
+func (a *App) handleInboundIdentity(declaredName, nodeID, instanceID string) {
+	if nodeID == "" || instanceID == "" {
 		return
 	}
-	cfg := a.store.Get()
-	prevID := ""
-	if cfg.KnownInboundIDs != nil {
-		prevID = cfg.KnownInboundIDs[remoteIP]
-	}
-	// First time we see this IP, or NodeID unchanged — record and return.
-	if prevID == "" || prevID == nodeID {
-		a.store.Update(func(c *Config) {
-			if c.KnownInboundIDs == nil {
-				c.KnownInboundIDs = make(map[string]string)
-			}
-			c.KnownInboundIDs[remoteIP] = nodeID
-		})
-		return
-	}
-	// Different NodeID at same source IP — propagate the rename. Same
-	// rewrite the outbound dialClient AttachTo callback uses, plus update
-	// the persistent index.
-	//
-	// NAT-shared-IP caveat: if two genuinely different peers happen to share
-	// an egress IP (egress NAT) AND both are actively connected, this code
-	// will incorrectly rewrite the first peer's nested authorization to the
-	// second peer's NodeID. We accept this trade-off because (a) NAT-shared
-	// peers are rare in production hy2scale meshes, where each node is
-	// typically deployed on a distinct host with its own egress, and (b) the
-	// alternative — adding HasPeer / GetLatency timing guards — produces
-	// false negatives during the legitimate rename window where the old
-	// peer's map entry is still stale, defeating the whole point of the
-	// fix. Operators on a NAT-shared topology can disable this behavior by
-	// not regenerating NodeIDs (the trigger is operator-controlled).
-	oldName := prevID
-	newName := nodeID
-	log.Printf("[%s] inbound-identity: peer at %s renamed %s → %s — propagating to cfg.Peers / cfg.Proxies / cfg.Users",
-		a.node.Name(), remoteIP, oldName, newName)
-	a.store.Update(func(c *Config) {
-		renamePeerRef := func(s string) string {
-			return strings.ReplaceAll(s, oldName, newName)
+	prev := a.store.Get().KnownInstances[instanceID]
+	if prev == "" || prev == nodeID {
+		if prev == "" {
+			a.store.Update(func(c *Config) {
+				if c.KnownInstances == nil {
+					c.KnownInstances = make(map[string]string)
+				}
+				c.KnownInstances[instanceID] = nodeID
+			})
 		}
+		return
+	}
+	oldName, newName := prev, nodeID
+	log.Printf("[%s] inbound-identity: node %s renamed itself %s → %s — updating cfg.Peers / cfg.Proxies / cfg.Users",
+		a.node.Name(), instanceID, oldName, newName)
+	a.store.Update(func(c *Config) {
 		newPeers := make(map[string]PeerConfig)
 		for k, v := range c.Peers {
-			newPeers[renamePeerRef(k)] = v
+			newPeers[renameHop(k, oldName, newName)] = v
 		}
 		c.Peers = newPeers
 		for i := range c.Proxies {
-			c.Proxies[i].ExitVia = renamePeerRef(c.Proxies[i].ExitVia)
+			c.Proxies[i].ExitVia = renameHop(c.Proxies[i].ExitVia, oldName, newName)
 			for j := range c.Proxies[i].ExitPaths {
-				c.Proxies[i].ExitPaths[j] = renamePeerRef(c.Proxies[i].ExitPaths[j])
+				c.Proxies[i].ExitPaths[j] = renameHop(c.Proxies[i].ExitPaths[j], oldName, newName)
 			}
 		}
 		for i := range c.Users {
-			c.Users[i].ExitVia = renamePeerRef(c.Users[i].ExitVia)
+			c.Users[i].ExitVia = renameHop(c.Users[i].ExitVia, oldName, newName)
 			for j := range c.Users[i].ExitPaths {
-				c.Users[i].ExitPaths[j] = renamePeerRef(c.Users[i].ExitPaths[j])
+				c.Users[i].ExitPaths[j] = renameHop(c.Users[i].ExitPaths[j], oldName, newName)
 			}
 		}
-		if c.KnownInboundIDs == nil {
-			c.KnownInboundIDs = make(map[string]string)
-		}
-		c.KnownInboundIDs[remoteIP] = newName
+		c.KnownInstances[instanceID] = newName
 	})
 	// Mirror relay-side nested map and clear stale latency, same as the
-	// outbound rename path.
+	// outbound rename path; the old name's stale slot goes at once.
 	a.node.SetNestedDiscovery(newName, a.node.IsNestedEnabled(oldName))
 	a.node.SetNestedDiscovery(oldName, false)
 	a.node.SetLatency(oldName, 0)
-	// Also force-disconnect the stale peer entry. Without this, upstream
-	// nodes polling our PeersOf list still see the old NodeID listed as a
-	// child until the prober eventually marks it dead — and during that
-	// window, the upstream's subPeersCache continues to report old → new is
-	// invisible to them. DisconnectPeer flushes the slot immediately so the
-	// next /api/internal/peers response carries only the new identity.
 	a.node.DisconnectPeer(oldName)
+}
+
+// instanceID is this installation's random id, kept in <data>/instance-id
+// (created on first use; "" without a data directory).
+func instanceID(dataDir string) string {
+	if dataDir == "" {
+		return ""
+	}
+	path := filepath.Join(dataDir, "instance-id")
+	if b, err := os.ReadFile(path); err == nil {
+		if id := strings.TrimSpace(string(b)); len(id) >= 16 {
+			return id
+		}
+	}
+	var r [16]byte
+	if _, err := rand.Read(r[:]); err != nil {
+		return ""
+	}
+	id := hex.EncodeToString(r[:])
+	if err := os.WriteFile(path, []byte(id+"\n"), 0644); err != nil {
+		log.Printf("[config] writing instance-id: %v", err)
+		return ""
+	}
+	return id
+}
+
+// renameHop replaces the path hops named from (whole names only).
+func renameHop(path, from, to string) string {
+	if path == "" {
+		return path
+	}
+	hops := strings.Split(path, "/")
+	for i, h := range hops {
+		if h == from {
+			hops[i] = to
+		}
+	}
+	return strings.Join(hops, "/")
 }
 
 // --- Nested discovery ---
