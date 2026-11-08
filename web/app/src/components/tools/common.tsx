@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@hy2scale/ui';
 import type { ToolAvail } from '@/api/tools';
@@ -50,9 +50,12 @@ export function RunButton({ running, disabled, onStop, testId }: {
   running: boolean; disabled?: boolean; onStop: () => void; testId?: string;
 }) {
   const { t } = useTranslation();
+  // Distinct keys: Stop must not turn into the submit button under the
+  // pointer during its own click (the click's default action would then
+  // submit the form and start a new run).
   return running
-    ? <Button type="button" onClick={onStop} data-testid={testId && `${testId}-stop`}>{t('tools.stop')}</Button>
-    : <Button variant="primary" type="submit" disabled={disabled} data-testid={testId && `${testId}-start`}>{t('tools.start')}</Button>;
+    ? <Button key="stop" type="button" onClick={(e) => { e.preventDefault(); onStop(); }} data-testid={testId && `${testId}-stop`}>{t('tools.stop')}</Button>
+    : <Button key="start" variant="primary" type="submit" disabled={disabled} data-testid={testId && `${testId}-start`}>{t('tools.start')}</Button>;
 }
 
 export function Unavailable({ avail }: { avail?: ToolAvail }) {
@@ -95,15 +98,58 @@ export function RttBars({ values, max = 120 }: { values: (number | null)[]; max?
   );
 }
 
+type Pt = { t: number; v: number };
+const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
+const LINE_STEP_MS = 450;
+
+/**
+ * The series as drawn: each new sample grows out of the previous last
+ * point and the vertical scale follows, eased over LINE_STEP_MS; a series
+ * that got shorter (a new run) is drawn at once, as is everything under
+ * reduced motion.
+ */
+function useEasedSeries(points: Pt[]): { pts: Pt[]; top: number } {
+  const target = useMemo(() => ({ pts: points, top: Math.max(1, ...points.map((p) => p.v)) * 1.1 }), [points]);
+  const [view, setView] = useState(target);
+  const cur = useRef(target);
+  useEffect(() => {
+    const from = cur.current;
+    const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduced || target.pts.length < from.pts.length || from.pts.length === 0) {
+      cur.current = target;
+      setView(target);
+      return;
+    }
+    const last = from.pts[from.pts.length - 1];
+    const fromPts = target.pts.map((p, i) => from.pts[i] ?? last ?? p);
+    const t0 = performance.now();
+    let raf = 0;
+    const step = (now: number) => {
+      const k = Math.min(1, (now - t0) / LINE_STEP_MS);
+      const e = 1 - Math.pow(1 - k, 3);
+      const v = {
+        pts: target.pts.map((p, i) => ({ t: lerp(fromPts[i].t, p.t, e), v: lerp(fromPts[i].v, p.v, e) })),
+        top: lerp(from.top, target.top, e),
+      };
+      cur.current = v;
+      setView(v);
+      if (k < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [target]);
+  return view;
+}
+
 /** Line of throughput samples over the run (x = elapsed / total). */
-export function RateLine({ points, total }: { points: { t: number; v: number }[]; total: number }) {
+export function RateLine({ points, total }: { points: Pt[]; total: number }) {
   const W = 600;
   const H = 120;
-  if (points.length < 2) return <svg className="tool-line" viewBox={`0 0 ${W} ${H}`} aria-hidden />;
-  const top = Math.max(1, ...points.map((p) => p.v)) * 1.1;
-  const xy = points.map((p) => `${(Math.min(p.t, total) / total) * W},${H - (p.v / top) * H}`);
+  const { pts, top } = useEasedSeries(points);
+  if (pts.length < 2) return <svg className="tool-line" viewBox={`0 0 ${W} ${H}`} aria-hidden />;
+  const xy = pts.map((p) => `${(Math.min(p.t, total) / total) * W},${H - (Math.min(p.v, top) / top) * H}`);
   return (
-    <svg className="tool-line" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden>
+    <svg className="tool-line" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden data-testid="rate-line">
       <polygon className="area" points={`0,${H} ${xy.join(' ')} ${xy[xy.length - 1].split(',')[0]},${H}`} />
       <polyline className="stroke" points={xy.join(' ')} vectorEffect="non-scaling-stroke" />
     </svg>

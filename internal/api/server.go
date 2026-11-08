@@ -98,8 +98,10 @@ func (s *Server) Start(ctx context.Context) error {
 	// flow on a passthrough-trusted peer doesn't prompt for that
 	// peer's web password just to mint the token the new tab needs.
 	apiMux.HandleFunc("POST /api/relay-passthrough-token", s.relayPassthroughToken)
-	// Shared-user pushes from a manager node: relay trust only (own gate).
+	// Shared users between nodes (own gate and signatures).
 	s.sharedPushRoutes(apiMux)
+	// A node updating itself takes this node's binary (relay, nodes only).
+	apiMux.HandleFunc("GET /api/upgrade/peer-binary", s.servePeerBinary)
 	// Internal peer list (no auth, used for reverse nested discovery)
 	apiMux.HandleFunc("GET /api/internal/peers", s.internalPeers)
 	// Build-id probe (no auth) — a long-lived SPA tab polls this to detect
@@ -283,7 +285,7 @@ func (s *Server) Start(ctx context.Context) error {
 // --- Node ---
 
 // Version is the application version. Update this on each release.
-const Version = "1.4.3"
+const Version = "1.4.4"
 
 func init() {
 	app.AppVersion = Version

@@ -171,3 +171,8 @@
 .hy-rate-input>.hy-input{flex:1;min-width:0}
 .hy-rate-input>.hy-select-wrap{flex:0 0 96px;width:96px}
 .import-error{margin-top:4px;font-size:12px;font-weight:400;color:var(--red);word-break:break-word}
+
+/* ====== Modal footer button group ====== */
+/* Left-side actions of a modal footer: wrap onto their own row when narrow. */
+.hy-modal-footer:has(> .modal-footer-group){flex-wrap:wrap}
+.modal-footer-group{display:flex;flex-wrap:wrap;gap:8px}

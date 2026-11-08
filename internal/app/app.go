@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -206,19 +208,46 @@ type Config struct {
 	// default: hy2scale falls back to net.LookupHost (host's resolv.conf).
 	DNSResolver DNSResolverConfig `yaml:"dns_resolver,omitempty" json:"dns_resolver,omitempty"`
 
-	// KnownInboundIDs persists the last NodeID seen at each source IP for
-	// inbound peers. Used by the inbound-identity sync path
-	// (docs/peer-identity-sync-bugs.md Bug B) to detect when a peer that
-	// previously connected from the same IP now reports a different NodeID
-	// — the inbound counterpart of the outbound rename signal carried by
-	// cfg.Clients[].Addr. Auto-populated on every inbound register; no
-	// operator-facing UI. Map key is the remote IP (no port), value is the
-	// NodeID the peer announced on its most recent connection from that IP.
+	// KnownInboundIDs: the source-IP → NodeID record of 1.4.3 and earlier
+	// (renames were guessed by source IP, which broke nodes behind one
+	// NAT). Read only to be dropped.
 	KnownInboundIDs map[string]string `yaml:"known_inbound_ids,omitempty" json:"known_inbound_ids,omitempty"`
+	// KnownInstances: installation id → NodeID last seen from that inbound
+	// peer; a different NodeID from the same installation is a rename.
+	KnownInstances map[string]string `yaml:"known_instances,omitempty" json:"known_instances,omitempty"`
 
-	// SharedDeletes: shared users still to delete on target nodes (a target
-	// removed, or the user deleted here, while the target was unreachable).
-	SharedDeletes []SharedDelete `yaml:"shared_deletes,omitempty" json:"-"`
+	// AcceptSharedUsers: other nodes may share users to this one (the
+	// first share still needs relay trust or a session here).
+	AcceptSharedUsers bool `yaml:"accept_shared_users,omitempty" json:"accept_shared_users,omitempty"`
+	// SharedTombs: shared users deleted everywhere, kept until every
+	// member still holding one has been told.
+	SharedTombs []SharedTomb `yaml:"shared_tombs,omitempty" json:"-"`
+
+	// AutoUpdate: install new releases by themselves (internal/api
+	// autoupdate.go). Off by default.
+	AutoUpdate AutoUpdateConfig `yaml:"auto_update,omitempty" json:"auto_update,omitempty"`
+}
+
+// AutoUpdateConfig: automatic update to new releases.
+type AutoUpdateConfig struct {
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled"`
+	// Time: when to look for one each day, "HH:MM" node local time
+	// ("" = 04:00).
+	Time string `yaml:"time,omitempty" json:"time"`
+	// FromPeers: when the release cannot be fetched, get it from a node
+	// that already runs it (the fastest path first).
+	FromPeers bool `yaml:"from_peers,omitempty" json:"from_peers"`
+}
+
+// AutoUpdateDefaultTime: the update time when none is set.
+const AutoUpdateDefaultTime = "04:00"
+
+// UpdateTime: Time, or the default.
+func (c AutoUpdateConfig) UpdateTime() string {
+	if c.Time == "" {
+		return AutoUpdateDefaultTime
+	}
+	return c.Time
 }
 
 // DNSResolverConfig: see exit.ResolverConfig.
@@ -273,6 +302,11 @@ type App struct {
 	pwConflicted  map[string]map[string]bool       // username → proxy → conflicted
 	pwConflictAll map[string]map[string][]string   // proxy → password → []usernames (for API)
 	trafficDirty  sync.Map                         // username → true (needs flush)
+	// shared users (shared_users.go): the hybrid logical clock, and the
+	// sync told of every change (set by the api server)
+	hlcMu        sync.Mutex
+	hlcLast      int64
+	SharedNotify func(gid string)
 	Sessions     *SessionManager
 
 	ifaces *ifaceManager  // child interfaces, public address detection
@@ -294,6 +328,7 @@ func New(dataDir string) (*App, error) {
 	// were the same field-on-disk after the schema merge.
 	node := relay.NewNode(cfg.NodeID, cfg.ExitNode)
 	node.SetNodeID(cfg.NodeID) // expose stable id to register handshakes
+	node.SetInstanceID(instanceID(dataDir))
 	histPath := ""
 	if dataDir != "" {
 		histPath = dataDir + "/history.json"
@@ -442,6 +477,9 @@ func (a *App) Run(ctx context.Context) error {
 	// Bug B. Fires inside relay.handleRegister after the meta exchange, lets
 	// us detect inbound peer NodeID changes (using source IP as stable handle).
 	a.node.SetOnInboundIdentity(a.handleInboundIdentity)
+	if a.store.Get().KnownInboundIDs != nil {
+		a.store.Update(func(c *Config) { c.KnownInboundIDs = nil })
+	}
 
 	// Start hy2 server if configured — check port first
 	if cfg.Server != nil {
@@ -831,8 +869,13 @@ func (a *App) UpdateProxy(pc ProxyConfig) error {
 func (a *App) rebuildUserIndex() {
 	cfg := a.store.Get()
 	index := make(map[string]*UserConfig, len(cfg.Users))
+	self := a.node.InstallationID()
 	for i := range cfg.Users {
-		index[cfg.Users[i].Username] = &cfg.Users[i]
+		u := &cfg.Users[i]
+		if u.Shared != nil {
+			atomic.StoreInt64(&u.RemoteUsed, remoteUsed(u, self))
+		}
+		index[u.Username] = u
 	}
 
 	// Build password conflict maps for password-only proxies.
@@ -949,7 +992,7 @@ func (a *App) LookupUser(username, password, proxy string) (*UserConfig, error) 
 			return nil, fmt.Errorf("user expired")
 		}
 	}
-	if u.TrafficLimit > 0 && u.TrafficUsed >= u.TrafficLimit {
+	if u.OverLimit() {
 		return nil, fmt.Errorf("traffic limit exceeded")
 	}
 	return u, nil
@@ -974,6 +1017,7 @@ func (a *App) AddUser(u UserConfig) error {
 }
 
 func (a *App) UpdateUser(id string, u UserConfig) error {
+	var sharedGID string
 	var oldPassword string
 	var oldProxyPw map[string]string
 	var oldProxyDisabled []string
@@ -996,10 +1040,13 @@ func (a *App) UpdateUser(id string, u UserConfig) error {
 						u.TrafficResetFrom = TrafficNow().Format(time.RFC3339)
 					}
 				}
-				u.ShareTargets = existing.ShareTargets
-				u.ShareRev = existing.ShareRev
-				u.ShareResetRev = existing.ShareResetRev
-				u.SharedFrom = existing.SharedFrom
+				u.Shared = existing.Shared
+				if u.Shared != nil {
+					// a shared user's period runs on UTC boundaries (shared_users.go)
+					u.TrafficResetFrom = existing.TrafficResetFrom
+					a.sharedStamp(&c.Users[i], &u, false)
+					sharedGID = u.Shared.GID
+				}
 				c.Users[i] = u
 				return
 			}
@@ -1007,6 +1054,10 @@ func (a *App) UpdateUser(id string, u UserConfig) error {
 	})
 	if err == nil {
 		a.rebuildUserIndex()
+		if sharedGID != "" {
+			a.applySharedEpochs()
+			a.sharedChanged(sharedGID)
+		}
 		// If credentials OR per-proxy access changed, disconnect all active
 		// sessions for this user. ProxyDisabled changing means a previously
 		// permitted protocol is now revoked — keeping the in-flight tunnel
@@ -1028,10 +1079,6 @@ func (a *App) RemoveUser(id string) error {
 	err := a.store.Update(func(c *Config) {
 		for i, u := range c.Users {
 			if u.ID == id {
-				// a user shared out is deleted on its targets too
-				for _, t := range u.ShareTargets {
-					addSharedDelete(c, SharedDelete{Target: t, UserID: u.ID})
-				}
 				c.Users = append(c.Users[:i], c.Users[i+1:]...)
 				return
 			}
@@ -1044,25 +1091,42 @@ func (a *App) RemoveUser(id string) error {
 }
 
 func (a *App) ToggleUser(id string, enabled bool) error {
+	var gid string
 	err := a.store.Update(func(c *Config) {
 		for i, u := range c.Users {
 			if u.ID == id {
-				c.Users[i].Enabled = enabled
+				nu := u
+				nu.Enabled = enabled
+				if nu.Shared != nil {
+					a.sharedStamp(&c.Users[i], &nu, false)
+					gid = nu.Shared.GID
+				}
+				c.Users[i].Enabled, c.Users[i].Shared = nu.Enabled, nu.Shared
 				return
 			}
 		}
 	})
 	if err == nil {
 		a.rebuildUserIndex()
+		a.sharedChanged(gid)
 	}
 	return err
 }
 
 func (a *App) ResetUserTraffic(id string) error {
+	var gid string
 	a.usersMu.RLock()
 	err := a.store.Update(func(c *Config) {
 		for i, u := range c.Users {
 			if u.ID == id {
+				if u.Shared != nil {
+					// a new period for every holder (applySharedEpochs)
+					nu := u
+					a.sharedStamp(&c.Users[i], &nu, true)
+					c.Users[i].Shared = nu.Shared
+					gid = nu.Shared.GID
+					return
+				}
 				if live, ok := a.userIndex[u.Username]; ok {
 					atomic.StoreInt64(&live.TrafficUsed, 0)
 				}
@@ -1075,6 +1139,10 @@ func (a *App) ResetUserTraffic(id string) error {
 	a.usersMu.RUnlock()
 	if err == nil {
 		a.rebuildUserIndex()
+		if gid != "" {
+			a.applySharedEpochs()
+			a.sharedChanged(gid)
+		}
 	}
 	return err
 }
@@ -1130,95 +1198,94 @@ func (a *App) StartTrafficFlusher(ctx context.Context) {
 // --- Nested-identity sync (inbound peer NodeID change detection) ---
 //
 // Outbound NodeID renames are handled inside dialClient's AttachTo callback
-// using cfg.Clients[].Addr as the stable handle. Inbound peers have no
-// equivalent stable handle in operator-provided config (operators never
-// pre-register inbound peers — they appear at runtime when they dial in).
-// We therefore use the source IP as the stable handle: persist
-// cfg.KnownInboundIDs[remoteIP] = NodeID-last-seen-from-that-IP. On the
-// next inbound register, if the same IP reports a different NodeID and the
-// previously-seen NodeID is no longer an active peer (so this is NOT a
-// NAT-shared-IP scenario where two different peers happen to share an
-// egress IP), we treat it as a rename and rewrite cfg.Peers keys,
-// cfg.Proxies.ExitVia/ExitPaths, and cfg.Users.ExitVia/ExitPaths — exactly
-// what the outbound AttachTo callback does.
-//
-// See docs/peer-identity-sync-bugs.md Bug B.
-func (a *App) handleInboundIdentity(declaredName, nodeID, remoteIP string) {
-	if nodeID == "" || remoteIP == "" {
+// using cfg.Clients[].Addr as the stable handle. Inbound peers send the id
+// of their installation (1.4.4+): the same installation under a new NodeID
+// is a rename, and cfg.Peers keys and proxies' / users' exit paths follow
+// it. Peers that send no installation id are never renamed — a source IP
+// cannot tell a renamed node from another node behind the same NAT.
+func (a *App) handleInboundIdentity(declaredName, nodeID, instanceID string) {
+	if nodeID == "" || instanceID == "" {
 		return
 	}
-	cfg := a.store.Get()
-	prevID := ""
-	if cfg.KnownInboundIDs != nil {
-		prevID = cfg.KnownInboundIDs[remoteIP]
-	}
-	// First time we see this IP, or NodeID unchanged — record and return.
-	if prevID == "" || prevID == nodeID {
-		a.store.Update(func(c *Config) {
-			if c.KnownInboundIDs == nil {
-				c.KnownInboundIDs = make(map[string]string)
-			}
-			c.KnownInboundIDs[remoteIP] = nodeID
-		})
-		return
-	}
-	// Different NodeID at same source IP — propagate the rename. Same
-	// rewrite the outbound dialClient AttachTo callback uses, plus update
-	// the persistent index.
-	//
-	// NAT-shared-IP caveat: if two genuinely different peers happen to share
-	// an egress IP (egress NAT) AND both are actively connected, this code
-	// will incorrectly rewrite the first peer's nested authorization to the
-	// second peer's NodeID. We accept this trade-off because (a) NAT-shared
-	// peers are rare in production hy2scale meshes, where each node is
-	// typically deployed on a distinct host with its own egress, and (b) the
-	// alternative — adding HasPeer / GetLatency timing guards — produces
-	// false negatives during the legitimate rename window where the old
-	// peer's map entry is still stale, defeating the whole point of the
-	// fix. Operators on a NAT-shared topology can disable this behavior by
-	// not regenerating NodeIDs (the trigger is operator-controlled).
-	oldName := prevID
-	newName := nodeID
-	log.Printf("[%s] inbound-identity: peer at %s renamed %s → %s — propagating to cfg.Peers / cfg.Proxies / cfg.Users",
-		a.node.Name(), remoteIP, oldName, newName)
-	a.store.Update(func(c *Config) {
-		renamePeerRef := func(s string) string {
-			return strings.ReplaceAll(s, oldName, newName)
+	prev := a.store.Get().KnownInstances[instanceID]
+	if prev == "" || prev == nodeID {
+		if prev == "" {
+			a.store.Update(func(c *Config) {
+				if c.KnownInstances == nil {
+					c.KnownInstances = make(map[string]string)
+				}
+				c.KnownInstances[instanceID] = nodeID
+			})
 		}
+		return
+	}
+	oldName, newName := prev, nodeID
+	log.Printf("[%s] inbound-identity: node %s renamed itself %s → %s — updating cfg.Peers / cfg.Proxies / cfg.Users",
+		a.node.Name(), instanceID, oldName, newName)
+	a.store.Update(func(c *Config) {
 		newPeers := make(map[string]PeerConfig)
 		for k, v := range c.Peers {
-			newPeers[renamePeerRef(k)] = v
+			newPeers[renameHop(k, oldName, newName)] = v
 		}
 		c.Peers = newPeers
 		for i := range c.Proxies {
-			c.Proxies[i].ExitVia = renamePeerRef(c.Proxies[i].ExitVia)
+			c.Proxies[i].ExitVia = renameHop(c.Proxies[i].ExitVia, oldName, newName)
 			for j := range c.Proxies[i].ExitPaths {
-				c.Proxies[i].ExitPaths[j] = renamePeerRef(c.Proxies[i].ExitPaths[j])
+				c.Proxies[i].ExitPaths[j] = renameHop(c.Proxies[i].ExitPaths[j], oldName, newName)
 			}
 		}
 		for i := range c.Users {
-			c.Users[i].ExitVia = renamePeerRef(c.Users[i].ExitVia)
+			c.Users[i].ExitVia = renameHop(c.Users[i].ExitVia, oldName, newName)
 			for j := range c.Users[i].ExitPaths {
-				c.Users[i].ExitPaths[j] = renamePeerRef(c.Users[i].ExitPaths[j])
+				c.Users[i].ExitPaths[j] = renameHop(c.Users[i].ExitPaths[j], oldName, newName)
 			}
 		}
-		if c.KnownInboundIDs == nil {
-			c.KnownInboundIDs = make(map[string]string)
-		}
-		c.KnownInboundIDs[remoteIP] = newName
+		c.KnownInstances[instanceID] = newName
 	})
 	// Mirror relay-side nested map and clear stale latency, same as the
-	// outbound rename path.
+	// outbound rename path; the old name's stale slot goes at once.
 	a.node.SetNestedDiscovery(newName, a.node.IsNestedEnabled(oldName))
 	a.node.SetNestedDiscovery(oldName, false)
 	a.node.SetLatency(oldName, 0)
-	// Also force-disconnect the stale peer entry. Without this, upstream
-	// nodes polling our PeersOf list still see the old NodeID listed as a
-	// child until the prober eventually marks it dead — and during that
-	// window, the upstream's subPeersCache continues to report old → new is
-	// invisible to them. DisconnectPeer flushes the slot immediately so the
-	// next /api/internal/peers response carries only the new identity.
 	a.node.DisconnectPeer(oldName)
+}
+
+// instanceID is this installation's random id, kept in <data>/instance-id
+// (created on first use; "" without a data directory).
+func instanceID(dataDir string) string {
+	if dataDir == "" {
+		return ""
+	}
+	path := filepath.Join(dataDir, "instance-id")
+	if b, err := os.ReadFile(path); err == nil {
+		if id := strings.TrimSpace(string(b)); len(id) >= 16 {
+			return id
+		}
+	}
+	var r [16]byte
+	if _, err := rand.Read(r[:]); err != nil {
+		return ""
+	}
+	id := hex.EncodeToString(r[:])
+	if err := os.WriteFile(path, []byte(id+"\n"), 0644); err != nil {
+		log.Printf("[config] writing instance-id: %v", err)
+		return ""
+	}
+	return id
+}
+
+// renameHop replaces the path hops named from (whole names only).
+func renameHop(path, from, to string) string {
+	if path == "" {
+		return path
+	}
+	hops := strings.Split(path, "/")
+	for i, h := range hops {
+		if h == from {
+			hops[i] = to
+		}
+	}
+	return strings.Join(hops, "/")
 }
 
 // --- Nested discovery ---
@@ -2546,7 +2613,7 @@ func (a *hy2Auth) Authenticate(addr net.Addr, auth string, tx uint64) (bool, str
 				}
 			}
 			// Check traffic limit
-			if u.TrafficLimit > 0 && u.TrafficUsed >= u.TrafficLimit {
+			if u.OverLimit() {
 				return false, ""
 			}
 			return true, "user:" + u.Username

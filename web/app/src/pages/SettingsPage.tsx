@@ -57,7 +57,7 @@ export default function SettingsPage() {
       case 'web': return <WebTab web={web} />;
       case 'storage': return <StorageTab />;
       case 'account': return <AccountTab pw={pw} forcePasswordChange={forcePasswordChange} />;
-      case 'upgrade': return <UpgradeTab />;
+      case 'upgrade': return <UpgradeTab sys={sys} settings={settingsQ.data} />;
       case 'maintenance': return <MaintenanceTab />;
       case 'about': return <AboutTab />;
     }

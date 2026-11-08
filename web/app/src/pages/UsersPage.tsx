@@ -7,12 +7,13 @@ import {
 import type { UserConfig, Session, PasswordConflicts } from '@/api';
 import * as api from '@/api';
 import { GiB } from '@/hooks/useFormat';
-import { useBulkAction } from '@/hooks/useBulkAction';
+import { useUserActions, isLeaving } from '@/hooks/useUserActions';
 import { ListScope } from '@/hooks/useDeselectOnBlankClick';
 import { isPast } from '@/utils/date';
 import { ExitViaCell, exitViaSortValue } from '@/components/ExitViaCell';
 import UserModal from '@/components/UserModal';
 import UserInfoModal, { type UserInfoTab } from '@/components/UserInfoModal';
+import ShareUserModal from '@/components/ShareUserModal';
 import { useImportExport } from '@/components/ImportExport';
 import ResponsiveActions from '@/components/ResponsiveActions';
 import UsageMeter from '@/components/UsageMeter';
@@ -31,6 +32,7 @@ export default function UsersPage() {
   const edit = useModalState<string | null>();      // user id; null = new user
   // row click: details; username click: proxies (share links)
   const info = useModalState<{ user: UserConfig; tab: UserInfoTab }>();
+  const share = useModalState<string>();             // user id
 
   const { data: users = [] } = useQuery({ queryKey: ['users'], queryFn: api.getUsers, refetchInterval: 5000 });
   const { data: conflicts = {} } = useQuery<PasswordConflicts>({ queryKey: ['userConflicts'], queryFn: api.getUserConflicts, refetchInterval: 5000 });
@@ -58,18 +60,9 @@ export default function UsersPage() {
 
   const selection = useSelection(users.map((u) => u.id));
   const selected = pickSelected(users, selection.selected, (u) => u.id);
-  const bulk = useBulkAction(['users']);
-
-  const bulkToggle = (enabled: boolean) => bulk(selection.selected, (id) => api.toggleUser(id, enabled),
-    { label: enabled ? t('app.bulkEnable') : t('app.bulkDisable') });
-  const bulkReset = () => bulk(selection.selected, (id) => api.resetTraffic(id), {
-    label: t('users.bulkResetTraffic'),
-    confirm: { title: t('users.resetTitle'), message: t('users.resetConfirm'), confirmText: t('users.reset') },
-  });
-  const bulkDelete = () => bulk(selection.selected, (id) => api.deleteUser(id), {
-    label: t('app.bulkDelete'),
-    confirm: { title: t('app.bulkDelete'), message: t('app.bulkDeleteConfirm', { count: selection.count }), confirmText: t('app.delete'), danger: true },
-  });
+  const actions = useUserActions();
+  const leaving = isLeaving(selected);
+  const one = selected.length === 1 ? selected[0] : null;
 
   const userColumns: Column<UserConfig>[] = [
     {
@@ -90,6 +83,11 @@ export default function UsersPage() {
             </Tooltip>
           )}
           <a className="peer-link peer-name-cell" onClick={(e) => { e.stopPropagation(); info.show({ user: u, tab: 'proxies' }, e); }}>{u.username}</a>
+          {u.shared && (
+            <Tooltip content={<div className="cell-small">{u.shared.members.map((m) => <div key={m.node_id || m.name}>{m.name}</div>)}</div>}>
+              <span data-testid="user-shared-tag"><Badge variant="blue">{t('users.sharedTag', { count: u.shared.members.length })}</Badge></span>
+            </Tooltip>
+          )}
         </span>
       ),
     },
@@ -143,8 +141,16 @@ export default function UsersPage() {
         count={users.length}
         actions={
           <ResponsiveActions selectedCount={selection.count} onClearSelection={selection.clear}>
-            <BulkButtons selected={selected} isEnabled={(u) => u.enabled} onToggle={bulkToggle} onDelete={bulkDelete}>
-              <Button size="sm" onClick={bulkReset}>{t('users.bulkResetTraffic')}</Button>
+            <BulkButtons selected={selected} isEnabled={(u) => u.enabled}
+              onToggle={(enabled) => actions.toggle(selected, enabled)} onDelete={() => actions.remove(selected)}
+              deleteLabel={leaving ? t('users.leave') : undefined}>
+              <Button size="sm" onClick={() => actions.reset(selected)}>{t('users.bulkResetTraffic')}</Button>
+              {one && <Button size="sm" data-testid="user-share" onClick={(e) => share.show(one.id, e)}>{t('users.share')}</Button>}
+              {one?.shared && (
+                <Button size="sm" variant="danger" data-testid="user-delete-everywhere" onClick={() => actions.deleteEverywhere(one)}>
+                  {t('users.deleteEverywhere')}
+                </Button>
+              )}
             </BulkButtons>
             <EditSelectedButton selected={selected} onEdit={(u, e) => edit.show(u.id, e)} />
             <ExpandButton variant="primary" label={t('users.addUser')} moreLabel={t('app.moreActions')}
@@ -174,6 +180,11 @@ export default function UsersPage() {
 
       {ie.modal}
 
+      <ShareUserModal
+        {...share.modalProps}
+        user={share.data ? users.find((u) => u.id === share.data) || null : null}
+      />
+
       <UserInfoModal
         {...info.modalProps}
         user={infoUser}
@@ -182,6 +193,7 @@ export default function UsersPage() {
         conflicts={infoUser ? conflicts[infoUser.username] : undefined}
         onKick={handleKick}
         onEdit={(u, from) => { info.close(); edit.show(u.id, from); }}
+        onShare={(u, from) => share.show(u.id, from)}
       />
     </div>
   );

@@ -3,7 +3,7 @@ import { Card, Button, Input, Toggle, Select, FormGroup, FormStack, SectionDivid
 import { OrderedList } from '@/components/OrderedList';
 import type { SystemForm } from './forms';
 
-/** Settings → Network: relaying, hole punching, path grace, public IP detection. */
+/** Settings → Network: relaying, hole punching, shared users, path grace, public IP detection. */
 export default function NetworkTab({ sys }: { sys: SystemForm }) {
   const { t } = useTranslation();
   const { v, set } = sys;
@@ -15,6 +15,9 @@ export default function NetworkTab({ sys }: { sys: SystemForm }) {
         </FormGroup>
         <FormGroup label={t('settings.acceptPunch')} hint={t('settings.acceptPunchDesc')}>
           <Toggle checked={v.accept_punch} onChange={(e) => set('accept_punch', e.target.checked)} data-testid="accept-punch" />
+        </FormGroup>
+        <FormGroup label={t('settings.acceptSharedUsers')} hint={t('settings.acceptSharedUsersDesc')}>
+          <Toggle checked={v.accept_shared_users} onChange={(e) => set('accept_shared_users', e.target.checked)} data-testid="accept-shared-users" />
         </FormGroup>
         <FormGroup label={t('settings.pathLossGrace')} hint={t('settings.pathLossGraceDesc')}>
           <Input type="number" min={3} max={300} suffix="s" value={v.path_loss_grace_s}

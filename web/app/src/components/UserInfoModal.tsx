@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { QRCodeCanvas } from 'qrcode.react';
@@ -7,6 +7,7 @@ import {
   useToast, type Column, type DetailItem,
 } from '@hy2scale/ui';
 import type { UserConfig, Session } from '@/api';
+import type { SharedMember, SharedMemberState } from '@/api/types';
 import * as api from '@/api';
 import { useNodeStore } from '@/store/node';
 import { PROXY_REGISTRY, DETAIL_PROXIES, type ProxyContext } from '@/config/proxyRegistry';
@@ -15,6 +16,7 @@ import { isPast } from '@/utils/date';
 import { copyToClipboard } from '@/utils/clipboard';
 import { ExitViaCell } from '@/components/ExitViaCell';
 import UsageMeter from '@/components/UsageMeter';
+import { useUserActions, isLeaving } from '@/hooks/useUserActions';
 import { fmtRateLimit } from './RateInput';
 
 export type UserInfoTab = 'details' | 'proxies';
@@ -34,11 +36,20 @@ interface Props {
   onKick?: (s: Session) => void;
   /** Opens the edit dialog of this user (from the Edit button). */
   onEdit?: (u: UserConfig, from: { x: number; y: number }) => void;
+  /** Opens the share dialog of this user (from the Share button). */
+  onShare?: (u: UserConfig, from: { x: number; y: number }) => void;
 }
 
+/** Centre of the clicked button: where the next dialog grows from. */
+const centreOf = (ev: MouseEvent) => {
+  const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+};
+
 /** A user: account state and live devices, and the share links per proxy. */
-export default function UserInfoModal({ open, onClose, user, tab: initialTab, animateFrom, sessions = [], conflicts, onKick, onEdit }: Props) {
+export default function UserInfoModal({ open, onClose, user, tab: initialTab, animateFrom, sessions = [], conflicts, onKick, onEdit, onShare }: Props) {
   const { t } = useTranslation();
+  const actions = useUserActions();
   const [tab, setTab] = useState<UserInfoTab>(initialTab);
   // each opening starts on the tab it was opened for
   const [wasOpen, setWasOpen] = useState(open);
@@ -57,17 +68,31 @@ export default function UserInfoModal({ open, onClose, user, tab: initialTab, an
       wide
       footer={
         <>
+          <div className="modal-footer-group">
+            <Button data-testid="user-info-toggle" onClick={() => actions.toggle([user], !user.enabled)}>
+              {user.enabled ? t('app.bulkDisable') : t('app.bulkEnable')}
+            </Button>
+            <Button data-testid="user-info-reset" onClick={() => actions.reset([user])}>{t('users.bulkResetTraffic')}</Button>
+            {onShare && (
+              <Button data-testid="user-info-share" onClick={(ev) => onShare(user, centreOf(ev))}>{t('users.share')}</Button>
+            )}
+            {user.shared && (
+              <Button variant="danger" data-testid="user-info-delete-everywhere"
+                onClick={async () => { if (await actions.deleteEverywhere(user)) onClose(); }}>
+                {t('users.deleteEverywhere')}
+              </Button>
+            )}
+            <Button variant="danger" data-testid="user-info-delete"
+              onClick={async () => { if (await actions.remove([user])) onClose(); }}>
+              {isLeaving([user]) ? t('users.leave') : t('app.bulkDelete')}
+            </Button>
+          </div>
           <span className="spacer" />
           <Button onClick={onClose}>{t('app.close')}</Button>
           {onEdit && (
-            <Button
-              variant="primary"
-              data-testid="user-info-edit"
-              onClick={(ev) => {
-                const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
-                onEdit(user, { x: r.left + r.width / 2, y: r.top + r.height / 2 });
-              }}
-            >{t('app.edit')}</Button>
+            <Button variant="primary" data-testid="user-info-edit" onClick={(ev) => onEdit(user, centreOf(ev))}>
+              {t('app.edit')}
+            </Button>
           )}
         </>
       }
@@ -163,6 +188,7 @@ function DetailsTab({ user, sessions, conflicts, onKick }: {
   return (
     <FormStack gap={16}>
       <DetailGrid variant="plain" items={fields} />
+      {user.shared && <SharedMembers members={user.shared.members} />}
       <div>
         <FieldLabel>{t('devices.title')} ({sessions.length})</FieldLabel>
         <Table
@@ -175,6 +201,51 @@ function DetailsTab({ user, sessions, conflicts, onKick }: {
         />
       </div>
     </FormStack>
+  );
+}
+
+const STATE_BADGE: Record<SharedMemberState, 'green' | 'muted' | 'red' | 'orange'> = {
+  synced: 'green', pending: 'muted', error: 'red', unreachable: 'orange',
+};
+
+/** The nodes holding a shared user: sync state and traffic counted on each. */
+function SharedMembers({ members }: { members: SharedMember[] }) {
+  const { t } = useTranslation();
+  const columns: Column<SharedMember>[] = ([
+    {
+      key: 'name', title: t('users.memberNode'), sortValue: (m) => m.name,
+      render: (m) => (
+        <span className="name-with-mark">
+          {m.name}
+          {m.self && <Badge variant="blue">{t('users.thisNode')}</Badge>}
+        </span>
+      ),
+    },
+    {
+      key: 'state', title: t('users.memberSync'), sortValue: (m) => m.state,
+      render: (m) => (m.self
+        ? <span className="text-muted">—</span>
+        : <Badge variant={STATE_BADGE[m.state] || 'muted'}>{t(`users.memberState.${m.state}`, { defaultValue: m.state })}</Badge>),
+    },
+    { key: 'used', title: t('users.memberUsed'), sortValue: (m) => m.used, render: (m) => <span className="mono">{fmtBytes(m.used)}</span> },
+    {
+      key: 'error', title: t('users.memberError'),
+      render: (m) => (m.error && (m.state === 'error' || m.state === 'unreachable')
+        ? <span className="cell-small text-bad">{m.error}</span>
+        : <span className="text-muted">—</span>),
+    },
+  ] as Column<SharedMember>[]).map((c) => ({ ...c, hideable: false }));
+  return (
+    <div data-testid="shared-members">
+      <FieldLabel>{t('users.members')} ({members.length})</FieldLabel>
+      <Table
+        id="users.detail.members"
+        columns={columns}
+        data={members}
+        rowKey={(m) => m.node_id || m.name}
+        paginate={false}
+      />
+    </div>
   );
 }
 
