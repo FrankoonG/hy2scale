@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"gopkg.in/yaml.v3"
 )
@@ -69,16 +70,17 @@ type UserConfig struct {
 	// reset at once). Internal, not in the API.
 	TrafficResetFrom string `yaml:"traffic_reset_from,omitempty" json:"-"`
 
-	// Shared users (shared_users.go). On the manager: the nodes the user is
-	// pushed to (relay chains "a/b") and the revision of its last change.
-	ShareTargets []string `yaml:"share_targets,omitempty" json:"share_targets,omitempty"`
-	ShareRev     int64    `yaml:"share_rev,omitempty" json:"share_rev,omitempty"`
-	// ShareResetRev: the revision of the last manual traffic reset (the
-	// targets reset their own counters when they see it).
-	ShareResetRev int64 `yaml:"share_reset_rev,omitempty" json:"-"`
-	// SharedFrom: on a receiving node, the manager that owns this user.
-	// Only exit settings may be changed here.
-	SharedFrom *SharedFrom `yaml:"shared_from,omitempty" json:"shared_from,omitempty"`
+	// Shared: set on a shared user (shared_users.go) — its id, key, field
+	// stamps, members and the other holders' traffic. Not in the API.
+	Shared *SharedState `yaml:"shared,omitempty" json:"-"`
+	// RemoteUsed: the other holders' traffic of a shared user in its
+	// current period (computed; the limit applies to the sum).
+	RemoteUsed int64 `yaml:"-" json:"-"`
+}
+
+// OverLimit: the user has used up its traffic limit (live counters).
+func (u *UserConfig) OverLimit() bool {
+	return u.TrafficLimit > 0 && atomic.LoadInt64(&u.TrafficUsed)+atomic.LoadInt64(&u.RemoteUsed) >= u.TrafficLimit
 }
 
 // EffectivePassword returns the proxy-specific password if set, else the main password.

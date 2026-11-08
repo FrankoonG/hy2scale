@@ -226,11 +226,15 @@ type peerMeta struct {
 	Rt bool `json:"rt,omitempty"`
 	// At: this node serves StreamAttrs.
 	At bool `json:"at,omitempty"`
+	// Iid: a random id of this installation (its data directory), kept
+	// across restarts and renames (1.4.4+). A receiver tells a renamed node
+	// from another node by it; a source IP cannot (nodes behind one NAT).
+	Iid string `json:"iid,omitempty"`
 }
 
 // localMeta is what this node advertises in the register handshake.
 func (n *Node) localMeta() peerMeta {
-	return peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable, PV: ProtocolVersion, NodeID: n.nodeID, DialNak: true, Eg: true, Rt: true, At: true}
+	return peerMeta{Version: NodeVersion, TunCapable: NodeTunCapable, PV: ProtocolVersion, NodeID: n.nodeID, DialNak: true, Eg: true, Rt: true, At: true, Iid: n.instanceID}
 }
 
 // writeMeta sends a length-prefixed JSON metadata blob.
@@ -527,6 +531,8 @@ type Stats struct {
 type Node struct {
 	name   string
 	nodeID string // cluster-unique stable identifier; sent in peerMeta.NodeID
+	// instanceID: this installation's random id; sent in peerMeta.Iid
+	instanceID string
 	exit   bool
 	mu     sync.RWMutex
 	// peers holds the PRIMARY connection to each named peer. When a peer
@@ -634,7 +640,7 @@ type Node struct {
 	// callback. See docs/peer-identity-sync-bugs.md Bug B for the design
 	// rationale: source remoteAddrIP is the stable handle (symmetric to how
 	// cfg.Clients[].Addr is the stable handle on the outbound side).
-	onInboundIdentity func(declaredName, nodeID, remoteAddrIP string)
+	onInboundIdentity func(declaredName, nodeID, instanceID string)
 
 	// Stream bridge manager for connection persistence across QUIC reconnects
 	bridgeTags *bridgeTags // old peers' via tags (rebind guard)
@@ -971,6 +977,13 @@ func (n *Node) SetName(name string) { n.name = name }
 // our stable identifier. Empty until set — keep the first call early
 // in App init, before any connectLoop fires.
 func (n *Node) SetNodeID(id string) { n.nodeID = id }
+
+// SetInstanceID sets the installation id sent in the register handshake.
+func (n *Node) SetInstanceID(id string) { n.instanceID = id }
+
+// InstallationID: the persistent installation id set by SetInstanceID (not
+// the per-process InstanceID of node access).
+func (n *Node) InstallationID() string { return n.instanceID }
 
 // NodeID returns the local stable identifier configured via SetNodeID.
 func (n *Node) NodeID() string { return n.nodeID }
@@ -1391,9 +1404,24 @@ func (n *Node) AttachTo(ctx context.Context, peerName string, client hyclient.Cl
 		}
 	}()
 
+	// The remote keeps the register stream open while it holds us as a
+	// peer; it closing it (we were dropped there, e.g. replaced) means the
+	// registration is gone although the connection still answers pings:
+	// reconnect and register again.
+	regGone := make(chan struct{})
+	if remoteMeta.NodeID != "" {
+		go func() {
+			var b [1]byte
+			regStream.Read(b[:])
+			close(regGone)
+		}()
+	}
+
 	select {
 	case err := <-errCh:
 		return fmt.Errorf("relay: peer %s disconnected: %w", peerName, err)
+	case <-regGone:
+		return fmt.Errorf("relay: peer %s dropped our registration", peerName)
 	case <-childCtx.Done():
 		return fmt.Errorf("relay: peer %s: health check triggered disconnect", peerName)
 	case <-ctx.Done():
@@ -1637,26 +1665,12 @@ func (n *Node) handleRegister(ctx context.Context, stream net.Conn) {
 		return
 	}
 
-	// Inbound-identity hook: let the app layer detect "same source IP, new
-	// NodeID" so cfg.Peers / cfg.Proxies.ExitVia / cfg.Users.ExitVia can be
-	// rewritten symmetrically to the outbound AttachTo path. Source IP is
-	// the stable handle for inbound peers (no operator-configured Addr like
-	// outbound). See docs/peer-identity-sync-bugs.md Bug B.
-	if n.onInboundIdentity != nil && remoteMeta.NodeID != "" {
-		remoteIP := ""
-		if ra := stream.RemoteAddr(); ra != nil {
-			// stream.RemoteAddr() returns host:port; we want just the host.
-			s := ra.String()
-			if h, _, splitErr := net.SplitHostPort(s); splitErr == nil {
-				remoteIP = h
-			} else {
-				remoteIP = s
-			}
-		}
-		// Don't block register on the callback — fire async-style by inlining
-		// (the callback is expected to complete quickly: it's a config-store
-		// Update on a single map lookup).
-		n.onInboundIdentity(name, remoteMeta.NodeID, remoteIP)
+	// Inbound-identity hook: the app layer detects "same installation, new
+	// NodeID" (a renamed node) and rewrites its references. The installation
+	// id is the handle; a source IP is not (several nodes behind one NAT).
+	if n.onInboundIdentity != nil && remoteMeta.NodeID != "" && remoteMeta.Iid != "" {
+		// the callback is quick (a config-store update on one map lookup)
+		n.onInboundIdentity(name, remoteMeta.NodeID, remoteMeta.Iid)
 	}
 
 	compat := isCompatible(remoteMeta.Version)
@@ -3224,13 +3238,11 @@ func (n *Node) SetAPIStreamWrap(fn func(stream net.Conn, authID string) net.Conn
 }
 
 // SetOnInboundIdentity registers a callback that fires when an inbound peer
-// completes its register-stream meta exchange. The app layer uses this to
-// detect when an inbound peer that previously connected from the same source
-// IP now reports a different NodeID, and to propagate the rename through
-// cfg.Peers / cfg.Proxies.ExitVia / cfg.Users.ExitVia (the inbound
-// counterpart of AttachTo's outbound rename). See docs/peer-identity-sync-bugs.md
-// Bug B.
-func (n *Node) SetOnInboundIdentity(handler func(declaredName, nodeID, remoteAddrIP string)) {
+// that sends its installation id completes the register meta exchange. The
+// app layer uses it to detect a renamed node (same installation, different
+// NodeID) and to propagate the rename (the inbound counterpart of
+// AttachTo's outbound rename).
+func (n *Node) SetOnInboundIdentity(handler func(declaredName, nodeID, instanceID string)) {
 	n.onInboundIdentity = handler
 }
 

@@ -211,7 +211,7 @@ func (a *App) overTrafficLimit(username string) bool {
 	a.usersMu.RLock()
 	u, ok := a.userIndex[username]
 	a.usersMu.RUnlock()
-	return ok && u.TrafficLimit > 0 && atomic.LoadInt64(&u.TrafficUsed) >= u.TrafficLimit
+	return ok && u.OverLimit()
 }
 
 // userExpired: the user's expiry date has passed.

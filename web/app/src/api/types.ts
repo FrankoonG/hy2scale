@@ -68,6 +68,8 @@ export interface TopologyNode {
   egress?: NodeEgress | null;
   // egress found by this node through the peer (it does not report one)
   egress_probed?: boolean;
+  // the node's attributes (e.g. shared_users: true)
+  attrs?: Record<string, unknown>;
 }
 
 export interface NodeEgressFamily { ip: string; ok: boolean }
@@ -178,6 +180,27 @@ export interface UserConfig {
   node_access_mode?: 'restricted' | 'full';
   /** flows may not reach internal destinations */
   deny_internal?: boolean;
+  /** Present for a user held by several nodes; traffic_used is then the total. */
+  shared?: SharedInfo;
+}
+
+export type SharedMemberState = 'synced' | 'pending' | 'error' | 'unreachable';
+export interface SharedMember {
+  name: string;
+  node_id?: string;
+  /** this node */
+  self?: boolean;
+  /** traffic counted on that node (bytes) */
+  used: number;
+  state: SharedMemberState;
+  error?: string;
+  synced_at?: string;
+}
+export interface SharedInfo {
+  members: SharedMember[];
+  total_used: number;
+  /** start of the current traffic period (RFC 3339) */
+  period_start?: string;
 }
 
 /** Password conflict info: username → proxy → list of conflicting usernames */
@@ -370,6 +393,7 @@ export interface UISettings {
   // local password / token check. Trust boundary becomes the relay handshake.
   relay_admin_passthrough: boolean;
   accept_punch?: boolean;
+  accept_shared_users?: boolean;
   // DNS resolver (relay-routed) — reroutes hy2scale's own internal name
   // lookups (rules-engine domain rules etc.) through a clean upstream
   // DNS reachable via the rule's own exit, so a polluted local
@@ -386,6 +410,22 @@ export interface UISettings {
   dns_resolver_cache_size: number;        // entries, default 1024
   dns_resolver_query_timeout_ms: number;  // ms, default 3000
   public_ip?: PublicIPSettings;
+  // Daily automatic update (PUT /settings/node).
+  auto_update_enabled?: boolean;
+  auto_update_time?: string;          // "HH:MM", 24h, node local time; default "04:00"
+  auto_update_from_peers?: boolean;   // download failed: fetch from a node already on the new version
+  // Read-only.
+  auto_update_supported?: boolean;    // false: this node cannot update itself (no supervisor)
+  auto_update_last?: AutoUpdateLast;
+}
+
+/** The last automatic-update run. */
+export interface AutoUpdateLast {
+  at: string; // RFC3339
+  result: 'updated' | 'up_to_date' | 'failed';
+  version?: string;
+  source?: string;
+  error?: string;
 }
 
 // Public-IP detection (GET/PUT /settings/ui). Empty servers = built-in list.

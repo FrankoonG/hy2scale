@@ -5,6 +5,7 @@ import type { Terminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { terminalUrl, type ToolAvail } from '@/api/tools';
+import { copyToClipboard } from '@/utils/clipboard';
 import { Unavailable } from './common';
 
 type State = 'idle' | 'connecting' | 'open' | 'closed' | 'error';
@@ -44,6 +45,27 @@ export default function TerminalTab({ avail, active }: { avail?: ToolAvail; acti
       tm.loadAddon(f);
       tm.open(host.current);
       f.fit();
+      // Clipboard keys: Ctrl/Cmd+C copies a selection (without one, Ctrl+C
+      // goes to the shell as ^C); Ctrl/Cmd+V pastes (the browser's paste
+      // event reaches the terminal); Cmd+A or Ctrl+Shift+A selects all
+      // (plain Ctrl+A stays the shell's line start).
+      tm.attachCustomKeyEventHandler((e) => {
+        if (e.type !== 'keydown' || e.altKey || !(e.ctrlKey || e.metaKey)) return true;
+        const k = e.key.toLowerCase();
+        if (k === 'c' && tm.hasSelection()) {
+          void copyToClipboard(tm.getSelection()).then(() => tm.focus());
+          tm.clearSelection();
+          e.preventDefault();
+          return false;
+        }
+        if (k === 'v') return false;
+        if (k === 'a' && (e.metaKey || e.shiftKey)) {
+          tm.selectAll();
+          e.preventDefault();
+          return false;
+        }
+        return true;
+      });
       tm.onData((d) => { const s = ws.current; if (s && s.readyState === WebSocket.OPEN) s.send(new TextEncoder().encode(d)); });
       tm.onResize(() => sendResize());
       term.current = tm;
