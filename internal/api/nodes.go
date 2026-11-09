@@ -402,6 +402,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				Version:    p.Version,
 				TunCapable: p.TunCapable,
 				Egress:     p.Egress,
+				Attrs:      p.Attrs,
 				// Inbound peers in the live `peers` slice are connected
 				// by definition — `p` was added when the inbound stream
 				// registered. The new `connected` field on topoSubPeer
