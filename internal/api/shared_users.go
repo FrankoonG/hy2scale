@@ -493,9 +493,34 @@ func (s *Server) sharedGate(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func sharedRefuse(w http.ResponseWriter, code int, msg string) {
+	sharedRefuseCode(w, code, "", msg)
+}
+
+// Reasons a share is refused, for the UI (the "code" field).
+const (
+	shareNotAccepting = "not_accepting" // the target's accept_shared_users is off
+	shareNeedsLogin   = "needs_login"   // no relay trust there, no session given
+	shareLoginFailed  = "login_failed"  // the credentials given were refused
+	shareUnsupported  = "unsupported"   // the target is older than 1.4.4
+	shareConflict     = "conflict"      // the username is taken there
+)
+
+func sharedRefuseCode(w http.ResponseWriter, status int, code, msg string) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	w.WriteHeader(status)
+	b := map[string]string{"error": msg}
+	if code != "" {
+		b["code"] = code
+	}
+	json.NewEncoder(w).Encode(b)
+}
+
+func remoteCode(b []byte) string {
+	var e struct {
+		Code string `json:"code"`
+	}
+	json.Unmarshal(b, &e)
+	return e.Code
 }
 
 // writeSigned answers v signed with key ("" = unsigned).
@@ -612,11 +637,11 @@ type joinMsg struct {
 func (s *Server) sharedJoin(w http.ResponseWriter, r *http.Request) {
 	cfg := s.app.Store().Get()
 	if !cfg.AcceptSharedUsers {
-		sharedRefuse(w, 403, "this node does not accept shared users")
+		sharedRefuseCode(w, 403, shareNotAccepting, "this node does not accept shared users")
 		return
 	}
 	if !cfg.RelayAdminPassthrough && !s.validSession(r) {
-		sharedRefuse(w, 403, "needs relay trust or a session on this node")
+		sharedRefuseCode(w, 403, shareNeedsLogin, "needs relay trust or a session on this node")
 		return
 	}
 	var msg joinMsg
@@ -638,7 +663,7 @@ func (s *Server) sharedJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if res.State != "ok" {
-		sharedRefuse(w, 409, res.Error)
+		sharedRefuseCode(w, 409, shareConflict, res.Error)
 		return
 	}
 	writeJSON(w, res)
@@ -742,14 +767,19 @@ func exitNodeOf(u app.UserConfig) string {
 	return hops[len(hops)-1]
 }
 
-// shareUser: POST /api/users/{id}/share {chain, token} — a first share of
-// the user to the node at the end of chain. token: a session of that node
-// the browser holds (not needed when it trusts this node's relay).
+// shareUser: POST /api/users/{id}/share {chain, token | username+password}
+// — a first share of the user to the node at the end of chain. Not needed
+// when that node trusts this node's relay; otherwise token is a session of
+// that node the browser holds, or this node signs in there with username
+// and password (the SHA-256 hex the login takes). A refusal carries a code
+// (shareNotAccepting, shareNeedsLogin, ...).
 func (s *Server) shareUser(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body struct {
-		Chain []string `json:"chain"`
-		Token string   `json:"token"`
+		Chain    []string `json:"chain"`
+		Token    string   `json:"token"`
+		Username string   `json:"username"`
+		Password string   `json:"password"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Chain) == 0 {
 		http.Error(w, "chain required", 400)
@@ -778,37 +808,57 @@ func (s *Server) shareUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	failed := func(code int, msg string) {
+	failed := func(status int, code, msg string) {
 		if before.Shared == nil {
 			s.app.UnshareIfAlone(id)
 		}
-		sharedRefuse(w, code, msg)
+		sharedRefuseCode(w, status, code, msg)
+	}
+	target := body.Chain[len(body.Chain)-1]
+	token := body.Token
+	if token == "" && body.Password != "" {
+		lb, _ := json.Marshal(map[string]string{"username": body.Username, "password": body.Password})
+		code, _, resp, err := s.relayCall(body.Chain, "POST", "/api/login", lb, nil)
+		var lr struct {
+			Token string `json:"token"`
+		}
+		switch {
+		case err != nil:
+			failed(502, "", err.Error())
+			return
+		case code == 401:
+			failed(409, shareLoginFailed, target+": wrong username or password")
+			return
+		case code != 200 || json.Unmarshal(resp, &lr) != nil || lr.Token == "":
+			failed(409, shareLoginFailed, fmt.Sprintf("%s: sign-in answered %d: %s", target, code, remoteMsg(resp)))
+			return
+		}
+		token = lr.Token
 	}
 	jb, _ := json.Marshal(joinMsg{Record: s.app.SharedRecordOf(u), Key: u.Shared.Key, ExitNode: exitNodeOf(u)})
 	hdr := map[string]string{}
-	if body.Token != "" {
-		hdr["Authorization"] = "Bearer " + body.Token
+	if token != "" {
+		hdr["Authorization"] = "Bearer " + token
 	}
-	target := body.Chain[len(body.Chain)-1]
 	code, _, resp, err := s.relayCall(body.Chain, "POST", "/api/shared-users/join", jb, hdr)
 	switch {
 	case err != nil:
-		failed(502, err.Error())
+		failed(502, "", err.Error())
 		return
 	case code == 404 || code == 405 || code == 302:
-		failed(409, target+" does not support shared users (older version)")
+		failed(409, shareUnsupported, target+" does not support shared users (older version)")
 		return
 	case code != 200:
-		failed(409, target+": "+remoteMsg(resp))
+		failed(409, remoteCode(resp), target+": "+remoteMsg(resp))
 		return
 	}
 	var res app.JoinResult
 	if err := json.Unmarshal(resp, &res); err != nil || res.IID == "" {
-		failed(502, target+": bad answer")
+		failed(502, "", target+": bad answer")
 		return
 	}
 	if res.IID == s.app.SelfIID() {
-		failed(400, "that is this node")
+		failed(400, "", "that is this node")
 		return
 	}
 	if err := s.app.AddSharedMember(u.Shared.GID, res.IID, res.Member); err != nil {
