@@ -69,6 +69,10 @@ Open `https://<host>:5565/scale/` (self-signed certificate by default) — defau
 
 For iKuai v4, download the `.ipkg` from [Releases](https://github.com/FrankoonG/hy2scale/releases) and install via the app store — see the [iKuai v4 guide](https://github.com/FrankoonG/hy2scale/wiki/iKuai-v4-Installation).
 
+## One-Click Deploy
+
+[![Deploy on RepoCloud](https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/hy2scale/)
+
 ## Features
 
 - Connect nodes into a mesh and route traffic through any of them, several hops deep (nested discovery).
