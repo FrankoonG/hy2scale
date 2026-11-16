@@ -107,7 +107,7 @@ func (s *Server) downloadBackup(w http.ResponseWriter, r *http.Request) {
 
 // notBackedUp: top-level data directories that backups leave out and
 // restores skip.
-var notBackedUp = map[string]bool{"bin": true, "geoip": true, "logs": true, "audit": true}
+var notBackedUp = map[string]bool{"bin": true, "geoip": true, "logs": true, "audit": true, "diag": true}
 
 func (s *Server) uploadRestore(w http.ResponseWriter, r *http.Request) {
 	dataDir := s.app.DataDir()
