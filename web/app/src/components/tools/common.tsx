@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button } from '@hy2scale/ui';
-import type { ToolAvail } from '@/api/tools';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Button, Input } from '@hy2scale/ui';
+import { clearToolsHistory, getToolsHistory, setToolsHistoryMax, type ToolAvail, type ToolsHistory } from '@/api/tools';
+
+const HISTORY_KEY = ['toolsHistory'];
 
 /** One running tool stream: start aborts the previous one; stop aborts. */
 export function useToolRun() {
   const ctl = useRef<AbortController | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
+  const qc = useQueryClient();
   useEffect(() => () => ctl.current?.abort(), []);
 
   const start = useCallback(async (fn: (signal: AbortSignal) => Promise<void>) => {
@@ -16,17 +20,21 @@ export function useToolRun() {
     ctl.current = c;
     setRunning(true);
     setError('');
+    // the node keeps the target once the test is under way
+    const seen = setTimeout(() => qc.invalidateQueries({ queryKey: HISTORY_KEY }), 1500);
     try {
       await fn(c.signal);
     } catch (e: any) {
       if (!c.signal.aborted) setError(String(e?.message || e));
     } finally {
+      clearTimeout(seen);
+      qc.invalidateQueries({ queryKey: HISTORY_KEY });
       if (ctl.current === c) {
         ctl.current = null;
         setRunning(false);
       }
     }
-  }, []);
+  }, [qc]);
   const stop = useCallback(() => {
     ctl.current?.abort();
     ctl.current = null;
@@ -62,6 +70,39 @@ export function Unavailable({ avail }: { avail?: ToolAvail }) {
   const { t } = useTranslation();
   if (!avail || avail.available) return null;
   return <div className="tool-note warn">{t('tools.unavailable', { reason: avail.reason || '' })}</div>;
+}
+
+/** Targets a tool ran against on this node, newest first. */
+export function useToolHistory(kind: keyof ToolsHistory['items']): string[] {
+  const { data } = useQuery({ queryKey: HISTORY_KEY, queryFn: getToolsHistory, staleTime: 30_000 });
+  return data?.items[kind] ?? NONE;
+}
+const NONE: string[] = [];
+
+/** How many targets each tool keeps, and clearing them (tab bar addon). */
+export function HistoryLimit() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: HISTORY_KEY, queryFn: getToolsHistory, staleTime: 30_000 });
+  const [max, setMax] = useState('');
+  useEffect(() => { if (data) setMax(String(data.max)); }, [data?.max]);
+  const save = async () => {
+    const n = Math.round(Number(max));
+    if (!data || max.trim() === '' || !isFinite(n) || n < 0 || n > 200) { setMax(data ? String(data.max) : ''); return; }
+    if (n === data.max) return;
+    qc.setQueryData(HISTORY_KEY, await setToolsHistoryMax(n));
+  };
+  const empty = !data || Object.values(data.items).every((l) => l.length === 0);
+  return (
+    <div className="tool-history">
+      <span className="tool-field-label">{t('tools.historyMax')}</span>
+      <Input className="tool-num" type="number" min={0} max={200} value={max} data-testid="tools-history-max"
+        onChange={(e) => setMax(e.target.value)} onBlur={save}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLInputElement).blur(); } }} />
+      <Button size="sm" disabled={empty} data-testid="tools-history-clear"
+        onClick={async () => qc.setQueryData(HISTORY_KEY, await clearToolsHistory())}>{t('tools.historyClear')}</Button>
+    </div>
+  );
 }
 
 export function Stats({ items }: { items: [string, ReactNode][] }) {

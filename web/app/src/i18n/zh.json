@@ -1276,6 +1276,8 @@
   "tools.rounds": "轮数",
   "tools.start": "开始",
   "tools.stop": "停止",
+  "tools.historyMax": "历史上限",
+  "tools.historyClear": "清空历史",
   "tools.unavailable": "不可用：{{reason}}",
   "tools.resolved": "{{host}}（{{ip}}）",
   "tools.sent": "发送",

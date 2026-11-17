@@ -1,10 +1,10 @@
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Card, Input, SegmentedControl, Progress } from '@hy2scale/ui';
+import { Autocomplete, Card, Input, SegmentedControl, Progress } from '@hy2scale/ui';
 import { streamTool, type SpeedLine, type SpeedPath, type ToolAvail } from '@/api/tools';
 import { ExitPathList, type ExitPathValue } from '@/components/ExitPathList';
 import { fmtBytes } from '@/hooks/useFormat';
-import { Field, RateLine, RunButton, Stats, Unavailable, useToolRun } from './common';
+import { Field, RateLine, RunButton, Stats, Unavailable, useToolHistory, useToolRun } from './common';
 
 type Mode = 'node' | 'url';
 type Dir = 'down' | 'up';
@@ -18,6 +18,8 @@ export default function SpeedTab({ avail }: { avail?: ToolAvail }) {
   // as a user's exit: one path, or several tested by quality / aggregate
   const [exit, setExit] = useState<ExitPathValue>({ paths: [''], mode: '' });
   const [url, setUrl] = useState('');
+  const recentPaths = useToolHistory('speed');
+  const recentUrls = useToolHistory('url');
   const [dir, setDir] = useState<Dir>('down');
   const [seconds, setSeconds] = useState('10');
   const [total, setTotal] = useState(10);
@@ -69,11 +71,11 @@ export default function SpeedTab({ avail }: { avail?: ToolAvail }) {
           </Field>
           {mode === 'node' ? (
             <div className="tool-paths" data-testid="speed-chain">
-              <ExitPathList label={t('tools.node')} value={exit} onChange={setExit} placeholder={t('tools.nodePh')} />
+              <ExitPathList label={t('tools.node')} value={exit} onChange={setExit} placeholder={t('tools.nodePh')} recent={recentPaths} />
             </div>
           ) : (
             <Field label="URL" grow>
-              <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://" data-testid="speed-url" />
+              <Autocomplete options={recentUrls} value={url} onChange={setUrl} placeholder="https://" testId="speed-url" />
             </Field>
           )}
           {mode === 'node' && (

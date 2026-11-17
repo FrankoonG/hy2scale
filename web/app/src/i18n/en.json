@@ -1276,6 +1276,8 @@
   "tools.rounds": "Rounds",
   "tools.start": "Start",
   "tools.stop": "Stop",
+  "tools.historyMax": "History limit",
+  "tools.historyClear": "Clear history",
   "tools.unavailable": "Unavailable: {{reason}}",
   "tools.resolved": "{{host}} ({{ip}})",
   "tools.sent": "Sent",

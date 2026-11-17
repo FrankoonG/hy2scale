@@ -1,14 +1,15 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Card, Input, Toggle } from '@hy2scale/ui';
+import { Autocomplete, Card, Input, Toggle } from '@hy2scale/ui';
 import { streamTool, type MtrHop, type MtrLine, type ToolAvail } from '@/api/tools';
 import { IPFlag } from '@/components/CountryFlag';
-import { Field, RunButton, Unavailable, ms, useToolRun } from './common';
+import { Field, RunButton, Unavailable, ms, useToolHistory, useToolRun } from './common';
 
 export default function MtrTab({ avail }: { avail?: ToolAvail }) {
   const { t } = useTranslation();
   const run = useToolRun();
   const [host, setHost] = useState('');
+  const history = useToolHistory('mtr');
   const [count, setCount] = useState('10');
   const [dns, setDns] = useState(true);
   const [target, setTarget] = useState<{ host: string; ip: string } | null>(null);
@@ -33,7 +34,7 @@ export default function MtrTab({ avail }: { avail?: ToolAvail }) {
       <Card>
         <form className="tool-bar" onSubmit={(e) => { e.preventDefault(); go(); }}>
           <Field label={t('tools.target')} grow>
-            <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder={t('tools.targetPh')} data-testid="mtr-host" />
+            <Autocomplete options={history} value={host} onChange={setHost} placeholder={t('tools.targetPh')} testId="mtr-host" />
           </Field>
           <Field label={t('tools.rounds')}>
             <Input className="tool-num" type="number" min={1} max={1000} value={count} onChange={(e) => setCount(e.target.value)} />
