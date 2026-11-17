@@ -834,6 +834,7 @@ func (s *Server) shareUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		token = lr.Token
+		s.rememberLogin(body.Chain, body.Username, body.Password, "web")
 	}
 	jb, _ := json.Marshal(joinMsg{Record: s.app.SharedRecordOf(u), Key: u.Shared.Key, ExitNode: exitNodeOf(u)})
 	hdr := map[string]string{}

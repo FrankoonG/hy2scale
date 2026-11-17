@@ -53,6 +53,9 @@ type Server struct {
 
 	// restart asks main to shut down and come back (SetRestart).
 	restart func()
+
+	// control socket: saved sign-ins to other nodes (ctl.go)
+	ctl ctlState
 }
 
 func NewServer(a *app.App, addr, basePath string) *Server {
@@ -274,6 +277,9 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	go func() { <-ctx.Done(); relaySrv.Close() }()
 	go relaySrv.Serve(apiBridge)
+
+	// Local control socket ("hy2scale ctl").
+	s.startCtl(ctx, root)
 
 	return srv.Serve(newSniffListener(ln, s.web))
 }
