@@ -19,6 +19,16 @@ type PathStatus struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// LocalPath drops a leading hop naming this node: the UI writes a path to an
+// inbound peer as "<this node>/<peer>", and this node is never a hop of its
+// own paths.
+func (a *App) LocalPath(parts []string) []string {
+	if len(parts) > 0 && (parts[0] == a.node.Name() || parts[0] == a.store.Get().NodeID) {
+		return parts[1:]
+	}
+	return parts
+}
+
 // PathStatus evaluates exitVia with the rules exitChain applies when it is
 // dialed, plus the current reachability of every hop.
 func (a *App) PathStatus(exitVia string) PathStatus {

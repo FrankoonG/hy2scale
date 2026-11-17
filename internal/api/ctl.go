@@ -192,7 +192,7 @@ func (s *Server) ctlChain(node string) []string {
 		return nil
 	}
 	if strings.Contains(node, "/") {
-		return strings.Split(node, "/")
+		return s.app.LocalPath(strings.Split(node, "/"))
 	}
 	if c, ok := s.manageable()[node]; ok {
 		return c.Chain
