@@ -58,9 +58,13 @@ func (s *Server) memLine() string {
 	runtime.ReadMemStats(&ms)
 	m := s.app.MsessStats()
 	ro := s.app.Node().ObjectCounts()
-	return fmt.Sprintf("rss=%dMB heap=%dMB inuse=%dMB sys=%dMB stack=%dMB objects=%d goroutines=%d msess=%d/%d relay=%d peers_of_cache=%d",
+	line := fmt.Sprintf("rss=%dMB heap=%dMB inuse=%dMB sys=%dMB stack=%dMB objects=%d goroutines=%d msess=%d/%d relay=%d peers_of_cache=%d peer_udp=%d",
 		rssKB()>>10, ms.HeapAlloc>>20, ms.HeapInuse>>20, ms.Sys>>20, ms.StackInuse>>20, ms.HeapObjects,
-		runtime.NumGoroutine(), m["exit_sessions"], m["exit_subflows"], s.app.Node().GetStats().Conns, ro["peers_of_cache"])
+		runtime.NumGoroutine(), m["exit_sessions"], m["exit_subflows"], s.app.Node().GetStats().Conns, ro["peers_of_cache"], ro["peer_udp_flows"])
+	if src, tgt := s.app.MsessBreakdown(1); len(src) > 0 {
+		line += fmt.Sprintf(" msess_top_source=%s:%d msess_top_target=%s:%d", src[0].Key, src[0].N, tgt[0].Key, tgt[0].N)
+	}
+	return line
 }
 
 func diagThresholdMB() uint64 {
