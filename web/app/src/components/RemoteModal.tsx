@@ -6,7 +6,7 @@ import {
 } from '@hy2scale/ui';
 import { api as request, getBasePath } from '@/api/client';
 import * as api from '@/api';
-import { sha256, getSessionHash, getSavedCredentials } from '@/hooks/useAuth';
+import { sha256, getSessionHash, getSavedCredentials, syncHubCookie } from '@/hooks/useAuth';
 import { versionGreater } from '@/utils/version';
 import { fmtBytes } from '@/hooks/useFormat';
 import { REMOTE_TTL, readRemoteAuth, writeRemoteAuth } from '@/utils/remoteAuth';
@@ -89,6 +89,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
     const headers: Record<string, string> = { ...(init.headers as Record<string, string> || {}) };
     if (token) headers.Authorization = `Bearer ${token}`;
     if (typeof init.body === 'string') headers['Content-Type'] = 'application/json';
+    syncHubCookie();
     return fetch(`${proxyBase}/api${path}`, { ...init, headers, credentials: 'same-origin', cache: 'no-store' });
   }, [proxyBase]);
 
@@ -216,6 +217,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
 
   const openUi = () => {
     if (!auth) return;
+    syncHubCookie();
     window.open(`${proxyBase}/scale/#tok=${encodeURIComponent(auth.token)}`, '_blank');
   };
 
