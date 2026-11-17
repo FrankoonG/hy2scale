@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -76,12 +77,50 @@ func sniffName(dst string, peeked []byte) string {
 
 // WantSniff reports whether a flow to dst should wait for the client's
 // first bytes: dst is an IP and has not repeatedly failed to yield a name.
+//
+// Internal destinations (private, CGNAT, loopback, link-local) are never
+// sniffed: a client asking for one means that address — a name in its hello
+// would be resolved elsewhere (at an exit: to a public address), sending a
+// LAN request somewhere else entirely, possibly in a loop back here.
 func WantSniff(dst string) bool {
 	host, _, err := net.SplitHostPort(dst)
-	if err != nil || net.ParseIP(host) == nil {
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || (internalIP(ip) && !sniffPublic(ip)) {
 		return false
 	}
 	return !sniffMisses.skip(dst)
+}
+
+var cgnat = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+
+// internalIP: an address no public name resolves to.
+func internalIP(ip net.IP) bool {
+	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() ||
+		ip.IsMulticast() || cgnat.Contains(ip)
+}
+
+// sniffPublicNets: internal ranges sniffed anyway (HY2SCALE_SNIFF_PUBLIC,
+// comma-separated CIDRs; for test networks that stand in for the internet).
+var sniffPublicNets = func() []*net.IPNet {
+	var out []*net.IPNet
+	for _, c := range strings.Split(os.Getenv("HY2SCALE_SNIFF_PUBLIC"), ",") {
+		if _, n, err := net.ParseCIDR(strings.TrimSpace(c)); err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}()
+
+func sniffPublic(ip net.IP) bool {
+	for _, n := range sniffPublicNets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsLoopbackAddr reports whether a client address is on this host.
