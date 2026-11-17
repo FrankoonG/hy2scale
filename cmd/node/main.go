@@ -22,6 +22,7 @@ import (
 )
 
 func main() {
+	noHugePages()
 	dataDir := flag.String("data", "", "configuration and data directory")
 	apiAddr := flag.String("api", "", "API/UI listen address (overrides config)")
 	basePath := flag.String("base-path", "", "UI base path (e.g. /scale)")
