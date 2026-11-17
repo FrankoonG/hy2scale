@@ -1276,6 +1276,8 @@
   "tools.rounds": "회차",
   "tools.start": "시작",
   "tools.stop": "중지",
+  "tools.historyMax": "기록 한도",
+  "tools.historyClear": "기록 지우기",
   "tools.unavailable": "사용 불가: {{reason}}",
   "tools.resolved": "{{host}} ({{ip}})",
   "tools.sent": "전송",

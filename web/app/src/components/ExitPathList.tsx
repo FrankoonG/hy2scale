@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Autocomplete, FormGroup, SortableList } from '@hy2scale/ui';
 import { useExitPaths } from '@/hooks/useExitPaths';
@@ -17,6 +17,8 @@ interface ExitPathListProps {
   label?: string;
   /** Row placeholder (default: the user form's hint, empty = direct). */
   placeholder?: string;
+  /** Paths offered first (e.g. recently tested ones). */
+  recent?: string[];
 }
 
 interface PathItem {
@@ -48,11 +50,12 @@ export function pathHasMultiConn(topology: TopologyNode[], path: string, selfId?
   return false;
 }
 
-export function ExitPathList({ value, onChange, label, placeholder }: ExitPathListProps) {
+export function ExitPathList({ value, onChange, label, placeholder, recent }: ExitPathListProps) {
   const { t } = useTranslation();
   // Several lists can share a form (policy rules): one radio group each.
   const radioName = `exitMode-${useId()}`;
-  const { exitPaths } = useExitPaths();
+  const { exitPaths: topoPaths } = useExitPaths();
+  const exitPaths = useMemo(() => (recent?.length ? Array.from(new Set([...recent, ...topoPaths])) : topoPaths), [recent, topoPaths]);
 
   // Items are the per-row form state. The earlier assumption — that
   // the consuming Modal unmounts on close, giving a fresh mount with

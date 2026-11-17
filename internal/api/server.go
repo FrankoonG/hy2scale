@@ -56,6 +56,9 @@ type Server struct {
 
 	// control socket: saved sign-ins to other nodes (ctl.go)
 	ctl ctlState
+
+	// targets the tools ran against (tools_history.go)
+	toolsHist toolsHistoryStore
 }
 
 func NewServer(a *app.App, addr, basePath string) *Server {

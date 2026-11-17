@@ -6,6 +6,11 @@ export interface ToolAvail { available: boolean; reason?: string }
 export interface ToolsInfo { ping: ToolAvail; mtr: ToolAvail; speed: ToolAvail; terminal: ToolAvail }
 
 export const getToolsInfo = () => api<ToolsInfo>('/tools/info');
+/** Targets the tools ran against, newest first (max: how many are kept). */
+export interface ToolsHistory { max: number; items: { ping: string[]; mtr: string[]; speed: string[]; url: string[] } }
+export const getToolsHistory = () => api<ToolsHistory>('/tools/history');
+export const setToolsHistoryMax = (max: number) => api<ToolsHistory>('/tools/history', { method: 'PUT', body: JSON.stringify({ max }) });
+export const clearToolsHistory = () => api<ToolsHistory>('/tools/history', { method: 'DELETE' });
 
 export type PingLine =
   | { type: 'start'; host: string; ip: string; proto: string }
