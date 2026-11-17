@@ -55,6 +55,19 @@ export function setHubSessionCookie(token: string) {
   document.cookie = `${hubCookieName}=${encodeURIComponent(token)}; Path=${path}; SameSite=Strict; Max-Age=43200`;
 }
 
+/**
+ * Writes this tab's own session token into the hub cookie before a request
+ * to /remote/ (which only the cookie authenticates). The cookie is shared
+ * by every tab and only written at sign-in, so it may hold another tab's
+ * token, one signed out elsewhere, or have expired while this tab's
+ * session lives on — every remote then looks signed out.
+ */
+export function syncHubCookie() {
+  if ((window as any).__PROXY__) return;
+  const t = getToken();
+  if (t) setHubSessionCookie(t);
+}
+
 export function clearHubSessionCookie() {
   const path = (window as any).__BASE__ || '/';
   document.cookie = `${hubCookieName}=; Path=${path}; SameSite=Strict; Max-Age=0`;

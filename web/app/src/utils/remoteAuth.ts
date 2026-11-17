@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getBasePath } from '@/api/client';
+import { syncHubCookie } from '@/hooks/useAuth';
 import type { TopologyNode } from '@/api/types';
 
 /**
@@ -39,6 +40,7 @@ export function remoteFetch(chain: string[], path: string, init: RequestInit = {
   const headers: Record<string, string> = { ...(init.headers as Record<string, string> || {}) };
   if (token) headers.Authorization = `Bearer ${token}`;
   if (typeof init.body === 'string') headers['Content-Type'] = 'application/json';
+  syncHubCookie();
   return fetch(`${remoteBase(chain)}/api${path}`, { ...init, headers, credentials: 'same-origin', cache: 'no-store' });
 }
 
