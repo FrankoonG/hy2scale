@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,6 +30,9 @@ type ServerConfig struct {
 	// OpenContext: the parent context of a new session's target dial,
 	// given the subflow that opened it (nil = context.Background()).
 	OpenContext func(subflow net.Conn) context.Context
+	// Label names who opened a session, given its first subflow
+	// (diagnostics; nil = none).
+	Label func(subflow net.Conn) string
 }
 
 // Server terminates subflows at the exit and owns the target sockets.
@@ -151,6 +155,10 @@ func (sv *Server) open(conn net.Conn, br *bufio.Reader, h hello) {
 		return
 	}
 	s := newSession(h.sid, h.mode, true, sv.cfg.Logf)
+	s.target = h.target
+	if sv.cfg.Label != nil {
+		s.src = sv.cfg.Label(conn)
+	}
 	// The ingress decides how long the user's connection may wait for a
 	// path; wait a little longer here so a rejoin at its deadline still
 	// finds the session.
@@ -317,6 +325,19 @@ type ServerStats struct {
 	Pending  int
 }
 
+// Breakdown counts the live sessions by source (Label) and by target
+// host:port (diagnostics).
+func (sv *Server) Breakdown() (bySrc, byTarget map[string]int) {
+	bySrc, byTarget = map[string]int{}, map[string]int{}
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	for _, s := range sv.sessions {
+		bySrc[s.src]++
+		byTarget[s.target]++
+	}
+	return
+}
+
 func (sv *Server) Stats() ServerStats {
 	sv.mu.Lock()
 	ss := make([]*session, 0, len(sv.sessions))
@@ -331,4 +352,28 @@ func (sv *Server) Stats() ServerStats {
 		s.mu.Unlock()
 	}
 	return st
+}
+
+// Count is one key of a breakdown.
+type Count struct {
+	Key string `json:"key"`
+	N   int    `json:"n"`
+}
+
+// TopCounts: the n largest entries of m, largest first.
+func TopCounts(m map[string]int, n int) []Count {
+	out := make([]Count, 0, len(m))
+	for k, v := range m {
+		out = append(out, Count{k, v})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].N != out[j].N {
+			return out[i].N > out[j].N
+		}
+		return out[i].Key < out[j].Key
+	})
+	if len(out) > n {
+		out = out[:n]
+	}
+	return out
 }

@@ -138,6 +138,8 @@ type session struct {
 	isServer bool
 	logf     func(string, ...any)
 	onEvent  func(ev string, sf *subflow) // path manager hook (client side)
+	// server side, for diagnostics: who opened it (Label) and its target
+	src, target string
 
 	// send
 	sq       ring // bytes [sBase, sBase+sq.Len())
