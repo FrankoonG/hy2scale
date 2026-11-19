@@ -245,6 +245,9 @@ type Query struct {
 	Q        string // substring of any text field
 	Limit    int
 	Cursor   string
+
+	// Not*: values left out ("-" = an empty field)
+	NotInbound, NotExit, NotProto, NotApp, NotResult []string
 }
 
 // QueryResult is one page.
@@ -384,13 +387,23 @@ func (m *matcher) match(line []byte) (audit.Record, bool) {
 		(q.App != "" && r.App != q.App) || (q.Result != "" && r.Result != q.Result) {
 		return r, false
 	}
-	if m.srcL != "" && !containsAny(m.srcL, r.User, r.Src, r.SrcNode, r.InIface, r.SrcMAC) {
+	for _, ex := range []struct {
+		v   string
+		not []string
+	}{{r.Inbound, q.NotInbound}, {r.Exit, q.NotExit}, {r.Proto, q.NotProto}, {r.App, q.NotApp}, {r.Result, q.NotResult}} {
+		for _, n := range ex.not {
+			if ex.v == n || n == "-" && ex.v == "" {
+				return r, false
+			}
+		}
+	}
+	if m.srcL != "" && !containsAny(m.srcL, r.User, r.Src, r.SrcPeer, r.SrcNode, r.InIface, r.SrcMAC) {
 		return r, false
 	}
 	if m.dstL != "" && !containsAny(m.dstL, r.Dst, r.DstHost, r.DstIP) {
 		return r, false
 	}
-	if m.qL != "" && !containsAny(m.qL, r.ID, r.Proto, r.App, r.Inbound, r.User, r.Src, r.SrcNode, r.InIface, r.SrcMAC, r.Dst, r.DstHost,
+	if m.qL != "" && !containsAny(m.qL, r.ID, r.Proto, r.App, r.Inbound, r.User, r.Src, r.SrcPeer, r.SrcNode, r.InIface, r.SrcMAC, r.Dst, r.DstHost,
 		r.DstIP, r.Rule, r.Policy, r.Terminal, r.Reason, r.Exit, r.ExitPath, r.ExitMode, r.EgressIface, r.EgressSrc, r.Result, r.Error) {
 		return r, false
 	}
@@ -505,6 +518,7 @@ func (s *AuditStore) Query(ctx context.Context, q Query) (QueryResult, error) {
 // Stat is one ranked entry.
 type Stat struct {
 	Key   string `json:"key"`
+	IP    string `json:"ip,omitempty"` // an address of the key (flags)
 	Flows int64  `json:"flows"`
 	Up    int64  `json:"up"`
 	Down  int64  `json:"down"`
@@ -533,7 +547,7 @@ var RollupMinRange = 48 * time.Hour
 
 func (q Query) unfiltered() bool {
 	return q.User == "" && q.Src == "" && q.Dst == "" && q.Inbound == "" && q.Exit == "" && q.Proto == "" &&
-		q.App == "" && q.Result == "" && q.Q == ""
+		q.App == "" && q.Result == "" && q.Q == "" && len(q.NotInbound)+len(q.NotExit)+len(q.NotProto)+len(q.NotApp)+len(q.NotResult) == 0
 }
 
 // Stats aggregates the records matching q. A flow with interim records is
@@ -551,7 +565,7 @@ func (s *AuditStore) Stats(ctx context.Context, q Query) (StatsResult, error) {
 	users, srcs, dsts, apps := map[string]*Stat{}, map[string]*Stat{}, map[string]*Stat{}, map[string]*Stat{}
 	seen := map[string]bool{} // flows that may have more than one record
 	long := audit.InterimEvery.Milliseconds()
-	add := func(m map[string]*Stat, k string, r *audit.Record) {
+	add := func(m map[string]*Stat, k string, r *audit.Record, ip string) {
 		if k == "" {
 			return
 		}
@@ -563,6 +577,7 @@ func (s *AuditStore) Stats(ctx context.Context, q Query) (StatsResult, error) {
 			st = &Stat{Key: k}
 			m[k] = st
 		}
+		st.IP = betterIP(st.IP, ip)
 		st.Flows++
 		st.Up += r.Up
 		st.Down += r.Down
@@ -578,18 +593,10 @@ func (s *AuditStore) Stats(ctx context.Context, q Query) (StatsResult, error) {
 		res.Flows++
 		res.Up += r.Up
 		res.Down += r.Down
-		add(users, r.User, &r)
-		src := r.SrcNode
-		if src == "" {
-			src = hostOf(r.Src)
-		}
-		add(srcs, src, &r)
-		dst := r.DstHost
-		if dst == "" {
-			dst = hostOf(r.Dst)
-		}
-		add(dsts, dst, &r)
-		add(apps, AppKey(&r), &r)
+		add(users, r.User, &r, clientIP(&r))
+		add(srcs, srcKey(&r), &r, clientIP(&r))
+		add(dsts, dstKey(&r), &r, dstIP(&r))
+		add(apps, AppKey(&r), &r, "")
 		return true
 	})
 	if err != nil {
@@ -627,7 +634,7 @@ func top(m map[string]*Stat, n int) []Stat {
 // ---------------------------------------------------------------- export
 
 // CSVColumns: the export columns, in order.
-var CSVColumns = []string{"id", "start", "end", "partial", "proto", "app", "inbound", "user", "src", "src_node", "in_iface", "src_mac",
+var CSVColumns = []string{"id", "start", "end", "partial", "proto", "app", "inbound", "user", "src", "src_peer", "src_node", "in_iface", "src_mac",
 	"dst", "dst_host", "dst_ip", "rule", "policy", "terminal", "reason", "exit", "exit_path", "exit_mode", "egress_iface", "egress_src",
 	"up", "down", "result", "error"}
 
@@ -637,7 +644,7 @@ func csvRow(r *audit.Record) []string {
 	if r.Partial {
 		p = "true"
 	}
-	return []string{r.ID, i(r.Start), i(r.End), p, r.Proto, r.App, r.Inbound, r.User, r.Src, r.SrcNode, r.InIface, r.SrcMAC,
+	return []string{r.ID, i(r.Start), i(r.End), p, r.Proto, r.App, r.Inbound, r.User, r.Src, r.SrcPeer, r.SrcNode, r.InIface, r.SrcMAC,
 		r.Dst, r.DstHost, r.DstIP, r.Rule, r.Policy, r.Terminal, r.Reason, r.Exit, r.ExitPath, r.ExitMode, r.EgressIface, r.EgressSrc,
 		i(r.Up), i(r.Down), r.Result, r.Error}
 }

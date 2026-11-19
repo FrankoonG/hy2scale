@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -28,8 +29,38 @@ const (
 	rollupMarker  = "complete"
 )
 
-// tally: flows, up, down.
-type tally [3]int64
+// tally: flows, up and down bytes of a key, and an address it was seen
+// with (to place it on the map). Stored as [f, u, d] or [f, u, d, ip].
+type tally struct {
+	F, U, D int64
+	IP      string
+}
+
+func (t tally) MarshalJSON() ([]byte, error) {
+	if t.IP == "" {
+		return json.Marshal([3]int64{t.F, t.U, t.D})
+	}
+	return json.Marshal([]any{t.F, t.U, t.D, t.IP})
+}
+
+func (t *tally) UnmarshalJSON(b []byte) error {
+	var a []json.RawMessage
+	if err := json.Unmarshal(b, &a); err != nil {
+		return err
+	}
+	if len(a) < 3 {
+		return errors.New("tally: 3 numbers expected")
+	}
+	for i, p := range []*int64{&t.F, &t.U, &t.D} {
+		if err := json.Unmarshal(a[i], p); err != nil {
+			return err
+		}
+	}
+	if len(a) > 3 {
+		json.Unmarshal(a[3], &t.IP)
+	}
+	return nil
+}
 
 type hourAgg struct {
 	Flows int64            `json:"f"`
@@ -80,11 +111,54 @@ func dayKey(ms int64) string { return time.UnixMilli(ms).UTC().Format("20060102"
 
 func hourOf(ms int64) int64 { return ms - ms%3_600_000 }
 
+// srcKey: the peer a flow came through, else the client's own address
+// (outside a VPN tunnel when known).
 func srcKey(rec *audit.Record) string {
 	if rec.SrcNode != "" {
 		return rec.SrcNode
 	}
+	if rec.SrcPeer != "" {
+		return hostOf(rec.SrcPeer)
+	}
 	return hostOf(rec.Src)
+}
+
+// ipOf: the IP of host:port or of a bare address ("" = a name).
+func ipOf(hp string) string {
+	h := hostOf(hp)
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.String()
+	}
+	return ""
+}
+
+// clientIP: the client's own address.
+func clientIP(rec *audit.Record) string {
+	if rec.SrcPeer != "" {
+		return ipOf(rec.SrcPeer)
+	}
+	return ipOf(rec.Src)
+}
+
+// dstIP: the destination's address.
+func dstIP(rec *audit.Record) string {
+	if rec.DstIP != "" {
+		return ipOf(rec.DstIP)
+	}
+	return ipOf(rec.Dst)
+}
+
+func publicIP(s string) bool {
+	ip := net.ParseIP(s)
+	return ip != nil && ip.IsGlobalUnicast() && !ip.IsPrivate()
+}
+
+// betterIP: keep a public address over a private one.
+func betterIP(cur, ip string) string {
+	if ip == "" || cur != "" && (publicIP(cur) || !publicIP(ip)) {
+		return cur
+	}
+	return ip
 }
 
 func dstKey(rec *audit.Record) string {
@@ -102,7 +176,7 @@ func AppKey(rec *audit.Record) string {
 	return rec.Proto
 }
 
-func bump(m *map[string]tally, k string, flows, up, down int64, limit int) {
+func bump(m *map[string]tally, k string, flows, up, down int64, ip string, limit int) {
 	if k == "" {
 		return
 	}
@@ -113,9 +187,10 @@ func bump(m *map[string]tally, k string, flows, up, down int64, limit int) {
 	if !ok && len(*m) >= limit {
 		return
 	}
-	t[0] += flows
-	t[1] += up
-	t[2] += down
+	t.F += flows
+	t.U += up
+	t.D += down
+	t.IP = betterIP(t.IP, ip)
 	(*m)[k] = t
 }
 
@@ -154,10 +229,10 @@ func addTo(days map[string]day, long map[string][2]int64, rec *audit.Record) str
 	a.Flows += flows
 	a.Up += up
 	a.Down += down
-	bump(&a.Users, rec.User, flows, up, down, rollupLiveCap)
-	bump(&a.Srcs, srcKey(rec), flows, up, down, rollupLiveCap)
-	bump(&a.Dsts, dstKey(rec), flows, up, down, rollupLiveCap)
-	bump(&a.Apps, AppKey(rec), flows, up, down, rollupLiveCap)
+	bump(&a.Users, rec.User, flows, up, down, clientIP(rec), rollupLiveCap)
+	bump(&a.Srcs, srcKey(rec), flows, up, down, clientIP(rec), rollupLiveCap)
+	bump(&a.Dsts, dstKey(rec), flows, up, down, dstIP(rec), rollupLiveCap)
+	bump(&a.Apps, AppKey(rec), flows, up, down, "", rollupLiveCap)
 	return k
 }
 
@@ -189,8 +264,8 @@ func trim(m map[string]tally, n int) map[string]tally {
 	}
 	sort.Slice(keys, func(i, j int) bool {
 		a, b := m[keys[i]], m[keys[j]]
-		if a[1]+a[2] != b[1]+b[2] {
-			return a[1]+a[2] > b[1]+b[2]
+		if a.U+a.D != b.U+b.D {
+			return a.U+a.D > b.U+b.D
 		}
 		return keys[i] < keys[j]
 	})
@@ -336,7 +411,7 @@ func merge(dst, src *hourAgg, limit int) {
 	}{
 		{&dst.Users, src.Users}, {&dst.Srcs, src.Srcs}, {&dst.Dsts, src.Dsts}, {&dst.Apps, src.Apps}} {
 		for k, t := range p.s {
-			bump(p.d, k, t[0], t[1], t[2], limit)
+			bump(p.d, k, t.F, t.U, t.D, t.IP, limit)
 		}
 	}
 }
@@ -429,7 +504,7 @@ func (r *Rollup) sum(from, to int64) (StatsResult, int64) {
 func topOf(m map[string]tally) []Stat {
 	sm := make(map[string]*Stat, len(m))
 	for k, t := range m {
-		sm[k] = &Stat{Key: k, Flows: t[0], Up: t[1], Down: t[2], Bytes: t[1] + t[2]}
+		sm[k] = &Stat{Key: k, Flows: t.F, Up: t.U, Down: t.D, Bytes: t.U + t.D, IP: t.IP}
 	}
 	return top(sm, 10)
 }

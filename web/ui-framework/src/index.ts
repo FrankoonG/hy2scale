@@ -27,6 +27,8 @@ export { FormGroup, FormGrid, FormStack, FormRow, Hint } from './components/Form
 export type { FormGroupProps, FormGridProps, FormStackProps } from './components/FormGroup';
 export { Autocomplete } from './components/Autocomplete';
 export { MultiSelect } from './components/MultiSelect';
+export { CheckSelect } from './components/CheckSelect';
+export type { CheckSelectProps, CheckSelectOption } from './components/CheckSelect';
 export type { MultiSelectProps, MultiSelectOption } from './components/MultiSelect';
 export type { AutocompleteProps } from './components/Autocomplete';
 export { SegmentedControl } from './components/SegmentedControl';

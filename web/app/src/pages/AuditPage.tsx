@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useQuery } from '@tanstack/react-query';
 import {
-  Badge, Button, Card, DetailGrid, Input, Modal, Select, SegmentedControl, Table, Toggle,
+  Autocomplete, Badge, Button, Card, CheckSelect, DetailGrid, Input, Modal, SegmentedControl, Table, Toggle,
   useModalState, useStoredState, boolCodec, type Column, type DetailItem,
 } from '@hy2scale/ui';
+import { getUsers } from '@/api';
 import {
   getAudit, getAuditStats, auditExportUrl, type AuditFilter, type AuditRecord, type AuditStats,
 } from '@/api/storage';
@@ -29,8 +31,21 @@ const APP_NAMES: Record<string, string> = {
   mqtt: 'MQTT', xmpp: 'XMPP', socks5: 'SOCKS5', bittorrent: 'BitTorrent', stun: 'STUN', ntp: 'NTP', dtls: 'DTLS',
   wireguard: 'WireGuard', openvpn: 'OpenVPN', ike: 'IKE', ssdp: 'SSDP', sip: 'SIP', tcp: 'TCP', udp: 'UDP',
 };
-const APP_FILTER = ['tls', 'http', 'quic', 'dns', 'ssh', 'stun', 'wireguard', 'bittorrent', 'rdp', 'smtp', 'ntp'];
+const APP_FILTER = ['tls', 'http', 'quic', 'dns', 'ssh', 'stun', 'wireguard', 'bittorrent', 'rdp', 'smtp', 'ntp', '-'];
 const appName = (k: string) => APP_NAMES[k] ?? k.toUpperCase();
+
+/** The ticked lists of the filters: an unticked value is left out. */
+type Group = 'inbound' | 'exit' | 'proto' | 'app' | 'result';
+const GROUPS: Group[] = ['inbound', 'exit', 'proto', 'app', 'result'];
+const GROUP_VALUES: Record<Group, string[]> = {
+  inbound: INBOUNDS,
+  exit: ['direct', 'node', 'blocked'],
+  proto: ['tcp', 'udp'],
+  app: APP_FILTER,
+  result: ['ok', 'error', 'refused', 'blocked'],
+};
+type Hidden = Record<Group, string[]>;
+const NONE_HIDDEN: Hidden = { inbound: [], exit: [], proto: [], app: [], result: [] };
 
 const pad = (n: number) => String(n).padStart(2, '0');
 function fmtTime(ms: number): string {
@@ -61,11 +76,7 @@ export default function AuditPage() {
   const [q, setQ] = useState('');
   const [src, setSrc] = useState('');
   const [dst, setDst] = useState('');
-  const [inbound, setInbound] = useState('');
-  const [exit, setExit] = useState('');
-  const [proto, setProto] = useState('');
-  const [app, setApp] = useState('');
-  const [result, setResult] = useState('');
+  const [hidden, setHidden] = useState<Hidden>(NONE_HIDDEN);
   // one debounce per field: an object made each render never settles and
   // reloaded the page in a loop
   const dq = useDebounced(q, 400);
@@ -87,8 +98,9 @@ export default function AuditPage() {
   const filter = useMemo<AuditFilter>(() => ({
     from: RANGE_MS[range] ? Date.now() - RANGE_MS[range] : undefined,
     q: dq.trim(), src: dsrc.trim(), dst: ddst.trim(),
-    inbound, exit, proto, app, result,
-  }), [range, dq, dsrc, ddst, inbound, exit, proto, app, result]);
+    not_inbound: hidden.inbound.join(','), not_exit: hidden.exit.join(','), not_proto: hidden.proto.join(','),
+    not_app: hidden.app.join(','), not_result: hidden.result.join(','),
+  }), [range, dq, dsrc, ddst, hidden]);
 
   const load = useCallback(async (more: boolean) => {
     listCtl.current?.abort();
@@ -153,11 +165,22 @@ export default function AuditPage() {
     { key: 'result', title: t('audit.result'), render: (r) => <ResultBadge r={r} /> },
   ];
 
-  const sel = (label: string, value: string, set: (v: string) => void, options: { value: string; label: string }[], testId: string) => (
-    <div className={value ? 'audit-sel' : 'audit-sel empty'} data-testid={testId}>
-      <Select value={value} onChange={(e) => set(e.target.value)} options={[{ value: '', label: value ? t('audit.any') : label }, ...options]} />
-    </div>
-  );
+  // source suggestions: the users, and the biggest sources of the range
+  const { data: users } = useQuery({ queryKey: ['users'], queryFn: getUsers, staleTime: 60_000 });
+  const srcOptions = useMemo(() => Array.from(new Set([
+    ...(users || []).map((u) => u.username),
+    ...(stats?.top_users || []).map((x) => x.key),
+    ...(stats?.top_sources || []).map((x) => x.key),
+  ].filter(Boolean))), [users, stats]);
+  const groupLabel = (g: Group, v: string) => {
+    switch (g) {
+      case 'inbound': return t(`audit.in.${v}`);
+      case 'exit': return t(`audit.exitKind.${v}`);
+      case 'proto': return v.toUpperCase();
+      case 'app': return v === '-' ? t('audit.appUnknown') : appName(v);
+      default: return t(`audit.res.${v}`);
+    }
+  };
 
   return (
     <div className="hy-page audit-page" data-testid="audit-page">
@@ -177,13 +200,14 @@ export default function AuditPage() {
           <Button onClick={() => { window.location.href = auditExportUrl(filter, 'csv'); }} data-testid="audit-export">{t('audit.exportCsv')}</Button>
         </div>
         <div className="audit-filters">
-          <Input value={src} onChange={(e) => setSrc(e.target.value)} placeholder={t('audit.sourceFilter')} data-testid="audit-src" />
+          <Autocomplete options={srcOptions} value={src} onChange={setSrc} placeholder={t('audit.sourceFilter')} testId="audit-src" className="audit-src" />
           <Input value={dst} onChange={(e) => setDst(e.target.value)} placeholder={t('audit.destination')} data-testid="audit-dst" />
-          {sel(t('audit.inbound'), inbound, setInbound, INBOUNDS.map((k) => ({ value: k, label: t(`audit.in.${k}`) })), 'audit-inbound')}
-          {sel(t('audit.exit'), exit, setExit, ['direct', 'node', 'blocked'].map((k) => ({ value: k, label: t(`audit.exitKind.${k}`) })), 'audit-exit')}
-          {sel(t('audit.proto'), proto, setProto, [{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' }], 'audit-proto')}
-          {sel(t('audit.app'), app, setApp, APP_FILTER.map((k) => ({ value: k, label: appName(k) })), 'audit-app')}
-          {sel(t('audit.result'), result, setResult, ['ok', 'error', 'refused', 'blocked'].map((k) => ({ value: k, label: t(`audit.res.${k}`) })), 'audit-result')}
+          {GROUPS.map((g) => (
+            <CheckSelect key={g} testId={`audit-group-${g}`} label={t(`audit.group.${g}`)}
+              options={GROUP_VALUES[g].map((v) => ({ value: v, label: groupLabel(g, v) }))}
+              value={GROUP_VALUES[g].filter((v) => !hidden[g].includes(v))}
+              onChange={(on) => setHidden({ ...hidden, [g]: GROUP_VALUES[g].filter((v) => !on.includes(v)) })} />
+          ))}
         </div>
       </Card>
 
@@ -216,12 +240,12 @@ function AuditSummary({ stats, loading }: { stats: AuditStats | null; loading: b
   if (!stats) {
     return loading ? <Card><div className="audit-summary-wait muted" data-testid="audit-summary-loading">{t('audit.loading')}</div></Card> : null;
   }
-  const top = (title: string, list?: { key: string; bytes: number }[], addr = false, name?: (k: string) => string) => (
+  const top = (title: string, list?: { key: string; bytes: number; ip?: string }[], addr = false, name?: (k: string) => string) => (
     <div className="audit-top">
       <div className="audit-top-title">{title}</div>
       {(list || []).slice(0, 5).map((x) => (
         <div className="audit-top-row" key={x.key}>
-          <span className="audit-top-key">{addr && <IPFlag addr={x.key} />}{x.key ? (name ? name(x.key) : x.key) : '—'}</span>
+          <span className="audit-top-key">{(x.ip || addr) && <IPFlag addr={x.ip || x.key} />}{x.key ? (name ? name(x.key) : x.key) : '—'}</span>
           <span className="muted num">{fmtBytes(x.bytes)}</span>
         </div>
       ))}
@@ -260,10 +284,13 @@ function ProtoCell({ r }: { r: AuditRecord }) {
 function Source({ r }: { r: AuditRecord }) {
   const { t } = useTranslation();
   const via = [r.src_node && t('audit.viaNode', { node: r.src_node }), r.in_iface].filter(Boolean).join(' · ');
+  // a VPN client: where it connects from, then its tunnel address
+  const main = r.src_peer || r.src;
   return (
     <span className="audit-addr">
       {r.user && <b className="nowrap">{r.user}</b>}
-      {r.src && <span className={r.user ? 'mono muted nowrap' : 'mono nowrap'}><IPFlag addr={r.src} />{r.src}</span>}
+      {main && <span className={r.user ? 'mono muted nowrap' : 'mono nowrap'}><IPFlag addr={main} />{main}</span>}
+      {r.src_peer && r.src && <span className="mono muted nowrap" data-testid="audit-tunnel">{t('audit.tunnelAddr', { addr: hostOf(r.src) })}</span>}
       {via && <span className="muted nowrap">{via}</span>}
       {!r.user && !r.src && !via && <span className="muted">—</span>}
     </span>
@@ -339,6 +366,7 @@ function AuditDetail({ open, onClose, animateFrom, record: r }: { open: boolean;
     [t('audit.inbound'), t(`audit.in.${r.inbound}`, { defaultValue: r.inbound })],
     [t('audit.user'), r.user || dash],
     [t('audit.sourceAddr'), r.src ? <span className="mono">{r.src}</span> : dash],
+    [t('audit.peerAddr'), r.src_peer ? <span className="mono">{r.src_peer}</span> : dash],
     [t('audit.fromNode'), r.src_node || dash],
     [t('audit.inIface'), r.in_iface || dash],
     [t('audit.srcMac'), r.src_mac ? <span className="mono">{r.src_mac}</span> : dash],
@@ -359,7 +387,7 @@ function AuditDetail({ open, onClose, animateFrom, record: r }: { open: boolean;
       <div data-testid="audit-detail">
         <DetailGrid items={items} variant="plain" columns={3} />
         <div className="audit-geo">
-          <GeoBlock title={t('audit.source')} addr={r.src} />
+          <GeoBlock title={t('audit.source')} addr={r.src_peer || r.src} />
           <GeoBlock title={t('audit.destination')} addr={r.dst_ip || r.dst_host} />
         </div>
       </div>

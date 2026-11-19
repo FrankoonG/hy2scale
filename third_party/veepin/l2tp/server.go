@@ -91,7 +91,7 @@ type ServerConfig struct {
 	// UserLookup, if set, replaces Users. (hy2scale P3)
 	UserLookup func(username string) (string, bool)
 	// OnSession reports a client's address coming up / going away. (hy2scale P3)
-	OnSession func(up bool, user string, addr netip.Addr)
+	OnSession func(up bool, user string, addr netip.Addr, peer netip.AddrPort) // peer: the client's own address (hy2scale P16)
 
 	Logger *slog.Logger
 }

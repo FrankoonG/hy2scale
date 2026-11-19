@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/FrankoonG/hy2scale/internal/app"
@@ -65,6 +66,17 @@ func auditQuery(r *http.Request) (storage.Query, error) {
 		Exit: v.Get("exit"), Proto: v.Get("proto"), App: v.Get("app"), Result: v.Get("result"), Q: v.Get("q"),
 		Cursor: v.Get("cursor"),
 	}
+	list := func(k string) []string {
+		var out []string
+		for _, s := range strings.Split(v.Get(k), ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	q.NotInbound, q.NotExit, q.NotProto, q.NotApp, q.NotResult =
+		list("not_inbound"), list("not_exit"), list("not_proto"), list("not_app"), list("not_result")
 	for _, f := range []struct {
 		key string
 		dst *int64
