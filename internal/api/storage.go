@@ -62,7 +62,7 @@ func auditQuery(r *http.Request) (storage.Query, error) {
 	v := r.URL.Query()
 	q := storage.Query{
 		User: v.Get("user"), Src: v.Get("src"), Dst: v.Get("dst"), Inbound: v.Get("inbound"),
-		Exit: v.Get("exit"), Proto: v.Get("proto"), Result: v.Get("result"), Q: v.Get("q"),
+		Exit: v.Get("exit"), Proto: v.Get("proto"), App: v.Get("app"), Result: v.Get("result"), Q: v.Get("q"),
 		Cursor: v.Get("cursor"),
 	}
 	for _, f := range []struct {
@@ -126,8 +126,10 @@ func (s *Server) auditStats(w http.ResponseWriter, r *http.Request) {
 		"top_users":        res.TopUsers,
 		"top_sources":      res.TopSrc,
 		"top_destinations": res.TopDst,
+		"top_apps":         res.TopApps,
 		"scanned":          res.Scanned,
 		"truncated":        res.Truncated,
+		"hourly":           res.Hourly,
 	})
 }
 
