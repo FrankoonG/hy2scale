@@ -75,7 +75,7 @@ func (a *App) dialAccepted(ctx context.Context, conn *gonet.TCPConn, ep tcpip.En
 		if _, err = remote.Write(peeked); err != nil {
 			remote.Close()
 		} else {
-			audit.FromContext(ctx).Add(int64(len(peeked)), 0)
+			audit.FromContext(ctx).AddData(peeked, true)
 		}
 	}
 	if err != nil {

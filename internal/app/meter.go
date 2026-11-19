@@ -108,6 +108,7 @@ type meteredConn struct {
 func (c *meteredConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
+		c.m.flow.Observe(p[:n], c.readUp)
 		if c.readUp {
 			c.m.add(int64(n), 0)
 		} else {
@@ -120,6 +121,7 @@ func (c *meteredConn) Read(p []byte) (int, error) {
 func (c *meteredConn) Write(p []byte) (int, error) {
 	n, err := c.Conn.Write(p)
 	if n > 0 {
+		c.m.flow.Observe(p[:n], !c.readUp)
 		if c.readUp {
 			c.m.add(0, int64(n))
 		} else {
