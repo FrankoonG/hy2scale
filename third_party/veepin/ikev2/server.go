@@ -105,7 +105,7 @@ type ServerConfig struct {
 	EAPLookup func(username string) (password string, ok bool)
 	// OnSession reports a client's tunnel address coming up / going away and
 	// the identity it authenticated as. (hy2scale P3)
-	OnSession func(up bool, user string, addr netip.Addr)
+	OnSession func(up bool, user string, addr netip.Addr, peer netip.AddrPort) // peer: the client's own address (hy2scale P16)
 
 	// PostQuantumOnly requires a post-quantum key exchange (ML-KEM-768 over
 	// RFC 9370) AND post-quantum authentication, refusing anything less rather

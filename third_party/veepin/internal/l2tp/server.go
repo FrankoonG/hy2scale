@@ -24,7 +24,7 @@ type ServerConfig struct {
 	UserLookup func(username string) (string, bool)
 	// OnSession reports a client's address coming up after PPP authentication
 	// and going away. (hy2scale P3)
-	OnSession func(up bool, user string, addr netip.Addr)
+	OnSession func(up bool, user string, addr netip.Addr, peer netip.AddrPort) // peer: the client's own address (hy2scale P16)
 	// PublicIP is the server's outer address as clients reach it. It becomes the
 	// IKE identity and the phase-2 traffic selector, so a server listening on the
 	// wildcard — where the socket cannot name it — must be told.
@@ -333,7 +333,7 @@ func (s *Server) removePeer(p *serverPeer, err error) {
 
 	if p.innerIP != nil {
 		if s.cfg.OnSession != nil && p.up.Load() {
-			s.cfg.OnSession(false, p.user, p.inner4)
+			s.cfg.OnSession(false, p.user, p.inner4, p.peerAddr())
 		}
 		s.pool.Release(p.innerIP)
 	}
@@ -565,6 +565,14 @@ func (p *serverPeer) Closed(err error) { p.srv.removePeer(p, err) }
 // serverPPP adapts serverPeer to ppp.ServerHandler.
 type serverPPP struct{ p *serverPeer }
 
+// peerAddr is where the client's IKE came from (hy2scale P16).
+func (p *serverPeer) peerAddr() netip.AddrPort {
+	if p.addr == nil {
+		return netip.AddrPort{}
+	}
+	return p.addr.AddrPort()
+}
+
 func (h serverPPP) Authenticated(u, pw string, nt [mschap.NTResponseLen]byte) {
 	h.p.mu.Lock()
 	h.p.user = u
@@ -582,7 +590,7 @@ func (h serverPPP) NetworkUp() {
 		h.p.mu.Lock()
 		user, a := h.p.user, h.p.inner4
 		h.p.mu.Unlock()
-		cb(true, user, a)
+		cb(true, user, a, h.p.peerAddr())
 	}
 	h.p.mu.Lock()
 	ps := h.p.ppp

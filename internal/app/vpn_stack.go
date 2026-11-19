@@ -61,6 +61,8 @@ type vpnNet struct {
 	// dual-stack client has an IPv4 and an IPv6 entry).
 	mu      sync.RWMutex
 	clients map[netip.Addr]string
+	// peers: where each tunnel address's client connects from
+	peers map[netip.Addr]netip.AddrPort
 }
 
 func newVPNNet(parent context.Context, proto string, gateways []netip.Addr, mtu int) (*vpnNet, error) {
@@ -101,23 +103,48 @@ func newVPNNet(parent context.Context, proto string, gateways []netip.Addr, mtu 
 		{Destination: header.IPv6EmptySubnet, NIC: 1},
 	})
 	ctx, stop := context.WithCancel(parent)
-	return &vpnNet{proto: proto, stack: s, ep: ep, ctx: ctx, stop: stop, clients: map[netip.Addr]string{}}, nil
+	return &vpnNet{proto: proto, stack: s, ep: ep, ctx: ctx, stop: stop, clients: map[netip.Addr]string{}, peers: map[netip.Addr]netip.AddrPort{}}, nil
 }
 
 // session is the server's OnSession callback.
-func (n *vpnNet) session(up bool, user string, addr netip.Addr) {
+func (n *vpnNet) session(up bool, user string, addr netip.Addr, peer netip.AddrPort) {
+	if peer.IsValid() {
+		peer = netip.AddrPortFrom(peer.Addr().Unmap(), peer.Port()) // ::ffff:a.b.c.d → a.b.c.d
+	}
 	n.mu.Lock()
 	if up {
 		n.clients[addr] = user
+		n.peers[addr] = peer
 	} else if cur, ok := n.clients[addr]; ok && cur == user {
 		delete(n.clients, addr)
+		delete(n.peers, addr)
 	}
 	n.mu.Unlock()
+	from := ""
+	if peer.IsValid() {
+		from = " from " + peer.String()
+	}
 	if up {
-		log.Printf("[%s] client %q up at %s", n.proto, user, addr)
+		log.Printf("[%s] client %q up at %s%s", n.proto, user, addr, from)
 	} else {
 		log.Printf("[%s] client %q at %s gone", n.proto, user, addr)
 	}
+}
+
+// clientPeer: where the client holding tunnel address ip connects from
+// ("" = unknown).
+func (n *vpnNet) clientPeer(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ""
+	}
+	n.mu.RLock()
+	p, ok := n.peers[a.Unmap()]
+	n.mu.RUnlock()
+	if !ok || !p.IsValid() {
+		return ""
+	}
+	return p.String()
 }
 
 func (n *vpnNet) clientUser(ip string) (string, bool) {
@@ -313,6 +340,7 @@ func (a *App) installVPNForwarders(n *vpnNet, resolve func(srcIP string) (vpnRou
 		}
 		dst := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
 		af := beginUserFlowStr(n.proto, "tcp", route.user, net.JoinHostPort(srcIP, strconv.Itoa(int(id.RemotePort))), dst)
+		af.SetSrcPeer(n.clientPeer(srcIP))
 		if sniffAfterAccept(dst) {
 			conn, ep := acceptForwarded(r, "["+n.proto+"]", srcIP, dst)
 			if conn == nil {
@@ -399,6 +427,7 @@ func (a *App) relayVPNUDP(n *vpnNet, conn *gonet.UDPConn, route vpnRoute, srcIP 
 		return // over its traffic limit: new flows are dropped
 	}
 	af := beginUserFlowStr(n.proto, "udp", route.user, net.JoinHostPort(srcIP, strconv.Itoa(srcPort)), dst)
+	af.SetSrcPeer(n.clientPeer(srcIP))
 	ctx, cancel := context.WithTimeout(audit.NewContext(n.ctx, af), 15*time.Second)
 	remote, err := a.dialRoutedUDP(withRestrict(ctx, a.userRestrict(route.user)), route.sel(),
 		route.src(n.proto, net.JoinHostPort(srcIP, strconv.Itoa(srcPort))), dst)

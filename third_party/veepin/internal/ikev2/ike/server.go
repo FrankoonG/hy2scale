@@ -113,7 +113,7 @@ type Config struct {
 	// OnSession, if set, is told when a client's tunnel address comes up and
 	// goes away, with the identity it authenticated as (the EAP username when
 	// EAP was used). (hy2scale P3)
-	OnSession func(up bool, user string, addr netip.Addr)
+	OnSession func(up bool, user string, addr netip.Addr, peer netip.AddrPort) // peer: the client's own address (hy2scale P16)
 
 	// IPTFSRate, when positive, makes every AGGFRAG Child SA transmit at that
 	// many bytes per second regardless of load. It is the traffic-flow
@@ -502,16 +502,20 @@ func (s *Server) deleteSA(sa *IKESA) {
 
 // reportSession tells OnSession about each address the SA holds: the IPv4
 // lease and, on a dual-stack SA, the IPv6 one. (hy2scale P3, P7)
-func (sa *IKESA) reportSession(on func(bool, string, netip.Addr), up bool) {
+func (sa *IKESA) reportSession(on func(bool, string, netip.Addr, netip.AddrPort), up bool) {
 	if on == nil {
 		return
 	}
+	var peer netip.AddrPort // hy2scale P16
+	if sa.RemoteAddr != nil {
+		peer = sa.RemoteAddr.AddrPort()
+	}
 	if a, ok := netip.AddrFromSlice(sa.ClientIP.To4()); ok {
-		on(up, sa.sessionUser(), a)
+		on(up, sa.sessionUser(), a, peer)
 	}
 	if len(sa.ClientIP6) == net.IPv6len && sa.ClientIP6.To4() == nil {
 		if a, ok := netip.AddrFromSlice(sa.ClientIP6); ok {
-			on(up, sa.sessionUser(), a)
+			on(up, sa.sessionUser(), a, peer)
 		}
 	}
 }

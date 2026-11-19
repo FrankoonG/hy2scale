@@ -30,6 +30,7 @@ type Record struct {
 	Inbound     string `json:"inbound,omitempty"` // socks5 http ss hy2 ikev2 l2tp openvpn wireguard rules access relay
 	User        string `json:"user,omitempty"`
 	Src         string `json:"src,omitempty"`
+	SrcPeer     string `json:"src_peer,omitempty"` // the client's own address, outside a VPN tunnel (Src: its tunnel address)
 	SrcNode     string `json:"src_node,omitempty"`
 	InIface     string `json:"in_iface,omitempty"` // inbound interface (forwarded traffic)
 	SrcMAC      string `json:"src_mac,omitempty"`  // source MAC (forwarded traffic)
@@ -182,6 +183,15 @@ func (f *Flow) SetSrc(src, node string) {
 			r.SrcNode = node
 		}
 	})
+}
+
+// SetSrcPeer records where a VPN client connects from (its tunnel
+// address stays the source).
+func (f *Flow) SetSrcPeer(addr string) {
+	if f == nil || addr == "" {
+		return
+	}
+	f.Set(func(r *Record) { r.SrcPeer = addr })
 }
 
 // SetDst records the destination as requested; a host name in it is also
