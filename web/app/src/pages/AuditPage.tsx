@@ -22,6 +22,16 @@ const PAGE = 200;
 const REFRESH_MS = 10_000;
 const INBOUNDS = ['local', 'forward', 'socks5', 'http', 'ss', 'trojan', 'hy2', 'ikev2', 'l2tp', 'openvpn', 'wireguard', 'access', 'relay'];
 
+/** Display names of application protocols (technical identifiers). */
+const APP_NAMES: Record<string, string> = {
+  tls: 'TLS', http: 'HTTP', http2: 'HTTP/2', quic: 'QUIC', dns: 'DNS', mdns: 'mDNS', ssh: 'SSH', rdp: 'RDP', vnc: 'VNC',
+  smb: 'SMB', smtp: 'SMTP', ftp: 'FTP', pop3: 'POP3', imap: 'IMAP', mysql: 'MySQL', postgres: 'PostgreSQL', redis: 'Redis',
+  mqtt: 'MQTT', xmpp: 'XMPP', socks5: 'SOCKS5', bittorrent: 'BitTorrent', stun: 'STUN', ntp: 'NTP', dtls: 'DTLS',
+  wireguard: 'WireGuard', openvpn: 'OpenVPN', ike: 'IKE', ssdp: 'SSDP', sip: 'SIP', tcp: 'TCP', udp: 'UDP',
+};
+const APP_FILTER = ['tls', 'http', 'quic', 'dns', 'ssh', 'stun', 'wireguard', 'bittorrent', 'rdp', 'smtp', 'ntp'];
+const appName = (k: string) => APP_NAMES[k] ?? k.toUpperCase();
+
 const pad = (n: number) => String(n).padStart(2, '0');
 function fmtTime(ms: number): string {
   const d = new Date(ms);
@@ -54,8 +64,13 @@ export default function AuditPage() {
   const [inbound, setInbound] = useState('');
   const [exit, setExit] = useState('');
   const [proto, setProto] = useState('');
+  const [app, setApp] = useState('');
   const [result, setResult] = useState('');
-  const text = useDebounced({ q, src, dst }, 400);
+  // one debounce per field: an object made each render never settles and
+  // reloaded the page in a loop
+  const dq = useDebounced(q, 400);
+  const dsrc = useDebounced(src, 400);
+  const ddst = useDebounced(dst, 400);
 
   const [records, setRecords] = useState<AuditRecord[]>([]);
   const [cursor, setCursor] = useState<string | undefined>();
@@ -63,53 +78,69 @@ export default function AuditPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [stats, setStats] = useState<AuditStats | null>(null);
-  const gen = useRef(0);
+  const [statsLoading, setStatsLoading] = useState(false);
+  // a newer request cancels the one before (the node stops that scan too)
+  const listCtl = useRef<AbortController | null>(null);
+  const statsCtl = useRef<AbortController | null>(null);
+  useEffect(() => () => { listCtl.current?.abort(); statsCtl.current?.abort(); }, []);
 
-  const filter = useMemo<AuditFilter>(() => {
-    const now = Date.now();
-    return {
-      from: RANGE_MS[range] ? now - RANGE_MS[range] : undefined,
-      q: text.q.trim(), src: text.src.trim(), dst: text.dst.trim(),
-      inbound, exit, proto, result,
-    };
-    // `tick` re-anchors the time window on refresh
-  }, [range, text, inbound, exit, proto, result]); // eslint-disable-line react-hooks/exhaustive-deps
+  const filter = useMemo<AuditFilter>(() => ({
+    from: RANGE_MS[range] ? Date.now() - RANGE_MS[range] : undefined,
+    q: dq.trim(), src: dsrc.trim(), dst: ddst.trim(),
+    inbound, exit, proto, app, result,
+  }), [range, dq, dsrc, ddst, inbound, exit, proto, app, result]);
 
   const load = useCallback(async (more: boolean) => {
-    const g = more ? gen.current : ++gen.current;
+    listCtl.current?.abort();
+    const c = new AbortController();
+    listCtl.current = c;
     setLoading(true);
     setError('');
     try {
       const f = more ? filter : { ...filter, from: RANGE_MS[range] ? Date.now() - RANGE_MS[range] : undefined };
-      const [page, st] = await Promise.all([
-        getAudit(f, PAGE, more ? cursor : undefined),
-        more ? Promise.resolve(null) : getAuditStats({ from: f.from, to: f.to }).catch(() => null),
-      ]);
-      if (g !== gen.current) return;
+      const page = await getAudit(f, PAGE, more ? cursor : undefined, c.signal);
+      if (c.signal.aborted) return;
       setRecords((prev) => (more ? prev.concat(page.records) : page.records));
       setCursor(page.next_cursor || undefined);
       setTruncated(!!page.truncated);
-      if (!more) setStats(st);
     } catch (e: any) {
-      if (g === gen.current) setError(String(e?.message || e));
+      if (!c.signal.aborted) setError(String(e?.message || e));
     } finally {
-      if (g === gen.current) setLoading(false);
+      if (listCtl.current === c) setLoading(false);
     }
   }, [filter, cursor, range]);
 
+  // the summary (whole range, no filters) loads on its own
+  const loadStats = useCallback(async () => {
+    statsCtl.current?.abort();
+    const c = new AbortController();
+    statsCtl.current = c;
+    setStatsLoading(true);
+    try {
+      const st = await getAuditStats({ from: RANGE_MS[range] ? Date.now() - RANGE_MS[range] : undefined }, c.signal);
+      if (!c.signal.aborted) setStats(st);
+    } catch {
+      if (!c.signal.aborted) setStats(null);
+    } finally {
+      if (statsCtl.current === c) setStatsLoading(false);
+    }
+  }, [range]);
+
+  const refresh = useCallback(() => { load(false); loadStats(); }, [load, loadStats]);
   useEffect(() => { load(false); }, [filter]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadStats(); }, [loadStats]);
   useEffect(() => {
     if (!auto) return;
-    const id = setInterval(() => load(false), REFRESH_MS);
+    const id = setInterval(refresh, REFRESH_MS);
     return () => clearInterval(id);
-  }, [auto, load]);
+  }, [auto, refresh]);
 
   const detail = useModalState<AuditRecord>();
 
   const columns: Column<AuditRecord>[] = [
     { key: 'time', title: t('audit.time'), render: (r) => <span className="mono nowrap">{fmtTime(r.start)}</span>, sortValue: (r) => r.start, hideable: false },
     { key: 'dur', title: t('audit.duration'), render: (r) => <span className="nowrap">{fmtDur(Math.max(0, r.end - r.start))}{r.partial ? ' …' : ''}</span>, sortValue: (r) => r.end - r.start },
-    { key: 'proto', title: t('audit.proto'), render: (r) => <span className="mono">{r.proto.toUpperCase()}</span> },
+    { key: 'proto', title: t('audit.proto'), render: (r) => <ProtoCell r={r} />, sortValue: (r) => r.app || r.proto },
     { key: 'inbound', title: t('audit.inbound'), render: (r) => <Badge variant="muted">{t(`audit.in.${r.inbound}`, { defaultValue: r.inbound })}</Badge> },
     { key: 'src', title: t('audit.source'), render: (r) => <Source r={r} />, sortValue: (r) => r.user || r.src || '' },
     { key: 'dst', title: t('audit.destination'), render: (r) => <Dest r={r} />, sortValue: (r) => r.dst_host || r.dst || '' },
@@ -130,7 +161,7 @@ export default function AuditPage() {
 
   return (
     <div className="hy-page audit-page" data-testid="audit-page">
-      <AuditSummary stats={stats} />
+      <AuditSummary stats={stats} loading={statsLoading} />
 
       <Card>
         <div className="audit-bar">
@@ -142,7 +173,7 @@ export default function AuditPage() {
           <Input className="audit-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('audit.search')} data-testid="audit-q" />
           <span className="spacer" />
           <Toggle size="sm" className="audit-auto" checked={auto} onChange={(e) => setAuto(e.target.checked)} label={t('audit.autoRefresh')} />
-          <Button onClick={() => load(false)} loading={loading && !records.length} data-testid="audit-refresh">{t('audit.refresh')}</Button>
+          <Button onClick={refresh} loading={loading && !records.length} data-testid="audit-refresh">{t('audit.refresh')}</Button>
           <Button onClick={() => { window.location.href = auditExportUrl(filter, 'csv'); }} data-testid="audit-export">{t('audit.exportCsv')}</Button>
         </div>
         <div className="audit-filters">
@@ -151,6 +182,7 @@ export default function AuditPage() {
           {sel(t('audit.inbound'), inbound, setInbound, INBOUNDS.map((k) => ({ value: k, label: t(`audit.in.${k}`) })), 'audit-inbound')}
           {sel(t('audit.exit'), exit, setExit, ['direct', 'node', 'blocked'].map((k) => ({ value: k, label: t(`audit.exitKind.${k}`) })), 'audit-exit')}
           {sel(t('audit.proto'), proto, setProto, [{ value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' }], 'audit-proto')}
+          {sel(t('audit.app'), app, setApp, APP_FILTER.map((k) => ({ value: k, label: appName(k) })), 'audit-app')}
           {sel(t('audit.result'), result, setResult, ['ok', 'error', 'refused', 'blocked'].map((k) => ({ value: k, label: t(`audit.res.${k}`) })), 'audit-result')}
         </div>
       </Card>
@@ -179,15 +211,17 @@ export default function AuditPage() {
   );
 }
 
-function AuditSummary({ stats }: { stats: AuditStats | null }) {
+function AuditSummary({ stats, loading }: { stats: AuditStats | null; loading: boolean }) {
   const { t } = useTranslation();
-  if (!stats) return null;
-  const top = (title: string, list?: { key: string; bytes: number }[], addr = false) => (
+  if (!stats) {
+    return loading ? <Card><div className="audit-summary-wait muted" data-testid="audit-summary-loading">{t('audit.loading')}</div></Card> : null;
+  }
+  const top = (title: string, list?: { key: string; bytes: number }[], addr = false, name?: (k: string) => string) => (
     <div className="audit-top">
       <div className="audit-top-title">{title}</div>
       {(list || []).slice(0, 5).map((x) => (
         <div className="audit-top-row" key={x.key}>
-          <span className="audit-top-key">{addr && <IPFlag addr={x.key} />}{x.key || '—'}</span>
+          <span className="audit-top-key">{addr && <IPFlag addr={x.key} />}{x.key ? (name ? name(x.key) : x.key) : '—'}</span>
           <span className="muted num">{fmtBytes(x.bytes)}</span>
         </div>
       ))}
@@ -205,9 +239,21 @@ function AuditSummary({ stats }: { stats: AuditStats | null }) {
         {top(t('audit.topUsers'), stats.top_users)}
         {top(t('audit.topSources'), stats.top_sources, true)}
         {top(t('audit.topHosts'), stats.top_destinations)}
+        {top(t('audit.topApps'), stats.top_apps, false, appName)}
       </div>
+      {(stats.truncated || stats.hourly) && (
+        <div className="audit-summary-note muted" data-testid="audit-summary-note">
+          {stats.truncated ? t('audit.statsTruncated', { n: (stats.scanned ?? 0).toLocaleString() }) : t('audit.statsHourly')}
+        </div>
+      )}
     </Card>
   );
+}
+
+/** Transport, and the application protocol when it was told. */
+function ProtoCell({ r }: { r: AuditRecord }) {
+  if (!r.app) return <span className="mono">{r.proto.toUpperCase()}</span>;
+  return <span className="nowrap"><b>{appName(r.app)}</b> <span className="mono muted">{r.proto.toUpperCase()}</span></span>;
 }
 
 /** Who: the user (when any), the client address, and where it came in. */
@@ -289,7 +335,7 @@ function AuditDetail({ open, onClose, animateFrom, record: r }: { open: boolean;
     [t('audit.start'), <span className="mono">{fmtTime(r.start)}</span>],
     [t('audit.end'), <span className="mono">{fmtTime(r.end)}{r.partial ? ` (${t('audit.ongoing')})` : ''}</span>],
     [t('audit.duration'), fmtDur(Math.max(0, r.end - r.start))],
-    [t('audit.proto'), r.proto.toUpperCase()],
+    [t('audit.proto'), r.app ? `${appName(r.app)} · ${r.proto.toUpperCase()}` : r.proto.toUpperCase()],
     [t('audit.inbound'), t(`audit.in.${r.inbound}`, { defaultValue: r.inbound })],
     [t('audit.user'), r.user || dash],
     [t('audit.sourceAddr'), r.src ? <span className="mono">{r.src}</span> : dash],
