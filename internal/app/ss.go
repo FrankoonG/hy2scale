@@ -379,7 +379,7 @@ func (a *App) handleSSNone(conn net.Conn) {
 
 	if len(remaining) > 0 {
 		remote.Write(remaining)
-		af.Add(int64(len(remaining)), 0)
+		af.AddData(remaining, true)
 	}
 	remoteIP := ""
 	if h, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {

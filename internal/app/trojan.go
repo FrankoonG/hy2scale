@@ -437,7 +437,7 @@ func (a *App) trojanUDP(ctx context.Context, conn *trojanConn, u *UserConfig) {
 		}
 		if _, err := f.up.Write(payload[:n]); err == nil {
 			m.add(int64(n), 0)
-			f.af.Add(int64(n), 0)
+			f.af.AddData(payload[:n], true)
 		}
 	}
 }

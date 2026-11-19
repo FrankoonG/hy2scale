@@ -288,7 +288,7 @@ func (a *App) handleSSUDPPacket(
 		if !a.userRate(u.Username).allow(true, len(payload)) {
 			return // over the user's rate limit: dropped
 		}
-		af.Add(int64(len(payload)), 0)
+		af.AddData(payload, true)
 		if _, werr := upstream.Write(payload); werr != nil {
 			// Drop on write failure — upstream conn may have died.
 			// Don't tear the flow down here; the reverse-reader's next
@@ -336,7 +336,7 @@ func (a *App) ssUDPForward(
 	if upstream == nil || a.overTrafficLimit(username) || !a.userRate(username).allow(true, len(payload)) {
 		return
 	}
-	af.Add(int64(len(payload)), 0)
+	af.AddData(payload, true)
 	_, _ = upstream.Write(payload)
 	if username != "" {
 		a.RecordTraffic(username, int64(len(payload)))

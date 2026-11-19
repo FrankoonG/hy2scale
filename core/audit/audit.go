@@ -26,6 +26,7 @@ type Record struct {
 	End         int64  `json:"end"`   // unix ms
 	Partial     bool   `json:"partial,omitempty"`
 	Proto       string `json:"proto,omitempty"`   // tcp | udp
+	App         string `json:"app,omitempty"`     // application protocol (App*), when told
 	Inbound     string `json:"inbound,omitempty"` // socks5 http ss hy2 ikev2 l2tp openvpn wireguard rules access relay
 	User        string `json:"user,omitempty"`
 	Src         string `json:"src,omitempty"`
@@ -132,6 +133,8 @@ type Flow struct {
 	up, down atomic.Int64
 	done     atomic.Bool
 	lastEmit atomic.Int64 // unix ms of the start or the last interim record
+	appSeen  atomic.Int32 // payload chunks looked at for the protocol
+	appDone  atomic.Bool  // protocol told, or given up
 }
 
 // Begin starts recording a flow entering by inbound over proto ("tcp" or
@@ -493,6 +496,7 @@ func (c *tracked) Read(p []byte) (int, error) {
 		} else {
 			c.f.down.Add(int64(n))
 		}
+		c.f.Observe(p[:n], c.client)
 	}
 	return n, err
 }
@@ -505,6 +509,7 @@ func (c *tracked) Write(p []byte) (int, error) {
 		} else {
 			c.f.up.Add(int64(n))
 		}
+		c.f.Observe(p[:n], !c.client)
 	}
 	return n, err
 }

@@ -2190,7 +2190,7 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 			if _, werr := remote.Write(peeked); werr != nil {
 				return
 			}
-			af.Add(int64(len(peeked)), 0)
+			af.AddData(peeked, true)
 		}
 	} else {
 		remote, err = rt.dial(dctx)
@@ -2435,7 +2435,7 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 			if _, werr := remote.Write(connectPeeked); werr != nil {
 				return
 			}
-			af.Add(int64(len(connectPeeked)), 0)
+			af.AddData(connectPeeked, true)
 		}
 	} else {
 		// Forward the original request to the remote
