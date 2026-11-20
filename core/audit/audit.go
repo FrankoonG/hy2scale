@@ -26,9 +26,12 @@ type Record struct {
 	End         int64  `json:"end"`   // unix ms
 	Partial     bool   `json:"partial,omitempty"`
 	Proto       string `json:"proto,omitempty"`   // tcp | udp
+	App         string `json:"app,omitempty"`     // application protocol (App*), when told
 	Inbound     string `json:"inbound,omitempty"` // socks5 http ss hy2 ikev2 l2tp openvpn wireguard rules access relay
 	User        string `json:"user,omitempty"`
+	Entry       string `json:"entry,omitempty"` // the user's password row that signed in ("#2 Japan")
 	Src         string `json:"src,omitempty"`
+	SrcPeer     string `json:"src_peer,omitempty"` // the client's own address, outside a VPN tunnel (Src: its tunnel address)
 	SrcNode     string `json:"src_node,omitempty"`
 	InIface     string `json:"in_iface,omitempty"` // inbound interface (forwarded traffic)
 	SrcMAC      string `json:"src_mac,omitempty"`  // source MAC (forwarded traffic)
@@ -132,6 +135,8 @@ type Flow struct {
 	up, down atomic.Int64
 	done     atomic.Bool
 	lastEmit atomic.Int64 // unix ms of the start or the last interim record
+	appSeen  atomic.Int32 // payload chunks looked at for the protocol
+	appDone  atomic.Bool  // protocol told, or given up
 }
 
 // Begin starts recording a flow entering by inbound over proto ("tcp" or
@@ -166,6 +171,11 @@ func (f *Flow) SetUser(u string) {
 	f.Set(func(r *Record) { r.User = u })
 }
 
+
+// SetEntry records which password row of the user signed in.
+func (f *Flow) SetEntry(e string) {
+	f.Set(func(r *Record) { r.Entry = e })
+}
 // SetSrc records the client address (and the peer it came from).
 func (f *Flow) SetSrc(src, node string) {
 	if f == nil {
@@ -179,6 +189,15 @@ func (f *Flow) SetSrc(src, node string) {
 			r.SrcNode = node
 		}
 	})
+}
+
+// SetSrcPeer records where a VPN client connects from (its tunnel
+// address stays the source).
+func (f *Flow) SetSrcPeer(addr string) {
+	if f == nil || addr == "" {
+		return
+	}
+	f.Set(func(r *Record) { r.SrcPeer = addr })
 }
 
 // SetDst records the destination as requested; a host name in it is also
@@ -493,6 +512,7 @@ func (c *tracked) Read(p []byte) (int, error) {
 		} else {
 			c.f.down.Add(int64(n))
 		}
+		c.f.Observe(p[:n], c.client)
 	}
 	return n, err
 }
@@ -505,6 +525,7 @@ func (c *tracked) Write(p []byte) (int, error) {
 		} else {
 			c.f.up.Add(int64(n))
 		}
+		c.f.Observe(p[:n], !c.client)
 	}
 	return n, err
 }

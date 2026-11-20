@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useNavSelect } from '@/hooks/useNavSelect';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -430,17 +430,9 @@ export default function NodesPage() {
   collectKeys(treeNodes);
   const selection = useSelection(selectableKeys);
 
-  // Opened with { select: key } (the top bar node badge): select that row
-  // alone once it exists.
-  const location = useLocation();
-  const pendingSelect = useRef<string | null>(null);
-  useEffect(() => { pendingSelect.current = (location.state as { select?: string } | null)?.select ?? null; }, [location.key]);
-  useEffect(() => {
-    const k = pendingSelect.current;
-    if (!k || !selectableKeys.includes(k)) return;
-    pendingSelect.current = null;
-    if (!(selection.count === 1 && selection.selected.has(k))) selection.selectOnly(k);
-  });
+  // Opened with { select } (the top bar node badge, the overview): select
+  // those rows once they exist.
+  useNavSelect(selectableKeys, selection);
 
   // Clicking anywhere outside the list region clears a single-row
   // selection (multi-select stays sticky). The boundary is the Card —
@@ -637,6 +629,7 @@ export default function NodesPage() {
       unlocked={unlocked}
       selfName={node?.name}
       selectedQPath={selection.count === 1 ? Array.from(selection.selected)[0] : null}
+      selectedQPaths={Array.from(selection.selected)}
       onSelectQPath={(qpath) => {
         // Mirror list-view single-select semantics: clicking a node
         // replaces the current selection so the same bulk-action bar

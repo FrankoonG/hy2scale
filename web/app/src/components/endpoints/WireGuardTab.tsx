@@ -15,6 +15,7 @@ import WgPeerModal from './WgPeerModal';
 import WgPeerConfigModal, { type WgPeerConfig } from './WgPeerConfigModal';
 import { nextPeerIP } from './wgAddr';
 import { boldMarkup } from '@/utils/richText';
+import { useShareHost } from '@/hooks/useShareHost';
 
 /** Endpoints → WireGuard: server settings and its peers. */
 export default function WireGuardTab() {
@@ -56,11 +57,11 @@ function WireGuardPanels({ wgQ }: { wgQ: UseQueryResult<api.WireGuardConfig> }) 
     confirm: { title: t('app.bulkDelete'), message: t('app.bulkDeleteConfirm', { count: selection.count }), confirmText: t('app.delete'), danger: true },
   });
 
+  const shareHost = useShareHost();
   const showConfig = useCallback(async (name: string, from?: MouseEvent | { x: number; y: number }) => {
     try {
-      // [Peer] Endpoint defaults to the host this admin UI is reached
-      // through — the same node serves WireGuard.
-      const res = await api.getWGPeerConfig(name, window.location.hostname);
+      // [Peer] Endpoint: the node's public host (Settings → Network)
+      const res = await api.getWGPeerConfig(name, shareHost);
       const text = await (res as any).text();
       let qr = '';
       try {
@@ -69,7 +70,7 @@ function WireGuardPanels({ wgQ }: { wgQ: UseQueryResult<api.WireGuardConfig> }) 
       } catch { /* no QR */ }
       config.show({ name, text, qr }, from);
     } catch (e: any) { toast.error(String(e.message || e)); }
-  }, [toast, config.show]);
+  }, [toast, config.show, shareHost]);
 
   const suggestIPs = () => [nextPeerIP(serverAddr.current.v4, peers), nextPeerIP(serverAddr.current.v6, peers)].filter(Boolean).join(', ');
 

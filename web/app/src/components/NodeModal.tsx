@@ -10,6 +10,9 @@ import type { ClientEntry, CertInfo, TopologyNode } from '@/api';
 import { useNodeStore } from '@/store/node';
 import { OrderedList, toListItems, fromListItems, type ListItem } from '@/components/OrderedList';
 import { remoteFetch, sessionFor, useRemoteAccess } from '@/utils/remoteAuth';
+import { buildScaleLink } from '@/utils/nodeLink';
+import { canExportAsHy2Url } from '@/utils/buildHy2Url';
+import { copyToClipboard } from '@/utils/clipboard';
 
 // Characters that would corrupt nested qualified paths (`/`), look weird in
 // topology display (whitespace), or upset YAML/CLI consumers (control chars).
@@ -371,6 +374,34 @@ export default function NodeModal({ open, onClose, editingName, animateFrom, pun
     return trimmed;
   };
 
+  // The link of this node as configured here: its addresses (without the
+  // local interface binding), password and TLS options.
+  const handleExport = async () => {
+    const addrs = validateAddrs();
+    if (!addrs) return;
+    const shareable = addrs.map((a) => a.replace(/#.*$/, '')).filter((a) => canExportAsHy2Url(a));
+    if (!shareable.length) {
+      toast.error(t('nodes.exportNotShareable'));
+      return;
+    }
+    const finalName = resolveName(shareable);
+    if (!finalName) return;
+    if (!password.trim()) {
+      toast.error(t('nodes.passRequired'));
+      return;
+    }
+    const url = buildScaleLink({
+      name: finalName,
+      addrs: shareable,
+      password: password.trim(),
+      sni: sni.trim() || undefined,
+      insecure: insecure || undefined,
+    });
+    const ok = await copyToClipboard(url);
+    if (ok) toast.success(t('nodes.exportCopied'));
+    else toast.error(t('nodes.exportFailed'));
+  };
+
   const handleSubmit = async () => {
     const addrs = validateAddrs();
     if (!addrs) return;
@@ -488,6 +519,11 @@ export default function NodeModal({ open, onClose, editingName, animateFrom, pun
       footer={
         <>
           <Button onClick={onClose}>{t('app.cancel')}</Button>
+          {editingName && (
+            <Button onClick={handleExport} data-testid="export-node-link">
+              {t('nodes.exportUrl')}
+            </Button>
+          )}
           <Button variant="primary" onClick={handleSubmit} loading={loading}>
             {editingName ? t('app.save') : t('nodes.connect')}
           </Button>

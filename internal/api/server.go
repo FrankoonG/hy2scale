@@ -53,6 +53,12 @@ type Server struct {
 
 	// restart asks main to shut down and come back (SetRestart).
 	restart func()
+
+	// control socket: saved sign-ins to other nodes (ctl.go)
+	ctl ctlState
+
+	// targets the tools ran against (tools_history.go)
+	toolsHist toolsHistoryStore
 }
 
 func NewServer(a *app.App, addr, basePath string) *Server {
@@ -102,6 +108,8 @@ func (s *Server) Start(ctx context.Context) error {
 	s.sharedPushRoutes(apiMux)
 	// A node updating itself takes this node's binary (relay, nodes only).
 	apiMux.HandleFunc("GET /api/upgrade/peer-binary", s.servePeerBinary)
+	// The subscription (no login: its token is the secret).
+	apiMux.HandleFunc("GET /sub/{id}/{token}", s.serveSub)
 	// Internal peer list (no auth, used for reverse nested discovery)
 	apiMux.HandleFunc("GET /api/internal/peers", s.internalPeers)
 	// Build-id probe (no auth) — a long-lived SPA tab polls this to detect
@@ -124,6 +132,8 @@ func (s *Server) Start(ctx context.Context) error {
 	s.shellRoutes(authed)
 	s.toolsRoutes(authed)
 	s.storageRoutes(authed)
+	s.linkRoutes(authed)
+	s.subscriptionRoutes(authed)
 
 	apiMux.Handle("/api/", s.authMiddleware(authed))
 
@@ -240,7 +250,7 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 	s.web = &webTLS{store: s.app.TLS(), conf: s.app.Store().Get}
-	srv := &http.Server{Handler: s.web.redirect(root)}
+	srv := &http.Server{Handler: s.subPlainHTTP(root, s.web.redirect(root))}
 	go func() { <-ctx.Done(); srv.Close() }()
 	if s.basePath != "" {
 		log.Printf("API/UI on %s%s", s.addr, s.basePath)
@@ -275,6 +285,9 @@ func (s *Server) Start(ctx context.Context) error {
 	go func() { <-ctx.Done(); relaySrv.Close() }()
 	go relaySrv.Serve(apiBridge)
 
+	// Local control socket ("hy2scale ctl").
+	s.startCtl(ctx, root)
+
 	return srv.Serve(newSniffListener(ln, s.web))
 }
 
@@ -285,7 +298,7 @@ func (s *Server) Start(ctx context.Context) error {
 // --- Node ---
 
 // Version is the application version. Update this on each release.
-const Version = "1.4.4"
+const Version = "1.4.5"
 
 func init() {
 	app.AppVersion = Version

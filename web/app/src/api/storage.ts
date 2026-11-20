@@ -62,7 +62,14 @@ export function uploadGeoDatabase(file: File, onProgress?: (pct: number) => void
 export interface AuditRecord {
   id: string; start: number; end: number; partial?: boolean;
   proto: 'tcp' | 'udp';
-  inbound: string; user?: string; src?: string; src_node?: string; in_iface?: string; src_mac?: string;
+  /** Application protocol, when told (tls, http, quic, dns, ssh, …). */
+  app?: string;
+  inbound: string; user?: string; src?: string;
+  /** The user's password row that signed in ("#2 Japan"). */
+  entry?: string;
+  /** A VPN client's own address (src: its tunnel address). */
+  src_peer?: string;
+  src_node?: string; in_iface?: string; src_mac?: string;
   dst?: string; dst_host?: string; dst_ip?: string;
   /** Policy chain text, the policy set that decided (id), its terminal and why. */
   rule?: string; policy?: string; terminal?: 'deny' | 'exit' | 'iface' | 'default'; reason?: string;
@@ -72,14 +79,19 @@ export interface AuditRecord {
 }
 export interface AuditFilter {
   from?: number; to?: number; user?: string; src?: string; dst?: string;
-  inbound?: string; exit?: string; proto?: string; result?: string; q?: string;
+  inbound?: string; exit?: string; proto?: string; app?: string; result?: string; q?: string;
+  /** Values left out, comma-separated ("-" = none told). */
+  not_inbound?: string; not_exit?: string; not_proto?: string; not_app?: string; not_result?: string;
 }
 export interface AuditPage { enabled: boolean; records: AuditRecord[]; next_cursor?: string; scanned?: number; truncated?: boolean }
-export interface AuditTop { key: string; bytes: number; flows?: number; up?: number; down?: number }
+export interface AuditTop { key: string; bytes: number; flows?: number; up?: number; down?: number; ip?: string }
 export interface AuditStats {
   flows: number; up: number; down: number;
-  top_users?: AuditTop[]; top_sources?: AuditTop[]; top_destinations?: AuditTop[];
-  truncated?: boolean;
+  top_users?: AuditTop[]; top_sources?: AuditTop[]; top_destinations?: AuditTop[]; top_apps?: AuditTop[];
+  /** Records looked at; truncated: the summary covers only the newest of them. */
+  scanned?: number; truncated?: boolean;
+  /** From the hourly totals (whole hours; top lists approximate). */
+  hourly?: boolean;
 }
 
 const auditQuery = (f: AuditFilter, extra: Record<string, string | number | undefined> = {}) => {
@@ -87,10 +99,10 @@ const auditQuery = (f: AuditFilter, extra: Record<string, string | number | unde
   for (const [k, v] of Object.entries({ ...f, ...extra })) if (v !== undefined && v !== '') q.set(k, String(v));
   return q.toString();
 };
-export const getAudit = (f: AuditFilter, limit: number, cursor?: string) =>
-  api<AuditPage>(`/audit?${auditQuery(f, { limit, cursor })}`, { cache: 'no-store' });
-export const getAuditStats = (f: Pick<AuditFilter, 'from' | 'to'>) =>
-  api<AuditStats>(`/audit/stats?${auditQuery(f)}`, { cache: 'no-store' });
+export const getAudit = (f: AuditFilter, limit: number, cursor?: string, signal?: AbortSignal) =>
+  api<AuditPage>(`/audit?${auditQuery(f, { limit, cursor })}`, { cache: 'no-store', signal });
+export const getAuditStats = (f: Pick<AuditFilter, 'from' | 'to'>, signal?: AbortSignal) =>
+  api<AuditStats>(`/audit/stats?${auditQuery(f)}`, { cache: 'no-store', signal });
 /** Export download (the session cookie authorises a plain navigation). */
 export function auditExportUrl(f: AuditFilter, format: 'csv' | 'jsonl'): string {
   const tok = authToken();

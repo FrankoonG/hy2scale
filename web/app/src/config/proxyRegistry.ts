@@ -1,150 +1,26 @@
-import type { SSConfig, TrojanConfig, ProxyConfig } from '@/api';
-
 /**
- * Proxy registry — single source of truth for all proxy types.
+ * The proxies a user signs in on: the key (a user's proxy_disabled, the
+ * backend's conflict detection) and the label the UI shows.
  *
- * To add a new proxy:
- *  1. Add an entry here
- *  2. Add i18n keys if the label needs translation
- *  3. Backend: add the proxy key to the conflict detection list in app.go rebuildUserIndex()
- *
- * That's it — UserInfoModal (proxies tab), UserModal (proxy password tab),
- * and conflict detection all derive from this registry automatically.
+ * To add a proxy: add an entry here, then the key to the conflict
+ * detection list in app.go rebuildUserIndex().
  */
 
-export interface ProxyContext {
-  serverPort: string;
-  ssConfig?: SSConfig | null;
-  trojanConfig?: TrojanConfig | null;
-  proxies: ProxyConfig[];
-}
-
-export interface ProxyUrlParams {
-  host: string;
-  port: string;
-  username: string;
-  password: string;
-}
-
 export interface ProxyRegistryEntry {
-  /** Config key — used in proxy_passwords map and backend conflict detection. */
   key: string;
-  /** Display label. */
   label: string;
-  /**
-   * Auth type:
-   * - 'password': password-only (supports per-proxy password override, needs conflict detection)
-   * - 'username_password': identified by username (no per-proxy password needed)
-   */
-  authType: 'password' | 'username_password';
-  /**
-   * Category:
-   * - 'l7': application-layer proxy (hy2, ss, socks5) — shown in user detail modal
-   * - 'vpn': tunnel/VPN (l2tp, ikev2) — NOT shown in user detail, has own config page
-   */
-  category: 'l7' | 'vpn';
-  /** Default port if config is unavailable. */
-  defaultPort: string;
-  /** Resolve the actual port from config. */
-  getPort: (ctx: ProxyContext) => string;
-  /** Build the connection URL. */
-  buildUrl: (params: ProxyUrlParams, ctx: ProxyContext) => string;
 }
 
 export const PROXY_REGISTRY: ProxyRegistryEntry[] = [
-  {
-    key: 'hy2',
-    label: 'Hysteria2',
-    authType: 'password',
-    category: 'l7',
-    defaultPort: '5565',
-    getPort: (ctx) => ctx.serverPort || '5565',
-    buildUrl: ({ host, port, password, username }) =>
-      `hysteria2://${encodeURIComponent(password)}@${host}:${port}/?insecure=1#${encodeURIComponent(username)}`,
-  },
-  {
-    key: 'ss',
-    label: 'Shadowsocks',
-    authType: 'password',
-    category: 'l7',
-    defaultPort: '8388',
-    getPort: (ctx) => ctx.ssConfig?.listen?.replace(/.*:/, '') || '8388',
-    buildUrl: ({ host, port, password, username }, ctx) => {
-      const method = ctx.ssConfig?.method || 'aes-256-gcm';
-      return `ss://${btoa(`${method}:${password}`)}@${host}:${port}#${encodeURIComponent(username)}`;
-    },
-  },
-  {
-    key: 'trojan',
-    label: 'Trojan',
-    authType: 'password',
-    category: 'l7',
-    defaultPort: '443',
-    getPort: (ctx) => ctx.trojanConfig?.listen?.replace(/.*:/, '') || '443',
-    buildUrl: ({ host, port, password, username }) =>
-      `trojan://${encodeURIComponent(password)}@${host}:${port}?security=tls&sni=${encodeURIComponent(host)}&allowInsecure=1#${encodeURIComponent(username)}`,
-  },
-  {
-    key: 'socks5',
-    label: 'SOCKS5',
-    authType: 'username_password',
-    category: 'l7',
-    defaultPort: '1080',
-    getPort: (ctx) => {
-      const sk5 = ctx.proxies.find((p) => p.protocol === 'socks5' && p.listen);
-      return sk5?.listen?.replace(/.*:/, '') || '1080';
-    },
-    buildUrl: ({ host, port, username, password }) =>
-      `socks5://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`,
-  },
-  {
-    key: 'http',
-    label: 'HTTP',
-    authType: 'username_password',
-    category: 'l7',
-    defaultPort: '8080',
-    getPort: (ctx) => {
-      const hp = ctx.proxies.find((p) => p.protocol === 'http' && p.listen);
-      return hp?.listen?.replace(/.*:/, '') || '8080';
-    },
-    buildUrl: ({ host, port, username, password }, ctx) => {
-      const hp = ctx.proxies.find((p) => p.protocol === 'http' && p.listen);
-      const scheme = hp?.tls_cert ? 'https' : 'http';
-      return `${scheme}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`;
-    },
-  },
-  // VPN proxies — included so the user-modal "proxy auth" tab can list a
-  // per-proxy enable toggle for them. They don't appear in the user-detail
-  // share-link list (filtered by category='vpn'); their connection details
-  // come from the dedicated L2TP / IKEv2 / OpenVPN admin pages instead.
-  {
-    key: 'l2tp',
-    label: 'L2TP/IPsec',
-    authType: 'username_password',
-    category: 'vpn',
-    defaultPort: '500',
-    getPort: () => '500',
-    buildUrl: () => '',
-  },
-  {
-    key: 'ikev2',
-    label: 'IKEv2',
-    authType: 'username_password',
-    category: 'vpn',
-    defaultPort: '500',
-    getPort: () => '500',
-    buildUrl: () => '',
-  },
-  {
-    key: 'openvpn',
-    label: 'OpenVPN',
-    authType: 'username_password',
-    category: 'vpn',
-    defaultPort: '1194',
-    getPort: () => '1194',
-    buildUrl: () => '',
-  },
+  { key: 'hy2', label: 'Hysteria2' },
+  { key: 'ss', label: 'Shadowsocks' },
+  { key: 'trojan', label: 'Trojan' },
+  { key: 'socks5', label: 'SOCKS5' },
+  { key: 'http', label: 'HTTP' },
+  { key: 'l2tp', label: 'L2TP/IPsec' },
+  { key: 'ikev2', label: 'IKEv2' },
+  { key: 'openvpn', label: 'OpenVPN' },
 ];
 
-/** L7 proxy types shown in user detail modal (excludes VPN types like l2tp/ikev2). */
-export const DETAIL_PROXIES = PROXY_REGISTRY.filter((p) => p.category === 'l7');
+/** The label of a proxy key (the key itself when unknown). */
+export const proxyLabel = (key: string) => PROXY_REGISTRY.find((p) => p.key === key)?.label || key;

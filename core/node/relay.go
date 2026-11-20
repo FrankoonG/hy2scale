@@ -2907,7 +2907,7 @@ func (n *Node) DialUDP(ctx context.Context, peerName string, addr string) (net.C
 		if err != nil {
 			return nil, fmt.Errorf("relay: UDP session: %w", err)
 		}
-		return &hyUDPConnWrapper{uc: uc, addr: addr}, nil
+		return newHyUDPConn(uc, addr), nil
 	}
 
 	// Inbound peer: request UDP dial via control stream (same as TCP but with "udp:" prefix)
@@ -2971,18 +2971,98 @@ func (c *streamUDPConn) SetReadDeadline(t time.Time) error  { return c.stream.Se
 func (c *streamUDPConn) SetWriteDeadline(t time.Time) error { return c.stream.SetWriteDeadline(t) }
 
 // hyUDPConnWrapper adapts HyUDPConn to net.Conn for a single destination.
+// Deadlines are honoured (callers end idle flows with them): a receiver
+// goroutine feeds packets to Read, which also waits on the read deadline;
+// Close ends the hysteria UDP session, and with it the receiver.
 type hyUDPConnWrapper struct {
-	uc   interface{ Send([]byte, string) error; Receive() ([]byte, string, error); Close() error }
+	uc interface {
+		Send([]byte, string) error
+		Receive() ([]byte, string, error)
+		Close() error
+	}
 	addr string
+
+	startOnce sync.Once
+	pkts      chan []byte
+	recvDone  chan struct{} // closed when Receive failed (recvErr set)
+	recvErr   error
+	closeOnce sync.Once
+	closed    chan struct{}
+
+	dlMu   sync.Mutex
+	rdl    time.Time
+	dlKick chan struct{} // closed (and replaced) when the deadline changes
+}
+
+// liveHyUDP: hyUDPConnWrappers not closed yet (diagnostics).
+var liveHyUDP atomic.Int64
+
+func newHyUDPConn(uc interface {
+	Send([]byte, string) error
+	Receive() ([]byte, string, error)
+	Close() error
+}, addr string) *hyUDPConnWrapper {
+	liveHyUDP.Add(1)
+	return &hyUDPConnWrapper{uc: uc, addr: addr, pkts: make(chan []byte, 16),
+		recvDone: make(chan struct{}), closed: make(chan struct{}), dlKick: make(chan struct{})}
+}
+
+func (w *hyUDPConnWrapper) receiver() {
+	for {
+		data, _, err := w.uc.Receive()
+		if err != nil {
+			w.recvErr = err
+			close(w.recvDone)
+			return
+		}
+		p := append([]byte(nil), data...)
+		select {
+		case w.pkts <- p:
+		case <-w.closed:
+			return
+		}
+	}
 }
 
 func (w *hyUDPConnWrapper) Read(b []byte) (int, error) {
-	data, _, err := w.uc.Receive()
-	if err != nil {
-		return 0, err
+	w.startOnce.Do(func() { go w.receiver() })
+	for {
+		w.dlMu.Lock()
+		dl, kick := w.rdl, w.dlKick
+		w.dlMu.Unlock()
+		var timeout <-chan time.Time
+		if !dl.IsZero() {
+			d := time.Until(dl)
+			if d <= 0 {
+				return 0, os.ErrDeadlineExceeded
+			}
+			t := time.NewTimer(d)
+			defer t.Stop()
+			timeout = t.C
+		}
+		select {
+		case p := <-w.pkts:
+			return copy(b, p), nil
+		default:
+		}
+		select {
+		case p := <-w.pkts:
+			return copy(b, p), nil
+		case <-w.recvDone:
+			select {
+			case p := <-w.pkts:
+				return copy(b, p), nil
+			default:
+			}
+			return 0, w.recvErr
+		case <-w.closed:
+			return 0, net.ErrClosed
+		case <-timeout:
+			return 0, os.ErrDeadlineExceeded
+		case <-kick:
+			// deadline changed: wait again with the new one
+		}
 	}
-	n := copy(b, data)
-	return n, nil
 }
 
 func (w *hyUDPConnWrapper) Write(b []byte) (int, error) {
@@ -2992,11 +3072,29 @@ func (w *hyUDPConnWrapper) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func (w *hyUDPConnWrapper) Close() error                       { return w.uc.Close() }
-func (w *hyUDPConnWrapper) LocalAddr() net.Addr                { return nil }
-func (w *hyUDPConnWrapper) RemoteAddr() net.Addr               { return nil }
-func (w *hyUDPConnWrapper) SetDeadline(t time.Time) error      { return nil }
-func (w *hyUDPConnWrapper) SetReadDeadline(t time.Time) error  { return nil }
+func (w *hyUDPConnWrapper) Close() error {
+	err := net.ErrClosed
+	w.closeOnce.Do(func() {
+		liveHyUDP.Add(-1)
+		close(w.closed)
+		err = w.uc.Close()
+	})
+	return err
+}
+
+func (w *hyUDPConnWrapper) LocalAddr() net.Addr  { return nil }
+func (w *hyUDPConnWrapper) RemoteAddr() net.Addr { return nil }
+
+// SetDeadline sets the read deadline (a send never blocks).
+func (w *hyUDPConnWrapper) SetDeadline(t time.Time) error { return w.SetReadDeadline(t) }
+func (w *hyUDPConnWrapper) SetReadDeadline(t time.Time) error {
+	w.dlMu.Lock()
+	w.rdl = t
+	close(w.dlKick)
+	w.dlKick = make(chan struct{})
+	w.dlMu.Unlock()
+	return nil
+}
 func (w *hyUDPConnWrapper) SetWriteDeadline(t time.Time) error { return nil }
 
 // ObjectCounts reports live relay-object counts for /api/diag/runtime.
@@ -3025,6 +3123,7 @@ func (n *Node) ObjectCounts() map[string]int {
 	n.peerRateMu.RLock()
 	out["peers_of_cache"] = len(n.peersOfCache)
 	n.peerRateMu.RUnlock()
+	out["peer_udp_flows"] = int(liveHyUDP.Load())
 	return out
 }
 

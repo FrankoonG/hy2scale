@@ -124,11 +124,12 @@ type ServerConfig struct {
 	ListenPacket dataplane.ListenFunc
 	// VerifyUser, if set, authenticates clients by the auth-user-pass
 	// credentials of key method 2; a client certificate becomes optional.
-	// (hy2scale P4)
-	VerifyUser func(username, password string) bool
+	// (hy2scale P4) It returns the identity the client is reported as.
+	// (hy2scale P17)
+	VerifyUser func(username, password string) (identity string, ok bool)
 	// OnSession reports a client's address coming up / going away with the
 	// username (or certificate common name) it authenticated as. (hy2scale P3)
-	OnSession func(up bool, user string, addr netip.Addr)
+	OnSession func(up bool, user string, addr netip.Addr, peer netip.AddrPort) // peer: the client's own address (hy2scale P16)
 
 	// Proto is the transport: "udp" (the default), "tcp", or "both" -- UDP and
 	// TCP on the same port. Over TCP every packet carries OpenVPN's 2-octet
@@ -261,8 +262,8 @@ type Server struct {
 	redirect, redirect6 bool
 	pushRoutes          []netip.Prefix
 
-	verifyUser func(string, string) bool
-	onSession  func(bool, string, netip.Addr)
+	verifyUser func(string, string) (string, bool) // hy2scale P17
+	onSession  func(bool, string, netip.Addr, netip.AddrPort)
 	tun        dataplane.Device
 	conn       *dataplane.PacketConn
 	pump       *dataplane.Pump
@@ -902,10 +903,13 @@ func (s *Server) handshake(cl *serverClient) {
 		switch {
 		case hello.Username == "" && cl.user == "":
 			authErr = "no credentials"
-		case hello.Username != "" && !s.verifyUser(hello.Username, hello.Password):
-			authErr = fmt.Sprintf("bad credentials for %q", hello.Username)
 		case hello.Username != "":
-			cl.user = hello.Username
+			// hy2scale P17: the session reports the identity the password matched.
+			if id, ok := s.verifyUser(hello.Username, hello.Password); ok {
+				cl.user = id
+			} else {
+				authErr = fmt.Sprintf("bad credentials for %q", hello.Username)
+			}
 		}
 	}
 
@@ -988,11 +992,20 @@ func (s *Server) reportSession(cl *serverClient, up bool) {
 	if s.onSession == nil {
 		return
 	}
+	var peer netip.AddrPort // hy2scale P16
+	switch {
+	case cl.addr != nil:
+		peer = cl.addr.AddrPort()
+	case cl.stream != nil && cl.stream.conn != nil:
+		if ta, ok := cl.stream.conn.RemoteAddr().(*net.TCPAddr); ok {
+			peer = ta.AddrPort()
+		}
+	}
 	if a, ok := netip.AddrFromSlice(cl.assignedIP.To4()); ok {
-		s.onSession(up, cl.user, a)
+		s.onSession(up, cl.user, a, peer)
 	}
 	if a6, ok := s.client6(cl.assignedIP); ok {
-		s.onSession(up, cl.user, a6)
+		s.onSession(up, cl.user, a6, peer)
 	}
 }
 

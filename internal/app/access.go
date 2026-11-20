@@ -97,14 +97,14 @@ func (a *App) accessClient(addr string) *AccessClient {
 
 // nodeAccessUser: authID is a user allowed node access.
 func (a *App) nodeAccessUser(authID string) bool {
-	name, ok := strings.CutPrefix(authID, "user:")
+	id, ok := strings.CutPrefix(authID, "user:")
 	if !ok {
 		return false
 	}
 	a.usersMu.RLock()
-	u, found := a.userIndex[name]
+	u, found := a.userIndex[id] // an access-kind user signs in without a row
 	a.usersMu.RUnlock()
-	return found && u.NodeAccess
+	return found && u.Kind() == KindAccess
 }
 
 // accessMode: the node-access mode of a user ("" = no node access).
@@ -113,7 +113,7 @@ func (a *App) accessMode(user string) string {
 	u, found := a.userIndex[user]
 	a.usersMu.RUnlock()
 	switch {
-	case !found || !u.NodeAccess:
+	case !found || u.Kind() != KindAccess:
 		return ""
 	case u.NodeAccessMode == proto.ModeFull:
 		return proto.ModeFull

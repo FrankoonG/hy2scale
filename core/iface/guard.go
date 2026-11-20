@@ -97,8 +97,9 @@ func (m *Manager) localNets() (map[netip.Addr]bool, []netip.Prefix) {
 }
 
 // IsInternal: ip is not a public destination as seen from this node — a
-// non-global range, one of this node's own addresses or networks, or a
-// destination the system routes specifically (a LAN, an explicit route).
+// non-global range, one of this node's own networks, or a destination the
+// system routes specifically (a LAN, an explicit route). This node's own
+// public addresses are not internal.
 func (m *Manager) IsInternal(ip netip.Addr) bool {
 	ip = ip.Unmap()
 	if ip.Is6() && nat64Prefix.Contains(ip) {
@@ -112,7 +113,10 @@ func (m *Manager) IsInternal(ip netip.Addr) bool {
 	}
 	addrs, pfx := m.localNets()
 	if addrs[ip] {
-		return true
+		// one of this node's own addresses outside the non-global ranges:
+		// a public address (also a NAT's detected WAN address) serves the
+		// public, so reaching it is not reaching inside
+		return false
 	}
 	for _, p := range pfx {
 		if p.Contains(ip) {

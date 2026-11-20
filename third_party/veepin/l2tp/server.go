@@ -88,10 +88,12 @@ type ServerConfig struct {
 	Device dataplane.Device
 	// ListenPacket, if set, opens the IKE (Port) and NAT-T sockets. (hy2scale P2)
 	ListenPacket dataplane.ListenFunc
-	// UserLookup, if set, replaces Users. (hy2scale P3)
-	UserLookup func(username string) (string, bool)
+	// UserLookup, if set, replaces Users. (hy2scale P3) It returns every
+	// password the user may sign in with; the session reports the Identity of
+	// the one that matched. (hy2scale P17)
+	UserLookup func(username string) ([]dataplane.Credential, bool)
 	// OnSession reports a client's address coming up / going away. (hy2scale P3)
-	OnSession func(up bool, user string, addr netip.Addr)
+	OnSession func(up bool, user string, addr netip.Addr, peer netip.AddrPort) // peer: the client's own address (hy2scale P16)
 
 	Logger *slog.Logger
 }

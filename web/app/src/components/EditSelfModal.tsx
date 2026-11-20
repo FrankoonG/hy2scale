@@ -46,8 +46,10 @@ export default function EditSelfModal({ open, onClose, animateFrom }: Props) {
   const [shareHost, setShareHost] = useState('');
   const topology = useNodeStore((s) => s.topology);
   const self = topology.find((n) => n.is_self);
-  const publicHosts = [self?.egress?.ipv4, self?.egress?.ipv6].filter((f) => f?.ok && f.ip).map((f) => f!.ip);
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.getUISettings, enabled: open });
+  // the public host setting (Settings → Network), else every public egress address
+  const publicHosts = settings?.public_host ? [settings.public_host]
+    : [self?.egress?.ipv4, self?.egress?.ipv6].filter((f) => f?.ok && f.ip).map((f) => f!.ip);
   // Exported URL: skip certificate verification by default — a node without
   // a TLS certificate from the TLS page serves a self-signed one.
   const [exportInsecure, setExportInsecure] = useState(true);

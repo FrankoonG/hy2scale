@@ -1,12 +1,16 @@
 import { useTranslation } from 'react-i18next';
 import { Card, Button, Input, Toggle, Select, FormGroup, FormStack, SectionDivider } from '@hy2scale/ui';
 import { OrderedList } from '@/components/OrderedList';
+import type { UISettings } from '@/api';
 import type { SystemForm } from './forms';
 
 /** Settings → Network: relaying, hole punching, shared users, path grace, public IP detection. */
-export default function NetworkTab({ sys }: { sys: SystemForm }) {
+export default function NetworkTab({ sys, settings }: { sys: SystemForm; settings?: UISettings }) {
   const { t } = useTranslation();
   const { v, set } = sys;
+  const st = settings?.mdns_state;
+  const lanStatus = st === 'on' && settings?.mdns_claimed ? t('settings.lanNameOn', { name: settings.mdns_claimed })
+    : st ? t(`settings.lanNameState.${st}`) : undefined;
   return (
     <Card fill={1} title={t('settings.network')}>
       <FormStack maxWidth={480} gap={18}>
@@ -22,6 +26,21 @@ export default function NetworkTab({ sys }: { sys: SystemForm }) {
         <FormGroup label={t('settings.pathLossGrace')} hint={t('settings.pathLossGraceDesc')}>
           <Input type="number" min={3} max={300} suffix="s" value={v.path_loss_grace_s}
             onChange={(e) => set('path_loss_grace_s', e.target.value)} />
+        </FormGroup>
+
+        <SectionDivider>{t('settings.publicHostSection')}</SectionDivider>
+        <FormGroup label={t('settings.publicHost')} hint={t('settings.publicHostHint')}>
+          <Input value={v.public_host} onChange={(e) => set('public_host', e.target.value)}
+            placeholder={settings?.public_host_detected || t('settings.publicHostNone')} data-testid="public-host" />
+        </FormGroup>
+        <FormGroup label={t('settings.lanName')} hint={lanStatus}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Toggle checked={v.mdns_enabled} onChange={(e) => set('mdns_enabled', e.target.checked)} data-testid="mdns-enabled" />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <Input value={v.mdns_name} onChange={(e) => set('mdns_name', e.target.value.toLowerCase())}
+                placeholder={settings?.mdns_label || ''} suffix=".local" disabled={!v.mdns_enabled} data-testid="mdns-name" />
+            </div>
+          </div>
         </FormGroup>
 
         <SectionDivider>{t('settings.publicIp')}</SectionDivider>

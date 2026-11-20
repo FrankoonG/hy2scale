@@ -17,10 +17,11 @@ import (
 func (s *Server) toolsRoutes(m *http.ServeMux) {
 	tools.UserAgent = "hy2scale/" + Version
 	m.HandleFunc("GET /api/tools/info", tools.InfoHandler)
-	m.HandleFunc("GET /api/tools/ping", tools.PingHandler)
-	m.HandleFunc("GET /api/tools/mtr", tools.MTRHandler)
-	m.HandleFunc("GET /api/tools/speed", tools.SpeedHandler(s.dialToolStream))
+	m.HandleFunc("GET /api/tools/ping", s.recordTool("ping", tools.PingHandler))
+	m.HandleFunc("GET /api/tools/mtr", s.recordTool("mtr", tools.MTRHandler))
+	m.HandleFunc("GET /api/tools/speed", s.recordTool("speed", tools.SpeedHandler(s.dialToolStream)))
 	m.HandleFunc("GET /api/tools/terminal", tools.TerminalHandler)
+	s.toolsHistoryRoutes(m)
 	// speed tests other nodes run toward this one (trusted relay
 	// connections only: user credentials never reach the stream, see
 	// core/server/access.go)
@@ -38,6 +39,15 @@ func (s *Server) dialToolStream(ctx context.Context, chain []string, addr string
 		}
 	}
 	s.mu.RUnlock()
+	chain = s.app.LocalPath(chain)
+	if len(chain) == 0 {
+		return nil, fmt.Errorf("the path names only this node")
+	}
+	// the hops a user's exit may take, and no other (nested rules); a hop
+	// that is offline is left to the dial, which says why
+	if st := s.app.PathStatus(strings.Join(chain, "/")); !st.OK && st.Reason != "offline" {
+		return nil, fmt.Errorf("%s: path refused at %s (%s)", strings.Join(chain, "/"), chain[st.Hop], st.Reason)
+	}
 	n := s.app.Node()
 	target := chain[len(chain)-1]
 	if p, ok := s.app.Exit().NodeInfoAt(chain); ok && p.Native || len(chain) == 1 && n.NativeMap()[target] {

@@ -112,6 +112,9 @@ func (a *App) MsessPaths() []msess.PathScore { return a.exit.MsessPaths() }
 // MsessStats reports session-layer counters for /api/diag/runtime.
 func (a *App) MsessStats() map[string]int { return a.exit.MsessStats() }
 
+// MsessBreakdown: live msess exit sessions by opening peer and by target.
+func (a *App) MsessBreakdown(n int) (bySrc, byTarget []msess.Count) { return a.exit.MsessBreakdown(n) }
+
 func splitPath(s string) []string {
 	var parts []string
 	for _, p := range strings.Split(s, "/") {

@@ -385,6 +385,7 @@ func installTCPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 		debugLog("[wg-fwd] %s -> %s sel=%+v", srcIP, dstAddr, sel)
 		srcAddr := net.JoinHostPort(srcIP, strconv.Itoa(int(id.RemotePort)))
 		af := beginUserFlowStr(audit.InWireGuard, "tcp", wgPeerName(key), srcAddr, dstAddr)
+		af.SetSrcPeer(a.wgEndpoint(srcIP))
 		dctx := audit.NewContext(a.appCtx, af)
 		rt := a.route(sel, wgSrc(key, srcAddr), "tcp", dstAddr)
 
@@ -476,6 +477,7 @@ func installUDPForwarder(s *stack.Stack, a *App, cfg WireGuardConfig) {
 			}
 			srcAddr := net.JoinHostPort(srcIP, strconv.Itoa(int(id.RemotePort)))
 			af := beginUserFlowStr(audit.InWireGuard, "udp", wgPeerName(key), srcAddr, dstAddr)
+			af.SetSrcPeer(a.wgEndpoint(srcIP))
 			ctx, cancel := context.WithTimeout(audit.NewContext(a.appCtx, af), 15*time.Second)
 			remote, derr := a.dialRoutedUDP(ctx, sel, wgSrc(key, srcAddr), dstAddr)
 			cancel()

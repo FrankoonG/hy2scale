@@ -145,6 +145,12 @@ type Config struct {
 	Interfaces []InterfaceConfig     `yaml:"interfaces,omitempty" json:"interfaces,omitempty"`
 	Egress     *EgressConfig         `yaml:"egress,omitempty" json:"egress,omitempty"`
 	PublicIP   *PublicIPConfig       `yaml:"public_ip,omitempty" json:"public_ip,omitempty"`
+	// PublicHost: the host links of this node carry ("" = the detected
+	// public address); Subscription: the node's subscription; MDNS: the
+	// LAN name (subscription.go, mdns.go).
+	PublicHost   string              `yaml:"public_host,omitempty" json:"public_host,omitempty"`
+	Subscription *SubscriptionConfig `yaml:"subscription,omitempty" json:"subscription,omitempty"`
+	MDNS         *MDNSConfig         `yaml:"mdns,omitempty" json:"mdns,omitempty"`
 	// Storage: logs and audit records kept on disk (storage.go); nil = both off.
 	Storage *StorageConfig `yaml:"storage,omitempty" json:"storage,omitempty"`
 	// GeoIP: how the GeoIP databases are kept (geoip.go); nil = manual.
@@ -359,6 +365,12 @@ func New(dataDir string) (*App, error) {
 	a.exit = exit.New(a.node, exitHost{a})
 	a.pol = policy.NewEngine()
 	a.initPolicy()
+	if needsKindMigration(a.store.Get()) {
+		if err := a.store.Update(func(c *Config) { MigrateUserKinds(c) }); err != nil {
+			log.Printf("[users] exit kind migration not persisted: %v", err)
+		}
+	}
+	userEntry = a.rowLabel
 	a.acc = newAccessState()
 	a.node.SetRestrictedDial(a.restrictedDial)
 	a.node.SetPlainDial(a.relayPlainDial)
@@ -445,7 +457,10 @@ func (a *App) Run(ctx context.Context) error {
 	a.ifaces.apply(cfg)
 	go a.initEgress(ctx)
 	go a.ifaces.pub.Run(ctx, a.node)
+	a.ApplyIIDAttr()
 	go a.node.RunAttrs(ctx)
+	a.ApplyMDNS()
+	go func() { <-ctx.Done(); stopMDNS() }()
 	go a.tree.Run(ctx)
 	a.exit.Start(ctx)
 	a.persisters.Add(1)
@@ -884,13 +899,19 @@ func (a *App) rebuildUserIndex() {
 	for _, proxy := range PasswordOnlyProxies {
 		proxyPwUsers[proxy] = make(map[string][]string)
 	}
-	for _, u := range cfg.Users {
+	// keyed by credential: Ident(username, row)
+	for i := range cfg.Users {
+		u := &cfg.Users[i]
 		if !u.Enabled {
 			continue
 		}
 		for _, proxy := range PasswordOnlyProxies {
-			pw := u.EffectivePassword(proxy)
-			proxyPwUsers[proxy][pw] = append(proxyPwUsers[proxy][pw], u.Username)
+			if !u.Serves(proxy) {
+				continue
+			}
+			for _, c := range u.Creds() {
+				proxyPwUsers[proxy][c.Password] = append(proxyPwUsers[proxy][c.Password], Ident(u.Username, c.Row))
+			}
 		}
 	}
 	// Also check system password against hy2 users (relay/user ambiguity)
@@ -924,7 +945,8 @@ func (a *App) rebuildUserIndex() {
 	a.syncUserRates(cfg.Users)
 }
 
-// IsPasswordConflicted returns true if the user has a password collision on the given proxy.
+// IsPasswordConflicted returns true if a credential (Ident(username, row))
+// has a password collision on the given proxy.
 func (a *App) IsPasswordConflicted(username, proxy string) bool {
 	a.usersMu.RLock()
 	defer a.usersMu.RUnlock()
@@ -945,18 +967,18 @@ func (a *App) GetPasswordConflicts() map[string]map[string][]string {
 			if len(usernames) <= 1 {
 				continue
 			}
-			for _, un := range usernames {
+			for _, id := range usernames {
+				un, _ := SplitIdent(id)
 				if result[un] == nil {
 					result[un] = make(map[string][]string)
 				}
 				// List the OTHER users this one conflicts with
-				others := make([]string, 0, len(usernames)-1)
 				for _, o := range usernames {
-					if o != un {
-						others = append(others, o)
+					on, _ := SplitIdent(o)
+					if on != un && !containsStr(result[un][proxy], on) {
+						result[un][proxy] = append(result[un][proxy], on)
 					}
 				}
-				result[un][proxy] = others
 			}
 		}
 	}
@@ -971,31 +993,32 @@ func (a *App) GetPasswordConflicts() map[string]map[string][]string {
 // specific listening protocol). VPN callers (l2tp/ikev2) commonly pass an
 // empty password — they validated the secret elsewhere — but they still
 // pay the ProxyDisabled check.
-func (a *App) LookupUser(username, password, proxy string) (*UserConfig, error) {
+func (a *App) LookupUser(username, password, proxy string) (*UserConfig, string, error) {
 	a.usersMu.RLock()
 	u, ok := a.userIndex[username]
 	a.usersMu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("user not found")
+		return nil, "", fmt.Errorf("user not found")
 	}
-	if u.Password != password {
-		return nil, fmt.Errorf("invalid password")
+	row, ok := u.CredFor(password)
+	if !ok {
+		return nil, "", fmt.Errorf("invalid password")
 	}
 	if !u.Enabled {
-		return nil, fmt.Errorf("user disabled")
+		return nil, "", fmt.Errorf("user disabled")
 	}
-	if proxy != "" && !u.IsProxyEnabled(proxy) {
-		return nil, fmt.Errorf("user disabled for proxy %s", proxy)
+	if !u.Serves(proxy) {
+		return nil, "", fmt.Errorf("user disabled for proxy %s", proxy)
 	}
 	if u.ExpiryDate != "" {
 		if t, err := time.Parse("2006-01-02", u.ExpiryDate); err == nil && time.Now().After(t) {
-			return nil, fmt.Errorf("user expired")
+			return nil, "", fmt.Errorf("user expired")
 		}
 	}
 	if u.OverLimit() {
-		return nil, fmt.Errorf("traffic limit exceeded")
+		return nil, "", fmt.Errorf("traffic limit exceeded")
 	}
-	return u, nil
+	return u, row, nil
 }
 
 func (a *App) AddUser(u UserConfig) error {
@@ -1019,21 +1042,21 @@ func (a *App) AddUser(u UserConfig) error {
 func (a *App) UpdateUser(id string, u UserConfig) error {
 	var sharedGID string
 	var oldPassword string
-	var oldProxyPw map[string]string
+	var oldCreds string
 	var oldProxyDisabled []string
 	var oldUsername string
 	err := a.store.Update(func(c *Config) {
 		for i, existing := range c.Users {
 			if existing.ID == id {
 				oldPassword = existing.Password
-				oldProxyPw = existing.ProxyPasswords
+				oldCreds = existing.Kind() + fmt.Sprint(existing.Creds())
 				oldProxyDisabled = existing.ProxyDisabled
 				oldUsername = existing.Username
 				u.TrafficUsed = existing.TrafficUsed
 				// server-managed fields
 				u.TrafficResetAt = existing.TrafficResetAt
 				u.TrafficResetFrom = existing.TrafficResetFrom
-				if u.TrafficReset != existing.TrafficReset || u.TrafficResetDay != existing.TrafficResetDay {
+				if ResetSettingChanged(&u, &existing) {
 					// a new period counts from now: no reset for boundaries already passed
 					u.TrafficResetFrom = ""
 					if u.TrafficReset != "" {
@@ -1063,7 +1086,7 @@ func (a *App) UpdateUser(id string, u UserConfig) error {
 		// permitted protocol is now revoked — keeping the in-flight tunnel
 		// alive would silently keep the user connected after the toggle.
 		credsChanged := oldPassword != u.Password ||
-			fmt.Sprint(oldProxyPw) != fmt.Sprint(u.ProxyPasswords) ||
+			oldCreds != u.Kind()+fmt.Sprint(u.Creds()) ||
 			fmt.Sprint(oldProxyDisabled) != fmt.Sprint(u.ProxyDisabled) ||
 			(oldUsername != u.Username && oldUsername != "")
 		if credsChanged {
@@ -2100,6 +2123,7 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 	hasUsers := len(cfg.Users) > 0
 
 	var user *UserConfig
+	userRow := ""
 	if hasUsers {
 		// Require username/password auth (RFC 1929, method 0x02)
 		conn.Write([]byte{0x05, 0x02})
@@ -2124,7 +2148,7 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 		password := string(buf[3+ulen : 3+ulen+plen])
 
 		var err error
-		user, err = a.LookupUser(username, password, "socks5")
+		user, userRow, err = a.LookupUser(username, password, "socks5")
 		if err != nil {
 			auditRefused(audit.InSOCKS5, username, conn, err)
 			conn.Write([]byte{0x01, 0x01}) // auth failed
@@ -2158,7 +2182,7 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 
 	// Route: a listener selection overrides the user's
 	username := ""
-	sel := userSel(user)
+	sel := userSelRow(user, userRow)
 	if user != nil {
 		username = user.Username
 	}
@@ -2167,7 +2191,7 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 	}
 	rt := a.route(sel, a.userSrc(policy.KindSOCKS5, user, conn.RemoteAddr()), "tcp", addr)
 
-	af := beginUserFlow(audit.InSOCKS5, "tcp", username, conn.RemoteAddr(), addr)
+	af := beginUserFlow(audit.InSOCKS5, "tcp", Ident(username, userRow), conn.RemoteAddr(), addr)
 	dctx := audit.NewContext(withRestrict(context.Background(), a.userRestrict(username)), af)
 
 	// IP destination: reply first so the client sends its hello, recover the
@@ -2190,7 +2214,7 @@ func (a *App) handleSOCKS5(conn net.Conn, pc *ProxyConfig) {
 			if _, werr := remote.Write(peeked); werr != nil {
 				return
 			}
-			af.Add(int64(len(peeked)), 0)
+			af.AddData(peeked, true)
 		}
 	} else {
 		remote, err = rt.dial(dctx)
@@ -2323,7 +2347,7 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 	cfg := a.store.Get()
 	hasUsers := len(cfg.Users) > 0
 	var user *UserConfig
-	username := ""
+	username, userRow := "", ""
 	if hasUsers {
 		authHeader := headers["proxy-authorization"]
 		if authHeader == "" {
@@ -2345,18 +2369,18 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\n\r\n"))
 			return
 		}
-		u, err := a.LookupUser(creds[0], creds[1], "http")
+		u, row, err := a.LookupUser(creds[0], creds[1], "http")
 		if err != nil {
 			auditRefused(audit.InHTTP, creds[0], conn, err)
 			conn.Write([]byte("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"proxy\"\r\n\r\n"))
 			return
 		}
 		user = u
-		username = u.Username
+		username, userRow = u.Username, row
 	}
 
 	// Resolve exit routing: a listener selection overrides the user's
-	sel := userSel(user)
+	sel := userSelRow(user, userRow)
 	if ps := proxySel(pc); ps.set() {
 		sel = ps
 	}
@@ -2435,7 +2459,7 @@ func (a *App) handleHTTP(conn net.Conn, pc *ProxyConfig) {
 			if _, werr := remote.Write(connectPeeked); werr != nil {
 				return
 			}
-			af.Add(int64(len(connectPeeked)), 0)
+			af.AddData(connectPeeked, true)
 		}
 	} else {
 		// Forward the original request to the remote
@@ -2517,7 +2541,8 @@ func (o *nodeOutbound) TCP(_ context.Context, authID, peerAddr, actualAddr strin
 
 // hy2UserTCP dials an hy2 user's stream along its selection (route.go).
 func (o *nodeOutbound) hy2UserTCP(ctx context.Context, authID, peerAddr, actualAddr string, isBridged bool) (net.Conn, error) {
-	ctx = withRestrict(ctx, o.app.userRestrict(strings.TrimPrefix(authID, "user:")))
+	name, _ := hy2Ident(authID)
+	ctx = withRestrict(ctx, o.app.userRestrict(name))
 	rt := o.app.hy2Route(authID, peerAddr, "tcp", actualAddr)
 	if !isBridged && wantSniff(actualAddr) {
 		// dialled once the client's first bytes are in, with the host name
@@ -2538,7 +2563,8 @@ func (o *nodeOutbound) UDP(_ context.Context, authID, peerAddr, reqAddr string) 
 	}
 	var c net.Conn
 	var err error
-	ctx := audit.NewContext(withRestrict(o.ctx, o.app.userRestrict(strings.TrimPrefix(authID, "user:"))), af)
+	name, _ := hy2Ident(authID)
+	ctx := audit.NewContext(withRestrict(o.ctx, o.app.userRestrict(name)), af)
 	c, err = o.app.hy2Route(authID, peerAddr, "udp", reqAddr).dial(ctx)
 	if err != nil {
 		af.End(err)
@@ -2550,7 +2576,7 @@ func (o *nodeOutbound) UDP(_ context.Context, authID, peerAddr, reqAddr string) 
 // hy2UserUsable refuses a new stream of an hy2 user that expired or used up
 // its traffic limit while its QUIC connection stayed open.
 func (a *App) hy2UserUsable(authID string) error {
-	name := strings.TrimPrefix(authID, "user:")
+	name, _ := hy2Ident(authID)
 	a.usersMu.RLock()
 	u, ok := a.userIndex[name]
 	a.usersMu.RUnlock()
@@ -2566,13 +2592,13 @@ func (a *App) hy2UserUsable(authID string) error {
 // hy2Route is the routing of an hy2-authenticated user's ("user:<name>")
 // flow to addr.
 func (a *App) hy2Route(authID, peerAddr, network, addr string) *routed {
-	name := strings.TrimPrefix(authID, "user:")
+	name, row := hy2Ident(authID)
 	a.usersMu.RLock()
 	u := a.userIndex[name]
 	var sel exitSel
 	src := flowSrc{kind: policy.KindHy2, addr: peerAddr}
 	if u != nil {
-		sel = userSel(u)
+		sel = userSelRow(u, row)
 		src.user = u.ID
 	}
 	a.usersMu.RUnlock()
@@ -2596,14 +2622,16 @@ func (a *hy2Auth) Authenticate(addr net.Addr, auth string, tx uint64) (bool, str
 	}
 	// Check user passwords first
 	cfg := a.app.store.Get()
-	for _, u := range cfg.Users {
-		if u.EffectivePassword("hy2") == auth && u.Enabled {
+	for i := range cfg.Users {
+		u := &cfg.Users[i]
+		row, ok := u.CredFor(auth)
+		if ok && u.Enabled {
 			// Per-proxy disable: admin UI can revoke a user from hy2 only.
-			if !u.IsProxyEnabled("hy2") {
+			if !u.Serves("hy2") {
 				continue
 			}
-			// Skip if this user's hy2 password conflicts with another user
-			if a.app.IsPasswordConflicted(u.Username, "hy2") {
+			// Skip if this password conflicts with another user's
+			if a.app.IsPasswordConflicted(Ident(u.Username, row), "hy2") {
 				continue
 			}
 			// Check expiry
@@ -2616,7 +2644,7 @@ func (a *hy2Auth) Authenticate(addr net.Addr, auth string, tx uint64) (bool, str
 			if u.OverLimit() {
 				return false, ""
 			}
-			return true, "user:" + u.Username
+			return true, "user:" + Ident(u.Username, row)
 		}
 	}
 	// Check system password (for hy2scale relay nodes)

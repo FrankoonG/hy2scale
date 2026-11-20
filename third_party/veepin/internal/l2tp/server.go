@@ -20,11 +20,12 @@ import (
 type ServerConfig struct {
 	PSK   []byte
 	Users map[string]string // username -> password for MS-CHAPv2
-	// UserLookup, if set, replaces Users. (hy2scale P3)
-	UserLookup func(username string) (string, bool)
+	// UserLookup, if set, replaces Users. (hy2scale P3) It returns every
+	// password the user may sign in with. (hy2scale P17)
+	UserLookup func(username string) ([]dataplane.Credential, bool)
 	// OnSession reports a client's address coming up after PPP authentication
 	// and going away. (hy2scale P3)
-	OnSession func(up bool, user string, addr netip.Addr)
+	OnSession func(up bool, user string, addr netip.Addr, peer netip.AddrPort) // peer: the client's own address (hy2scale P16)
 	// PublicIP is the server's outer address as clients reach it. It becomes the
 	// IKE identity and the phase-2 traffic selector, so a server listening on the
 	// wildcard — where the socket cannot name it — must be told.
@@ -333,7 +334,7 @@ func (s *Server) removePeer(p *serverPeer, err error) {
 
 	if p.innerIP != nil {
 		if s.cfg.OnSession != nil && p.up.Load() {
-			s.cfg.OnSession(false, p.user, p.inner4)
+			s.cfg.OnSession(false, p.user, p.inner4, p.peerAddr())
 		}
 		s.pool.Release(p.innerIP)
 	}
@@ -346,12 +347,15 @@ func (s *Server) removePeer(p *serverPeer, err error) {
 	s.logger.Printf("l2tp: peer %s gone: %v", p.addr, err)
 }
 
-func (s *Server) auth(username string) (string, bool) {
+func (s *Server) auth(username string) ([]dataplane.Credential, bool) { // hy2scale P17
 	if s.cfg.UserLookup != nil {
 		return s.cfg.UserLookup(username)
 	}
 	pw, ok := s.cfg.Users[username]
-	return pw, ok
+	if !ok {
+		return nil, false
+	}
+	return []dataplane.Credential{{Password: pw, Identity: username}}, true
 }
 
 // tunLoop routes TUN egress to the peer owning the inner destination address.
@@ -408,7 +412,7 @@ type serverPeer struct {
 	// group PSK that got the peer this far authenticates no user.
 	up     atomic.Bool
 	inner4 netip.Addr
-	user   string // hy2scale P3: the MS-CHAPv2 username, set before up
+	user   string // hy2scale P3: the MS-CHAPv2 username, set before up; P17: the matched Identity
 
 	// l2tpPort is the inner UDP source port of the peer's last authenticated
 	// L2TP datagram, the destination of ours (0: not seen yet, 1701). (hy2scale P9)
@@ -565,6 +569,14 @@ func (p *serverPeer) Closed(err error) { p.srv.removePeer(p, err) }
 // serverPPP adapts serverPeer to ppp.ServerHandler.
 type serverPPP struct{ p *serverPeer }
 
+// peerAddr is where the client's IKE came from (hy2scale P16).
+func (p *serverPeer) peerAddr() netip.AddrPort {
+	if p.addr == nil {
+		return netip.AddrPort{}
+	}
+	return p.addr.AddrPort()
+}
+
 func (h serverPPP) Authenticated(u, pw string, nt [mschap.NTResponseLen]byte) {
 	h.p.mu.Lock()
 	h.p.user = u
@@ -582,7 +594,7 @@ func (h serverPPP) NetworkUp() {
 		h.p.mu.Lock()
 		user, a := h.p.user, h.p.inner4
 		h.p.mu.Unlock()
-		cb(true, user, a)
+		cb(true, user, a, h.p.peerAddr())
 	}
 	h.p.mu.Lock()
 	ps := h.p.ppp

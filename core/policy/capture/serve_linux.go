@@ -408,7 +408,7 @@ func (f *udpFlow) send(b []byte) {
 		f.dns(append([]byte(nil), b...))
 		return
 	}
-	f.af.Add(int64(len(b)), 0)
+	f.af.AddData(b, true)
 	f.mu.Lock()
 	r := f.remote
 	if r == nil && !f.closed && !f.dead && len(f.queue) < udpQueue {
@@ -619,7 +619,7 @@ func (m *Manager) startUDPFlow(f *udpFlow, use portUse, done func()) {
 				return
 			}
 			f.touch()
-			f.af.Add(0, int64(n))
+			f.af.AddData(b[:n], false)
 			f.local.Write(b[:n])
 		}
 	}()

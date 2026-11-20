@@ -34,7 +34,11 @@ func beginUserFlowStr(inbound, proto, user, src, dst string) *audit.Flow {
 	if user == "__psk__" { // IKEv2 shared-key clients: no user account
 		user = ""
 	}
-	f.SetUser(user)
+	name, row := SplitIdent(user) // a user signed in with one of its rows
+	f.SetUser(name)
+	if row != "" && userEntry != nil {
+		f.SetEntry(userEntry(name, row))
+	}
 	f.SetSrc(src, "")
 	f.SetDst(dst)
 	return f

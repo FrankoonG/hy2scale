@@ -52,7 +52,19 @@ type SharedMember struct {
 	Name   string `yaml:"name" json:"name"`
 	Left   bool   `yaml:"left,omitempty" json:"left,omitempty"`
 	S      Stamp  `yaml:"s" json:"s"`
+	// Caps: what the member's version understands (SharedCaps); none on a
+	// member older than exit kinds.
+	Caps []string `yaml:"caps,omitempty" json:"caps,omitempty"`
+	// Ent: how clients reach the member, for the user's subscription.
+	Ent *Entrance `yaml:"ent,omitempty" json:"ent,omitempty"`
 }
+
+// SharedCaps: what this version understands of a shared user — "kinds":
+// exit kinds and password rows (user_creds.go).
+var SharedCaps = []string{"kinds"}
+
+// HasCap: m understands cap.
+func (m SharedMember) HasCap(c string) bool { return containsStr(m.Caps, c) }
 
 // SharedState: the share record kept with a shared user.
 type SharedState struct {
@@ -101,9 +113,10 @@ type SharedTomb struct {
 
 // sharedFields: the user fields kept in step (JSON names); the exit and the
 // counters stay per node.
-var sharedFields = []string{"username", "password", "proxy_passwords", "proxy_disabled", "enabled",
+var sharedFields = []string{"username", "password", "proxy_disabled", "enabled",
 	"traffic_limit", "rate_up", "rate_down", "expiry_date", "node_access", "node_access_mode",
-	"deny_internal", "traffic_reset", "traffic_reset_day"}
+	"deny_internal", "traffic_reset", "traffic_reset_day", "traffic_reset_every", "traffic_reset_anchor",
+	"exit_kind", "rows", "sub"}
 
 // fieldResetAt: the stamp key of the manual traffic reset.
 const fieldResetAt = "reset_at"
@@ -198,7 +211,7 @@ func (a *App) SelfIID() string { return a.node.InstallationID() }
 // selfMember: this node's member entry (nodeID: the config's NodeID — the
 // store may be locked by the caller).
 func (a *App) selfMember(nodeID string) SharedMember {
-	return SharedMember{NodeID: nodeID, Name: a.node.Name()}
+	return SharedMember{NodeID: nodeID, Name: a.node.Name(), Caps: SharedCaps}
 }
 
 func randomHex(n int) string {
@@ -216,10 +229,12 @@ func sharedEpoch(u *UserConfig, now time.Time) int64 {
 	st := u.Shared
 	e := st.ResetAt
 	if u.TrafficReset != "" {
-		b := TrafficResetLast(u.TrafficReset, u.TrafficResetDay, now.UTC())
-		set := st.Stamps["traffic_reset"].Ms()
-		if d := st.Stamps["traffic_reset_day"].Ms(); d > set {
-			set = d
+		b := TrafficResetLast(u, now.UTC())
+		var set int64
+		for _, k := range []string{"traffic_reset", "traffic_reset_day", "traffic_reset_every", "traffic_reset_anchor"} {
+			if d := st.Stamps[k].Ms(); d > set {
+				set = d
+			}
 		}
 		if !b.IsZero() && b.UnixMilli() >= set && b.UnixMilli() > e {
 			e = b.UnixMilli()
@@ -231,7 +246,7 @@ func sharedEpoch(u *UserConfig, now time.Time) int64 {
 // SharedNextReset: the next UTC boundary of a shared user's period ("" for
 // none).
 func SharedNextReset(u *UserConfig, now time.Time) string {
-	n := TrafficResetNext(u.TrafficReset, u.TrafficResetDay, now.UTC())
+	n := TrafficResetNext(u, now.UTC())
 	if n.IsZero() {
 		return ""
 	}
@@ -504,6 +519,12 @@ func (a *App) mergeInto(c *Config, idx int, nu *UserConfig, rec SharedRecord) (b
 		if err := setUserFields(nu, vals); err != nil {
 			log.Printf("[shared] %s: %v", st.GID, err)
 		}
+		// an older holder set the period by its day: the start date follows
+		if _, ok := vals["traffic_reset_day"]; ok && st.Stamps["traffic_reset_day"].Ms() > st.Stamps["traffic_reset_anchor"].Ms() {
+			if a := legacyAnchor(nu.TrafficReset, nu.TrafficResetDay); nu.TrafficResetDay != 0 && dayOfAnchor(nu) != nu.TrafficResetDay {
+				nu.TrafficResetAnchor, nu.TrafficResetEvery = a, 1
+			}
+		}
 	}
 	for iid, e := range rec.Usage {
 		if iid == self {
@@ -575,7 +596,7 @@ func (a *App) JoinShared(rec SharedRecord, key, exitNode string) (JoinResult, er
 	if nu.Username == "" || nu.Password == "" {
 		return res, fmt.Errorf("username and password required")
 	}
-	if _, err := ValidateTrafficReset(nu.TrafficReset, nu.TrafficResetDay); err != nil {
+	if err := NormalizeTrafficReset(&nu, TrafficNow().UTC()); err != nil {
 		return res, err
 	}
 	nu.ExitVia, nu.ExitPaths, nu.ExitMode = a.initialExit(exitNode)
@@ -669,6 +690,7 @@ type ReachPath struct {
 	Hops    []string
 	Lat     int
 	Version string
+	IID     json.RawMessage // the last node's installation id attribute (AttrIID)
 }
 
 // Path: the hops joined.
@@ -712,7 +734,7 @@ func (a *App) reach(stop string) []ReachPath {
 		if lat < 0 {
 			lat = 10_000
 		}
-		level = append(level, ReachPath{Hops: []string{p.Name}, Lat: lat, Version: p.Version})
+		level = append(level, ReachPath{Hops: []string{p.Name}, Lat: lat, Version: p.Version, IID: p.Attrs[AttrIID]})
 	}
 	const maxDepth = 6
 	for depth := 1; depth <= maxDepth && len(level) > 0; depth++ {
@@ -745,7 +767,7 @@ func (a *App) reach(stop string) []ReachPath {
 				if dup || !a.exit.Authorised(hops) {
 					continue
 				}
-				next = append(next, ReachPath{Hops: hops, Lat: c.Lat + k.LatencyMs, Version: k.Version})
+				next = append(next, ReachPath{Hops: hops, Lat: c.Lat + k.LatencyMs, Version: k.Version, IID: k.Attrs[AttrIID]})
 			}
 		}
 		level = next

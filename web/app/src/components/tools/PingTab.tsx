@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Card, Input, SegmentedControl } from '@hy2scale/ui';
+import { Autocomplete, Card, Input, SegmentedControl } from '@hy2scale/ui';
 import { streamTool, type PingLine, type ToolAvail } from '@/api/tools';
 import { IPFlag } from '@/components/CountryFlag';
-import { Field, RunButton, RttBars, Stats, Unavailable, ms, useToolRun } from './common';
+import { Field, RunButton, RttBars, Stats, Unavailable, ms, useToolHistory, useToolRun } from './common';
 
 type Proto = 'icmp' | 'tcp';
 type Row = { seq: number; ip?: string; rtt?: number; ttl?: number; bytes?: number; err?: string };
@@ -13,6 +13,7 @@ export default function PingTab({ avail }: { avail?: ToolAvail }) {
   const { t } = useTranslation();
   const run = useToolRun();
   const [host, setHost] = useState('');
+  const history = useToolHistory('ping');
   const [proto, setProto] = useState<Proto>('icmp');
   const [port, setPort] = useState('443');
   const [count, setCount] = useState('10');
@@ -56,7 +57,7 @@ export default function PingTab({ avail }: { avail?: ToolAvail }) {
       <Card>
         <form className="tool-bar" onSubmit={(e) => { e.preventDefault(); go(); }}>
           <Field label={t('tools.target')} grow>
-            <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder={t('tools.targetPh')} data-testid="ping-host" />
+            <Autocomplete options={history} value={host} onChange={setHost} placeholder={t('tools.targetPh')} testId="ping-host" />
           </Field>
           <Field label={t('tools.protocol')}>
             <SegmentedControl<Proto> items={[{ key: 'icmp', label: 'ICMP' }, { key: 'tcp', label: 'TCP' }]} value={proto} onChange={setProto} />

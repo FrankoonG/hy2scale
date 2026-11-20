@@ -104,20 +104,33 @@ export const toggleUser = (id: string, enabled: boolean) =>
   api(`/users/${encodeURIComponent(id)}/toggle`, { method: 'PUT', body: JSON.stringify({ enabled }) });
 export const resetTraffic = (id: string) =>
   api(`/users/${encodeURIComponent(id)}/reset-traffic`, { method: 'PUT' });
+/** Moves the expiry on by one reset period (1 month without one). */
+export const extendUser = (id: string) =>
+  api<{ expiry_date: string }>(`/users/${encodeURIComponent(id)}/extend`, { method: 'POST' });
 
-// Shared users: errors answer either plain text or {error}.
+// Shared users: errors answer either plain text or {error, code}; the code
+// (not_accepting, needs_login, login_failed, unsupported, conflict) is kept
+// on the thrown error.
+export class SharedError extends Error {
+  constructor(message: string, public code?: string) { super(message); }
+}
 async function sharedCall(path: string, body?: unknown) {
   try {
     return await api(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
   } catch (e: any) {
     let msg = String(e?.message || e);
-    try { const j = JSON.parse(msg); if (j?.error) msg = String(j.error); } catch { /* plain text */ }
-    throw new Error(msg.trim());
+    let code: string | undefined;
+    try { const j = JSON.parse(msg); if (j?.error) msg = String(j.error); if (j?.code) code = String(j.code); } catch { /* plain text */ }
+    throw new SharedError(msg.trim(), code);
   }
 }
-/** Shares the user to the node at the end of `chain`; `token`: a session of that node. */
-export const shareUser = (id: string, chain: string[], token?: string) =>
-  sharedCall(`/users/${encodeURIComponent(id)}/share`, token ? { chain, token } : { chain });
+/**
+ * Shares the user to the node at the end of `chain`. Without relay trust
+ * there, `token` (a session of that node) or `username` + `password` (the
+ * SHA-256 hex the login takes; this node signs in there) is needed.
+ */
+export const shareUser = (id: string, chain: string[], auth: { token?: string; username?: string; password?: string } = {}) =>
+  sharedCall(`/users/${encodeURIComponent(id)}/share`, { chain, ...auth });
 export const deleteUserEverywhere = (id: string) =>
   sharedCall(`/users/${encodeURIComponent(id)}/delete-everywhere`);
 

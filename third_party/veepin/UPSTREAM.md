@@ -84,6 +84,15 @@ Every change is marked `hy2scale P<n>` in the source.
   connection; every transport feeds the pump under one mutex. A client hard
   reset after the first (packet ID not 0) carries only ACKs: OpenVPN 2.6 over
   TCP acknowledges the server's reset with one and reuses its packet ID.
+- **P16 — client address.** `OnSession` also gets the client's own address
+  (`netip.AddrPort`): the IKE peer for IKEv2 and L2TP/IPsec, the UDP source
+  or TCP remote for OpenVPN.
+- **P17 — several passwords.** `UserLookup` and `EAPLookup` return every
+  `dataplane.Credential` (password, identity) of a username; PPP and EAP
+  MS-CHAPv2 try each, keep the peer's username in the challenge and
+  authenticator response, key MPPE / the MSK from the matched password, and
+  report its `Identity` as the session's user. `VerifyUser` returns the
+  identity OpenVPN reports.
 
 ## Updating
 

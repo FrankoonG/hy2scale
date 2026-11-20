@@ -50,11 +50,28 @@ type AuditStore struct {
 
 	wmu     sync.Mutex // a write vs. Wipe
 	wipedAt int64      // records that ended by then are gone (under wmu)
+
+	roll *Rollup // hourly totals (summaries of long ranges)
 }
 
 // NewAuditStore uses dir (<data>/audit).
 func NewAuditStore(dir string) *AuditStore {
-	return &AuditStore{seg: OpenSegments(dir), ch: make(chan *audit.Record, AuditQueueLen)}
+	return &AuditStore{seg: OpenSegments(dir), ch: make(chan *audit.Record, AuditQueueLen), roll: newRollup(dir)}
+}
+
+// RollupReady reports whether the hourly totals cover the stored records.
+func (s *AuditStore) RollupReady() bool { return s.roll.Ready() }
+
+// oldestEnd: when the oldest stored record ended (0 = none stored).
+func (s *AuditStore) oldestEnd() int64 {
+	for _, si := range s.seg.List() {
+		if line := firstLine(s.seg.Path(si.Name)); line != nil {
+			if v, ok := intField(line, "end"); ok {
+				return v
+			}
+		}
+	}
+	return 0
 }
 
 // Segments: the files.
@@ -95,6 +112,15 @@ func (s *AuditStore) Run(ctx context.Context, prune func()) {
 	if prune != nil {
 		prune()
 	}
+	if !s.roll.Ready() {
+		// the records stored so far are summed up in the background; the
+		// ones written from now on are counted as they come
+		s.wmu.Lock()
+		segs := s.seg.List()
+		s.roll.startLive()
+		s.wmu.Unlock()
+		go s.roll.backfill(s.seg, segs, ctx.Done())
+	}
 	tick := time.NewTicker(time.Minute)
 	defer tick.Stop()
 	flush := time.NewTicker(time.Second)
@@ -108,6 +134,7 @@ func (s *AuditStore) Run(ctx context.Context, prune func()) {
 			audit.Interim(time.Now(), 0)
 			s.drain()
 			s.seg.Close()
+			s.roll.save()
 			return
 		case r := <-s.ch:
 			s.write(r)
@@ -136,6 +163,10 @@ func (s *AuditStore) Run(ctx context.Context, prune func()) {
 			if prune != nil {
 				prune()
 			}
+			if s.roll.Ready() {
+				s.roll.prune(s.oldestEnd())
+			}
+			s.roll.save()
 		}
 	}
 }
@@ -171,6 +202,7 @@ func (s *AuditStore) write(r *audit.Record) {
 	}
 	if s.seg.Append(b, time.UnixMilli(r.End)) == nil {
 		s.written.Add(1)
+		s.roll.add(r)
 	}
 }
 
@@ -187,6 +219,7 @@ func (s *AuditStore) Wipe() error {
 		}
 		break
 	}
+	s.roll.wipe()
 	return s.seg.Wipe()
 }
 
@@ -207,10 +240,14 @@ type Query struct {
 	Inbound  string
 	Exit     string
 	Proto    string
+	App      string // application protocol (audit.App*)
 	Result   string
 	Q        string // substring of any text field
 	Limit    int
 	Cursor   string
+
+	// Not*: values left out ("-" = an empty field)
+	NotInbound, NotExit, NotProto, NotApp, NotResult []string
 }
 
 // QueryResult is one page.
@@ -248,6 +285,7 @@ type matcher struct {
 	q                       Query
 	exact                   [][]byte // raw-line prefilters for exact fields
 	srcL, dstL, qL          string
+	srcIP                   net.IP // the source filter is an address
 	srcNeed, dstNeed, qNeed []byte
 	lower                   []byte
 }
@@ -255,13 +293,14 @@ type matcher struct {
 func compile(q Query) *matcher {
 	m := &matcher{q: q}
 	for _, kv := range [][2]string{{"user", q.User}, {"inbound", q.Inbound}, {"exit", q.Exit},
-		{"proto", q.Proto}, {"result", q.Result}} {
+		{"proto", q.Proto}, {"app", q.App}, {"result", q.Result}} {
 		if kv[1] != "" {
 			v, _ := json.Marshal(kv[1])
 			m.exact = append(m.exact, []byte(`"`+kv[0]+`":`+string(v)))
 		}
 	}
 	m.srcL, m.dstL, m.qL = strings.ToLower(q.Src), strings.ToLower(q.Dst), strings.ToLower(q.Q)
+	m.srcIP = net.ParseIP(strings.Trim(strings.TrimSpace(q.Src), "[]"))
 	need := func(s string) []byte {
 		if s == "" {
 			return nil
@@ -274,6 +313,9 @@ func compile(q Query) *matcher {
 		return []byte(s)
 	}
 	m.srcNeed, m.dstNeed, m.qNeed = need(m.srcL), need(m.dstL), need(m.qL)
+	if m.srcIP != nil {
+		m.srcNeed = []byte(m.srcIP.String()) // as records spell it
+	}
 	return m
 }
 
@@ -347,20 +389,50 @@ func (m *matcher) match(line []byte) (audit.Record, bool) {
 	}
 	if (q.User != "" && r.User != q.User) || (q.Inbound != "" && r.Inbound != q.Inbound) ||
 		(q.Exit != "" && r.Exit != q.Exit) || (q.Proto != "" && r.Proto != q.Proto) ||
-		(q.Result != "" && r.Result != q.Result) {
+		(q.App != "" && r.App != q.App) || (q.Result != "" && r.Result != q.Result) {
 		return r, false
 	}
-	if m.srcL != "" && !containsAny(m.srcL, r.User, r.Src, r.SrcNode, r.InIface, r.SrcMAC) {
-		return r, false
+	for _, ex := range []struct {
+		v   string
+		not []string
+	}{{r.Inbound, q.NotInbound}, {r.Exit, q.NotExit}, {r.Proto, q.NotProto}, {r.App, q.NotApp}, {r.Result, q.NotResult}} {
+		for _, n := range ex.not {
+			if ex.v == n || n == "-" && ex.v == "" {
+				return r, false
+			}
+		}
+	}
+	if m.srcL != "" {
+		if m.srcIP != nil {
+			// an address: that address exactly (10.0.0.2 is not 10.0.0.20)
+			if !sameHost(m.srcIP, r.Src) && !sameHost(m.srcIP, r.SrcPeer) {
+				return r, false
+			}
+		} else if !containsAny(m.srcL, r.User, r.Src, r.SrcPeer, r.SrcNode, r.InIface, r.SrcMAC) {
+			return r, false
+		}
 	}
 	if m.dstL != "" && !containsAny(m.dstL, r.Dst, r.DstHost, r.DstIP) {
 		return r, false
 	}
-	if m.qL != "" && !containsAny(m.qL, r.ID, r.Proto, r.Inbound, r.User, r.Src, r.SrcNode, r.InIface, r.SrcMAC, r.Dst, r.DstHost,
+	if m.qL != "" && !containsAny(m.qL, r.ID, r.Proto, r.App, r.Inbound, r.User, r.Src, r.SrcPeer, r.SrcNode, r.InIface, r.SrcMAC, r.Dst, r.DstHost,
 		r.DstIP, r.Rule, r.Policy, r.Terminal, r.Reason, r.Exit, r.ExitPath, r.ExitMode, r.EgressIface, r.EgressSrc, r.Result, r.Error) {
 		return r, false
 	}
 	return r, true
+}
+
+// sameHost: addr (host or host:port) is ip.
+func sameHost(ip net.IP, addr string) bool {
+	if addr == "" {
+		return false
+	}
+	h := addr
+	if x, _, err := net.SplitHostPort(addr); err == nil {
+		h = x
+	}
+	o := net.ParseIP(strings.Trim(h, "[]"))
+	return o != nil && o.Equal(ip)
 }
 
 func containsAny(needle string, fields ...string) bool {
@@ -471,6 +543,7 @@ func (s *AuditStore) Query(ctx context.Context, q Query) (QueryResult, error) {
 // Stat is one ranked entry.
 type Stat struct {
 	Key   string `json:"key"`
+	IP    string `json:"ip,omitempty"` // an address of the key (flags)
 	Flows int64  `json:"flows"`
 	Up    int64  `json:"up"`
 	Down  int64  `json:"down"`
@@ -485,19 +558,39 @@ type StatsResult struct {
 	TopUsers  []Stat `json:"top_users"`
 	TopSrc    []Stat `json:"top_sources"`
 	TopDst    []Stat `json:"top_destinations"`
+	TopApps   []Stat `json:"top_apps"`
 	Scanned   int    `json:"scanned"`
 	Truncated bool   `json:"truncated"`
+	// Hourly: the totals come from the hourly rollup (the range is
+	// widened to whole hours; the top lists keep the 50 biggest per hour).
+	Hourly bool `json:"hourly,omitempty"`
+}
+
+// RollupMinRange: a summary over at least this long a range (or all of
+// it) comes from the hourly totals once they are ready.
+var RollupMinRange = 48 * time.Hour
+
+func (q Query) unfiltered() bool {
+	return q.User == "" && q.Src == "" && q.Dst == "" && q.Inbound == "" && q.Exit == "" && q.Proto == "" &&
+		q.App == "" && q.Result == "" && q.Q == "" && len(q.NotInbound)+len(q.NotExit)+len(q.NotProto)+len(q.NotApp)+len(q.NotResult) == 0
 }
 
 // Stats aggregates the records matching q. A flow with interim records is
 // counted once, with its newest (largest) totals.
 func (s *AuditStore) Stats(ctx context.Context, q Query) (StatsResult, error) {
 	q.Cursor = ""
+	now := time.Now().UnixMilli()
+	if q.unfiltered() && (q.To == 0 || q.To >= now-60_000) &&
+		(q.From == 0 || now-q.From >= RollupMinRange.Milliseconds()) && s.roll.Ready() {
+		res, _ := s.roll.sum(q.From, q.To)
+		res.Hourly = true
+		return res, nil
+	}
 	var res StatsResult
-	users, srcs, dsts := map[string]*Stat{}, map[string]*Stat{}, map[string]*Stat{}
+	users, srcs, dsts, apps := map[string]*Stat{}, map[string]*Stat{}, map[string]*Stat{}, map[string]*Stat{}
 	seen := map[string]bool{} // flows that may have more than one record
 	long := audit.InterimEvery.Milliseconds()
-	add := func(m map[string]*Stat, k string, r *audit.Record) {
+	add := func(m map[string]*Stat, k string, r *audit.Record, ip string) {
 		if k == "" {
 			return
 		}
@@ -509,6 +602,7 @@ func (s *AuditStore) Stats(ctx context.Context, q Query) (StatsResult, error) {
 			st = &Stat{Key: k}
 			m[k] = st
 		}
+		st.IP = betterIP(st.IP, ip)
 		st.Flows++
 		st.Up += r.Up
 		st.Down += r.Down
@@ -524,24 +618,17 @@ func (s *AuditStore) Stats(ctx context.Context, q Query) (StatsResult, error) {
 		res.Flows++
 		res.Up += r.Up
 		res.Down += r.Down
-		add(users, r.User, &r)
-		src := r.SrcNode
-		if src == "" {
-			src = hostOf(r.Src)
-		}
-		add(srcs, src, &r)
-		dst := r.DstHost
-		if dst == "" {
-			dst = hostOf(r.Dst)
-		}
-		add(dsts, dst, &r)
+		add(users, r.User, &r, clientIP(&r))
+		add(srcs, srcKey(&r), &r, clientIP(&r))
+		add(dsts, dstKey(&r), &r, dstIP(&r))
+		add(apps, AppKey(&r), &r, "")
 		return true
 	})
 	if err != nil {
 		return res, err
 	}
 	res.Scanned, res.Truncated = scanned, trunc
-	res.TopUsers, res.TopSrc, res.TopDst = top(users, 10), top(srcs, 10), top(dsts, 10)
+	res.TopUsers, res.TopSrc, res.TopDst, res.TopApps = top(users, 10), top(srcs, 10), top(dsts, 10), top(apps, 10)
 	return res, nil
 }
 
@@ -572,7 +659,7 @@ func top(m map[string]*Stat, n int) []Stat {
 // ---------------------------------------------------------------- export
 
 // CSVColumns: the export columns, in order.
-var CSVColumns = []string{"id", "start", "end", "partial", "proto", "inbound", "user", "src", "src_node", "in_iface", "src_mac",
+var CSVColumns = []string{"id", "start", "end", "partial", "proto", "app", "inbound", "user", "src", "src_peer", "src_node", "in_iface", "src_mac",
 	"dst", "dst_host", "dst_ip", "rule", "policy", "terminal", "reason", "exit", "exit_path", "exit_mode", "egress_iface", "egress_src",
 	"up", "down", "result", "error"}
 
@@ -582,7 +669,7 @@ func csvRow(r *audit.Record) []string {
 	if r.Partial {
 		p = "true"
 	}
-	return []string{r.ID, i(r.Start), i(r.End), p, r.Proto, r.Inbound, r.User, r.Src, r.SrcNode, r.InIface, r.SrcMAC,
+	return []string{r.ID, i(r.Start), i(r.End), p, r.Proto, r.App, r.Inbound, r.User, r.Src, r.SrcPeer, r.SrcNode, r.InIface, r.SrcMAC,
 		r.Dst, r.DstHost, r.DstIP, r.Rule, r.Policy, r.Terminal, r.Reason, r.Exit, r.ExitPath, r.ExitMode, r.EgressIface, r.EgressSrc,
 		i(r.Up), i(r.Down), r.Result, r.Error}
 }
