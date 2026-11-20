@@ -101,6 +101,7 @@ type ProxyLink struct {
 	Name  string `json:"name"`
 	Host  string `json:"host"`
 	LAN   bool   `json:"lan,omitempty"`
+	Label string `json:"label,omitempty"` // the row's policy set (policy kind)
 	URL   string `json:"url"`
 	clash []kv
 }
@@ -108,6 +109,22 @@ type ProxyLink struct {
 type kv struct {
 	k string
 	v any
+}
+
+// Rename gives the link another name (its fragment and Clash name).
+func (l *ProxyLink) Rename(name string) {
+	if i := strings.LastIndexByte(l.URL, '#'); i >= 0 {
+		l.URL = l.URL[:i]
+	}
+	l.URL += "#" + uriEscape(name)
+	ck := make([]kv, len(l.clash))
+	copy(ck, l.clash)
+	for i := range ck {
+		if ck[i].k == "name" {
+			ck[i].v = name
+		}
+	}
+	l.clash, l.Name = ck, name
 }
 
 // certTrust: how clients should check a server certificate.
@@ -167,19 +184,45 @@ func certTrustOf(path string) certTrust {
 	return t
 }
 
-// subEndpoint: a protocol this node serves, as a link needs it.
-type subEndpoint struct {
-	proto  string
-	port   int
-	ports  string // hy2 port hopping: every port of the listen spec
-	method string // ss
-	tls    *certTrust
+// Endpoint: a protocol a node serves, as a link needs it.
+type Endpoint struct {
+	Proto  string `json:"proto"`
+	Port   int    `json:"port"`
+	Ports  string `json:"ports,omitempty"`  // hy2 port hopping: every port of the listen spec
+	Method string `json:"method,omitempty"` // ss
+	TLS    bool   `json:"tls,omitempty"`    // https proxy
+	// the server certificate (hy2, trojan, https)
+	SNI      string   `json:"sni,omitempty"`
+	Names    []string `json:"names,omitempty"`
+	Insecure bool     `json:"insecure,omitempty"`
+	Pin      string   `json:"pin,omitempty"`
 }
 
-// subEndpoints: the protocols this node serves now, by key.
-func (a *App) subEndpoints() map[string]subEndpoint {
+func (ep *Endpoint) setTrust(t certTrust) {
+	ep.SNI, ep.Names, ep.Insecure, ep.Pin = t.sni, t.names, t.insecure, t.pin
+}
+
+// sniFor: the name to present when connecting to host.
+func (ep Endpoint) sniFor(host string) string {
+	return certTrust{sni: ep.SNI, names: ep.Names}.sniFor(host)
+}
+
+// Entrance: how clients reach a node — its public host, LAN addresses,
+// the protocols it serves and (for one user) the policy set of each row
+// there. Shared users' holders publish theirs (shared_users.go).
+type Entrance struct {
+	Node string     `json:"node"`
+	Host string     `json:"host,omitempty"`
+	LAN  []string   `json:"lan,omitempty"`
+	Eps  []Endpoint `json:"eps,omitempty"`
+	// Rows: a policy-kind user's rows usable here → the policy set's name.
+	Rows map[string]string `json:"rows,omitempty"`
+}
+
+// endpoints: the protocols this node serves now, in SubProtocols order.
+func (a *App) endpoints() []Endpoint {
 	cfg := a.store.Get()
-	out := map[string]subEndpoint{}
+	by := map[string]Endpoint{}
 	listenPort := func(listen string) int {
 		_, p, err := net.SplitHostPort(stripAddrBind(listen))
 		if err != nil {
@@ -190,17 +233,16 @@ func (a *App) subEndpoints() map[string]subEndpoint {
 	}
 	if s := cfg.Server; s != nil && s.Listen != "" {
 		if _, ports, err := net.SplitHostPort(stripAddrBind(s.Listen)); err == nil {
-			ep := subEndpoint{proto: "hy2"}
+			ep := Endpoint{Proto: "hy2"}
 			if strings.ContainsAny(ports, ",-") {
-				ep.port, _ = strconv.Atoi(hopPrimaryPort(ports))
-				ep.ports = ports
+				ep.Port, _ = strconv.Atoi(hopPrimaryPort(ports))
+				ep.Ports = ports
 			} else {
-				ep.port, _ = strconv.Atoi(ports)
+				ep.Port, _ = strconv.Atoi(ports)
 			}
-			t := certTrustOf(s.TLSCert)
-			ep.tls = &t
-			if ep.port > 0 {
-				out["hy2"] = ep
+			ep.setTrust(certTrustOf(s.TLSCert))
+			if ep.Port > 0 {
+				by["hy2"] = ep
 			}
 		}
 	}
@@ -210,7 +252,7 @@ func (a *App) subEndpoints() map[string]subEndpoint {
 			m = "aes-256-gcm"
 		}
 		if p := listenPort(s.Listen); p > 0 {
-			out["ss"] = subEndpoint{proto: "ss", port: p, method: m}
+			by["ss"] = Endpoint{Proto: "ss", Port: p, Method: m}
 		}
 	}
 	if s := cfg.Trojan; s != nil && s.Enabled {
@@ -219,29 +261,68 @@ func (a *App) subEndpoints() map[string]subEndpoint {
 			id = "default"
 		}
 		if p := listenPort(s.Listen); p > 0 {
-			t := certTrustOf(a.tls.CertPath(id))
-			out["trojan"] = subEndpoint{proto: "trojan", port: p, tls: &t}
+			ep := Endpoint{Proto: "trojan", Port: p}
+			ep.setTrust(certTrustOf(a.tls.CertPath(id)))
+			by["trojan"] = ep
 		}
 	}
 	for _, px := range cfg.Proxies {
 		if !px.Enabled || (px.Protocol != "socks5" && px.Protocol != "http") {
 			continue
 		}
-		if _, dup := out[px.Protocol]; dup {
+		if _, dup := by[px.Protocol]; dup {
 			continue
 		}
 		p := listenPort(px.Listen)
 		if p == 0 {
 			continue
 		}
-		ep := subEndpoint{proto: px.Protocol, port: p}
+		ep := Endpoint{Proto: px.Protocol, Port: p}
 		if px.Protocol == "http" && px.TLSCert != "" {
-			t := certTrustOf(a.tls.CertPath(px.TLSCert))
-			ep.tls = &t
+			ep.TLS = true
+			ep.setTrust(certTrustOf(a.tls.CertPath(px.TLSCert)))
 		}
-		out[px.Protocol] = ep
+		by[px.Protocol] = ep
+	}
+	var out []Endpoint
+	for _, p := range SubProtocols {
+		if ep, ok := by[p]; ok {
+			out = append(out, ep)
+		}
 	}
 	return out
+}
+
+// LocalEntrance: this node's entrance for user u (fallback: the host used
+// when no public host is known).
+func (a *App) LocalEntrance(u *UserConfig, fallback string) Entrance {
+	e := Entrance{Node: a.node.Name(), Host: a.PublicHost(), Eps: a.endpoints()}
+	if e.Host == "" {
+		e.Host = fallback
+	}
+	for _, ip := range LANAddrs() {
+		if s := ip.String(); s != e.Host {
+			e.LAN = append(e.LAN, s)
+		}
+	}
+	if u != nil && u.Kind() == KindPolicy {
+		e.Rows = map[string]string{}
+		pol := a.store.Get().Policy
+		for _, r := range u.Rows {
+			id := u.RowPolicy[r.ID]
+			if id == "" || pol == nil {
+				continue
+			}
+			if ps := pol.PolicySetByID(id); ps != nil {
+				name := ps.Name
+				if name == "" {
+					name = id
+				}
+				e.Rows[r.ID] = name
+			}
+		}
+	}
+	return e
 }
 
 // uriEscape escapes all but the unreserved characters (RFC 3986).
@@ -261,33 +342,29 @@ func hostPort(host string, port int) string {
 	return net.JoinHostPort(strings.Trim(host, "[]"), strconv.Itoa(port))
 }
 
-// link builds the link of user u on endpoint ep at host.
-func link(ep subEndpoint, host string, u *UserConfig, name string) (string, []kv) {
-	user := u.Username
-	pw := u.EffectivePassword(ep.proto)
-	hp := hostPort(host, ep.port)
+// link builds the link of user (password pw) on endpoint ep at host.
+func link(ep Endpoint, host, user, pw, name string) (string, []kv) {
+	hp := hostPort(host, ep.Port)
 	frag := "#" + uriEscape(name)
 	server := strings.Trim(host, "[]")
-	switch ep.proto {
+	switch ep.Proto {
 	case "hy2":
 		var q []string
-		ck := []kv{{"name", name}, {"type", "hysteria2"}, {"server", server}, {"port", ep.port}, {"password", pw}}
-		if ep.ports != "" {
-			q = append(q, "mport="+uriEscape(ep.ports))
-			ck = append(ck, kv{"ports", ep.ports})
+		ck := []kv{{"name", name}, {"type", "hysteria2"}, {"server", server}, {"port", ep.Port}, {"password", pw}}
+		if ep.Ports != "" {
+			q = append(q, "mport="+uriEscape(ep.Ports))
+			ck = append(ck, kv{"ports", ep.Ports})
 		}
-		if t := ep.tls; t != nil {
-			if sni := t.sniFor(server); sni != "" {
-				q = append(q, "sni="+uriEscape(sni))
-				ck = append(ck, kv{"sni", sni})
-			}
-			if t.insecure {
-				q = append(q, "insecure=1")
-				ck = append(ck, kv{"skip-cert-verify", true})
-				if t.pin != "" {
-					q = append(q, "pinSHA256="+t.pin)
-					ck = append(ck, kv{"fingerprint", t.pin})
-				}
+		if sni := ep.sniFor(server); sni != "" {
+			q = append(q, "sni="+uriEscape(sni))
+			ck = append(ck, kv{"sni", sni})
+		}
+		if ep.Insecure {
+			q = append(q, "insecure=1")
+			ck = append(ck, kv{"skip-cert-verify", true})
+			if ep.Pin != "" {
+				q = append(q, "pinSHA256="+ep.Pin)
+				ck = append(ck, kv{"fingerprint", ep.Pin})
 			}
 		}
 		u := "hysteria2://" + uriEscape(pw) + "@" + hp + "/"
@@ -296,38 +373,36 @@ func link(ep subEndpoint, host string, u *UserConfig, name string) (string, []kv
 		}
 		return u + frag, ck
 	case "ss":
-		ui := base64.RawURLEncoding.EncodeToString([]byte(ep.method + ":" + pw))
+		ui := base64.RawURLEncoding.EncodeToString([]byte(ep.Method + ":" + pw))
 		return "ss://" + ui + "@" + hp + frag,
-			[]kv{{"name", name}, {"type", "ss"}, {"server", server}, {"port", ep.port}, {"cipher", ep.method}, {"password", pw}, {"udp", true}}
+			[]kv{{"name", name}, {"type", "ss"}, {"server", server}, {"port", ep.Port}, {"cipher", ep.Method}, {"password", pw}, {"udp", true}}
 	case "trojan":
 		q := []string{"security=tls"}
-		ck := []kv{{"name", name}, {"type", "trojan"}, {"server", server}, {"port", ep.port}, {"password", pw}, {"udp", true}}
-		if t := ep.tls; t != nil {
-			if sni := t.sniFor(server); sni != "" {
-				q = append(q, "sni="+uriEscape(sni))
-				ck = append(ck, kv{"sni", sni})
-			}
-			if t.insecure {
-				q = append(q, "allowInsecure=1")
-				ck = append(ck, kv{"skip-cert-verify", true})
-			}
+		ck := []kv{{"name", name}, {"type", "trojan"}, {"server", server}, {"port", ep.Port}, {"password", pw}, {"udp", true}}
+		if sni := ep.sniFor(server); sni != "" {
+			q = append(q, "sni="+uriEscape(sni))
+			ck = append(ck, kv{"sni", sni})
+		}
+		if ep.Insecure {
+			q = append(q, "allowInsecure=1")
+			ck = append(ck, kv{"skip-cert-verify", true})
 		}
 		return "trojan://" + uriEscape(pw) + "@" + hp + "?" + strings.Join(q, "&") + frag, ck
 	case "socks5":
 		return "socks5://" + uriEscape(user) + ":" + uriEscape(pw) + "@" + hp + frag,
-			[]kv{{"name", name}, {"type", "socks5"}, {"server", server}, {"port", ep.port}, {"username", user}, {"password", pw}, {"udp", true}}
+			[]kv{{"name", name}, {"type", "socks5"}, {"server", server}, {"port", ep.Port}, {"username", user}, {"password", pw}, {"udp", true}}
 	case "http":
-		ck := []kv{{"name", name}, {"type", "http"}, {"server", server}, {"port", ep.port}, {"username", user}, {"password", pw}}
+		ck := []kv{{"name", name}, {"type", "http"}, {"server", server}, {"port", ep.Port}, {"username", user}, {"password", pw}}
 		scheme := "http"
 		var q []string
-		if t := ep.tls; t != nil {
+		if ep.TLS {
 			scheme = "https"
 			ck = append(ck, kv{"tls", true})
-			if sni := t.sniFor(server); sni != "" {
+			if sni := ep.sniFor(server); sni != "" {
 				q = append(q, "sni="+uriEscape(sni))
 				ck = append(ck, kv{"sni", sni})
 			}
-			if t.insecure {
+			if ep.Insecure {
 				q = append(q, "skip-cert-verify=true")
 				ck = append(ck, kv{"skip-cert-verify", true})
 			}
@@ -341,66 +416,92 @@ func link(ep subEndpoint, host string, u *UserConfig, name string) (string, []kv
 	return "", nil
 }
 
-// LinkOptions: what UserLinks builds.
+// LinkOptions: what EntranceLinks builds.
 type LinkOptions struct {
 	Protocols []string // nil = every protocol served
 	LAN       bool     // also the LAN addresses
-	NodeName  bool     // names start with the node's name
+	NodeName  bool     // names carry the node's name (a subscription)
+	// NameFormat: the name template (subscription.go); "" = the user, the
+	// row's set, the protocol and the LAN mark.
+	NameFormat string
 	Fallback  string   // the host used when no public host is known ("" = none)
 }
 
-// UserLinks: the links of user u, public host first, then the LAN
-// addresses (each protocol in SubProtocols order).
-func (a *App) UserLinks(u *UserConfig, opt LinkOptions) []ProxyLink {
-	eps := a.subEndpoints()
+// EntranceLinks: the links of user u at entrance e: each of its passwords
+// usable there (a policy-kind user's rows set there, else the main
+// password) on each protocol, public host first, then the LAN addresses.
+// Names: "<user> [<node>] [<policy set>] <proto> [LAN <ip>]".
+func EntranceLinks(e Entrance, u *UserConfig, opt LinkOptions) []ProxyLink {
 	protos := opt.Protocols
 	if protos == nil {
 		protos = SubProtocols
 	}
-	type hostE struct {
-		host string
-		lan  string // "" public; else the LAN label
+	type cred struct{ pw, label string }
+	var creds []cred
+	if u.Kind() == KindPolicy {
+		seen := map[string]int{}
+		for _, r := range u.Rows {
+			if name, ok := e.Rows[r.ID]; ok {
+				seen[name]++
+			}
+		}
+		for i, r := range u.Rows {
+			if name, ok := e.Rows[r.ID]; ok && r.Password != "" {
+				if seen[name] > 1 { // rows going to the same set: told apart by number
+					name += fmt.Sprintf(" #%d", i+1)
+				}
+				creds = append(creds, cred{r.Password, name})
+			}
+		}
+	} else if u.Password != "" {
+		creds = append(creds, cred{pw: u.Password})
 	}
+	type hostE struct{ host, lan string }
 	var hosts []hostE
-	pub := a.PublicHost()
-	if pub == "" {
-		pub = opt.Fallback
-	}
-	if pub != "" {
-		hosts = append(hosts, hostE{host: pub})
+	if e.Host != "" {
+		hosts = append(hosts, hostE{host: e.Host})
 	}
 	if opt.LAN {
-		lans := LANAddrs()
-		for _, ip := range lans {
-			if ip.String() == pub {
-				continue
-			}
+		for _, ip := range e.LAN {
 			label := "LAN"
-			if len(lans) > 1 {
-				label = "LAN " + ip.String()
+			if len(e.LAN) > 1 {
+				label = "LAN " + ip
 			}
-			hosts = append(hosts, hostE{host: ip.String(), lan: label})
+			hosts = append(hosts, hostE{host: ip, lan: label})
 		}
 	}
-	prefix := u.Username
-	if opt.NodeName {
-		prefix = a.node.Name() + " " + u.Username
-	}
 	var out []ProxyLink
-	for _, h := range hosts {
-		for _, p := range protos {
-			ep, ok := eps[p]
-			if !ok || !u.IsProxyEnabled(p) {
-				continue
+	for _, c := range creds {
+		for _, h := range hosts {
+			for _, p := range protos {
+				var ep *Endpoint
+				for i := range e.Eps {
+					if e.Eps[i].Proto == p {
+						ep = &e.Eps[i]
+					}
+				}
+				if ep == nil || !u.Serves(p) {
+					continue
+				}
+				node := ""
+				if opt.NodeName {
+					node = e.Node
+				}
+				tmpl := opt.NameFormat
+				if tmpl == "" {
+					tmpl = "{user} {policy} {proto} {lan}"
+				}
+				name := FormatLinkName(tmpl, map[string]string{"user": u.Username, "node": node,
+					"policy": c.label, "proto": p, "lan": h.lan, "host": h.host})
+				url, ck := link(*ep, h.host, u.Username, c.pw, name)
+				out = append(out, ProxyLink{Proto: p, User: u.Username, Name: name, Host: h.host, LAN: h.lan != "", Label: c.label, URL: url, clash: ck})
 			}
-			name := prefix + " " + p
-			if h.lan != "" {
-				name += " " + h.lan
-			}
-			url, ck := link(ep, h.host, u, name)
-			out = append(out, ProxyLink{Proto: p, User: u.Username, Name: name, Host: h.host, LAN: h.lan != "", URL: url, clash: ck})
 		}
 	}
 	return out
 }
 
+// UserLinks: the links of user u on this node.
+func (a *App) UserLinks(u *UserConfig, opt LinkOptions) []ProxyLink {
+	return EntranceLinks(a.LocalEntrance(u, opt.Fallback), u, opt)
+}

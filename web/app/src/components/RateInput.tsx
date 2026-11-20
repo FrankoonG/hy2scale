@@ -46,3 +46,42 @@ export function RateInput({ value, onChange, testId }: { value: RateValue; onCha
     </div>
   );
 }
+
+// Traffic amounts are stored in bytes; the form edits them in a chosen unit.
+export const SIZE_UNITS = [
+  { value: 'MB', bytes: 1024 ** 2 },
+  { value: 'GB', bytes: 1024 ** 3 },
+  { value: 'TB', bytes: 1024 ** 4 },
+] as const;
+
+export type SizeUnit = (typeof SIZE_UNITS)[number]['value'];
+
+export interface SizeValue { amount: string; unit: SizeUnit }
+
+const sizeBytes = (u: SizeUnit) => SIZE_UNITS.find((x) => x.value === u)!.bytes;
+
+/** Form value for a stored amount: the largest unit it is a whole number of (GB when none). */
+export function sizeToForm(bytes: number | undefined): SizeValue {
+  if (!bytes || bytes <= 0) return { amount: '', unit: 'GB' };
+  for (const u of ['TB', 'GB', 'MB'] as SizeUnit[]) {
+    if (bytes % sizeBytes(u) === 0) return { amount: String(bytes / sizeBytes(u)), unit: u };
+  }
+  return { amount: String(+(bytes / sizeBytes('GB')).toFixed(3)), unit: 'GB' };
+}
+
+/** Stored amount (bytes, 0 = unlimited) for a form value. */
+export function formToSize(v: SizeValue): number {
+  const n = parseFloat(v.amount);
+  return n > 0 ? Math.round(n * sizeBytes(v.unit)) : 0;
+}
+
+export function SizeInput({ value, onChange, testId }: { value: SizeValue; onChange: (v: SizeValue) => void; testId?: string }) {
+  return (
+    <div className="hy-rate-input" data-testid={testId}>
+      <Input type="number" min={0} step="any" value={value.amount} placeholder="0"
+        onChange={(e) => onChange({ ...value, amount: e.target.value })} />
+      <Select value={value.unit} onChange={(e) => onChange({ ...value, unit: e.target.value as SizeUnit })}
+        options={SIZE_UNITS.map((u) => ({ value: u.value, label: u.value }))} />
+    </div>
+  );
+}

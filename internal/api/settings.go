@@ -41,6 +41,9 @@ func (s *Server) webSettings(cfg app.Config) map[string]any {
 		"https_cert_id":     cfg.HTTPSCertID,
 		"https_active":      true,
 		"session_timeout_h": sessionH,
+		// subscriptions served here (subscription.go)
+		"sub_no_relay": cfg.Subscription != nil && cfg.Subscription.NoRelay,
+		"sub_http":     cfg.Subscription != nil && cfg.Subscription.HTTP,
 	}
 }
 
@@ -161,6 +164,8 @@ type settingsBody struct {
 	DNSResolverQueryTimeoutMs *int                `json:"dns_resolver_query_timeout_ms"`
 	PublicIP                  *app.PublicIPConfig `json:"public_ip"`
 	PublicHost                *string             `json:"public_host"`
+	SubNoRelay                *bool               `json:"sub_no_relay"`
+	SubHTTP                   *bool               `json:"sub_http"`
 	MDNSEnabled               *bool               `json:"mdns_enabled"`
 	MDNSName                  *string             `json:"mdns_name"`
 }
@@ -205,6 +210,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, own int) {
 	if own&ownWeb == 0 {
 		body.Listen, body.BasePath, body.ForceHTTPS, body.HTTPSCertID = nil, nil, nil, nil
 		body.SessionTimeoutH = nil
+		body.SubNoRelay, body.SubHTTP = nil, nil
 	}
 	if own&ownPublicIP == 0 {
 		body.PublicIP = nil
@@ -316,6 +322,17 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, own int) {
 		}
 		if body.PublicHost != nil {
 			c.PublicHost = *body.PublicHost
+		}
+		if body.SubNoRelay != nil || body.SubHTTP != nil {
+			if c.Subscription == nil {
+				c.Subscription = &app.SubscriptionConfig{}
+			}
+			if body.SubNoRelay != nil {
+				c.Subscription.NoRelay = *body.SubNoRelay
+			}
+			if body.SubHTTP != nil {
+				c.Subscription.HTTP = *body.SubHTTP
+			}
 		}
 		if body.MDNSEnabled != nil || body.MDNSName != nil {
 			if c.MDNS == nil {

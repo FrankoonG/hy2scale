@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"net"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -188,7 +187,7 @@ func (a *App) meterHy2(authID, peerAddr string, c net.Conn, af *audit.Flow) net.
 // meterHy2As: meterHy2 with the device row's protocol ("hy2-node" for node
 // access by user). af (the stream's audit record, nil = none) ends with it.
 func (a *App) meterHy2As(authID, peerAddr, proto string, c net.Conn, af *audit.Flow) net.Conn {
-	name := strings.TrimPrefix(authID, "user:")
+	name, _ := hy2Ident(authID)
 	ip := peerAddr
 	if h, _, err := net.SplitHostPort(peerAddr); err == nil {
 		ip = h

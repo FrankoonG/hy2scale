@@ -104,6 +104,9 @@ export const toggleUser = (id: string, enabled: boolean) =>
   api(`/users/${encodeURIComponent(id)}/toggle`, { method: 'PUT', body: JSON.stringify({ enabled }) });
 export const resetTraffic = (id: string) =>
   api(`/users/${encodeURIComponent(id)}/reset-traffic`, { method: 'PUT' });
+/** Moves the expiry on by one reset period (1 month without one). */
+export const extendUser = (id: string) =>
+  api<{ expiry_date: string }>(`/users/${encodeURIComponent(id)}/extend`, { method: 'POST' });
 
 // Shared users: errors answer either plain text or {error, code}; the code
 // (not_accepting, needs_login, login_failed, unsupported, conflict) is kept

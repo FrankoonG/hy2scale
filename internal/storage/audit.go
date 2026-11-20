@@ -285,6 +285,7 @@ type matcher struct {
 	q                       Query
 	exact                   [][]byte // raw-line prefilters for exact fields
 	srcL, dstL, qL          string
+	srcIP                   net.IP // the source filter is an address
 	srcNeed, dstNeed, qNeed []byte
 	lower                   []byte
 }
@@ -299,6 +300,7 @@ func compile(q Query) *matcher {
 		}
 	}
 	m.srcL, m.dstL, m.qL = strings.ToLower(q.Src), strings.ToLower(q.Dst), strings.ToLower(q.Q)
+	m.srcIP = net.ParseIP(strings.Trim(strings.TrimSpace(q.Src), "[]"))
 	need := func(s string) []byte {
 		if s == "" {
 			return nil
@@ -311,6 +313,9 @@ func compile(q Query) *matcher {
 		return []byte(s)
 	}
 	m.srcNeed, m.dstNeed, m.qNeed = need(m.srcL), need(m.dstL), need(m.qL)
+	if m.srcIP != nil {
+		m.srcNeed = []byte(m.srcIP.String()) // as records spell it
+	}
 	return m
 }
 
@@ -397,8 +402,15 @@ func (m *matcher) match(line []byte) (audit.Record, bool) {
 			}
 		}
 	}
-	if m.srcL != "" && !containsAny(m.srcL, r.User, r.Src, r.SrcPeer, r.SrcNode, r.InIface, r.SrcMAC) {
-		return r, false
+	if m.srcL != "" {
+		if m.srcIP != nil {
+			// an address: that address exactly (10.0.0.2 is not 10.0.0.20)
+			if !sameHost(m.srcIP, r.Src) && !sameHost(m.srcIP, r.SrcPeer) {
+				return r, false
+			}
+		} else if !containsAny(m.srcL, r.User, r.Src, r.SrcPeer, r.SrcNode, r.InIface, r.SrcMAC) {
+			return r, false
+		}
 	}
 	if m.dstL != "" && !containsAny(m.dstL, r.Dst, r.DstHost, r.DstIP) {
 		return r, false
@@ -408,6 +420,19 @@ func (m *matcher) match(line []byte) (audit.Record, bool) {
 		return r, false
 	}
 	return r, true
+}
+
+// sameHost: addr (host or host:port) is ip.
+func sameHost(ip net.IP, addr string) bool {
+	if addr == "" {
+		return false
+	}
+	h := addr
+	if x, _, err := net.SplitHostPort(addr); err == nil {
+		h = x
+	}
+	o := net.ParseIP(strings.Trim(h, "[]"))
+	return o != nil && o.Equal(ip)
 }
 
 func containsAny(needle string, fields ...string) bool {

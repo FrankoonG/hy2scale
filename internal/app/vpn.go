@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -196,6 +197,25 @@ type vpnInstance struct {
 	srv vpnServer
 }
 
+// Devices: the active devices, a VPN client's with where it connects from.
+func (a *App) Devices() []DeviceJSON {
+	list := a.Sessions.List()
+	a.vpnMu.Lock()
+	nets := map[string]*vpnNet{}
+	for proto, inst := range a.vpn {
+		if inst != nil {
+			nets[proto] = inst.net
+		}
+	}
+	a.vpnMu.Unlock()
+	for i := range list {
+		if n := nets[list[i].Protocol]; n != nil {
+			list[i].Peer = n.clientPeer(list[i].RemoteIP)
+		}
+	}
+	return list
+}
+
 // vpnMuxFor returns the shared IKE/NAT-T sockets. Caller holds a.vpnMu.
 func (a *App) vpnMuxFor() *vpnmux.Mux {
 	if a.vpnMux == nil {
@@ -277,12 +297,14 @@ func (a *App) VPNRunning(proto string) bool {
 	return a.vpn[proto] != nil
 }
 
-// vpnUser is the active user name may log in as on proto, or nil.
+// vpnUser is the active user name may log in as on proto, or nil (name may
+// carry the row it signed in with: Ident).
 func (a *App) vpnUser(name, proto string) *UserConfig {
+	name, _ = SplitIdent(name)
 	a.usersMu.RLock()
 	u, ok := a.userIndex[name]
 	a.usersMu.RUnlock()
-	if !ok || !u.Enabled || !u.IsProxyEnabled(proto) {
+	if !ok || !u.Enabled || !u.Serves(proto) {
 		return nil
 	}
 	if u.ExpiryDate != "" {
@@ -296,24 +318,15 @@ func (a *App) vpnUser(name, proto string) *UserConfig {
 	return u
 }
 
-// vpnPassword serves the per-attempt credential lookups (MS-CHAPv2 needs the
-// plaintext password).
-func (a *App) vpnPassword(proto string) func(string) (string, bool) {
-	return func(name string) (string, bool) {
-		if u := a.vpnUser(name, proto); u != nil {
-			return u.Password, true
-		}
-		return "", false
-	}
-}
-
 // userRoute is the route of an authenticated user: their own exit, or direct
 // when the account is gone.
-func (a *App) userRoute(name, proto string) vpnRoute {
-	r := vpnRoute{user: name}
+func (a *App) userRoute(id, proto string) vpnRoute {
+	name, row := SplitIdent(id)
+	r := vpnRoute{user: name, row: row}
 	if u := a.vpnUser(name, proto); u != nil {
-		r.userID, r.policy = u.ID, u.ExitPolicy
-		r.exitVia, r.exitPaths, r.exitMode = u.ExitVia, u.ExitPaths, u.ExitMode
+		s := userSelRow(u, row)
+		r.userID, r.policy = u.ID, s.policy
+		r.exitVia, r.exitPaths, r.exitMode = s.via, s.paths, s.mode
 	}
 	return r
 }
@@ -479,7 +492,7 @@ func (a *App) StartIKEv2(cfg IKEv2Config) error {
 			return vpnErr("ikev2", err)
 		}
 		sc.CertFile, sc.KeyFile = certFile, keyFile
-		sc.EAPLookup = a.vpnPassword("ikev2")
+		sc.EAPLookup = func(name string) ([]dataplane.Credential, bool) { return a.vpnCreds("ikev2", name) }
 	default:
 		return vpnErr("ikev2", fmt.Errorf("unknown mode %q", cfg.Mode))
 	}
@@ -555,7 +568,7 @@ func (a *App) StartL2TP(cfg L2TPConfig) error {
 		return l2tp.NewServer(l2tp.ServerConfig{
 			Port:         ikePort,
 			PSK:          cfg.PSK,
-			UserLookup:   a.vpnPassword("l2tp"),
+			UserLookup:   func(name string) ([]dataplane.Credential, bool) { return a.vpnCreds("l2tp", name) },
 			Pool:         cidr,
 			DNS:          a.vpnDNS(),
 			Device:       n.device(),
@@ -629,7 +642,6 @@ func (a *App) StartOpenVPN(cfg OpenVPNConfig) error {
 	}
 	certPEM, _ := os.ReadFile(certFile)
 	keyPEM, _ := os.ReadFile(keyFile)
-	check := a.vpnPassword("openvpn")
 	resolve := func(n *vpnNet, ip string) (vpnRoute, bool) {
 		user, ok := n.clientUser(ip)
 		if !ok {
@@ -701,9 +713,14 @@ func (a *App) StartOpenVPN(cfg OpenVPNConfig) error {
 			DNS:    dns,
 			MTU:    cfg.mtuVal(),
 			Device: n.device(),
-			VerifyUser: func(user, pass string) bool {
-				pw, ok := check(user)
-				return ok && pw == pass
+			VerifyUser: func(user, pass string) (string, bool) {
+				creds, _ := a.vpnCreds("openvpn", user)
+				for _, c := range creds {
+					if subtle.ConstantTimeCompare([]byte(c.Password), []byte(pass)) == 1 {
+						return c.Identity, true
+					}
+				}
+				return "", false
 			},
 			OnSession: n.session,
 			Logger:    vpnLogger("openvpn"),

@@ -4,7 +4,7 @@ import { Card, Button, Input, Toggle, Select, FormGroup, FormStack } from '@hy2s
 import * as api from '@/api';
 import type { WebForm } from './forms';
 
-/** Settings → Web: the admin UI's own listener. */
+/** Settings → Web: the admin UI's own listener (it also serves subscriptions). */
 export default function WebTab({ web }: { web: WebForm }) {
   const { t } = useTranslation();
   const { data: certs = [] } = useQuery({ queryKey: ['certs'], queryFn: api.getCerts });
@@ -30,6 +30,12 @@ export default function WebTab({ web }: { web: WebForm }) {
         </FormGroup>
         <FormGroup label={t('settings.sessionTimeout')}>
           <Input type="number" value={web.sessionTimeout} onChange={(e) => web.setSessionTimeout(e.target.value)} suffix="h" />
+        </FormGroup>
+        <FormGroup label={t('settings.subViaNodes')}>
+          <Toggle checked={web.subViaNodes} onChange={(e) => web.setSubViaNodes(e.target.checked)} data-testid="web-sub-via-nodes" />
+        </FormGroup>
+        <FormGroup label={t('settings.subHTTP')}>
+          <Toggle checked={web.subHTTP} onChange={(e) => web.setSubHTTP(e.target.checked)} data-testid="web-sub-http" />
         </FormGroup>
         <Button variant="primary" className="align-start" onClick={web.save} loading={web.saving}>{t('app.save')}</Button>
       </FormStack>
