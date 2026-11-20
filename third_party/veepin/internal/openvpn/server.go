@@ -124,8 +124,9 @@ type ServerConfig struct {
 	ListenPacket dataplane.ListenFunc
 	// VerifyUser, if set, authenticates clients by the auth-user-pass
 	// credentials of key method 2; a client certificate becomes optional.
-	// (hy2scale P4)
-	VerifyUser func(username, password string) bool
+	// (hy2scale P4) It returns the identity the client is reported as.
+	// (hy2scale P17)
+	VerifyUser func(username, password string) (identity string, ok bool)
 	// OnSession reports a client's address coming up / going away with the
 	// username (or certificate common name) it authenticated as. (hy2scale P3)
 	OnSession func(up bool, user string, addr netip.Addr, peer netip.AddrPort) // peer: the client's own address (hy2scale P16)
@@ -261,7 +262,7 @@ type Server struct {
 	redirect, redirect6 bool
 	pushRoutes          []netip.Prefix
 
-	verifyUser func(string, string) bool
+	verifyUser func(string, string) (string, bool) // hy2scale P17
 	onSession  func(bool, string, netip.Addr, netip.AddrPort)
 	tun        dataplane.Device
 	conn       *dataplane.PacketConn
@@ -902,10 +903,13 @@ func (s *Server) handshake(cl *serverClient) {
 		switch {
 		case hello.Username == "" && cl.user == "":
 			authErr = "no credentials"
-		case hello.Username != "" && !s.verifyUser(hello.Username, hello.Password):
-			authErr = fmt.Sprintf("bad credentials for %q", hello.Username)
 		case hello.Username != "":
-			cl.user = hello.Username
+			// hy2scale P17: the session reports the identity the password matched.
+			if id, ok := s.verifyUser(hello.Username, hello.Password); ok {
+				cl.user = id
+			} else {
+				authErr = fmt.Sprintf("bad credentials for %q", hello.Username)
+			}
 		}
 	}
 

@@ -87,6 +87,12 @@ Every change is marked `hy2scale P<n>` in the source.
 - **P16 — client address.** `OnSession` also gets the client's own address
   (`netip.AddrPort`): the IKE peer for IKEv2 and L2TP/IPsec, the UDP source
   or TCP remote for OpenVPN.
+- **P17 — several passwords.** `UserLookup` and `EAPLookup` return every
+  `dataplane.Credential` (password, identity) of a username; PPP and EAP
+  MS-CHAPv2 try each, keep the peer's username in the challenge and
+  authenticator response, key MPPE / the MSK from the matched password, and
+  report its `Identity` as the session's user. `VerifyUser` returns the
+  identity OpenVPN reports.
 
 ## Updating
 
