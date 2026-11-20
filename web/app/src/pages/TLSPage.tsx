@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import { useNavSelect } from '@/hooks/useNavSelect';
 import { useQuery } from '@tanstack/react-query';
 import { Card, Badge, ExpandButton, Table, useSelection, useModalState, type Column } from '@hy2scale/ui';
 import ResponsiveActions from '@/components/ResponsiveActions';
@@ -19,6 +20,7 @@ export default function TLSPage() {
   const edit = useModalState<CertInfo | null>();
   const newCa = useModalState<null>();
   const selection = useSelection(certs.map((c) => c.id));
+  useNavSelect(certs.map((c) => c.id), selection);
   const selected = pickSelected(certs, selection.selected, (c) => c.id);
   const bulk = useBulkAction(['certs']);
   const bulkDelete = () => bulk(selection.selected, (id) => api.deleteCert(id), {
