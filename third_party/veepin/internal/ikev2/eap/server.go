@@ -4,18 +4,20 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"fmt"
+
+	"github.com/xen0bit/veepin/dataplane"
 )
 
-// CredentialLookup returns the cleartext password for a username, and whether
+// CredentialLookup returns the cleartext passwords for a username, and whether
 // the user exists. Passwords are needed in cleartext (or as NT hashes) because
 // MSCHAPv2 is a challenge/response scheme; there is no way to verify against a
-// salted one-way hash.
-type CredentialLookup func(username string) (password string, ok bool)
+// salted one-way hash. The first candidate that verifies wins. (hy2scale P17)
+type CredentialLookup func(username string) (creds []dataplane.Credential, ok bool)
 
 // Result reports the outcome of a completed EAP-MSCHAPv2 exchange.
 type Result struct {
 	Success  bool
-	Username string
+	Username string // on success, the matched credential's Identity (hy2scale P17)
 	// MSK is the 64-octet Master Session Key, used by IKEv2 as the shared
 	// secret for the final AUTH payloads. Valid only when Success is true.
 	MSK []byte
@@ -123,7 +125,7 @@ func (s *Server) handleResponseState(resp Packet) (Packet, bool, error) {
 		return Packet{}, false, err
 	}
 
-	password, ok := s.lookup(fields.Name)
+	creds, ok := s.lookup(fields.Name)
 	if !ok {
 		s.result = Result{Success: false, Username: fields.Name}
 		s.state = stateDone
@@ -133,9 +135,19 @@ func (s *Server) handleResponseState(resp Packet) (Packet, bool, error) {
 		}, false, nil
 	}
 
-	ntHash := ntPasswordHash(password)
-	expected := generateNTResponse(s.authChallenge, fields.PeerChallenge, fields.Name, ntHash)
-	if subtle.ConstantTimeCompare(expected[:], fields.NTResponse[:]) != 1 {
+	// hy2scale P17: try each candidate; the MS-CHAPv2 math keeps the name the
+	// peer sent, the MSK comes from the matched password.
+	var ntHash []byte
+	var match *dataplane.Credential
+	for i := range creds {
+		h := ntPasswordHash(creds[i].Password)
+		expected := generateNTResponse(s.authChallenge, fields.PeerChallenge, fields.Name, h)
+		if subtle.ConstantTimeCompare(expected[:], fields.NTResponse[:]) == 1 {
+			ntHash, match = h, &creds[i]
+			break
+		}
+	}
+	if match == nil {
 		s.result = Result{Success: false, Username: fields.Name}
 		s.state = stateDone
 		return Packet{
@@ -154,7 +166,7 @@ func (s *Server) handleResponseState(resp Packet) (Packet, bool, error) {
 		fields.PeerChallenge, s.authChallenge, fields.Name)
 	s.result = Result{
 		Success:  true,
-		Username: fields.Name,
+		Username: match.Identity, // hy2scale P17
 		MSK:      deriveMSK(ntHash, fields.NTResponse),
 	}
 	s.state = stateSuccessSent
