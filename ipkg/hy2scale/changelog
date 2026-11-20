@@ -1,3 +1,14 @@
+v1.4.5
+- Users: an exit group, a policy set per password, or node access; the per-protocol passwords page is replaced by a protocol choice
+- Subscription per user (for SublinkPro / Sub-Store and the like): V2Ray or Clash list, entry name format, LAN entries; a shared user's lists every holder
+- Traffic reset every N days / weeks / months from a start date; traffic limit in MB / GB / TB; extend expiry from the user details
+- Public address and LAN name (mDNS) settings; share links come from the node; direct node links export as hy2scale://
+- Audit: application protocol, the client's own address for VPN flows, the password row used, list filters, hourly summaries; active devices open the audit filtered to them
+- Sharing a user lists every manageable node and signs in when a node asks
+- Overview links open the node, user, certificate, interface or service sub-page they show
+- "hy2scale ctl" local control; tools keep target history
+- Fixes: a node's own public address is not internal; UDP through an outbound peer no longer leaks flows; internal destinations keep their address when sniffed; no transparent huge pages; remote pages use the tab's own session; memory diagnostics
+
 v1.4.4
 - Shared users: a user shared to other nodes is held by all of them alike (any holder edits, shares on, leaves or deletes it everywhere; traffic summed against one limit); "Accept shared users" setting
 - Automatic update (off by default): daily at a set time; optionally fetched from a node that already runs the new release
