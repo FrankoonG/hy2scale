@@ -148,40 +148,63 @@ export type TrafficReset = '' | 'daily' | 'weekly' | 'monthly';
 export interface UserConfig {
   id: string;
   username: string;
+  /** The password (group and access kinds; kept, unused, in the policy kind). */
   password: string;
-  proxy_passwords?: Record<string, string>;
   // Proxy keys this user is forbidden to authenticate on. Empty/undefined =
   // allowed everywhere. Backend short-circuits each protocol's auth path
   // when the proxy key appears in this list (hot-effective).
   proxy_disabled?: string[];
+  /** group: the exit fields below; policy: password rows, each to a policy set; access: node access ('' = group). */
+  exit_kind?: UserKind;
+  /** policy kind: the passwords the user signs in with (shared between holders) */
+  rows?: UserRow[];
+  /** policy kind: row id → this node's policy set id (missing/'' = off here) */
+  row_policy?: Record<string, string>;
   exit_via: string;
   exit_paths?: string[];
   exit_mode?: '' | 'quality' | 'aggregate';
-  /** Policy set id; non-empty = the policy set is chosen instead of the exit group. */
-  exit_policy?: string;
   traffic_limit: number;
   traffic_used: number;
   /** Rate limits in bytes per second (from / to the user); 0 = unlimited. */
   rate_up?: number;
   rate_down?: number;
-  /** Automatic reset of traffic_used at 00:00 node time; '' = never. */
+  /** Automatic reset of traffic_used at 00:00 node time, by unit; '' = never (omitted on update: kept). */
   traffic_reset?: TrafficReset;
-  /** weekly: ISO weekday 1 (Mon)..7 (Sun); monthly: 1..31 (clamped to the month). */
-  traffic_reset_day?: number;
+  /** Units per period, 1..1000. */
+  traffic_reset_every?: number;
+  /** Start date (YYYY-MM-DD): periods fall every `every` units from it. */
+  traffic_reset_anchor?: string;
   /** Last reset (RFC 3339, server-managed). */
   traffic_reset_at?: string;
   /** Next automatic reset (RFC 3339, read-only). */
   traffic_reset_next?: string;
   expiry_date?: string;
   enabled: boolean;
-  /** may use this node's visible nodes as exits (node access by user) */
-  node_access?: boolean;
-  /** 'restricted' (default) | 'full' */
+  /** access kind: 'restricted' (default) | 'full' */
   node_access_mode?: 'restricted' | 'full';
   /** flows may not reach internal destinations */
   deny_internal?: boolean;
   /** Present for a user held by several nodes; traffic_used is then the total. */
   shared?: SharedInfo;
+  /** The subscription: read as stored, sent as {enabled, name, no_lan}. */
+  sub?: UserSubConfig;
+}
+
+export type UserKind = 'group' | 'policy' | 'access';
+/** A password row of a policy-kind user. */
+export interface UserRow {
+  id: string;
+  password: string;
+}
+export interface UserSubConfig {
+  /** set = on (read only) */
+  token?: string;
+  /** entry name template ('' = the default) */
+  name?: string;
+  /** the LAN-address entries left out */
+  no_lan?: boolean;
+  /** on a save: on (a token made when none) or off (the token dropped, the rest kept) */
+  enabled?: boolean;
 }
 
 export type SharedMemberState = 'synced' | 'pending' | 'error' | 'unreachable';
@@ -211,6 +234,8 @@ export interface Session {
   key: string;
   username: string;
   remote_ip: string;
+  /** A VPN client's public address (host:port); remote_ip is then its tunnel address. */
+  peer?: string;
   protocol: string;
   connect_at: number;
   conn_count: number;
@@ -427,6 +452,9 @@ export interface UISettings {
   mdns_label?: string;
   mdns_claimed?: string;
   mdns_state?: 'on' | 'probing' | 'off' | 'no_lan' | 'failed';
+  /** Subscriptions (PUT /settings/web): refuse those other nodes pass on; also answer over plain http. */
+  sub_no_relay?: boolean;
+  sub_http?: boolean;
 }
 
 /** The last automatic-update run. */

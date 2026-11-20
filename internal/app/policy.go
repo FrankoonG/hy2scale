@@ -246,7 +246,7 @@ func (a *App) DeletePolicySet(id string) error {
 	if refs := a.PolicyRefs(&cfg, id); len(refs) > 0 {
 		return &PolicyRefError{Refs: refs}
 	}
-	return a.updatePolicy(func(p *policy.Config) error {
+	err := a.updatePolicy(func(p *policy.Config) error {
 		for i := range p.Policies {
 			if p.Policies[i].ID == id {
 				if refs := p.InternalRefs(id); len(refs) > 0 {
@@ -258,6 +258,24 @@ func (a *App) DeletePolicySet(id string) error {
 		}
 		return ErrPolicyNotFound
 	})
+	if err == nil {
+		a.dropRowPolicy(id)
+	}
+	return err
+}
+
+// dropRowPolicy forgets set id in the rows users keep from an earlier
+// policy kind.
+func (a *App) dropRowPolicy(id string) {
+	a.store.Update(func(c *Config) {
+		for i := range c.Users {
+			for row, p := range c.Users[i].RowPolicy {
+				if p == id {
+					delete(c.Users[i].RowPolicy, row)
+				}
+			}
+		}
+	})
 }
 
 // PolicyRefs: every reference to set id — users, proxies, WireGuard peers,
@@ -265,7 +283,13 @@ func (a *App) DeletePolicySet(id string) error {
 func (a *App) PolicyRefs(cfg *Config, id string) []policy.Ref {
 	var out []policy.Ref
 	for _, u := range cfg.Users {
-		if u.ExitPolicy == id {
+		used := u.ExitPolicy == id
+		if u.Kind() == KindPolicy { // rows kept from an earlier policy kind refer to nothing
+			for _, p := range u.RowPolicy {
+				used = used || p == id
+			}
+		}
+		if used {
 			out = append(out, policy.Ref{Kind: "user", ID: u.ID, Name: u.Username})
 		}
 	}

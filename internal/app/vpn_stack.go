@@ -36,6 +36,7 @@ import (
 // vpnRoute is where one client's traffic goes.
 type vpnRoute struct {
 	user      string // device-row name; "" when the client has no user
+	row       string // the password row it signed in with ("" = the main password)
 	userID    string // the user's internal id ("" = none)
 	policy    string // a policy set selection (overrides the exit fields)
 	exitVia   string
@@ -124,10 +125,14 @@ func (n *vpnNet) session(up bool, user string, addr netip.Addr, peer netip.AddrP
 	if peer.IsValid() {
 		from = " from " + peer.String()
 	}
+	name, row := SplitIdent(user)
+	if row != "" {
+		name += " (row " + row + ")"
+	}
 	if up {
-		log.Printf("[%s] client %q up at %s%s", n.proto, user, addr, from)
+		log.Printf("[%s] client %q up at %s%s", n.proto, name, addr, from)
 	} else {
-		log.Printf("[%s] client %q at %s gone", n.proto, user, addr)
+		log.Printf("[%s] client %q at %s gone", n.proto, name, addr)
 	}
 }
 
@@ -339,7 +344,7 @@ func (a *App) installVPNForwarders(n *vpnNet, resolve func(srcIP string) (vpnRou
 			return
 		}
 		dst := net.JoinHostPort(id.LocalAddress.String(), strconv.Itoa(int(id.LocalPort)))
-		af := beginUserFlowStr(n.proto, "tcp", route.user, net.JoinHostPort(srcIP, strconv.Itoa(int(id.RemotePort))), dst)
+		af := beginUserFlowStr(n.proto, "tcp", Ident(route.user, route.row), net.JoinHostPort(srcIP, strconv.Itoa(int(id.RemotePort))), dst)
 		af.SetSrcPeer(n.clientPeer(srcIP))
 		if sniffAfterAccept(dst) {
 			conn, ep := acceptForwarded(r, "["+n.proto+"]", srcIP, dst)
@@ -426,7 +431,7 @@ func (a *App) relayVPNUDP(n *vpnNet, conn *gonet.UDPConn, route vpnRoute, srcIP 
 	if a.overTrafficLimit(route.user) {
 		return // over its traffic limit: new flows are dropped
 	}
-	af := beginUserFlowStr(n.proto, "udp", route.user, net.JoinHostPort(srcIP, strconv.Itoa(srcPort)), dst)
+	af := beginUserFlowStr(n.proto, "udp", Ident(route.user, route.row), net.JoinHostPort(srcIP, strconv.Itoa(srcPort)), dst)
 	af.SetSrcPeer(n.clientPeer(srcIP))
 	ctx, cancel := context.WithTimeout(audit.NewContext(n.ctx, af), 15*time.Second)
 	remote, err := a.dialRoutedUDP(withRestrict(ctx, a.userRestrict(route.user)), route.sel(),

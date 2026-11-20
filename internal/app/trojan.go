@@ -136,32 +136,36 @@ func trojanHash(password string) string {
 
 func isHexLower(b byte) bool { return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'f') }
 
-// trojanUser finds the eligible user whose trojan password hashes to hash.
-func (a *App) trojanUser(hash []byte) (*UserConfig, bool) {
+// trojanUser finds the eligible user (and row) whose trojan password
+// hashes to hash.
+func (a *App) trojanUser(hash []byte) (*UserConfig, string, bool) {
 	cfg := a.store.Get()
 	var found *UserConfig
+	foundRow := ""
 	skipped := 0
 	for i := range cfg.Users {
 		u := &cfg.Users[i]
 		if !u.Enabled {
 			continue
 		}
-		match := subtle.ConstantTimeCompare([]byte(trojanHash(u.EffectivePassword("trojan"))), hash) == 1
-		if !match {
-			continue
-		}
-		if !u.IsProxyEnabled("trojan") || a.IsPasswordConflicted(u.Username, "trojan") {
-			skipped++
-			continue
-		}
-		if found == nil {
-			found = u
+		for _, cred := range u.Creds() {
+			match := subtle.ConstantTimeCompare([]byte(trojanHash(cred.Password)), hash) == 1
+			if !match {
+				continue
+			}
+			if !u.Serves("trojan") || a.IsPasswordConflicted(Ident(u.Username, cred.Row), "trojan") {
+				skipped++
+				continue
+			}
+			if found == nil {
+				found, foundRow = u, cred.Row
+			}
 		}
 	}
 	if found == nil && skipped > 0 {
 		log.Printf("[trojan] password matches %d user(s) with trojan disabled or in a password conflict", skipped)
 	}
-	return found, found != nil
+	return found, foundRow, found != nil
 }
 
 // trojanConn is the client stream after the handshake: reads come from
@@ -214,8 +218,9 @@ func (a *App) handleTrojan(ctx context.Context, conn *tls.Conn, fallback string)
 		}
 	}
 	var u *UserConfig
+	row := ""
 	if !bad {
-		u, _ = a.trojanUser(head[:trojanHashLen])
+		u, row, _ = a.trojanUser(head[:trojanHashLen])
 	}
 	if u == nil {
 		a.trojanFallback(conn, head, fallback)
@@ -244,9 +249,9 @@ func (a *App) handleTrojan(ctx context.Context, conn *tls.Conn, fallback string)
 	tc := &trojanConn{Conn: conn, r: br}
 	switch cmd {
 	case 0x01:
-		a.trojanConnect(tc, u, net.JoinHostPort(host, strconv.Itoa(int(port))))
+		a.trojanConnect(tc, u, row, net.JoinHostPort(host, strconv.Itoa(int(port))))
 	case 0x03:
-		a.trojanUDP(ctx, tc, u)
+		a.trojanUDP(ctx, tc, u, row)
 	}
 }
 
@@ -280,11 +285,11 @@ func (a *App) trojanFallback(conn *tls.Conn, head []byte, fallback string) {
 	<-done
 }
 
-func (a *App) trojanConnect(conn *trojanConn, u *UserConfig, addr string) {
+func (a *App) trojanConnect(conn *trojanConn, u *UserConfig, row, addr string) {
 	username := u.Username
 	src := conn.RemoteAddr()
-	rt := a.route(userSel(u), a.userSrc(policy.KindTrojan, u, src), "tcp", addr)
-	af := beginUserFlow(audit.InTrojan, "tcp", username, src, addr)
+	rt := a.route(userSelRow(u, row), a.userSrc(policy.KindTrojan, u, src), "tcp", addr)
+	af := beginUserFlow(audit.InTrojan, "tcp", Ident(username, row), src, addr)
 	dctx := audit.NewContext(withRestrict(a.appCtx, a.userRestrict(username)), af)
 	var (
 		remote net.Conn
@@ -331,7 +336,7 @@ type trojanUDPFlow struct {
 // trojanUDP serves a UDP ASSOCIATE stream: each datagram names its
 // destination; one routed UDP flow is kept per destination and its replies
 // are framed back onto the stream. Bytes go through the user meter.
-func (a *App) trojanUDP(ctx context.Context, conn *trojanConn, u *UserConfig) {
+func (a *App) trojanUDP(ctx context.Context, conn *trojanConn, u *UserConfig, row string) {
 	username := u.Username
 	src := conn.RemoteAddr()
 	sctx, cancel := context.WithCancel(ctx)
@@ -421,9 +426,9 @@ func (a *App) trojanUDP(ctx context.Context, conn *trojanConn, u *UserConfig) {
 			continue // too many destinations at once: drop
 		}
 		if f == nil {
-			af := beginUserFlow(audit.InTrojan, "udp", username, src, dst)
+			af := beginUserFlow(audit.InTrojan, "udp", Ident(username, row), src, dst)
 			dctx := audit.NewContext(withRestrict(sctx, a.userRestrict(username)), af)
-			up, derr := a.dialRoutedUDP(dctx, userSel(u), a.userSrc(policy.KindTrojan, u, src), dst)
+			up, derr := a.dialRoutedUDP(dctx, userSelRow(u, row), a.userSrc(policy.KindTrojan, u, src), dst)
 			if derr != nil {
 				af.End(derr)
 				continue

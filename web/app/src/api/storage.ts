@@ -65,6 +65,8 @@ export interface AuditRecord {
   /** Application protocol, when told (tls, http, quic, dns, ssh, …). */
   app?: string;
   inbound: string; user?: string; src?: string;
+  /** The user's password row that signed in ("#2 Japan"). */
+  entry?: string;
   /** A VPN client's own address (src: its tunnel address). */
   src_peer?: string;
   src_node?: string; in_iface?: string; src_mac?: string;

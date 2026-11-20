@@ -29,6 +29,7 @@ type Record struct {
 	App         string `json:"app,omitempty"`     // application protocol (App*), when told
 	Inbound     string `json:"inbound,omitempty"` // socks5 http ss hy2 ikev2 l2tp openvpn wireguard rules access relay
 	User        string `json:"user,omitempty"`
+	Entry       string `json:"entry,omitempty"` // the user's password row that signed in ("#2 Japan")
 	Src         string `json:"src,omitempty"`
 	SrcPeer     string `json:"src_peer,omitempty"` // the client's own address, outside a VPN tunnel (Src: its tunnel address)
 	SrcNode     string `json:"src_node,omitempty"`
@@ -170,6 +171,11 @@ func (f *Flow) SetUser(u string) {
 	f.Set(func(r *Record) { r.User = u })
 }
 
+
+// SetEntry records which password row of the user signed in.
+func (f *Flow) SetEntry(e string) {
+	f.Set(func(r *Record) { r.Entry = e })
+}
 // SetSrc records the client address (and the peer it came from).
 func (f *Flow) SetSrc(src, node string) {
 	if f == nil {

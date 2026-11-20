@@ -1,24 +1,30 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
-import { Modal, Button, Input, PasswordInput, Toggle, Select, FormGroup, FormGrid, Tabs, TabPanel, useToast } from '@hy2scale/ui';
-import { exitPathToApi, apiToExitPath, type ExitPathValue } from './ExitPathList';
-import ExitChoice from './policy/ExitChoice';
+import {
+  Modal, Button, Input, PasswordInput, Toggle, Select, SegmentedControl, CheckSelect, FormGroup, FormGrid, FormStack, Hint, useToast,
+} from '@hy2scale/ui';
+import { ExitPathList, exitPathToApi, apiToExitPath, type ExitPathValue } from './ExitPathList';
+import { PasswordRows, newRowId, type PasswordRow } from './users/PasswordRows';
+import { userKind, usePolicySets, KIND_LABEL } from './users/userKind';
+import { SubscriptionFields, type SubForm } from './users/SubscriptionFields';
+import { resetUnit, todayISO as today } from './users/trafficReset';
 import * as api from '@/api';
 import type { UserConfig, TrafficReset } from '@/api';
+import type { UserKind } from '@/api/types';
 import { PROXY_REGISTRY } from '@/config/proxyRegistry';
 import { useNodeStore } from '@/store/node';
 import { useDialogInit } from '@/hooks/useFormInit';
-import { RateInput, rateToForm, formToRate, type RateValue } from './RateInput';
+import { useShareHost } from '@/hooks/useShareHost';
+import { RateInput, rateToForm, formToRate, type RateValue, SizeInput, sizeToForm, formToSize, type SizeValue } from './RateInput';
 
-const RESET_PERIODS: TrafficReset[] = ['', 'daily', 'weekly', 'monthly'];
-
-/** Monday..Sunday in the UI language. */
-function weekdayNames(lang: string): string[] {
-  const f = new Intl.DateTimeFormat(lang, { weekday: 'long' });
-  // 2024-01-01 was a Monday.
-  return Array.from({ length: 7 }, (_, i) => f.format(new Date(2024, 0, 1 + i)));
-}
+const RESET_UNITS: TrafficReset[] = ['', 'daily', 'weekly', 'monthly'];
+const RESET_EVERY_MAX = 1000;
+const KINDS: UserKind[] = ['group', 'policy', 'access'];
+const PROTOCOL_OPTIONS = PROXY_REGISTRY.map((p) => ({ value: p.key, label: p.label }));
+/** The protocols a subscription lists, in its order (the name preview's {proto}). */
+const SUB_PROTOCOLS = ['hy2', 'ss', 'trojan', 'socks5', 'http'];
+const SUB_OFF: SubForm = { enabled: false, name: '', lan: true };
 
 interface Props {
   open: boolean;
@@ -36,103 +42,127 @@ interface Props {
 }
 
 export default function UserModal({ open, onClose, editing, animateFrom }: Props) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
+  const sets = usePolicySets();
+  const nodeName = useNodeStore((s) => s.node?.name) || '';
+  const shareHost = useShareHost();
 
   const [loading, setLoading] = useState(false);
-  const [tab, setTab] = useState('general');
   const [username, setUsername] = useState('');
+  // group / access kinds; kept (and sent) in the policy kind
   const [password, setPassword] = useState('');
-  const [proxyPasswords, setProxyPasswords] = useState<Record<string, string>>({});
-  // proxyDisabled tracked as a Set for O(1) toggle membership tests; the
-  // backend stores it as a string[]. Empty set → user authenticates on
-  // every proxy.
+  const [kind, setKind] = useState<UserKind>('group');
+  const [rows, setRows] = useState<PasswordRow[]>([]);
+  // proxyDisabled tracked as a Set for O(1) membership tests; the backend
+  // stores it as a string[]. Empty set → user authenticates on every proxy.
   const [proxyDisabled, setProxyDisabled] = useState<Set<string>>(new Set());
   const [exitPath, setExitPath] = useState<ExitPathValue>({ paths: [''], mode: '' });
-  const [exitPolicy, setExitPolicy] = useState('');
-  const [trafficLimit, setTrafficLimit] = useState('');
+  const [trafficLimit, setTrafficLimit] = useState<SizeValue>(sizeToForm(0));
   const [rateUp, setRateUp] = useState<RateValue>(rateToForm(0));
   const [rateDown, setRateDown] = useState<RateValue>(rateToForm(0));
   const [expiryDate, setExpiryDate] = useState('');
-  const [resetPeriod, setResetPeriod] = useState<TrafficReset>('');
-  const [resetDay, setResetDay] = useState(1);
-  const [enabled, setEnabled] = useState(true);
-  // node access by user; internal destinations (new users: denied)
-  const [nodeAccess, setNodeAccess] = useState(false);
+  // traffic reset: every N units from the start date
+  const [resetUnitV, setResetUnit] = useState<TrafficReset>('');
+  const [resetEvery, setResetEvery] = useState('1');
+  const [resetAnchor, setResetAnchor] = useState(today);
+  const [sub, setSub] = useState<SubForm>(SUB_OFF);
+  // the access kind's level; internal destinations (new users: denied)
   const [accessMode, setAccessMode] = useState<'restricted' | 'full'>('restricted');
   const [allowInternal, setAllowInternal] = useState(false);
 
   // Seed on open / on switching to another user only — the users list
   // refetches every 5 s and a user with traffic is a new object each flush.
   useDialogInit(open, editing?.id ?? null, () => {
-    setTab('general');
     if (!editing) {
-      setUsername(''); setPassword(''); setProxyPasswords({});
+      setUsername(''); setPassword(''); setKind('group'); setRows([]);
       setProxyDisabled(new Set());
       setExitPath({ paths: [''], mode: '' });
-      setExitPolicy('');
-      setTrafficLimit(''); setExpiryDate(''); setEnabled(true);
+      setTrafficLimit(sizeToForm(0)); setExpiryDate('');
       setRateUp(rateToForm(0)); setRateDown(rateToForm(0));
-      setResetPeriod(''); setResetDay(1);
-      setNodeAccess(false); setAccessMode('restricted'); setAllowInternal(false);
+      setResetUnit(''); setResetEvery('1'); setResetAnchor(today());
+      setSub(SUB_OFF);
+      setAccessMode('restricted'); setAllowInternal(false);
       return;
     }
     setUsername(editing.username);
     setPassword(editing.password);
-    setProxyPasswords(editing.proxy_passwords || {});
+    setKind(userKind(editing));
+    setRows((editing.rows || []).map((r) => ({ id: r.id, password: r.password, policy: editing.row_policy?.[r.id] || '' })));
     setProxyDisabled(new Set(editing.proxy_disabled || []));
     setExitPath(apiToExitPath(editing.exit_via, editing.exit_paths, editing.exit_mode));
-    setExitPolicy(editing.exit_policy || '');
-    setTrafficLimit(editing.traffic_limit > 0 ? String(editing.traffic_limit / 1073741824) : '');
+    setTrafficLimit(sizeToForm(editing.traffic_limit));
     setRateUp(rateToForm(editing.rate_up)); setRateDown(rateToForm(editing.rate_down));
     setExpiryDate(editing.expiry_date || '');
-    setResetPeriod(editing.traffic_reset || '');
-    setResetDay(editing.traffic_reset_day || 1);
-    setEnabled(editing.enabled);
-    setNodeAccess(!!editing.node_access);
+    setResetUnit(resetUnit(editing.traffic_reset));
+    setResetEvery(String(editing.traffic_reset_every || 1));
+    setResetAnchor(editing.traffic_reset_anchor || today());
+    setSub({ enabled: !!editing.sub?.token, name: editing.sub?.name || '', lan: !editing.sub?.no_lan });
     setAccessMode(editing.node_access_mode === 'full' ? 'full' : 'restricted');
     setAllowInternal(!editing.deny_internal);
   });
 
+  // the policy kind starts with one row: the current password
+  const pickKind = (k: UserKind) => {
+    setKind(k);
+    if (k === 'policy' && rows.length === 0) setRows([{ id: newRowId([]), password, policy: sets[0]?.id ?? '' }]);
+  };
+
   const handleSubmit = async () => {
-    if (!username || !password) {
+    const policyKind = kind === 'policy';
+    if (!username || (!policyKind && !password)) {
       toast.error(t('users.usernamePassRequired'));
       return;
     }
-    // Block re-using the hy2 server password as a user account password —
-    // peers see the server password in plain text via the clients[]
-    // block, so this would silently leak the user's credentials to every
-    // other peer. Backend enforces the same rule, this is the UI hint.
-    const node = useNodeStore.getState().node;
-    if (node?.server?.password && node.server.password === password) {
+    if (policyKind) {
+      if (rows.length === 0 || rows.some((r) => !r.password)) {
+        toast.error(t('users.rowPasswordRequired'));
+        return;
+      }
+      if (new Set(rows.map((r) => r.password)).size !== rows.length) {
+        toast.error(t('users.rowPasswordDup'));
+        return;
+      }
+    }
+    // Block re-using the hy2 server password as a password the user signs
+    // in with here — peers see the server password in plain text via the
+    // clients[] block, so this would silently leak the user's credentials
+    // to every other peer. Backend enforces the same rule, this is the UI hint.
+    const serverPw = useNodeStore.getState().node?.server?.password;
+    const signIn = policyKind ? rows.filter((r) => r.policy).map((r) => r.password) : [password];
+    if (serverPw && signIn.includes(serverPw)) {
       toast.error(t('users.passwordCollidesServer'));
       return;
     }
+    const every = Number(resetEvery);
+    if (resetUnitV && !(Number.isInteger(every) && every >= 1 && every <= RESET_EVERY_MAX)) {
+      toast.error(t('users.resetEveryInvalid', { max: RESET_EVERY_MAX }));
+      return;
+    }
     setLoading(true);
-    const exitData = exitPathToApi(exitPath);
-    // Filter out empty proxy passwords
-    const filteredProxyPw = Object.fromEntries(
-      Object.entries(proxyPasswords).filter(([, v]) => v !== '')
-    );
     const proxyDisabledArr = Array.from(proxyDisabled);
-    const data = {
+    const data: Partial<UserConfig> = {
       username,
       password,
-      proxy_passwords: Object.keys(filteredProxyPw).length > 0 ? filteredProxyPw : undefined,
-      proxy_disabled: proxyDisabledArr.length > 0 ? proxyDisabledArr : undefined,
-      ...exitData,
-      exit_policy: exitPolicy,
-      traffic_limit: trafficLimit ? parseFloat(trafficLimit) * 1073741824 : 0,
+      exit_kind: kind,
+      rows: policyKind ? rows.map((r) => ({ id: r.id, password: r.password })) : undefined,
+      row_policy: policyKind ? Object.fromEntries(rows.filter((r) => r.policy).map((r) => [r.id, r.policy])) : undefined,
+      proxy_disabled: proxyDisabledArr,
+      ...exitPathToApi(exitPath),
+      traffic_limit: formToSize(trafficLimit),
       rate_up: formToRate(rateUp),
       rate_down: formToRate(rateDown),
       expiry_date: expiryDate || undefined,
-      traffic_reset: resetPeriod,
-      traffic_reset_day: resetPeriod === 'weekly' || resetPeriod === 'monthly' ? resetDay : 0,
-      enabled,
-      node_access: nodeAccess,
-      node_access_mode: (nodeAccess && accessMode === 'full' ? 'full' : undefined) as 'full' | undefined,
+      traffic_reset: resetUnitV,
+      traffic_reset_every: resetUnitV ? every : undefined,
+      traffic_reset_anchor: resetUnitV ? resetAnchor || today() : undefined,
+      // enabled is set from the users list; an edit keeps it
+      enabled: editing ? undefined : true,
+      node_access_mode: kind === 'access' ? accessMode : undefined,
       deny_internal: !allowInternal,
+      // node access users have no subscription
+      sub: kind === 'access' ? undefined : { enabled: sub.enabled, name: sub.name.trim(), no_lan: !sub.lan },
     };
 
     try {
@@ -145,6 +175,8 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
       }
       queryClient.invalidateQueries({ queryKey: ['users'] });
       queryClient.invalidateQueries({ queryKey: ['userConflicts'] });
+      queryClient.invalidateQueries({ queryKey: ['userLinks'] });
+      queryClient.invalidateQueries({ queryKey: ['userSub'] });
       onClose();
     } catch (e: any) {
       toast.error(String(e.message || e));
@@ -153,19 +185,19 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
     }
   };
 
-  const weekdays = weekdayNames(i18n.language);
-
   const title = editing ? t('users.editPrefix', { name: username }) : t('users.addTitle');
 
-  const updateProxyPw = (key: string, val: string) =>
-    setProxyPasswords((prev) => ({ ...prev, [key]: val }));
-
-  const toggleProxyEnabled = (key: string, on: boolean) =>
-    setProxyDisabled((prev) => {
-      const next = new Set(prev);
-      if (on) next.delete(key); else next.add(key);
-      return next;
-    });
+  const protocolsOn = PROXY_REGISTRY.filter((p) => !proxyDisabled.has(p.key)).map((p) => p.key);
+  // at least one protocol stays on
+  const setProtocols = (on: string[]) => {
+    if (on.length) setProxyDisabled(new Set(PROXY_REGISTRY.map((p) => p.key).filter((k) => !on.includes(k))));
+  };
+  // the subscription name preview's sample entry
+  const firstPolicy = kind === 'policy' && rows[0]?.policy ? sets.find((x) => x.id === rows[0].policy)?.name ?? rows[0].policy : '';
+  const subSample = {
+    user: username, node: nodeName, policy: firstPolicy,
+    proto: SUB_PROTOCOLS.find((p) => !proxyDisabled.has(p)) || '', lan: '', host: shareHost,
+  };
 
   return (
     <Modal
@@ -180,139 +212,104 @@ export default function UserModal({ open, onClose, editing, animateFrom }: Props
         </>
       }
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-        <Tabs
-          items={[
-            { key: 'general', label: t('users.general') },
-            { key: 'proxy_pw', label: t('users.proxyAuth') },
-          ]}
-          activeKey={tab}
-          onChange={setTab}
-        />
-
-        <TabPanel activeKey={tab} keys={['general', 'proxy_pw']}>
-          {tab === 'general' ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <FormGrid>
-                <FormGroup label={t('users.username')} required>
-                  <Input value={username} onChange={(e) => setUsername(e.target.value)} />
-                </FormGroup>
-                <FormGroup label={t('users.password')} required>
-                  <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} onGenerate={setPassword} />
-                </FormGroup>
-              </FormGrid>
-
-              <ExitChoice policy={exitPolicy} onPolicy={setExitPolicy} exit={exitPath} onExit={setExitPath} />
-
-              <FormGrid>
-                <FormGroup label={t('users.trafficLimit')}>
-                  <Input type="number" value={trafficLimit} onChange={(e) => setTrafficLimit(e.target.value)} placeholder="0" suffix="GB" />
-                </FormGroup>
-                <FormGroup label={t('users.expiryDate')}>
-                  <Input type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} />
-                </FormGroup>
-              </FormGrid>
-
-              <FormGrid>
-                <FormGroup label={t('users.rateUp')}>
-                  <RateInput value={rateUp} onChange={setRateUp} testId="user-rate-up" />
-                </FormGroup>
-                <FormGroup label={t('users.rateDown')}>
-                  <RateInput value={rateDown} onChange={setRateDown} testId="user-rate-down" />
-                </FormGroup>
-              </FormGrid>
-
-              <FormGrid>
-                <FormGroup label={t('users.trafficReset')}>
-                  <div data-testid="user-traffic-reset">
-                    <Select
-                      value={resetPeriod}
-                      onChange={(e) => setResetPeriod(e.target.value as TrafficReset)}
-                      options={RESET_PERIODS.map((p) => ({ value: p, label: t(`users.reset.${p || 'never'}`) }))}
-                    />
-                  </div>
-                </FormGroup>
-                {(resetPeriod === 'weekly' || resetPeriod === 'monthly') && (
-                  <FormGroup label={t('users.trafficResetDay')}>
-                    <div data-testid="user-traffic-reset-day">
-                      <Select
-                        value={String(resetPeriod === 'weekly' ? Math.min(resetDay, 7) : resetDay)}
-                        onChange={(e) => setResetDay(Number(e.target.value))}
-                        options={resetPeriod === 'weekly'
-                          ? weekdays.map((name, i) => ({ value: String(i + 1), label: name }))
-                          : Array.from({ length: 31 }, (_, i) => ({ value: String(i + 1), label: t('users.reset.dayOfMonth', { day: i + 1 }) }))}
-                      />
-                    </div>
-                  </FormGroup>
-                )}
-              </FormGrid>
-
-              <FormGrid>
-                <FormGroup label={t('users.nodeAccess')} hint={t('users.nodeAccessHint')}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <Toggle checked={nodeAccess} onChange={(e) => setNodeAccess(e.target.checked)} data-testid="user-node-access" />
-                    {nodeAccess && (
-                      <div style={{ flex: 1, minWidth: 0 }} data-testid="user-access-mode">
-                        <Select
-                          value={accessMode}
-                          onChange={(e) => setAccessMode(e.target.value === 'full' ? 'full' : 'restricted')}
-                          options={[
-                            { value: 'restricted', label: t('users.accessRestricted') },
-                            { value: 'full', label: t('users.accessFull') },
-                          ]}
-                        />
-                      </div>
-                    )}
-                  </div>
-                </FormGroup>
-                <FormGroup label={t('users.allowInternal')} hint={t('users.allowInternalHint')}>
-                  <Toggle checked={allowInternal} onChange={(e) => setAllowInternal(e.target.checked)} data-testid="user-allow-internal" />
-                </FormGroup>
-              </FormGrid>
-
-              <FormGroup label={t('app.enabled')}>
-                <Toggle checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-              </FormGroup>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                {t('users.proxyAuthHint')}
-              </div>
-              {PROXY_REGISTRY.map(({ key, label, authType }) => {
-                const isOn = !proxyDisabled.has(key);
-                const showPwField = authType === 'password';
-                return (
-                  <FormGroup key={key} label={label}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <Toggle
-                        checked={isOn}
-                        onChange={(e) => toggleProxyEnabled(key, e.target.checked)}
-                        data-testid={`proxy-enable-${key}`}
-                      />
-                      {showPwField ? (
-                        <div style={{ flex: 1 }}>
-                          <PasswordInput
-                            value={proxyPasswords[key] || ''}
-                            onChange={(e) => updateProxyPw(key, e.target.value)}
-                            onGenerate={(v) => updateProxyPw(key, v)}
-                            placeholder={t('users.useMainPassword')}
-                            disabled={!isOn}
-                          />
-                        </div>
-                      ) : (
-                        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                          {isOn ? t('users.proxyAuthOn') : t('users.proxyAuthOff')}
-                        </span>
-                      )}
-                    </div>
-                  </FormGroup>
-                );
-              })}
-            </div>
+      <FormStack gap={14}>
+        <FormGrid>
+          <FormGroup label={t('users.username')} required>
+            <Input value={username} onChange={(e) => setUsername(e.target.value)} />
+          </FormGroup>
+          {kind !== 'policy' && (
+            <FormGroup label={t('users.password')} required>
+              <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} onGenerate={setPassword} />
+            </FormGroup>
           )}
-        </TabPanel>
-      </div>
+        </FormGrid>
+
+        <FormGroup label={t('users.exitKind')}>
+          <div className="exit-choice" data-testid="user-exit-kind">
+            <SegmentedControl<UserKind>
+              items={KINDS.map((k) => ({
+                key: k, label: t(KIND_LABEL[k]), testId: `user-kind-${k}`,
+                // no policy set to choose on this node
+                disabled: k === 'policy' && sets.length === 0 && kind !== 'policy',
+              }))}
+              value={kind}
+              onChange={pickKind}
+            />
+            {kind === 'group' && <ExitPathList label="" value={exitPath} onChange={setExitPath} />}
+            {kind === 'policy' && <PasswordRows rows={rows} onChange={setRows} sets={sets} />}
+            {kind === 'access' && (
+              <>
+                <div className="user-access-mode" data-testid="user-access-mode">
+                  <Select
+                    value={accessMode}
+                    onChange={(e) => setAccessMode(e.target.value === 'full' ? 'full' : 'restricted')}
+                    options={[
+                      { value: 'restricted', label: t('users.accessRestricted') },
+                      { value: 'full', label: t('users.accessFull') },
+                    ]}
+                  />
+                </div>
+                <Hint>{t('users.nodeAccessHint')}</Hint>
+              </>
+            )}
+          </div>
+        </FormGroup>
+
+        <FormGrid>
+          <FormGroup label={t('users.rateUp')}>
+            <RateInput value={rateUp} onChange={setRateUp} testId="user-rate-up" />
+          </FormGroup>
+          <FormGroup label={t('users.rateDown')}>
+            <RateInput value={rateDown} onChange={setRateDown} testId="user-rate-down" />
+          </FormGroup>
+        </FormGrid>
+
+        <FormGrid>
+          <FormGroup label={t('users.trafficReset')}>
+            <div className="hy-rate-input user-reset">
+              {resetUnitV && (
+                <Input type="number" min={1} max={RESET_EVERY_MAX} step={1} value={resetEvery} placeholder="1"
+                  onChange={(e) => setResetEvery(e.target.value)} data-testid="user-reset-every" />
+              )}
+              <div className="user-reset-unit" data-testid="user-reset-unit">
+                <Select
+                  value={resetUnitV}
+                  onChange={(e) => setResetUnit(e.target.value as TrafficReset)}
+                  options={RESET_UNITS.map((u) => ({ value: u, label: u ? t(`users.resetUnit.${u}`) : t('users.reset.never') }))}
+                />
+              </div>
+            </div>
+          </FormGroup>
+          {resetUnitV && (
+            <FormGroup label={t('users.resetAnchor')}>
+              <Input type="date" value={resetAnchor} onChange={(e) => setResetAnchor(e.target.value)} data-testid="user-reset-anchor" />
+            </FormGroup>
+          )}
+        </FormGrid>
+
+        <FormGrid>
+          <FormGroup label={t('users.trafficLimit')}>
+            <SizeInput value={trafficLimit} onChange={setTrafficLimit} testId="user-traffic-limit" />
+          </FormGroup>
+          <FormGroup label={t('users.expiryDate')}>
+            <Input type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} />
+          </FormGroup>
+        </FormGrid>
+
+        <FormGrid>
+          <FormGroup label={t('users.allowInternal')} hint={t('users.allowInternalHint')}>
+            <Toggle checked={allowInternal} onChange={(e) => setAllowInternal(e.target.checked)} data-testid="user-allow-internal" />
+          </FormGroup>
+        </FormGrid>
+
+        {kind !== 'access' && (
+          <FormGroup label={t('sub.protocols')}>
+            <CheckSelect testId="user-protocols" label={t('sub.protocolsAll')} maxNames={3}
+              options={PROTOCOL_OPTIONS} value={protocolsOn} onChange={setProtocols} />
+          </FormGroup>
+        )}
+        {kind !== 'access' && <SubscriptionFields value={sub} onChange={setSub} sample={subSample} />}
+      </FormStack>
     </Modal>
   );
 }

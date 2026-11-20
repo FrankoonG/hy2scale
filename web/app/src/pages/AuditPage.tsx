@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
-  Autocomplete, Badge, Button, Card, CheckSelect, DetailGrid, Input, Modal, SegmentedControl, Table, Toggle,
+  Autocomplete, Badge, Button, Card, CheckSelect, DetailGrid, Input, Modal, SegmentedControl, Select, Table, Toggle,
   useModalState, useStoredState, boolCodec, type Column, type DetailItem,
 } from '@hy2scale/ui';
 import { getUsers } from '@/api';
@@ -69,14 +70,26 @@ function useDebounced<T>(v: T, ms: number): T {
   return d;
 }
 
+/** Where the page was opened from (a user's active device). */
+export interface AuditFrom { user?: string; src?: string; inbound?: string }
+
 export default function AuditPage() {
   const { t } = useTranslation();
   const [range, setRange] = useStoredState<Range>('hy-audit-range', '24h');
   const [auto, setAuto] = useStoredState('hy-audit-auto', false, boolCodec);
   const [q, setQ] = useState('');
-  const [src, setSrc] = useState('');
+  // opened from a user's active device: that user, address and inbound (taken once)
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [from] = useState(() => (location.state as AuditFrom | null) || {});
+  const [src, setSrc] = useState<string>(from.src || '');
+  const [user, setUser] = useState<string>(from.user || '');
+  useEffect(() => {
+    if (location.state) navigate(location.pathname, { replace: true, state: null });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [dst, setDst] = useState('');
-  const [hidden, setHidden] = useState<Hidden>(NONE_HIDDEN);
+  const [hidden, setHidden] = useState<Hidden>(() => (from.inbound && INBOUNDS.includes(from.inbound)
+    ? { ...NONE_HIDDEN, inbound: INBOUNDS.filter((v) => v !== from.inbound) } : NONE_HIDDEN));
   // one debounce per field: an object made each render never settles and
   // reloaded the page in a loop
   const dq = useDebounced(q, 400);
@@ -97,10 +110,10 @@ export default function AuditPage() {
 
   const filter = useMemo<AuditFilter>(() => ({
     from: RANGE_MS[range] ? Date.now() - RANGE_MS[range] : undefined,
-    q: dq.trim(), src: dsrc.trim(), dst: ddst.trim(),
+    q: dq.trim(), src: dsrc.trim(), dst: ddst.trim(), user: user || undefined,
     not_inbound: hidden.inbound.join(','), not_exit: hidden.exit.join(','), not_proto: hidden.proto.join(','),
     not_app: hidden.app.join(','), not_result: hidden.result.join(','),
-  }), [range, dq, dsrc, ddst, hidden]);
+  }), [range, dq, dsrc, ddst, hidden, user]);
 
   const load = useCallback(async (more: boolean) => {
     listCtl.current?.abort();
@@ -200,6 +213,11 @@ export default function AuditPage() {
           <Button onClick={() => { window.location.href = auditExportUrl(filter, 'csv'); }} data-testid="audit-export">{t('audit.exportCsv')}</Button>
         </div>
         <div className="audit-filters">
+          <div className="audit-user" data-testid="audit-user">
+            <Select value={user} onChange={(e) => setUser(e.target.value)}
+              options={[{ value: '', label: t('audit.allUsers') },
+                ...[...new Set([...(users || []).map((u) => u.username), ...(user ? [user] : [])])].sort().map((n) => ({ value: n, label: n }))]} />
+          </div>
           <Autocomplete options={srcOptions} value={src} onChange={setSrc} placeholder={t('audit.sourceFilter')} testId="audit-src" className="audit-src" />
           <Input value={dst} onChange={(e) => setDst(e.target.value)} placeholder={t('audit.destination')} data-testid="audit-dst" />
           {GROUPS.map((g) => (
@@ -288,7 +306,7 @@ function Source({ r }: { r: AuditRecord }) {
   const main = r.src_peer || r.src;
   return (
     <span className="audit-addr">
-      {r.user && <b className="nowrap">{r.user}</b>}
+      {r.user && <span className="nowrap"><b>{r.user}</b>{r.entry && <span className="muted audit-entry" data-testid="audit-entry">{r.entry}</span>}</span>}
       {main && <span className={r.user ? 'mono muted nowrap' : 'mono nowrap'}><IPFlag addr={main} />{main}</span>}
       {r.src_peer && r.src && <span className="mono muted nowrap" data-testid="audit-tunnel">{t('audit.tunnelAddr', { addr: hostOf(r.src) })}</span>}
       {via && <span className="muted nowrap">{via}</span>}
@@ -365,6 +383,7 @@ function AuditDetail({ open, onClose, animateFrom, record: r }: { open: boolean;
     [t('audit.proto'), r.app ? `${appName(r.app)} · ${r.proto.toUpperCase()}` : r.proto.toUpperCase()],
     [t('audit.inbound'), t(`audit.in.${r.inbound}`, { defaultValue: r.inbound })],
     [t('audit.user'), r.user || dash],
+    [t('audit.entry'), r.entry || dash],
     [t('audit.sourceAddr'), r.src ? <span className="mono">{r.src}</span> : dash],
     [t('audit.peerAddr'), r.src_peer ? <span className="mono">{r.src_peer}</span> : dash],
     [t('audit.fromNode'), r.src_node || dash],

@@ -1,4 +1,6 @@
 import { useCallback, useMemo } from 'react';
+import { useNavSelect } from '@/hooks/useNavSelect';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -19,6 +21,7 @@ import ResponsiveActions from '@/components/ResponsiveActions';
 import UsageMeter from '@/components/UsageMeter';
 import { BulkButtons, EditSelectedButton, pickSelected } from '@/components/SelectionActions';
 import { boldMarkup } from '@/utils/richText';
+import { userKind, usePolicySets, rowSets } from '@/components/users/userKind';
 
 const gb = (digits: number) => (b: number) => (b / GiB).toFixed(digits) + ' GB';
 const noSessions: Session[] = [];
@@ -59,10 +62,20 @@ export default function UsersPage() {
   }, [queryClient, toast, t]);
 
   const selection = useSelection(users.map((u) => u.id));
+  useNavSelect(useMemo(() => users.map((u) => u.id), [users]), selection);
   const selected = pickSelected(users, selection.selected, (u) => u.id);
   const actions = useUserActions();
   const leaving = isLeaving(selected);
   const one = selected.length === 1 ? selected[0] : null;
+
+  // a policy-kind user's exit: the policy sets its rows sign in to here
+  const sets = usePolicySets();
+  const policySets = (u: UserConfig) => {
+    const seen = new Map<string, string>();
+    for (const r of rowSets(u, sets)) if (r.policy && !seen.has(r.policy)) seen.set(r.policy, r.name);
+    return Array.from(seen, ([id, name]) => ({ id, name }));
+  };
+  const navigate = useNavigate();
 
   const userColumns: Column<UserConfig>[] = [
     {
@@ -88,17 +101,43 @@ export default function UsersPage() {
               <span data-testid="user-shared-tag"><Badge variant="blue">{t('users.sharedTag', { count: u.shared.members.length })}</Badge></span>
             </Tooltip>
           )}
+          {u.sub?.token && <span data-testid="user-sub-badge"><Badge variant="green">{t('users.subscriptionTab')}</Badge></span>}
         </span>
       ),
     },
     {
-      key: 'exit', title: t('users.exitVia'),
-      sortValue: (u) => exitViaSortValue(u.exit_via, u.exit_paths),
-      render: (u) => (
-        <div className="cell-exit">
-          <ExitViaCell exitVia={u.exit_via} exitPaths={u.exit_paths} exitMode={u.exit_mode} />
-        </div>
-      ),
+      key: 'exit', title: t('users.exitKind'),
+      sortValue: (u) => {
+        const kind = userKind(u);
+        if (kind === 'access') return t('users.nodeAccess');
+        if (kind === 'policy') return policySets(u).map((p) => p.name).join(', ') || null;
+        return exitViaSortValue(u.exit_via, u.exit_paths);
+      },
+      render: (u) => {
+        const kind = userKind(u);
+        if (kind === 'access') return <span className="cell-small" data-testid="user-exit-access">{t('users.nodeAccess')}</span>;
+        if (kind === 'policy') {
+          const ps = policySets(u);
+          if (!ps.length) return <span className="text-muted cell-small">{t('users.rowDisabled')}</span>;
+          // a set name opens that set on the Rules page
+          return (
+            <span className="cell-small user-exit-policy" data-testid="user-exit-policy">
+              {ps.map((p, i) => (
+                <span key={p.id}>
+                  {i > 0 && ', '}
+                  <a className="user-exit-set" data-set={p.id}
+                    onClick={(e) => { e.stopPropagation(); navigate('/rules', { state: { openSet: p.id } }); }}>{p.name}</a>
+                </span>
+              ))}
+            </span>
+          );
+        }
+        return (
+          <div className="cell-exit">
+            <ExitViaCell exitVia={u.exit_via} exitPaths={u.exit_paths} exitMode={u.exit_mode} />
+          </div>
+        );
+      },
     },
     {
       key: 'devices', title: t('users.devices'), width: '80px', className: 'col-right',

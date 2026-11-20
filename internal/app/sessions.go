@@ -10,21 +10,24 @@ import (
 // Device represents an active client device, aggregated by (username, IP, protocol).
 // Multiple TCP connections from the same device are counted, not listed separately.
 type Device struct {
-	Key       string    // username|ip|protocol
+	Key       string // username|ip|protocol
 	Username  string
 	RemoteIP  string
 	Protocol  string // "socks5", "ss", "hy2", "l2tp", "ikev2"
 	ConnectAt time.Time
-	ConnCount atomic.Int32  // number of active TCP connections
+	ConnCount atomic.Int32 // number of active TCP connections
 	TxBytes   atomic.Int64
 	RxBytes   atomic.Int64
 	cancels   sync.Map // connID → cancel func
 }
 
 type DeviceJSON struct {
-	Key       string `json:"key"`
-	Username  string `json:"username"`
-	RemoteIP  string `json:"remote_ip"`
+	Key      string `json:"key"`
+	Username string `json:"username"`
+	RemoteIP string `json:"remote_ip"`
+	// Peer: where a VPN client connects from (host:port), its tunnel
+	// address being RemoteIP; "" for proxies (RemoteIP is the client).
+	Peer      string `json:"peer,omitempty"`
 	Protocol  string `json:"protocol"`
 	ConnectAt int64  `json:"connect_at"`
 	Duration  int    `json:"duration"`

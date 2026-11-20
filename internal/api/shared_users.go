@@ -81,11 +81,17 @@ func (s *Server) startShareSync() {
 	ss := s.shares()
 	s.app.SharedNotify = func(gid string) { go ss.pushAll(gid) }
 	s.app.ApplySharedAttr()
+	s.app.RefreshSharedCaps()
 	go func() {
 		time.Sleep(10 * time.Second) // let the peers connect first
 		seen := map[string]bool{}
-		var lastFull, lastUsage, lastTomb time.Time
+		var lastFull, lastUsage, lastTomb, lastEnt time.Time
 		for {
+			// this node's entrance for shared users' subscriptions
+			if time.Since(lastEnt) >= 30*time.Second {
+				s.app.RefreshSharedEntrances()
+				lastEnt = time.Now()
+			}
 			now := map[string]bool{}
 			fresh := false
 			for _, p := range s.app.Node().Peers() {

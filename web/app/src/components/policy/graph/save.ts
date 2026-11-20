@@ -90,7 +90,14 @@ export async function saveGraph(g0: Graph, base: PolicyConfig): Promise<Graph> {
         const u = users.find((x) => x.id === id);
         if (!u) continue;
         step = { kind: 'source', name: u.username };
-        await api.updateUser(id, { ...u, exit_policy: policy });
+        // the graph links a user to one set: every password row goes there
+        // (no rows yet: one with the user's password); unlinked → exit group
+        if (policy) {
+          const rows = u.rows?.length ? u.rows : [{ id: 'r1', password: u.password }];
+          await api.updateUser(id, { ...u, exit_kind: 'policy', rows, row_policy: Object.fromEntries(rows.map((r) => [r.id, policy])) });
+        } else {
+          await api.updateUser(id, { ...u, exit_kind: 'group' });
+        }
       }
     }
     const proxyChanges = want(c.proxies, refs.proxies);

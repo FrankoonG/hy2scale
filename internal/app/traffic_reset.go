@@ -10,7 +10,8 @@ import (
 )
 
 // Periodic traffic reset: a user's TrafficUsed goes back to 0 at 00:00
-// (node local time) on each boundary of its period.
+// (node local time; UTC for a shared user) every N days, weeks or months
+// counted from a start date.
 
 const (
 	TrafficResetDaily   = "daily"
@@ -18,24 +19,108 @@ const (
 	TrafficResetMonthly = "monthly"
 )
 
-// ValidateTrafficReset checks a period and its day and returns the day as
-// stored (0 for never and daily).
-func ValidateTrafficReset(period string, day int) (int, error) {
-	switch period {
-	case "", TrafficResetDaily:
-		return 0, nil
-	case TrafficResetWeekly:
-		if day < 1 || day > 7 {
-			return 0, fmt.Errorf("traffic_reset_day must be 1 (Monday) .. 7 (Sunday) for weekly")
-		}
-		return day, nil
-	case TrafficResetMonthly:
-		if day < 1 || day > 31 {
-			return 0, fmt.Errorf("traffic_reset_day must be 1..31 for monthly")
-		}
-		return day, nil
+// TrafficResetMaxEvery bounds the period count.
+const TrafficResetMaxEvery = 1000
+
+// legacyAnchor: the start date standing for an old weekday / day of month
+// setting (2024-01-01 is a Monday; January has 31 days).
+func legacyAnchor(period string, day int) string {
+	if (period == TrafficResetWeekly && day >= 1 && day <= 7) || (period == TrafficResetMonthly && day >= 1 && day <= 31) {
+		return fmt.Sprintf("2024-01-%02d", day)
 	}
-	return 0, fmt.Errorf("traffic_reset must be \"\", daily, weekly or monthly")
+	return "2024-01-01"
+}
+
+// ResetAnchor: the start date of u's period ("" without one).
+func (u *UserConfig) ResetAnchor() string {
+	if u.TrafficReset == "" {
+		return ""
+	}
+	if u.TrafficResetAnchor != "" {
+		return u.TrafficResetAnchor
+	}
+	return legacyAnchor(u.TrafficReset, u.TrafficResetDay)
+}
+
+// ResetEvery: how many units make u's period (at least 1).
+func (u *UserConfig) ResetEvery() int {
+	if u.TrafficResetEvery < 1 {
+		return 1
+	}
+	return u.TrafficResetEvery
+}
+
+// NormalizeTrafficReset checks u's period and fills what follows from it:
+// the unit (day/week/month accepted for daily/weekly/monthly), the count
+// (default 1), the start date (default today; an old weekday / day of
+// month setting gives its own) and the old-style day (for older holders of
+// a shared user).
+func NormalizeTrafficReset(u *UserConfig, today time.Time) error {
+	switch u.TrafficReset {
+	case "":
+		u.TrafficResetEvery, u.TrafficResetAnchor, u.TrafficResetDay = 0, "", 0
+		return nil
+	case "day":
+		u.TrafficReset = TrafficResetDaily
+	case "week":
+		u.TrafficReset = TrafficResetWeekly
+	case "month":
+		u.TrafficReset = TrafficResetMonthly
+	case TrafficResetDaily, TrafficResetWeekly, TrafficResetMonthly:
+	default:
+		return fmt.Errorf("traffic_reset must be \"\", daily, weekly or monthly")
+	}
+	if u.TrafficResetEvery < 0 || u.TrafficResetEvery > TrafficResetMaxEvery {
+		return fmt.Errorf("traffic_reset_every must be 1..%d", TrafficResetMaxEvery)
+	}
+	if u.TrafficResetEvery == 0 {
+		u.TrafficResetEvery = 1
+	}
+	if u.TrafficResetAnchor == "" {
+		switch {
+		case u.TrafficReset == TrafficResetWeekly && u.TrafficResetDay != 0:
+			if u.TrafficResetDay < 1 || u.TrafficResetDay > 7 {
+				return fmt.Errorf("traffic_reset_day must be 1 (Monday) .. 7 (Sunday) for weekly")
+			}
+			u.TrafficResetAnchor = legacyAnchor(u.TrafficReset, u.TrafficResetDay)
+		case u.TrafficReset == TrafficResetMonthly && u.TrafficResetDay != 0:
+			if u.TrafficResetDay < 1 || u.TrafficResetDay > 31 {
+				return fmt.Errorf("traffic_reset_day must be 1..31 for monthly")
+			}
+			u.TrafficResetAnchor = legacyAnchor(u.TrafficReset, u.TrafficResetDay)
+		default:
+			u.TrafficResetAnchor = today.Format("2006-01-02")
+		}
+	}
+	if a, err := time.Parse("2006-01-02", u.TrafficResetAnchor); err != nil || a.Year() < 2000 || a.Year() > 2200 {
+		return fmt.Errorf("traffic_reset_anchor must be a date (YYYY-MM-DD)")
+	}
+	u.TrafficResetDay = dayOfAnchor(u)
+	return nil
+}
+
+// dayOfAnchor: the old-style day of u's start date (weekday / day of
+// month; 0 for daily or none).
+func dayOfAnchor(u *UserConfig) int {
+	a, err := time.Parse("2006-01-02", u.ResetAnchor())
+	if err != nil {
+		return 0
+	}
+	switch u.TrafficReset {
+	case TrafficResetWeekly:
+		if wd := int(a.Weekday()); wd != 0 {
+			return wd
+		}
+		return 7
+	case TrafficResetMonthly:
+		return a.Day()
+	}
+	return 0
+}
+
+// ResetSettingChanged: the period of a differs from b's.
+func ResetSettingChanged(a, b *UserConfig) bool {
+	return a.TrafficReset != b.TrafficReset || a.ResetEvery() != b.ResetEvery() || a.ResetAnchor() != b.ResetAnchor()
 }
 
 func monthBoundary(y int, m time.Month, day int, loc *time.Location) time.Time {
@@ -46,56 +131,80 @@ func monthBoundary(y int, m time.Month, day int, loc *time.Location) time.Time {
 	return time.Date(y, m, day, 0, 0, 0, 0, loc)
 }
 
-// TrafficResetLast is the latest reset boundary at or before t, in t's
-// location; zero for never or an invalid setting.
-func TrafficResetLast(period string, day int, t time.Time) time.Time {
-	if _, err := ValidateTrafficReset(period, day); err != nil || period == "" {
+// civilDays: the day number of t's date.
+func civilDays(t time.Time) int64 {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC).Unix() / 86400
+}
+
+// resetBoundary: the k-th boundary (k >= 0) of u's period in loc.
+func resetBoundary(u *UserConfig, a time.Time, k int, loc *time.Location) time.Time {
+	n := k * u.ResetEvery()
+	switch u.TrafficReset {
+	case TrafficResetDaily:
+		return time.Date(a.Year(), a.Month(), a.Day()+n, 0, 0, 0, 0, loc)
+	case TrafficResetWeekly:
+		return time.Date(a.Year(), a.Month(), a.Day()+7*n, 0, 0, 0, 0, loc)
+	default:
+		return monthBoundary(a.Year(), a.Month()+time.Month(n), a.Day(), loc)
+	}
+}
+
+// resetIndex: the index of the latest boundary at or before t (-1 before
+// the start date); ok false for no period.
+func resetIndex(u *UserConfig, t time.Time) (time.Time, int, bool) {
+	if u.TrafficReset == "" {
+		return time.Time{}, 0, false
+	}
+	a, err := time.Parse("2006-01-02", u.ResetAnchor())
+	if err != nil {
+		return time.Time{}, 0, false
+	}
+	loc := t.Location()
+	if resetBoundary(u, a, 0, loc).After(t) {
+		return a, -1, true
+	}
+	var k int
+	switch u.TrafficReset {
+	case TrafficResetDaily:
+		k = int((civilDays(t) - civilDays(a)) / int64(u.ResetEvery()))
+	case TrafficResetWeekly:
+		k = int((civilDays(t) - civilDays(a)) / int64(7*u.ResetEvery()))
+	default:
+		k = ((t.Year()*12 + int(t.Month())) - (a.Year()*12 + int(a.Month()))) / u.ResetEvery()
+	}
+	for k > 0 && resetBoundary(u, a, k, loc).After(t) {
+		k--
+	}
+	for !resetBoundary(u, a, k+1, loc).After(t) {
+		k++
+	}
+	return a, k, true
+}
+
+// TrafficResetLast is u's latest reset boundary at or before t, in t's
+// location; zero for none (no period, or before its start date).
+func TrafficResetLast(u *UserConfig, t time.Time) time.Time {
+	a, k, ok := resetIndex(u, t)
+	if !ok || k < 0 {
 		return time.Time{}
 	}
-	loc := t.Location()
-	midnight := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc)
-	switch period {
-	case TrafficResetDaily:
-		return midnight
-	case TrafficResetWeekly:
-		wd := int(t.Weekday())
-		if wd == 0 {
-			wd = 7
-		}
-		return midnight.AddDate(0, 0, -((wd - day + 7) % 7))
-	default: // monthly
-		b := monthBoundary(t.Year(), t.Month(), day, loc)
-		if b.After(t) {
-			p := time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, loc).AddDate(0, -1, 0)
-			b = monthBoundary(p.Year(), p.Month(), day, loc)
-		}
-		return b
-	}
+	return resetBoundary(u, a, k, t.Location())
 }
 
-// TrafficResetNext is the first reset boundary strictly after t, in t's
-// location; zero for never or an invalid setting.
-func TrafficResetNext(period string, day int, t time.Time) time.Time {
-	last := TrafficResetLast(period, day, t)
-	if last.IsZero() {
-		return last
+// TrafficResetNext is u's first reset boundary strictly after t, in t's
+// location; zero for no period.
+func TrafficResetNext(u *UserConfig, t time.Time) time.Time {
+	a, k, ok := resetIndex(u, t)
+	if !ok {
+		return time.Time{}
 	}
-	loc := t.Location()
-	switch period {
-	case TrafficResetDaily:
-		return time.Date(last.Year(), last.Month(), last.Day()+1, 0, 0, 0, 0, loc)
-	case TrafficResetWeekly:
-		return time.Date(last.Year(), last.Month(), last.Day()+7, 0, 0, 0, 0, loc)
-	default:
-		n := time.Date(last.Year(), last.Month(), 1, 0, 0, 0, 0, loc).AddDate(0, 1, 0)
-		return monthBoundary(n.Year(), n.Month(), day, loc)
-	}
+	return resetBoundary(u, a, k+1, t.Location())
 }
 
-// TrafficResetDue: a reset boundary lies in (since, now] (boundaries are
-// taken in now's location).
-func TrafficResetDue(period string, day int, since, now time.Time) bool {
-	b := TrafficResetLast(period, day, now)
+// TrafficResetDue: a boundary of u's period lies in (since, now]
+// (boundaries taken in now's location).
+func TrafficResetDue(u *UserConfig, since, now time.Time) bool {
+	b := TrafficResetLast(u, now)
 	return !b.IsZero() && b.After(since)
 }
 
@@ -147,7 +256,7 @@ func (u *UserConfig) resetSince() (time.Time, bool) {
 
 // TrafficResetNextOf: the user's next reset moment ("" without a period).
 func TrafficResetNextOf(u *UserConfig, now time.Time) string {
-	n := TrafficResetNext(u.TrafficReset, u.TrafficResetDay, now)
+	n := TrafficResetNext(u, now)
 	if n.IsZero() {
 		return ""
 	}
@@ -167,7 +276,7 @@ func (a *App) ApplyTrafficResets(now time.Time) []string {
 			continue
 		}
 		since, ok := u.resetSince()
-		if !ok || TrafficResetDue(u.TrafficReset, u.TrafficResetDay, since, now) {
+		if !ok || TrafficResetDue(&u, since, now) {
 			need = true
 			break
 		}
@@ -189,7 +298,7 @@ func (a *App) ApplyTrafficResets(now time.Time) []string {
 				u.TrafficResetFrom = stamp
 				continue
 			}
-			if !TrafficResetDue(u.TrafficReset, u.TrafficResetDay, since, now) {
+			if !TrafficResetDue(u, since, now) {
 				continue
 			}
 			if live, ok := a.userIndex[u.Username]; ok {
@@ -225,4 +334,30 @@ func (a *App) runTrafficResets(ctx context.Context) {
 			a.ApplyTrafficResets(TrafficNow())
 		}
 	}
+}
+
+// ExtendedExpiry: u's expiry date moved on by one reset period (one month
+// without a period), counted from today (UTC, as expiry is checked) when it
+// has passed; "" when u never expires.
+func ExtendedExpiry(u *UserConfig, now time.Time) string {
+	if u.ExpiryDate == "" {
+		return ""
+	}
+	today := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC)
+	base, err := time.Parse("2006-01-02", u.ExpiryDate)
+	if err != nil || !base.After(today) {
+		base = today
+	}
+	n := u.ResetEvery()
+	switch u.TrafficReset {
+	case TrafficResetDaily:
+		base = base.AddDate(0, 0, n)
+	case TrafficResetWeekly:
+		base = base.AddDate(0, 0, 7*n)
+	case TrafficResetMonthly:
+		base = monthBoundary(base.Year(), base.Month()+time.Month(n), base.Day(), time.UTC)
+	default:
+		base = monthBoundary(base.Year(), base.Month()+1, base.Day(), time.UTC)
+	}
+	return base.Format("2006-01-02")
 }

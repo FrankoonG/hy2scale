@@ -11,6 +11,8 @@ export interface ProxyLink {
   name: string;
   host: string;
   lan?: boolean;
+  /** the password row's policy set (policy-kind users) */
+  label?: string;
   url: string;
 }
 

@@ -13,9 +13,10 @@
 .audit-auto{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary)}
 .audit-filters{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:12px}
 .audit-sel{min-width:0}
-.audit-filters .hy-autocomplete,.audit-filters .hy-check-select{min-width:0}
+.audit-filters .hy-autocomplete,.audit-filters .hy-check-select,.audit-filters .audit-user{min-width:0}
 .audit-filters .audit-src .hy-input{font-family:inherit!important}
 .audit-addr{display:flex;flex-direction:column;line-height:1.35}
+.audit-entry{margin-left:6px;font-size:12px}
 .audit-path{display:inline-flex;align-items:center;flex-wrap:wrap;gap:2px}
 .audit-hop{padding:1px 6px;border-radius:4px;background:var(--primary-light);color:var(--primary);font-size:12px}
 .audit-hop+.audit-hop::before{content:'›';margin:0 4px 0 -2px;color:var(--text-muted)}

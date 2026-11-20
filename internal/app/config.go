@@ -29,7 +29,7 @@ type UserConfig struct {
 	// is allowed on every proxy. Used by the per-proxy auth toggle in the
 	// admin UI; the auth path consults IsProxyEnabled() before issuing a
 	// successful auth on each protocol.
-	ProxyDisabled []string `yaml:"proxy_disabled,omitempty" json:"proxy_disabled,omitempty"`
+	ProxyDisabled []string `yaml:"proxy_disabled,omitempty" json:"proxy_disabled"`
 	ExitVia       string   `yaml:"exit_via" json:"exit_via"`
 	ExitPaths     []string `yaml:"exit_paths,omitempty" json:"exit_paths,omitempty"`
 	ExitMode      string   `yaml:"exit_mode,omitempty" json:"exit_mode,omitempty"` // ""|"quality"|"aggregate"
@@ -56,11 +56,17 @@ type UserConfig struct {
 	// at 1.4.0+ exits further away.
 	DenyInternal bool `yaml:"deny_internal,omitempty" json:"deny_internal"`
 
-	// TrafficReset: periodic reset of TrafficUsed at 00:00 local time —
-	// "" (never), "daily", "weekly" or "monthly" (traffic_reset.go).
+	// TrafficReset: periodic reset of TrafficUsed at 00:00 local time, its
+	// unit — "" (never), "daily", "weekly" or "monthly" (traffic_reset.go).
 	TrafficReset string `yaml:"traffic_reset,omitempty" json:"traffic_reset"`
-	// TrafficResetDay: weekly → ISO weekday 1 (Monday) .. 7 (Sunday);
-	// monthly → 1..31, clamped to the month's last day. 0 otherwise.
+	// TrafficResetEvery: units per period (0 = 1).
+	TrafficResetEvery int `yaml:"traffic_reset_every,omitempty" json:"traffic_reset_every,omitempty"`
+	// TrafficResetAnchor (YYYY-MM-DD): the period's start date; periods
+	// follow every TrafficResetEvery units from it. "" with an old setting:
+	// taken from TrafficResetDay.
+	TrafficResetAnchor string `yaml:"traffic_reset_anchor,omitempty" json:"traffic_reset_anchor,omitempty"`
+	// TrafficResetDay: the start date's ISO weekday 1 (Monday) .. 7 (weekly)
+	// or day of month 1..31 (monthly), as older versions read it. 0 otherwise.
 	TrafficResetDay int `yaml:"traffic_reset_day,omitempty" json:"traffic_reset_day,omitempty"`
 	// TrafficResetAt (RFC3339): the last automatic or manual reset.
 	// Server-managed: kept on update like TrafficUsed.
@@ -69,6 +75,18 @@ type UserConfig struct {
 	// effect. Boundaries before it never reset (setting a period doesn't
 	// reset at once). Internal, not in the API.
 	TrafficResetFrom string `yaml:"traffic_reset_from,omitempty" json:"-"`
+
+	// Sub: the user's subscription (subscription.go; nil = none).
+	Sub *UserSub `yaml:"sub,omitempty" json:"sub"`
+
+	// ExitKind: "group" (the exit fields above; "" = group), "policy"
+	// (Rows, each signing in to its own policy set) or "access" (node
+	// access: hy2 only, direct here, the node that signs in picks its own
+	// paths) — user_creds.go. Rows are shared between holders; RowPolicy
+	// (row id → policy set id, "" = off here) is this node's own.
+	ExitKind  string            `yaml:"exit_kind,omitempty" json:"exit_kind"`
+	Rows      []UserRow         `yaml:"rows,omitempty" json:"rows"`
+	RowPolicy map[string]string `yaml:"row_policy,omitempty" json:"row_policy"`
 
 	// Shared: set on a shared user (shared_users.go) — its id, key, field
 	// stamps, members and the other holders' traffic. Not in the API.

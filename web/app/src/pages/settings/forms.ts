@@ -191,7 +191,7 @@ export function useSystemForm(settingsQ: UseQueryResult<UISettings>) {
 }
 export type SystemForm = ReturnType<typeof useSystemForm>;
 
-/** Web UI card: listen, base path, HTTPS, session timeout. */
+/** Web UI card: listen, base path, HTTPS, session timeout, how subscriptions are served. */
 export function useWebForm(settingsQ: UseQueryResult<UISettings>) {
   const { t } = useTranslation();
   const toast = useToast();
@@ -200,6 +200,9 @@ export function useWebForm(settingsQ: UseQueryResult<UISettings>) {
   const [basePath, setBasePath] = useState('');
   const [httpsCertId, setHttpsCertId] = useState('');
   const [sessionTimeout, setSessionTimeout] = useState('12');
+  // subscriptions: through other nodes (sub_no_relay off), over plain http
+  const [subViaNodes, setSubViaNodes] = useState(true);
+  const [subHTTP, setSubHTTP] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const resync = useServerFormInit(settingsQ, (s) => {
@@ -207,6 +210,8 @@ export function useWebForm(settingsQ: UseQueryResult<UISettings>) {
     setBasePath(s.base_path || '');
     setHttpsCertId(s.https_cert_id || '');
     setSessionTimeout(String(s.session_timeout_h || 12));
+    setSubViaNodes(!s.sub_no_relay);
+    setSubHTTP(!!s.sub_http);
   });
 
   const save = async () => {
@@ -215,6 +220,7 @@ export function useWebForm(settingsQ: UseQueryResult<UISettings>) {
       await api.updateWebSettings({
         listen, base_path: basePath,
         https_cert_id: httpsCertId, session_timeout_h: parseInt(sessionTimeout) || 12,
+        sub_no_relay: !subViaNodes, sub_http: subHTTP,
       });
       toast.success(t('settings.saved'));
       resync();
@@ -225,7 +231,8 @@ export function useWebForm(settingsQ: UseQueryResult<UISettings>) {
 
   return {
     listen, setListen, basePath, setBasePath,
-    httpsCertId, setHttpsCertId, sessionTimeout, setSessionTimeout, save, saving,
+    httpsCertId, setHttpsCertId, sessionTimeout, setSessionTimeout,
+    subViaNodes, setSubViaNodes, subHTTP, setSubHTTP, save, saving,
   };
 }
 export type WebForm = ReturnType<typeof useWebForm>;
