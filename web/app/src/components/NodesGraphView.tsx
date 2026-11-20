@@ -50,6 +50,8 @@ interface Props {
   /** Details: `qpath` is the list-view row key ('__self__' for this node). */
   onOpenDetails?: (qpath: string, anchor?: { x: number; y: number }) => void;
   selectedQPath?: string | null;
+  /** Every selected row key when several are (marked, no route shown). */
+  selectedQPaths?: string[];
   onSelectQPath?: (qpath: string | null) => void;
   /** Fill the parent (flex) container instead of the fixed card height. */
   full?: boolean;
@@ -138,7 +140,7 @@ function useGraphCanvases() {
 
 const sameJSON = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
-export default function NodesGraphView({ topology, selfId, selfName, onOpenRemote, onOpenDetails, selectedQPath, onSelectQPath, full, actions, unlocked }: Props) {
+export default function NodesGraphView({ topology, selfId, selfName, onOpenRemote, onOpenDetails, selectedQPath, selectedQPaths, onSelectQPath, full, actions, unlocked }: Props) {
   const { t, i18n } = useTranslation();
   const { isReachableAt } = useExitPaths();
   const confirm = useConfirm();
@@ -834,6 +836,9 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     const segs = currentQPath.split('/');
     return segs[segs.length - 1];
   }, [currentQPath]);
+  // several rows selected (e.g. opened from the overview): their nodes marked
+  const multiKeys = useMemo(() => new Set((selectedQPaths && selectedQPaths.length > 1 ? selectedQPaths : [])
+    .map((q) => (q === '__self__' ? selfId : q.split('/').pop() || ''))), [selectedQPaths, selfId]);
   const selectedPaths = useMemo<GraphPath[]>(() => (selectedKey ? findPaths(topology, selectedKey, selfId, selfName) : []), [selectedKey, topology, selfId, selfName]);
   const pathIdx = useMemo(() => {
     if (!currentQPath || selectedPaths.length === 0) return 0;
@@ -1172,7 +1177,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
     const ed = target.closest('[data-edge-key]');
     if (ed) { setSelectedEdge(ed.getAttribute('data-edge-key')); return; }
     setSelectedEdge(null);
-    if (currentQPath) { setCurrentQPath(null); onSelectQPath?.(null); }
+    if (currentQPath || multiKeys.size) { setCurrentQPath(null); onSelectQPath?.(null); }
   };
   const onCanvasDoubleClick = (e: ReactMouseEvent) => {
     if (!onCanvas(e)) return;
@@ -1770,7 +1775,7 @@ export default function NodesGraphView({ topology, selfId, selfName, onOpenRemot
           transform={`translate(${p.x},${p.y})`}
           className={clsx(
             'hy-topo-dot', n.isSelf && 'self', geoMode && geoBase.unlocated.has(n.key) && 'unlocated', n.disabled && 'disabled', n.offline && !n.disabled && 'offline',
-            n.nested && 'nested', n.native && 'native', n.restricted && 'restricted', n.incompatible && 'bad', selectedKey === n.key && 'selected',
+            n.nested && 'nested', n.native && 'native', n.restricted && 'restricted', n.incompatible && 'bad', (selectedKey === n.key || multiKeys.has(n.key)) && 'selected',
           )}
         >
           <circle r={rOuter} className="hy-topo-dot-outer" />
