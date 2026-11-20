@@ -51,7 +51,7 @@ export default function SettingsPage() {
 
   const panel = () => {
     switch (activeTab) {
-      case 'network': return <NetworkTab sys={sys} />;
+      case 'network': return <NetworkTab sys={sys} settings={settingsQ.data} />;
       case 'dns': return <DnsTab sys={sys} />;
       case 'nested': return <NestedTab sys={sys} />;
       case 'web': return <WebTab web={web} />;

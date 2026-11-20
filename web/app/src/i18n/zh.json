@@ -1438,5 +1438,20 @@
   "users.accessFull": "完整使用",
   "nodes.invisible": "隐形接入",
   "nodes.invisibleTitle": "以用户身份接入，不在对方的节点列表中",
-  "nodes.detail.access": "接入方式"
+  "nodes.detail.access": "接入方式",
+  "settings.publicHostSection": "公网地址",
+  "settings.publicHost": "公网主机",
+  "settings.publicHostHint": "导出链接与订阅使用。留空则用检测到的地址。",
+  "settings.publicHostNone": "未检测到公网地址",
+  "settings.publicHostInvalid": "公网主机：填写域名或 IP，不带端口",
+  "settings.lanName": "局域网名称 (mDNS)",
+  "settings.lanNameInvalid": "局域网名称：小写字母、数字和 '-'",
+  "settings.lanNameOn": "已应答 {{name}}",
+  "settings.lanNameState.on": "已启用",
+  "settings.lanNameState.probing": "正在确认名称…",
+  "settings.lanNameState.off": "已关闭",
+  "settings.lanNameState.no_lan": "未处于宿主机网络（容器 bridge 模式）",
+  "settings.lanNameState.failed": "无法启动",
+  "users.linkLAN": "内网",
+  "users.noLinks": "没有可访问本节点的地址"
 }

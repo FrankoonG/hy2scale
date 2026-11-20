@@ -8,6 +8,7 @@ import { downloadBlob } from '@/utils/download';
 import * as api from '@/api';
 import { useServerFormInit } from '@/hooks/useFormInit';
 import VPNStatus from './VPNStatus';
+import { useShareHost } from '@/hooks/useShareHost';
 
 type Control = '' | 'tls-crypt' | 'tls-auth';
 type Digest = 'SHA1' | 'SHA256';
@@ -42,7 +43,10 @@ export default function OpenVPNTab() {
   const [tunnelIPv6, setTunnelIPv6] = useState(true);
   const [routes, setRoutes] = useState('');
   const [extra, setExtra] = useState('');
-  const [endpoint, setEndpoint] = useState(window.location.hostname);
+  // Profile endpoint: the node's public host until edited
+  const shareHost = useShareHost();
+  const [endpointEdit, setEndpoint] = useState<string | null>(null);
+  const endpoint = endpointEdit ?? shareHost;
   const [loading, setLoading] = useState(false);
 
   // Seed once from the first fetch; refetches must not revert unsaved edits.
