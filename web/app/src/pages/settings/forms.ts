@@ -40,6 +40,9 @@ export interface SystemValues extends Record<NumKey, string> {
   public_method: 'public' | 'peer+public';
   public_interval: string;
   public_servers: ListItem[];
+  public_host: string;
+  mdns_enabled: boolean;
+  mdns_name: string;
   auto_update_enabled: boolean;
   auto_update_time: string;
   auto_update_from_peers: boolean;
@@ -64,6 +67,9 @@ function systemFrom(s?: UISettings): SystemValues {
     public_method: pip?.method === 'peer+public' ? 'peer+public' : 'public',
     public_interval: String(pip?.interval || 600),
     public_servers: toListItems(pip?.servers || []),
+    public_host: s?.public_host || '',
+    mdns_enabled: s?.mdns_enabled !== false,
+    mdns_name: s?.mdns_name || '',
     auto_update_enabled: !!s?.auto_update_enabled,
     auto_update_time: s?.auto_update_time || AUTO_UPDATE_TIME,
     auto_update_from_peers: !!s?.auto_update_from_peers,
@@ -73,7 +79,8 @@ function systemFrom(s?: UISettings): SystemValues {
 /** System sub-pages, each saving only its own fields. */
 export type SystemSection = 'network' | 'dns' | 'nested' | 'update';
 const SECTION_KEYS: Record<SystemSection, (keyof SystemValues)[]> = {
-  network: ['relay_admin_passthrough', 'accept_punch', 'accept_shared_users', 'path_loss_grace_s', 'public_method', 'public_interval', 'public_servers'],
+  network: ['relay_admin_passthrough', 'accept_punch', 'accept_shared_users', 'path_loss_grace_s', 'public_method', 'public_interval', 'public_servers',
+    'public_host', 'mdns_enabled', 'mdns_name'],
   dns: ['dns', 'dns_resolver_enabled', 'dns_resolver_cache_ttl', 'dns_resolver_negative_ttl', 'dns_resolver_cache_size', 'dns_resolver_query_timeout_ms'],
   nested: NESTED_KEYS,
   update: ['auto_update_enabled', 'auto_update_time', 'auto_update_from_peers'],
@@ -112,7 +119,20 @@ export function useSystemForm(settingsQ: UseQueryResult<UISettings>) {
         toast.error(t('settings.publicIpServerInvalid', { v: badServer }));
         return null;
       }
+      const host = v.public_host.trim();
+      if (host && !/^(\[[0-9a-fA-F:.]+\]|[0-9a-fA-F:.]*:[0-9a-fA-F:.]*|[A-Za-z0-9.-]+)$/.test(host)) {
+        toast.error(t('settings.publicHostInvalid'));
+        return null;
+      }
+      const mdnsName = v.mdns_name.trim();
+      if (mdnsName && !/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(mdnsName)) {
+        toast.error(t('settings.lanNameInvalid'));
+        return null;
+      }
       return {
+        public_host: host,
+        mdns_enabled: v.mdns_enabled,
+        mdns_name: mdnsName,
         relay_admin_passthrough: v.relay_admin_passthrough,
         accept_punch: v.accept_punch,
         accept_shared_users: v.accept_shared_users,
@@ -171,7 +191,7 @@ export function useSystemForm(settingsQ: UseQueryResult<UISettings>) {
 }
 export type SystemForm = ReturnType<typeof useSystemForm>;
 
-/** Web UI card: listen, base path, HTTPS, session timeout. */
+/** Web UI card: listen, base path, HTTPS, session timeout, how subscriptions are served. */
 export function useWebForm(settingsQ: UseQueryResult<UISettings>) {
   const { t } = useTranslation();
   const toast = useToast();
@@ -180,6 +200,9 @@ export function useWebForm(settingsQ: UseQueryResult<UISettings>) {
   const [basePath, setBasePath] = useState('');
   const [httpsCertId, setHttpsCertId] = useState('');
   const [sessionTimeout, setSessionTimeout] = useState('12');
+  // subscriptions: through other nodes (sub_no_relay off), over plain http
+  const [subViaNodes, setSubViaNodes] = useState(true);
+  const [subHTTP, setSubHTTP] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const resync = useServerFormInit(settingsQ, (s) => {
@@ -187,6 +210,8 @@ export function useWebForm(settingsQ: UseQueryResult<UISettings>) {
     setBasePath(s.base_path || '');
     setHttpsCertId(s.https_cert_id || '');
     setSessionTimeout(String(s.session_timeout_h || 12));
+    setSubViaNodes(!s.sub_no_relay);
+    setSubHTTP(!!s.sub_http);
   });
 
   const save = async () => {
@@ -195,6 +220,7 @@ export function useWebForm(settingsQ: UseQueryResult<UISettings>) {
       await api.updateWebSettings({
         listen, base_path: basePath,
         https_cert_id: httpsCertId, session_timeout_h: parseInt(sessionTimeout) || 12,
+        sub_no_relay: !subViaNodes, sub_http: subHTTP,
       });
       toast.success(t('settings.saved'));
       resync();
@@ -205,7 +231,8 @@ export function useWebForm(settingsQ: UseQueryResult<UISettings>) {
 
   return {
     listen, setListen, basePath, setBasePath,
-    httpsCertId, setHttpsCertId, sessionTimeout, setSessionTimeout, save, saving,
+    httpsCertId, setHttpsCertId, sessionTimeout, setSessionTimeout,
+    subViaNodes, setSubViaNodes, subHTTP, setSubHTTP, save, saving,
   };
 }
 export type WebForm = ReturnType<typeof useWebForm>;

@@ -55,6 +55,10 @@ func (e *Engine) initMsess() {
 				return e.dialSessionTarget(ctx, r, "udp", addr)
 			},
 			Logf: log.Printf,
+			Label: func(c net.Conn) string {
+				_, peer := e.node.SourceOf(c)
+				return peer
+			},
 		})
 	}
 	e.ms.server = server(0)
@@ -469,6 +473,20 @@ func (e *Engine) MsessStats() map[string]int {
 	st, rs := e.ms.server.Stats(), e.ms.restricted.Stats()
 	return map[string]int{"exit_sessions": st.Sessions + rs.Sessions, "exit_subflows": st.Subflows + rs.Subflows,
 		"exit_pending": st.Pending + rs.Pending, "probed_paths": e.ms.prober.Count()}
+}
+
+// MsessBreakdown: the live exit sessions by opening peer and by target,
+// the top n of each (diagnostics).
+func (e *Engine) MsessBreakdown(n int) (bySrc, byTarget []msess.Count) {
+	a, b := e.ms.server.Breakdown()
+	c, d := e.ms.restricted.Breakdown()
+	for k, v := range c {
+		a["restricted:"+k] += v
+	}
+	for k, v := range d {
+		b[k] += v
+	}
+	return msess.TopCounts(a, n), msess.TopCounts(b, n)
 }
 
 // withPolicySource records the source of a flow arriving on stream c (a

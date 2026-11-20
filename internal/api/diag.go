@@ -76,7 +76,10 @@ func (s *Server) diagRuntime(w http.ResponseWriter, r *http.Request) {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 	st := s.app.Node().GetStats()
+	bySrc, byTarget := s.app.MsessBreakdown(10)
 	writeJSON(w, map[string]any{
+		"msess_by_source": bySrc,
+		"msess_by_target": byTarget,
 		"goroutines":     runtime.NumGoroutine(),
 		"heap_alloc":     ms.HeapAlloc,
 		"heap_inuse":     ms.HeapInuse,

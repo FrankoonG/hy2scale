@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/FrankoonG/hy2scale/internal/app"
@@ -62,9 +63,20 @@ func auditQuery(r *http.Request) (storage.Query, error) {
 	v := r.URL.Query()
 	q := storage.Query{
 		User: v.Get("user"), Src: v.Get("src"), Dst: v.Get("dst"), Inbound: v.Get("inbound"),
-		Exit: v.Get("exit"), Proto: v.Get("proto"), Result: v.Get("result"), Q: v.Get("q"),
+		Exit: v.Get("exit"), Proto: v.Get("proto"), App: v.Get("app"), Result: v.Get("result"), Q: v.Get("q"),
 		Cursor: v.Get("cursor"),
 	}
+	list := func(k string) []string {
+		var out []string
+		for _, s := range strings.Split(v.Get(k), ",") {
+			if s = strings.TrimSpace(s); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	q.NotInbound, q.NotExit, q.NotProto, q.NotApp, q.NotResult =
+		list("not_inbound"), list("not_exit"), list("not_proto"), list("not_app"), list("not_result")
 	for _, f := range []struct {
 		key string
 		dst *int64
@@ -126,8 +138,10 @@ func (s *Server) auditStats(w http.ResponseWriter, r *http.Request) {
 		"top_users":        res.TopUsers,
 		"top_sources":      res.TopSrc,
 		"top_destinations": res.TopDst,
+		"top_apps":         res.TopApps,
 		"scanned":          res.Scanned,
 		"truncated":        res.Truncated,
+		"hourly":           res.Hourly,
 	})
 }
 

@@ -72,6 +72,9 @@ func (s *Server) coreRoutes(m *http.ServeMux) {
 	//                                the first thing to read when a node's
 	//                                memory keeps growing
 	m.HandleFunc("GET /api/diag/runtime", s.diagRuntime)
+	// live profiles and automatic snapshots (diag_mem.go)
+	s.diagMemRoutes(m)
+	s.startMemWatch()
 	m.HandleFunc("GET /api/logs", s.handleLogs)
 	m.HandleFunc("GET /api/settings/ui", s.getUISettings)
 	m.HandleFunc("PUT /api/settings/ui", s.updateUISettings)
@@ -402,6 +405,7 @@ func (s *Server) getTopology(w http.ResponseWriter, r *http.Request) {
 				Version:    p.Version,
 				TunCapable: p.TunCapable,
 				Egress:     p.Egress,
+				Attrs:      p.Attrs,
 				// Inbound peers in the live `peers` slice are connected
 				// by definition — `p` was added when the inbound stream
 				// registered. The new `connected` field on topoSubPeer

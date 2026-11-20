@@ -63,3 +63,16 @@
 @media(max-width:768px){
   .tool-term{min-height:60vh}
 }
+
+/* switching tabs: the panel shown slides in from the side of the one it replaces */
+.tool-panel.in-r{--tool-dx:20px;animation:toolPanelIn .35s ease-out}
+.tool-panel.in-l{--tool-dx:-20px;animation:toolPanelIn .35s ease-out}
+@keyframes toolPanelIn{from{opacity:0;transform:translateX(var(--tool-dx))}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.tool-panel.in-r,.tool-panel.in-l{animation:none}}
+
+/* history limit (tab bar) */
+.tools-page .hy-tabs-row{flex-wrap:wrap;row-gap:10px}
+.tools-page .hy-tabs-row>.hy-tabs{flex-shrink:0;max-width:100%}
+.tool-history{display:flex;align-items:center;gap:8px;margin-left:auto}
+.tool-history .tool-field-label{white-space:nowrap}
+.tool-history .tool-num{width:76px}

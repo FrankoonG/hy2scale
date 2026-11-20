@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import type { NavSelect } from '@/hooks/useNavSelect';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -157,11 +158,11 @@ function Donut({ parts, center, sub, size = 104 }: { parts: Part[]; center: Reac
   );
 }
 
-function Legend({ parts, onClick }: { parts: Part[]; onClick?: () => void }) {
+function Legend({ parts, onClick }: { parts: Part[]; onClick?: (key: string) => void }) {
   return (
     <div className="ov-legend">
       {parts.map((p) => (
-        <div key={p.key} className={clsx('ov-legend-row', onClick && 'ov-click')} {...(onClick ? linkProps(onClick) : {})}>
+        <div key={p.key} className={clsx('ov-legend-row', onClick && 'ov-click')} {...(onClick ? linkProps(() => onClick(p.key)) : {})}>
           <i className="ov-legend-sq" style={{ color: p.color }} />
           <span className="ov-legend-label">{p.label}</span>
           <span className="ov-legend-num">{p.value}</span>
@@ -479,23 +480,30 @@ export default function OverviewPage() {
   // ---- users ----
   const userStats = useMemo(() => {
     const now = Date.now();
-    let enabled = 0, expired = 0, expiring = 0, over = 0, near = 0;
+    const online = new Set(sessions.map((s) => s.username));
+    // the users of each figure, for the users page to select
+    const ids = { over: [] as string[], near: [] as string[], expired: [] as string[], expiring: [] as string[],
+      on: [] as string[], idle: [] as string[], off: [] as string[] };
     for (const u of users) {
-      if (u.enabled) enabled++;
+      if (!u.enabled) ids.off.push(u.id);
+      else if (online.has(u.username)) ids.on.push(u.id);
+      else ids.idle.push(u.id);
       const exp = u.expiry_date ? Date.parse(u.expiry_date) : NaN;
       if (!Number.isNaN(exp)) {
-        if (exp < now) expired++;
-        else if (exp - now <= 7 * 86400000) expiring++;
+        if (exp < now) ids.expired.push(u.id);
+        else if (exp - now <= 7 * 86400000) ids.expiring.push(u.id);
       }
       if (u.traffic_limit > 0) {
         const r = u.traffic_used / u.traffic_limit;
-        if (r >= 1) over++;
-        else if (r >= 0.9) near++;
+        if (r >= 1) ids.over.push(u.id);
+        else if (r >= 0.9) ids.near.push(u.id);
       }
     }
     const top = [...users].filter((u) => u.traffic_used > 0).sort((a, b) => b.traffic_used - a.traffic_used).slice(0, 5);
-    return { enabled, expired, expiring, over, near, top };
-  }, [users]);
+    return { enabled: users.length - ids.off.length, expired: ids.expired.length, expiring: ids.expiring.length,
+      over: ids.over.length, near: ids.near.length, top, ids };
+  }, [users, sessions]);
+  const selUsers = (k: keyof typeof userStats.ids) => navigate('/users', { state: { select: userStats.ids[k] } });
   const topMax = Math.max(1, ...userStats.top.map((u) => u.traffic_used));
 
   // ---- services ----
@@ -548,16 +556,16 @@ export default function OverviewPage() {
   }, [certs]);
 
   // ---- attention ----
-  const issues: { level: 'red' | 'orange'; label: string; count?: number; to: string }[] = [];
+  const issues: { level: 'red' | 'orange'; label: string; count?: number; to: string; state?: NavSelect & { tab?: string } }[] = [];
   if (node?.limited) issues.push({ level: 'orange', label: t('overview.issue.limited'), to: '/settings' });
-  if (peersOffline.length) issues.push({ level: 'red', label: t('overview.issue.peersOffline'), count: peersOffline.length, to: '/nodes' });
-  if (peersBad.length) issues.push({ level: 'orange', label: t('overview.issue.peersIncompat'), count: peersBad.length, to: '/nodes' });
-  for (const s of servicesDown) issues.push({ level: 'red', label: t('overview.issue.serviceDown', { name: s.label }), to: svcPage(s.key) });
-  if (!eg4.ok) issues.push({ level: 'orange', label: t('overview.issue.egress', { fam: 'IPv4' }), to: '/interfaces' });
-  if (!eg6.ok) issues.push({ level: 'orange', label: t('overview.issue.egress', { fam: 'IPv6' }), to: '/interfaces' });
-  if (certInfo.expired) issues.push({ level: 'red', label: t('overview.issue.certsExpired'), count: certInfo.expired, to: '/tls' });
-  if (certInfo.expiring) issues.push({ level: 'orange', label: t('overview.issue.certsExpiring'), count: certInfo.expiring, to: '/tls' });
-  if (userStats.over) issues.push({ level: 'orange', label: t('overview.issue.usersOverQuota'), count: userStats.over, to: '/users' });
+  if (peersOffline.length) issues.push({ level: 'red', label: t('overview.issue.peersOffline'), count: peersOffline.length, to: '/nodes', state: { select: peersOffline.map((p) => p.name) } });
+  if (peersBad.length) issues.push({ level: 'orange', label: t('overview.issue.peersIncompat'), count: peersBad.length, to: '/nodes', state: { select: peersBad.map((p) => p.name) } });
+  for (const s of servicesDown) issues.push({ level: 'red', label: t('overview.issue.serviceDown', { name: s.label }), to: svcPage(s.key), state: { tab: s.key } });
+  if (!eg4.ok) issues.push({ level: 'orange', label: t('overview.issue.egress', { fam: 'IPv4' }), to: '/interfaces', state: { select: eg4.name } });
+  if (!eg6.ok) issues.push({ level: 'orange', label: t('overview.issue.egress', { fam: 'IPv6' }), to: '/interfaces', state: { select: eg6.name } });
+  if (certInfo.expired) issues.push({ level: 'red', label: t('overview.issue.certsExpired'), count: certInfo.expired, to: '/tls', state: { select: certInfo.list.filter((x) => x.days != null && x.days < 0).map((x) => x.c.id) } });
+  if (certInfo.expiring) issues.push({ level: 'orange', label: t('overview.issue.certsExpiring'), count: certInfo.expiring, to: '/tls', state: { select: certInfo.list.filter((x) => x.days != null && x.days >= 0 && x.days <= 30).map((x) => x.c.id) } });
+  if (userStats.over) issues.push({ level: 'orange', label: t('overview.issue.usersOverQuota'), count: userStats.over, to: '/users', state: { select: userStats.ids.over } });
 
   // ---- sparks ----
   const sConns = live.map((s) => s.conns);
@@ -608,7 +616,7 @@ export default function OverviewPage() {
           {issues.length > 0 && (
             <div className="ov-issues">
               {issues.map((it, i) => (
-                <div key={i} className={clsx('ov-issue', it.level)} {...linkProps(() => navigate(it.to))}>
+                <div key={i} className={clsx('ov-issue', it.level)} {...linkProps(() => navigate(it.to, { state: it.state }))}>
                   <IconCircleAlert className="ov-issue-mark" size={16} />
                   <span className="ov-issue-label">{it.label}</span>
                   {it.count != null && <span className="ov-issue-count">{it.count}</span>}
@@ -646,7 +654,7 @@ export default function OverviewPage() {
                 const strip = hourStrip(history?.peers?.[p.name]?.h1);
                 const dot = p.disabled ? 'off' : !p.connected ? 'bad' : p.bad ? 'warn' : 'ok';
                 return (
-                  <div key={p.name} className={clsx('ov-peer', p.disabled && 'ov-dim')} {...linkProps(() => navigate('/nodes'))}>
+                  <div key={p.name} className={clsx('ov-peer', p.disabled && 'ov-dim')} {...linkProps(() => navigate('/nodes', { state: { select: p.name } }))}>
                     <i className={clsx('ov-dot', dot)} />
                     <span className="ov-peer-name">
                       <span className="ov-ellipsis">{p.name}</span>
@@ -707,7 +715,7 @@ export default function OverviewPage() {
             {services.map((s) => {
               const dot = !s.on ? 'off' : s.running === false ? 'bad' : 'ok';
               return (
-                <div key={s.key} className={clsx('ov-svc', !s.on && 'ov-dim')} {...linkProps(() => navigate(svcPage(s.key)))}>
+                <div key={s.key} className={clsx('ov-svc', !s.on && 'ov-dim')} {...linkProps(() => navigate(svcPage(s.key), { state: { tab: s.key } }))}>
                   <i className={clsx('ov-dot', dot)} />
                   <span className="ov-svc-name">
                     {s.label}{s.on && <i className="ov-legend-sq" style={{ color: SVC_COLORS[s.key] }} />}
@@ -755,16 +763,16 @@ export default function OverviewPage() {
             return (
               <div className="ov-donut-row">
                 <Donut parts={parts} center={users.length} sub={t('overview.total')} />
-                <Legend parts={parts} onClick={() => navigate('/users')} />
+                <Legend parts={parts} onClick={(k) => navigate('/users', { state: { select: userStats.ids[k as keyof typeof userStats.ids] } })} />
               </div>
             );
           })()}
           {(userStats.expired + userStats.expiring + userStats.over + userStats.near) > 0 && (
             <div className="ov-flags">
-              {userStats.over > 0 && <Badge variant="red">{t('overview.overQuota')} · {userStats.over}</Badge>}
-              {userStats.near > 0 && <Badge variant="orange">{t('overview.nearQuota')} · {userStats.near}</Badge>}
-              {userStats.expired > 0 && <Badge variant="muted">{t('overview.expired')} · {userStats.expired}</Badge>}
-              {userStats.expiring > 0 && <Badge variant="orange">{t('overview.expiringSoon')} · {userStats.expiring}</Badge>}
+              {userStats.over > 0 && <span className="ov-click" {...linkProps(() => selUsers('over'))}><Badge variant="red">{t('overview.overQuota')} · {userStats.over}</Badge></span>}
+              {userStats.near > 0 && <span className="ov-click" {...linkProps(() => selUsers('near'))}><Badge variant="orange">{t('overview.nearQuota')} · {userStats.near}</Badge></span>}
+              {userStats.expired > 0 && <span className="ov-click" {...linkProps(() => selUsers('expired'))}><Badge variant="muted">{t('overview.expired')} · {userStats.expired}</Badge></span>}
+              {userStats.expiring > 0 && <span className="ov-click" {...linkProps(() => selUsers('expiring'))}><Badge variant="orange">{t('overview.expiringSoon')} · {userStats.expiring}</Badge></span>}
             </div>
           )}
           <div className="ov-sub">{t('overview.topUsage')}</div>
@@ -774,7 +782,7 @@ export default function OverviewPage() {
             const limited = u.traffic_limit > 0;
             const pct = limited ? (u.traffic_used / u.traffic_limit) * 100 : (u.traffic_used / topMax) * 100;
             return (
-              <div key={u.id} className="ov-usage">
+              <div key={u.id} className="ov-usage ov-click" {...linkProps(() => navigate('/users', { state: { select: u.id } }))}>
                 <span className={clsx('ov-ellipsis', !u.enabled && 'ov-muted')}>{u.username}</span>
                 <span className="ov-mono">{fmtBytes(u.traffic_used)}{limited && <span className="ov-muted"> / {fmtBytes(u.traffic_limit)}</span>}</span>
                 <Progress value={pct} variant={limited ? (pct >= 100 ? 'red' : pct >= 90 ? 'orange' : 'default') : 'default'} />
@@ -795,8 +803,8 @@ export default function OverviewPage() {
             ]} />
           )}
           <div className="hy-kv">
-            <KV label={t('iface.egressOn', { fam: 'IPv4' })} onClick={() => navigate('/interfaces')}>{ifaces ? egressLine('ipv4', eg4) : '—'}</KV>
-            <KV label={t('iface.egressOn', { fam: 'IPv6' })} onClick={() => navigate('/interfaces')}>{ifaces ? egressLine('ipv6', eg6) : '—'}</KV>
+            <KV label={t('iface.egressOn', { fam: 'IPv4' })} onClick={() => navigate('/interfaces', { state: { select: eg4.name } })}>{ifaces ? egressLine('ipv4', eg4) : '—'}</KV>
+            <KV label={t('iface.egressOn', { fam: 'IPv6' })} onClick={() => navigate('/interfaces', { state: { select: eg6.name } })}>{ifaces ? egressLine('ipv6', eg6) : '—'}</KV>
             <KV label={t('policy.policies')} onClick={() => navigate('/rules')}>
               {policy ? `${policy.policies.length} · ${t('policy.direct')}: ${directName || t('policy.term.default')}` : '—'}
             </KV>
@@ -823,7 +831,7 @@ export default function OverviewPage() {
             ]} />
             <div className="hy-kv">
               {certInfo.list.slice(0, 5).map(({ c, days }) => (
-                <KV key={c.id} label={<span className="ov-ellipsis">{c.name || c.id}{c.is_ca && <span className="ov-tag">CA</span>}</span>} onClick={() => navigate('/tls')}>
+                <KV key={c.id} label={<span className="ov-ellipsis">{c.name || c.id}{c.is_ca && <span className="ov-tag">CA</span>}</span>} onClick={() => navigate('/tls', { state: { select: c.id } })}>
                   {days != null && days < 0
                     ? <Badge variant="red">{t('overview.expired')}</Badge>
                     : days != null && days <= 30

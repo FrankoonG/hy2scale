@@ -5,6 +5,7 @@ package api
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -226,6 +227,15 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 		defer stop()
 	}
 
+	// A sign-in to the remote from this node's web UI is kept for the
+	// control socket (ctl.go); a sign-out drops it.
+	var signIn []byte
+	if r.Method == http.MethodPost && (remotePath == "/scale/api/login" || remotePath == "/scale/api/logout") {
+		signIn, _ = io.ReadAll(io.LimitReader(r.Body, 64<<10))
+		r.Body = io.NopCloser(bytes.NewReader(signIn))
+		r.ContentLength = int64(len(signIn))
+	}
+
 	// Construct proxied request. Use a fresh header so we don't forward the
 	// local API token (remote node authenticates independently) or Hop-by-Hop
 	// headers that confuse it. Force HTTP/1.1 with Connection: close so the
@@ -272,6 +282,9 @@ func (s *Server) remoteProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	if signIn != nil {
+		s.remoteSignIn(chain, remotePath, r.Method, signIn, resp.StatusCode)
+	}
 
 	// Rewrite __BASE__ in HTML responses so JS API calls route through proxy
 	ct := resp.Header.Get("Content-Type")

@@ -508,7 +508,7 @@ func (f *udpFlow) touch() { f.last.Store(time.Now().UnixNano()) }
 // still in flight.
 func (f *udpFlow) send(b []byte) {
 	f.touch()
-	f.af.Add(int64(len(b)), 0)
+	f.af.AddData(b, true)
 	f.mu.Lock()
 	r := f.remote
 	if r == nil && !f.closed && len(f.queue) < ruleUDPQueue {
@@ -707,7 +707,7 @@ func (e *Engine) startUDPFlow(ctx context.Context, f *udpFlow, tproxied bool, ln
 				return
 			}
 			f.touch()
-			f.af.Add(0, int64(n))
+			f.af.AddData(b[:n], false)
 			f.reply(b[:n])
 		}
 	}()

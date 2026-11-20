@@ -22,6 +22,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "ctl" {
+		os.Exit(runCtl(os.Args[2:]))
+	}
+	noHugePages()
 	dataDir := flag.String("data", "", "configuration and data directory")
 	apiAddr := flag.String("api", "", "API/UI listen address (overrides config)")
 	basePath := flag.String("base-path", "", "UI base path (e.g. /scale)")

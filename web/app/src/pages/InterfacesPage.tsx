@@ -1,4 +1,5 @@
 import { useState, useCallback, type ReactNode, type MouseEvent } from 'react';
+import { useNavSelect } from '@/hooks/useNavSelect';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -74,6 +75,7 @@ export default function InterfacesPage() {
   const [modal, setModal] = useState<{ parent: IfaceEntry | null; editing: IfaceEntry | null } | null>(null);
   const [deleting, setDeleting] = useState<IfaceEntry[]>([]);
   const selection = useSelection(list.map((x) => x.name));
+  useNavSelect(list.map((x) => x.name), selection);
 
   const invalidate = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['ifaces'] });

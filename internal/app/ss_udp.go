@@ -58,15 +58,15 @@ const udpFlowIdle = 90 * time.Second
 type ssUDPFlow struct {
 	upstream   net.Conn
 	clientAddr *net.UDPAddr
-	userIdx    int      // index into the enabled-users snapshot at session-creation time
-	username   string   // for traffic accounting
-	masterKey  []byte   // user's master key, captured so we don't have to rebuild per packet
-	atyp       byte     // ATYP byte of the most recent dst (echoed back in replies)
-	dstHost    string   // most recent dst hostname/IP literal (for reply addr header)
+	userIdx    int    // index into the enabled-users snapshot at session-creation time
+	username   string // for traffic accounting
+	masterKey  []byte // user's master key, captured so we don't have to rebuild per packet
+	atyp       byte   // ATYP byte of the most recent dst (echoed back in replies)
+	dstHost    string // most recent dst hostname/IP literal (for reply addr header)
 	dstPort    uint16
 	mu         sync.Mutex
 	lastUsed   time.Time
-	dead       bool // upstream gone: the next datagram builds a new flow
+	dead       bool        // upstream gone: the next datagram builds a new flow
 	af         *audit.Flow // audit record (nil = not recorded)
 }
 
@@ -209,95 +209,100 @@ func (a *App) handleSSUDPPacket(
 
 	// Trial-decrypt against every eligible user.
 	for _, u := range cfg.Users {
-		if !u.Enabled || !u.IsProxyEnabled("ss") || a.IsPasswordConflicted(u.Username, "ss") {
+		if !u.Enabled || !u.Serves("ss") {
 			continue
 		}
-		key := evpBytesToKey(u.EffectivePassword("ss"), keySize(method))
-		dec, ok := ssUDPDecrypt(method, key, salt, ciphertext, zeroNonce)
-		if !ok {
-			continue
-		}
-		if userExpired(&u) || a.overTrafficLimit(u.Username) {
-			return
-		}
-		// Plain payload = atype + addr + port + udp_data.
-		host, port, atyp, payload, perr := parseSocksAddrUDP(dec)
-		if perr != nil {
-			return
-		}
-		dst := net.JoinHostPort(host, fmt.Sprintf("%d", port))
-
-		// Create / refresh the flow under flowsMu so two concurrent first
-		// packets from the same clientAddr don't race to dial.
-		flowsMu.Lock()
-		flow, ok := flows[clientKey]
-		if !ok {
-			// Set up the entry with the master key + addr-header BEFORE
-			// dialing so the idle reaper can drop us cleanly if the dial
-			// hangs (mirrors the nil-guard reaper hardening in
-			// udp_transparent.go).
-			flow = &ssUDPFlow{
-				clientAddr: src,
-				masterKey:  key,
-				username:   u.Username,
-				atyp:       atyp,
-				dstHost:    host,
-				dstPort:    port,
-				lastUsed:   time.Now(),
+		for _, cred := range u.Creds() {
+			if a.IsPasswordConflicted(Ident(u.Username, cred.Row), "ss") {
+				continue
 			}
-			flows[clientKey] = flow
-		}
-		flowsMu.Unlock()
-
-		// Dial outside the lock. If a concurrent first-packet already won
-		// the slot, this branch becomes the second-packet-on-existing
-		// path: re-read the flow under flow.mu and skip re-dial.
-		flow.mu.Lock()
-		if flow.upstream == nil {
-			af := beginUserFlow(audit.InSS, "udp", u.Username, src, dst)
-			remote, derr := a.dialRoutedUDP(audit.NewContext(withRestrict(ctx, a.userRestrict(u.Username)), af), userSel(&u), a.userSrc(policy.KindSS, &u, src), dst)
-			if derr != nil {
-				af.End(derr)
-				flow.mu.Unlock()
-				flowsMu.Lock()
-				if cur, ok := flows[clientKey]; ok && cur == flow {
-					delete(flows, clientKey)
-				}
-				flowsMu.Unlock()
+			key := evpBytesToKey(cred.Password, keySize(method))
+			dec, ok := ssUDPDecrypt(method, key, salt, ciphertext, zeroNonce)
+			if !ok {
+				continue
+			}
+			if userExpired(&u) || a.overTrafficLimit(u.Username) {
 				return
 			}
-			flow.upstream = remote
-			flow.af = af
-			// Spawn the reverse-direction goroutine. It captures the
-			// flow pointer so subsequent address-rotations within the
-			// same flow (different dst addrs from same client) reflect
-			// in the encoded reply header automatically.
-			go a.ssUDPReverse(ctx, listener, flow, method, saltLen, zeroNonce)
-		} else {
-			// Existing flow: update dst-of-record for reply re-keying
-			// when the client moves to a different upstream peer.
-			flow.atyp = atyp
-			flow.dstHost = host
-			flow.dstPort = port
-		}
-		flow.lastUsed = time.Now()
-		upstream := flow.upstream
-		af := flow.af
-		flow.mu.Unlock()
+			// Plain payload = atype + addr + port + udp_data.
+			host, port, atyp, payload, perr := parseSocksAddrUDP(dec)
+			if perr != nil {
+				return
+			}
+			dst := net.JoinHostPort(host, fmt.Sprintf("%d", port))
 
-		if !a.userRate(u.Username).allow(true, len(payload)) {
-			return // over the user's rate limit: dropped
+			// Create / refresh the flow under flowsMu so two concurrent first
+			// packets from the same clientAddr don't race to dial.
+			flowsMu.Lock()
+			flow, ok := flows[clientKey]
+			if !ok {
+				// Set up the entry with the master key + addr-header BEFORE
+				// dialing so the idle reaper can drop us cleanly if the dial
+				// hangs (mirrors the nil-guard reaper hardening in
+				// udp_transparent.go).
+				flow = &ssUDPFlow{
+					clientAddr: src,
+					masterKey:  key,
+					username:   u.Username,
+					atyp:       atyp,
+					dstHost:    host,
+					dstPort:    port,
+					lastUsed:   time.Now(),
+				}
+				flows[clientKey] = flow
+			}
+			flowsMu.Unlock()
+
+			// Dial outside the lock. If a concurrent first-packet already won
+			// the slot, this branch becomes the second-packet-on-existing
+			// path: re-read the flow under flow.mu and skip re-dial.
+			flow.mu.Lock()
+			if flow.upstream == nil {
+				af := beginUserFlow(audit.InSS, "udp", Ident(u.Username, cred.Row), src, dst)
+				remote, derr := a.dialRoutedUDP(audit.NewContext(withRestrict(ctx, a.userRestrict(u.Username)), af), userSelRow(&u, cred.Row), a.userSrc(policy.KindSS, &u, src), dst)
+				if derr != nil {
+					af.End(derr)
+					flow.mu.Unlock()
+					flowsMu.Lock()
+					if cur, ok := flows[clientKey]; ok && cur == flow {
+						delete(flows, clientKey)
+					}
+					flowsMu.Unlock()
+					return
+				}
+				flow.upstream = remote
+				flow.af = af
+				// Spawn the reverse-direction goroutine. It captures the
+				// flow pointer so subsequent address-rotations within the
+				// same flow (different dst addrs from same client) reflect
+				// in the encoded reply header automatically.
+				go a.ssUDPReverse(ctx, listener, flow, method, saltLen, zeroNonce)
+			} else {
+				// Existing flow: update dst-of-record for reply re-keying
+				// when the client moves to a different upstream peer.
+				flow.atyp = atyp
+				flow.dstHost = host
+				flow.dstPort = port
+			}
+			flow.lastUsed = time.Now()
+			upstream := flow.upstream
+			af := flow.af
+			flow.mu.Unlock()
+
+			if !a.userRate(u.Username).allow(true, len(payload)) {
+				return // over the user's rate limit: dropped
+			}
+			af.AddData(payload, true)
+			if _, werr := upstream.Write(payload); werr != nil {
+				// Drop on write failure — upstream conn may have died.
+				// Don't tear the flow down here; the reverse-reader's next
+				// Read will see the same error and trigger cleanup.
+			}
+			if u.Username != "" {
+				a.RecordTraffic(u.Username, int64(len(payload)))
+			}
+			return
 		}
-		af.Add(int64(len(payload)), 0)
-		if _, werr := upstream.Write(payload); werr != nil {
-			// Drop on write failure — upstream conn may have died.
-			// Don't tear the flow down here; the reverse-reader's next
-			// Read will see the same error and trigger cleanup.
-		}
-		if u.Username != "" {
-			a.RecordTraffic(u.Username, int64(len(payload)))
-		}
-		return
 	}
 	// No user matched. Could be a UDP scanner probe (silent reject ideal)
 	// or a real client with a bad password / wrong cipher (operator wants
@@ -336,7 +341,7 @@ func (a *App) ssUDPForward(
 	if upstream == nil || a.overTrafficLimit(username) || !a.userRate(username).allow(true, len(payload)) {
 		return
 	}
-	af.Add(int64(len(payload)), 0)
+	af.AddData(payload, true)
 	_, _ = upstream.Write(payload)
 	if username != "" {
 		a.RecordTraffic(username, int64(len(payload)))

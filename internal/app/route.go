@@ -58,11 +58,26 @@ func (s exitSel) start() policy.Start {
 	return policy.Direct
 }
 
-func userSel(u *UserConfig) exitSel {
+func userSel(u *UserConfig) exitSel { return userSelRow(u, "") }
+
+// userSelRow: the selection of user u signed in with row: a policy-kind
+// row's policy set here, direct for node access, else the exit group.
+func userSelRow(u *UserConfig, row string) exitSel {
 	if u == nil {
 		return exitSel{}
 	}
-	return selOf(u.ExitPolicy, u.ExitVia, u.ExitPaths, u.ExitMode)
+	switch u.Kind() {
+	case KindPolicy:
+		if row == "" { // a caller without the row: the first row set here
+			if cs := u.Creds(); len(cs) > 0 {
+				row = cs[0].Row
+			}
+		}
+		return selOf(u.RowPolicy[row], "", nil, "")
+	case KindAccess:
+		return exitSel{}
+	}
+	return selOf("", u.ExitVia, u.ExitPaths, u.ExitMode)
 }
 
 func proxySel(pc *ProxyConfig) exitSel {

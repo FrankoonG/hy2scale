@@ -125,6 +125,12 @@ func (s *Server) sessionTimeout() time.Duration {
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The local control socket: only the node's own account can
+		// connect to it (ctl.go).
+		if fromCtl(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		// RelayAdminPassthrough lets requests delivered through the
 		// peer-to-peer relay bridge skip the local token check — but
 		// ONLY when the underlying QUIC connection authenticated with

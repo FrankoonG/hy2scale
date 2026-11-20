@@ -14,12 +14,14 @@ export interface AutocompleteProps {
   placeholder?: string;
   className?: string;
   disabled?: boolean;
+  /** data-testid of the input */
+  testId?: string;
 }
 
 const MAX_HEIGHT = 180;
 
 export function Autocomplete({
-  options, value, onChange, placeholder, className, disabled,
+  options, value, onChange, placeholder, className, disabled, testId,
 }: AutocompleteProps) {
   const L = useUiLabels();
   const [open, setOpen] = useState(false);
@@ -88,6 +90,7 @@ export function Autocomplete({
           onKeyDown={handleKey}
           placeholder={placeholder}
           disabled={disabled}
+          data-testid={testId}
           style={{ fontFamily: 'var(--mono)' }}
         />
         {value && (

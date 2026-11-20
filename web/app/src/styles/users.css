@@ -1,0 +1,30 @@
+/* Users: the user dialog's password rows, the share links, the subscription tab */
+.user-row-no{width:22px;flex-shrink:0;font-size:12px;color:var(--text-muted);font-variant-numeric:tabular-nums}
+.user-row-pw{flex:1;min-width:0}
+.user-row-policy{width:170px;flex-shrink:0}
+.user-access-mode{max-width:260px}
+.user-reset>.user-reset-unit{flex:1;min-width:0}
+.user-reset>.hy-input+.user-reset-unit{flex:0 0 96px;width:96px}
+.sub-name{display:flex;flex-direction:column;gap:8px}
+.sub-name-tokens{display:flex;flex-wrap:wrap;gap:6px}
+.sub-name-token{padding:2px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text-secondary);font-family:var(--mono, monospace);font-size:12px;line-height:18px;cursor:pointer;transition:all .15s}
+.sub-name-token:hover,.sub-name-token:focus-visible{border-color:var(--primary);color:var(--primary);background:var(--primary-light);outline:none}
+.sub-name-preview{display:flex;gap:8px;align-items:baseline;font-size:12px;min-width:0}
+.sub-name-preview-k{color:var(--text-muted);flex-shrink:0}
+.sub-name-preview-v{font-family:var(--mono, monospace);color:var(--text);word-break:break-all}
+.user-exit-policy .user-exit-set{color:var(--primary);font-weight:600;cursor:pointer;text-decoration:none}
+.user-exit-policy .user-exit-set:hover{text-decoration:underline}
+.inline-line{display:flex;align-items:center;gap:8px;min-width:0}
+.inline-line-main{flex:1;min-width:0}
+.hy-btn.sm.inline-btn{padding:2px 8px;line-height:18px;flex-shrink:0}
+.user-link-group{display:flex;flex-direction:column;gap:12px;padding-left:12px;border-left:2px solid var(--border-light)}
+.user-link-group-title{font-size:13px;font-weight:600;color:var(--text)}
+.sub-urls{display:flex;flex-direction:column;gap:8px}
+.sub-url-row{display:grid;grid-template-columns:72px minmax(0,1fr);gap:10px;align-items:center}
+.sub-url-label{font-size:12px;color:var(--text-muted)}
+.sub-url-row .hy-link-box{word-break:break-all}
+.sub-url-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:4px}
+.sub-entry-name{font-family:var(--mono, monospace);font-size:12px}
+.sub-entry-host{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono, monospace);font-size:12px}
+.sub-lan-badge{font-family:inherit}
+@media(max-width:600px){.user-row-policy{width:130px}.sub-url-row{grid-template-columns:1fr;gap:4px}}

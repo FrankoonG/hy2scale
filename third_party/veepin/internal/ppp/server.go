@@ -8,16 +8,19 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/xen0bit/veepin/dataplane"
 	"github.com/xen0bit/veepin/internal/mschap"
 )
 
-// Authenticator returns the password for a username, or ok=false if unknown. The
-// server session uses it to verify a client's MS-CHAPv2 response.
-type Authenticator func(username string) (password string, ok bool)
+// Authenticator returns the candidate passwords for a username, or ok=false if
+// unknown. The server session uses it to verify a client's MS-CHAPv2 response;
+// the first candidate that verifies wins. (hy2scale P17)
+type Authenticator func(username string) (creds []dataplane.Credential, ok bool)
 
 // ServerHandler receives the server session's lifecycle events. The SSTP layer
 // implements it: Authenticated hands back the credentials the crypto binding
 // needs, NetworkUp signals the tunnel can carry IP, and Closed reports teardown.
+// Its username is the matched credential's Identity. (hy2scale P17)
 type ServerHandler interface {
 	Authenticated(username, password string, ntResponse [mschap.NTResponseLen]byte)
 	NetworkUp()
@@ -287,19 +290,32 @@ func (s *ServerSession) handleCHAP(payload []byte) {
 		s.failLocked(fmt.Errorf("ppp: malformed MS-CHAPv2 response"))
 		return
 	}
-	password, known := s.cfg.Auth(username)
-	if !known || !verifyResponse(s.authChallenge, peerCh, username, password, ntResp) {
+	// hy2scale P17: try each candidate password; the response is computed over
+	// the name the peer sent, the session reports the matched Identity.
+	creds, known := s.cfg.Auth(username)
+	if !known {
+		creds = nil
+	}
+	var match *dataplane.Credential
+	for i := range creds {
+		if verifyResponse(s.authChallenge, peerCh, username, creds[i].Password, ntResp) {
+			match = &creds[i]
+			break
+		}
+	}
+	if match == nil {
 		s.send(ProtocolCHAP, cpPacket{Code: chapFailure, ID: pkt.ID, Body: buildFailure()}.marshal())
 		s.failLocked(fmt.Errorf("ppp: authentication failed for %q", username))
 		return
 	}
+	password := match.Password
 
 	s.username, s.password, s.ntResponse = username, password, ntResp
 	s.setMPPEKeys(password, ntResp) // hy2scale P10
 	success := buildSuccess(s.authChallenge, peerCh, username, password, ntResp)
 	s.send(ProtocolCHAP, cpPacket{Code: chapSuccess, ID: pkt.ID, Body: success}.marshal())
 
-	s.h.Authenticated(username, password, ntResp)
+	s.h.Authenticated(match.Identity, password, ntResp)
 	s.phase = phaseIPCP
 	s.sendIPCPConfigReq()
 }

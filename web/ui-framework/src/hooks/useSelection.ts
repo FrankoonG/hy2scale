@@ -47,9 +47,12 @@ export function useSelection(allKeys: string[]) {
 
   const clear = useCallback(() => setSelected(new Set()), []);
 
+  // selectKeys selects exactly these keys (another page asking for them).
+  const selectKeys = useCallback((keys: string[]) => setSelected(new Set(keys)), []);
+
   const count = selected.size;
   const isAllSelected = count > 0 && count === allKeys.length;
   const isSomeSelected = count > 0 && count < allKeys.length;
 
-  return { selected, toggle, toggleAll, selectOnly, clear, isAllSelected, isSomeSelected, count };
+  return { selected, toggle, toggleAll, selectOnly, selectKeys, clear, isAllSelected, isSomeSelected, count };
 }

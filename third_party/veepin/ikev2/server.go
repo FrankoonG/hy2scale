@@ -101,11 +101,13 @@ type ServerConfig struct {
 	// ListenPacket, if set, opens the IKE/NAT-T sockets. (hy2scale P2)
 	ListenPacket dataplane.ListenFunc
 	// EAPLookup, if set, enables EAP-MSCHAPv2 with credentials looked up per
-	// attempt (instead of the static EAPUsers file). (hy2scale P3)
-	EAPLookup func(username string) (password string, ok bool)
+	// attempt (instead of the static EAPUsers file). (hy2scale P3) It returns
+	// every password the user may sign in with; the session reports the
+	// Identity of the one that matched. (hy2scale P17)
+	EAPLookup func(username string) (creds []dataplane.Credential, ok bool)
 	// OnSession reports a client's tunnel address coming up / going away and
 	// the identity it authenticated as. (hy2scale P3)
-	OnSession func(up bool, user string, addr netip.Addr)
+	OnSession func(up bool, user string, addr netip.Addr, peer netip.AddrPort) // peer: the client's own address (hy2scale P16)
 
 	// PostQuantumOnly requires a post-quantum key exchange (ML-KEM-768 over
 	// RFC 9370) AND post-quantum authentication, refusing anything less rather
@@ -206,7 +208,10 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		if lerr != nil {
 			return nil, fmt.Errorf("ikev2: loading EAP users: %w", lerr)
 		}
-		eapLookup = store.Lookup
+		eapLookup = func(name string) ([]dataplane.Credential, bool) { // hy2scale P17
+			pw, ok := store.Lookup(name)
+			return []dataplane.Credential{{Password: pw, Identity: name}}, ok
+		}
 		logger.Printf("ikev2: EAP-MSCHAPv2 enabled with %d user(s) from %s", store.Count(), cfg.EAPUsers)
 	}
 	if cfg.EAPLookup != nil {

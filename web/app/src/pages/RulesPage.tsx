@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Badge, Button, Card, ExpandButton, Table, useModalState, type Column } from '@hy2scale/ui';
 import { dismissPolicyNotice, getPolicy, type ConditionSet, type PolicySet } from '@/api/policy';
 import SetModal from '@/components/policy/SetModal';
@@ -28,6 +29,19 @@ export default function RulesPage() {
   const io = useRulesImportExport(cfg);
   // leaving the page returns it to the list: entering always shows the list
   useEffect(() => () => setView('list'), []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Other pages may open a policy set (state: { openSet: id }); taken once.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const openSet = (location.state as { openSet?: string } | null)?.openSet;
+  useEffect(() => {
+    if (!openSet || !cfg) return;
+    const set = cfg.policies.find((s) => s.id === openSet);
+    if (set) {
+      setView('list');
+      edit.show({ kind: 'policy', set });
+    }
+    navigate(location.pathname, { replace: true, state: null });
+  }, [openSet, cfg]); // eslint-disable-line react-hooks/exhaustive-deps
 
   type Row = { kind: SetKind; set: PolicySet | ConditionSet };
   const rows: Row[] = [

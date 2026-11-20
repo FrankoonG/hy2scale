@@ -131,198 +131,200 @@ func (a *App) handleSS(conn net.Conn, method string) {
 			continue
 		}
 		// Per-proxy disable: admin UI can revoke a user from ss only.
-		if !u.IsProxyEnabled("ss") {
+		if !u.Serves("ss") {
 			skippedDisabled++
 			continue
 		}
-		// Skip if this user's SS password conflicts with another user.
-		// We log this case at end-of-loop so the operator sees a single
-		// clear line per failed connection rather than silence.
-		if a.IsPasswordConflicted(u.Username, "ss") {
-			skippedConflict++
-			continue
-		}
-		tried++
-		key := evpBytesToKey(u.EffectivePassword("ss"), keySize(method))
+		for _, cred := range u.Creds() {
+			// Skip a password that conflicts with another user's. We log this
+			// case at end-of-loop so the operator sees a single clear line per
+			// failed connection rather than silence.
+			if a.IsPasswordConflicted(Ident(u.Username, cred.Row), "ss") {
+				skippedConflict++
+				continue
+			}
+			tried++
+			key := evpBytesToKey(cred.Password, keySize(method))
 
-		// Derive session key from this user's master key + connection salt
-		sessionKey := make([]byte, keySize(method))
-		hkdfReader := hkdf.New(sha1.New, key, salt, []byte("ss-subkey"))
-		hkdfReader.Read(sessionKey)
-		sessionAEAD, err := newAEAD(method, sessionKey)
-		if err != nil {
-			continue
-		}
+			// Derive session key from this user's master key + connection salt
+			sessionKey := make([]byte, keySize(method))
+			hkdfReader := hkdf.New(sha1.New, key, salt, []byte("ss-subkey"))
+			hkdfReader.Read(sessionKey)
+			sessionAEAD, err := newAEAD(method, sessionKey)
+			if err != nil {
+				continue
+			}
 
-		// AEAD.Open may modify the ciphertext buffer (docs allow it), so we
-		// must feed it a copy — otherwise a failed first attempt would
-		// corrupt the bytes and the next user's attempt would see garbage.
-		nonce := make([]byte, nonceSize)
-		lenBufCopy := make([]byte, len(lenBuf))
-		copy(lenBufCopy, lenBuf)
-		plainLen, err := sessionAEAD.Open(lenBufCopy[:0], nonce, lenBufCopy, nil)
-		if err != nil {
-			continue
-		}
-		increment(nonce)
+			// AEAD.Open may modify the ciphertext buffer (docs allow it), so we
+			// must feed it a copy — otherwise a failed first attempt would
+			// corrupt the bytes and the next user's attempt would see garbage.
+			nonce := make([]byte, nonceSize)
+			lenBufCopy := make([]byte, len(lenBuf))
+			copy(lenBufCopy, lenBuf)
+			plainLen, err := sessionAEAD.Open(lenBufCopy[:0], nonce, lenBufCopy, nil)
+			if err != nil {
+				continue
+			}
+			increment(nonce)
 
-		// This user's key decrypted the first frame — lock it in.
-		if userExpired(&u) || a.overTrafficLimit(u.Username) {
-			log.Printf("[ss] %s refused: expired or over its traffic limit", u.Username)
-			return
-		}
-		payloadLen := int(binary.BigEndian.Uint16(plainLen))
-		payload := make([]byte, payloadLen+overhead)
-		if _, err := io.ReadFull(conn, payload); err != nil {
-			return
-		}
-		plain, err := sessionAEAD.Open(payload[:0], nonce, payload, nil)
-		if err != nil {
-			return
-		}
-		increment(nonce)
+			// This user's key decrypted the first frame — lock it in.
+			if userExpired(&u) || a.overTrafficLimit(u.Username) {
+				log.Printf("[ss] %s refused: expired or over its traffic limit", u.Username)
+				return
+			}
+			payloadLen := int(binary.BigEndian.Uint16(plainLen))
+			payload := make([]byte, payloadLen+overhead)
+			if _, err := io.ReadFull(conn, payload); err != nil {
+				return
+			}
+			plain, err := sessionAEAD.Open(payload[:0], nonce, payload, nil)
+			if err != nil {
+				return
+			}
+			increment(nonce)
 
-		// Parse SOCKS-like address from payload
-		addr, remaining, err := parseSocksAddr(plain)
-		if err != nil {
-			return
-		}
+			// Parse SOCKS-like address from payload
+			addr, remaining, err := parseSocksAddr(plain)
+			if err != nil {
+				return
+			}
 
-		// User identified! Route along their selection
-		username := u.Username
-		rt := a.route(userSel(&u), a.userSrc(policy.KindSS, &u, conn.RemoteAddr()), "tcp", addr)
+			// User identified! Route along their selection
+			username := u.Username
+			rt := a.route(userSelRow(&u, cred.Row), a.userSrc(policy.KindSS, &u, conn.RemoteAddr()), "tcp", addr)
 
-		af := beginUserFlow(audit.InSS, "tcp", username, conn.RemoteAddr(), addr)
-		dctx := audit.NewContext(withRestrict(a.appCtx, a.userRestrict(username)), af)
+			af := beginUserFlow(audit.InSS, "tcp", Ident(username, cred.Row), conn.RemoteAddr(), addr)
+			dctx := audit.NewContext(withRestrict(a.appCtx, a.userRestrict(username)), af)
 
-		// IP destination: read frames until the client's hello is whole so
-		// the host name can be recovered (sniff_override.go). Most clients
-		// send the address alone in the first frame.
-		var remote net.Conn
-		if wantSniff(addr) {
-			deadline := time.Now().Add(exit.SniffWindow)
-			waited := false
-			for !sniff.Complete(remaining) {
-				extra, started, ferr := readSSFrame(conn, sessionAEAD, nonce, overhead, deadline)
-				if ferr != nil {
-					if started {
-						af.End(ferr)
-						return // part of a frame is gone: the stream is unusable
+			// IP destination: read frames until the client's hello is whole so
+			// the host name can be recovered (sniff_override.go). Most clients
+			// send the address alone in the first frame.
+			var remote net.Conn
+			if wantSniff(addr) {
+				deadline := time.Now().Add(exit.SniffWindow)
+				waited := false
+				for !sniff.Complete(remaining) {
+					extra, started, ferr := readSSFrame(conn, sessionAEAD, nonce, overhead, deadline)
+					if ferr != nil {
+						if started {
+							af.End(ferr)
+							return // part of a frame is gone: the stream is unusable
+						}
+						var ne net.Error
+						waited = errors.As(ferr, &ne) && ne.Timeout()
+						break
 					}
-					var ne net.Error
-					waited = errors.As(ferr, &ne) && ne.Timeout()
+					remaining = append(remaining, extra...)
+				}
+				remote, err = a.dialSniffedTCP(dctx, rt, addr, remaining, waited, isLoopbackAddr(conn.RemoteAddr()))
+			} else {
+				remote, err = rt.dial(dctx)
+			}
+			if err != nil {
+				af.End(err)
+				denyClose(conn, err)
+				return
+			}
+			defer remote.Close()
+			defer af.End(nil)
+
+			// Device row with live accounting; stop closes both ends.
+			remoteIP := ""
+			if h, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
+				remoteIP = h
+			}
+			stop := func() { conn.Close(); remote.Close() }
+			sid := a.Sessions.Connect(username, remoteIP, "ss", stop)
+			m := a.newUserMeter(username, sid, stop)
+			m.flow = af
+			defer func() {
+				a.Sessions.Disconnect(sid, 0, 0)
+				m.done()
+			}()
+
+			// Send remaining data
+			if len(remaining) > 0 {
+				remote.Write(remaining)
+				m.add(int64(len(remaining)), 0)
+			}
+
+			done := make(chan struct{})
+
+			// remote → client (encrypt)
+			go func() {
+				buf := make([]byte, 16384)
+				writeNonce := make([]byte, sessionAEAD.NonceSize())
+				// Generate write salt
+				writeSalt := make([]byte, saltLen)
+				rand.Read(writeSalt)
+				// Derive write session key
+				writeKey := make([]byte, keySize(method))
+				wr := hkdf.New(sha1.New, key, writeSalt, []byte("ss-subkey"))
+				wr.Read(writeKey)
+				writeAEAD, _ := newAEAD(method, writeKey)
+				conn.Write(writeSalt)
+				for {
+					n, err := remote.Read(buf)
+					if n > 0 {
+						// Encrypt length
+						var lb [2]byte
+						binary.BigEndian.PutUint16(lb[:], uint16(n))
+						encLen := writeAEAD.Seal(nil, writeNonce, lb[:], nil)
+						increment(writeNonce)
+						// Encrypt payload
+						encPayload := writeAEAD.Seal(nil, writeNonce, buf[:n], nil)
+						increment(writeNonce)
+						conn.Write(encLen)
+						conn.Write(encPayload)
+						m.add(0, int64(n))
+					}
+					if err != nil {
+						break
+					}
+				}
+				// The target finished: pass its FIN on to the client and bound
+				// the other direction, as relayUser does.
+				halfCloseAndBound(conn)
+				done <- struct{}{}
+			}()
+
+			// client → remote (decrypt) — continue reading from existing stream
+			readBuf := make([]byte, 16384)
+			for {
+				// Read encrypted length
+				lb := make([]byte, 2+sessionAEAD.Overhead())
+				if _, err := io.ReadFull(conn, lb); err != nil {
 					break
 				}
-				remaining = append(remaining, extra...)
-			}
-			remote, err = a.dialSniffedTCP(dctx, rt, addr, remaining, waited, isLoopbackAddr(conn.RemoteAddr()))
-		} else {
-			remote, err = rt.dial(dctx)
-		}
-		if err != nil {
-			af.End(err)
-			denyClose(conn, err)
-			return
-		}
-		defer remote.Close()
-		defer af.End(nil)
-
-		// Device row with live accounting; stop closes both ends.
-		remoteIP := ""
-		if h, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
-			remoteIP = h
-		}
-		stop := func() { conn.Close(); remote.Close() }
-		sid := a.Sessions.Connect(username, remoteIP, "ss", stop)
-		m := a.newUserMeter(username, sid, stop)
-		m.flow = af
-		defer func() {
-			a.Sessions.Disconnect(sid, 0, 0)
-			m.done()
-		}()
-
-		// Send remaining data
-		if len(remaining) > 0 {
-			remote.Write(remaining)
-			m.add(int64(len(remaining)), 0)
-		}
-
-		done := make(chan struct{})
-
-		// remote → client (encrypt)
-		go func() {
-			buf := make([]byte, 16384)
-			writeNonce := make([]byte, sessionAEAD.NonceSize())
-			// Generate write salt
-			writeSalt := make([]byte, saltLen)
-			rand.Read(writeSalt)
-			// Derive write session key
-			writeKey := make([]byte, keySize(method))
-			wr := hkdf.New(sha1.New, key, writeSalt, []byte("ss-subkey"))
-			wr.Read(writeKey)
-			writeAEAD, _ := newAEAD(method, writeKey)
-			conn.Write(writeSalt)
-			for {
-				n, err := remote.Read(buf)
-				if n > 0 {
-					// Encrypt length
-					var lb [2]byte
-					binary.BigEndian.PutUint16(lb[:], uint16(n))
-					encLen := writeAEAD.Seal(nil, writeNonce, lb[:], nil)
-					increment(writeNonce)
-					// Encrypt payload
-					encPayload := writeAEAD.Seal(nil, writeNonce, buf[:n], nil)
-					increment(writeNonce)
-					conn.Write(encLen)
-					conn.Write(encPayload)
-					m.add(0, int64(n))
-				}
+				plainLenBuf, err := sessionAEAD.Open(lb[:0], nonce, lb, nil)
 				if err != nil {
 					break
 				}
+				increment(nonce)
+				pLen := int(binary.BigEndian.Uint16(plainLenBuf))
+				if pLen > len(readBuf)+sessionAEAD.Overhead() {
+					break
+				}
+				encData := make([]byte, pLen+sessionAEAD.Overhead())
+				if _, err := io.ReadFull(conn, encData); err != nil {
+					break
+				}
+				plainData, err := sessionAEAD.Open(encData[:0], nonce, encData, nil)
+				if err != nil {
+					break
+				}
+				increment(nonce)
+				remote.Write(plainData)
+				m.add(int64(len(plainData)), 0)
 			}
-			// The target finished: pass its FIN on to the client and bound
-			// the other direction, as relayUser does.
-			halfCloseAndBound(conn)
-			done <- struct{}{}
-		}()
-
-		// client → remote (decrypt) — continue reading from existing stream
-		readBuf := make([]byte, 16384)
-		for {
-			// Read encrypted length
-			lb := make([]byte, 2+sessionAEAD.Overhead())
-			if _, err := io.ReadFull(conn, lb); err != nil {
-				break
-			}
-			plainLenBuf, err := sessionAEAD.Open(lb[:0], nonce, lb, nil)
-			if err != nil {
-				break
-			}
-			increment(nonce)
-			pLen := int(binary.BigEndian.Uint16(plainLenBuf))
-			if pLen > len(readBuf)+sessionAEAD.Overhead() {
-				break
-			}
-			encData := make([]byte, pLen+sessionAEAD.Overhead())
-			if _, err := io.ReadFull(conn, encData); err != nil {
-				break
-			}
-			plainData, err := sessionAEAD.Open(encData[:0], nonce, encData, nil)
-			if err != nil {
-				break
-			}
-			increment(nonce)
-			remote.Write(plainData)
-			m.add(int64(len(plainData)), 0)
+			// The client finished sending: pass its FIN on to the target (which
+			// may close only after it) and bound the wait for the reply
+			// direction. Waiting for the target first kept both ends — and the
+			// exit's session — open forever with a target that waits for us.
+			halfCloseAndBound(remote)
+			<-done
+			return
 		}
-		// The client finished sending: pass its FIN on to the target (which
-		// may close only after it) and bound the wait for the reply
-		// direction. Waiting for the target first kept both ends — and the
-		// exit's session — open forever with a target that waits for us.
-		halfCloseAndBound(remote)
-		<-done
-		return
 	}
 	// User-loop exited with no match — explain WHY (silent rejection
 	// otherwise looks like a network glitch to the operator). Heuristic:
@@ -379,7 +381,7 @@ func (a *App) handleSSNone(conn net.Conn) {
 
 	if len(remaining) > 0 {
 		remote.Write(remaining)
-		af.Add(int64(len(remaining)), 0)
+		af.AddData(remaining, true)
 	}
 	remoteIP := ""
 	if h, _, err := net.SplitHostPort(conn.RemoteAddr().String()); err == nil {
