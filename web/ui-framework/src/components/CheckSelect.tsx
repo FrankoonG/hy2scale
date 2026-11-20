@@ -21,6 +21,8 @@ export interface CheckSelectProps {
   label: string;
   className?: string;
   testId?: string;
+  /** Up to this many ticked options are named in the box (default 2). */
+  maxNames?: number;
 }
 
 const MAX_HEIGHT = 300;
@@ -28,9 +30,9 @@ const MAX_HEIGHT = 300;
 /**
  * A select-like box whose list ticks options on and off (it stays open
  * while ticking). Shows `label` while all are ticked, the ticked names when
- * one or two are, else the label with a count.
+ * up to `maxNames` are, else the label with a count.
  */
-export function CheckSelect({ options, value, onChange, label, className, testId }: CheckSelectProps) {
+export function CheckSelect({ options, value, onChange, label, className, testId, maxNames = 2 }: CheckSelectProps) {
   const L = useUiLabels();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -43,7 +45,7 @@ export function CheckSelect({ options, value, onChange, label, className, testId
   const ticked = options.filter((o) => on.has(o.value));
   const all = ticked.length === options.length;
   const text = all ? label
-    : ticked.length > 0 && ticked.length <= 2 ? ticked.map((o) => o.label).join(', ')
+    : ticked.length > 0 && ticked.length <= maxNames ? ticked.map((o) => o.label).join(', ')
       : `${label} (${ticked.length}/${options.length})`;
   const toggle = (v: string) => onChange(on.has(v) ? value.filter((x) => x !== v) : [...value, v]);
 

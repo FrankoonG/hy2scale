@@ -40,6 +40,9 @@ export interface SystemValues extends Record<NumKey, string> {
   public_method: 'public' | 'peer+public';
   public_interval: string;
   public_servers: ListItem[];
+  public_host: string;
+  mdns_enabled: boolean;
+  mdns_name: string;
   auto_update_enabled: boolean;
   auto_update_time: string;
   auto_update_from_peers: boolean;
@@ -64,6 +67,9 @@ function systemFrom(s?: UISettings): SystemValues {
     public_method: pip?.method === 'peer+public' ? 'peer+public' : 'public',
     public_interval: String(pip?.interval || 600),
     public_servers: toListItems(pip?.servers || []),
+    public_host: s?.public_host || '',
+    mdns_enabled: s?.mdns_enabled !== false,
+    mdns_name: s?.mdns_name || '',
     auto_update_enabled: !!s?.auto_update_enabled,
     auto_update_time: s?.auto_update_time || AUTO_UPDATE_TIME,
     auto_update_from_peers: !!s?.auto_update_from_peers,
@@ -73,7 +79,8 @@ function systemFrom(s?: UISettings): SystemValues {
 /** System sub-pages, each saving only its own fields. */
 export type SystemSection = 'network' | 'dns' | 'nested' | 'update';
 const SECTION_KEYS: Record<SystemSection, (keyof SystemValues)[]> = {
-  network: ['relay_admin_passthrough', 'accept_punch', 'accept_shared_users', 'path_loss_grace_s', 'public_method', 'public_interval', 'public_servers'],
+  network: ['relay_admin_passthrough', 'accept_punch', 'accept_shared_users', 'path_loss_grace_s', 'public_method', 'public_interval', 'public_servers',
+    'public_host', 'mdns_enabled', 'mdns_name'],
   dns: ['dns', 'dns_resolver_enabled', 'dns_resolver_cache_ttl', 'dns_resolver_negative_ttl', 'dns_resolver_cache_size', 'dns_resolver_query_timeout_ms'],
   nested: NESTED_KEYS,
   update: ['auto_update_enabled', 'auto_update_time', 'auto_update_from_peers'],
@@ -112,7 +119,20 @@ export function useSystemForm(settingsQ: UseQueryResult<UISettings>) {
         toast.error(t('settings.publicIpServerInvalid', { v: badServer }));
         return null;
       }
+      const host = v.public_host.trim();
+      if (host && !/^(\[[0-9a-fA-F:.]+\]|[0-9a-fA-F:.]*:[0-9a-fA-F:.]*|[A-Za-z0-9.-]+)$/.test(host)) {
+        toast.error(t('settings.publicHostInvalid'));
+        return null;
+      }
+      const mdnsName = v.mdns_name.trim();
+      if (mdnsName && !/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/.test(mdnsName)) {
+        toast.error(t('settings.lanNameInvalid'));
+        return null;
+      }
       return {
+        public_host: host,
+        mdns_enabled: v.mdns_enabled,
+        mdns_name: mdnsName,
         relay_admin_passthrough: v.relay_admin_passthrough,
         accept_punch: v.accept_punch,
         accept_shared_users: v.accept_shared_users,

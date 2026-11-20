@@ -8,10 +8,13 @@ package api
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/FrankoonG/hy2scale/internal/app"
+	"github.com/FrankoonG/hy2scale/internal/mdns"
 )
 
 func (s *Server) getUISettings(w http.ResponseWriter, r *http.Request) {
@@ -50,6 +53,7 @@ func (s *Server) nodeSettings(cfg app.Config) map[string]any {
 	lim := s.app.Tree().Limits() // current runtime values (post-clamp + env override)
 	// DNS resolver: raw stored values, so "unset = default" survives a save.
 	dr := cfg.DNSResolver
+	mdnsClaimed, mdnsState := s.app.MDNSStatus()
 	return map[string]any{
 		"dns": dns,
 		// quality/aggregate: seconds a connection survives with no path (effective value)
@@ -78,7 +82,41 @@ func (s *Server) nodeSettings(cfg app.Config) map[string]any {
 		"dns_resolver_negative_ttl":     dr.NegativeTTL,
 		"dns_resolver_cache_size":       dr.CacheSize,
 		"dns_resolver_query_timeout_ms": dr.QueryTimeoutMs,
+		// the host links of this node carry, and the LAN name (subscription.go, mdns.go)
+		"public_host":          cfg.PublicHost,
+		"public_host_detected": s.app.DetectedPublicHost(),
+		"mdns_enabled":         cfg.MDNS == nil || !cfg.MDNS.Disabled,
+		"mdns_name":            mdnsName(cfg),
+		"mdns_label":           s.app.MDNSLabel(),
+		"mdns_claimed":         mdnsClaimed,
+		"mdns_state":           mdnsState,
 	}
+}
+
+func mdnsName(cfg app.Config) string {
+	if cfg.MDNS == nil {
+		return ""
+	}
+	return cfg.MDNS.Name
+}
+
+// validPublicHost: a host name or an IP address (no scheme, port or path).
+func validPublicHost(h string) bool {
+	if h == "" {
+		return true
+	}
+	if net.ParseIP(strings.Trim(h, "[]")) != nil {
+		return true
+	}
+	if len(h) > 253 {
+		return false
+	}
+	for _, c := range h {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '.') {
+			return false
+		}
+	}
+	return !strings.HasPrefix(h, ".") && !strings.HasPrefix(h, "-")
 }
 
 func (s *Server) getNodeSettings(w http.ResponseWriter, r *http.Request) {
@@ -122,6 +160,9 @@ type settingsBody struct {
 	DNSResolverCacheSize      *int                `json:"dns_resolver_cache_size"`
 	DNSResolverQueryTimeoutMs *int                `json:"dns_resolver_query_timeout_ms"`
 	PublicIP                  *app.PublicIPConfig `json:"public_ip"`
+	PublicHost                *string             `json:"public_host"`
+	MDNSEnabled               *bool               `json:"mdns_enabled"`
+	MDNSName                  *string             `json:"mdns_name"`
 }
 
 // The owner of a settings write.
@@ -175,6 +216,23 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, own int) {
 		body.MaxNestedDepth, body.MaxResponseNodes, body.MaxCacheEntries, body.MaxResponseBytes, body.MaxFetchFanOut = nil, nil, nil, nil, nil
 		body.DNSResolverEnabled, body.DNSResolverCacheTTL, body.DNSResolverNegativeTTL = nil, nil, nil
 		body.DNSResolverCacheSize, body.DNSResolverQueryTimeoutMs = nil, nil
+		body.PublicHost, body.MDNSEnabled, body.MDNSName = nil, nil, nil
+	}
+	if body.PublicHost != nil {
+		h := strings.TrimSpace(*body.PublicHost)
+		if !validPublicHost(h) {
+			http.Error(w, "public host: a host name or an IP address, without a port", 400)
+			return
+		}
+		body.PublicHost = &h
+	}
+	if body.MDNSName != nil {
+		n := strings.TrimSpace(*body.MDNSName)
+		if n != "" && mdns.SanitizeLabel(n) != strings.ToLower(n) {
+			http.Error(w, "LAN name: letters, digits and '-' only", 400)
+			return
+		}
+		body.MDNSName = &n
 	}
 	if body.AutoUpdateTime != nil {
 		if _, err := time.Parse("15:04", *body.AutoUpdateTime); err != nil || len(*body.AutoUpdateTime) != 5 {
@@ -256,6 +314,20 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, own int) {
 		if body.DNSResolverQueryTimeoutMs != nil {
 			c.DNSResolver.QueryTimeoutMs = *body.DNSResolverQueryTimeoutMs
 		}
+		if body.PublicHost != nil {
+			c.PublicHost = *body.PublicHost
+		}
+		if body.MDNSEnabled != nil || body.MDNSName != nil {
+			if c.MDNS == nil {
+				c.MDNS = &app.MDNSConfig{}
+			}
+			if body.MDNSEnabled != nil {
+				c.MDNS.Disabled = !*body.MDNSEnabled
+			}
+			if body.MDNSName != nil {
+				c.MDNS.Name = *body.MDNSName
+			}
+		}
 		if body.PublicIP != nil {
 			applyPublicIPSettings(c, body.PublicIP)
 		}
@@ -265,6 +337,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, own int) {
 	}
 	if body.AcceptSharedUsers != nil {
 		s.app.ApplySharedAttr()
+	}
+	if body.MDNSEnabled != nil || body.MDNSName != nil {
+		go s.app.ApplyMDNS()
 	}
 	// Hot-reload resolver snapshot on any DNS-resolver field touch +
 	// purge cache so the new config takes effect on next call.

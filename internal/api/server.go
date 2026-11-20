@@ -130,6 +130,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.shellRoutes(authed)
 	s.toolsRoutes(authed)
 	s.storageRoutes(authed)
+	s.linkRoutes(authed)
 
 	apiMux.Handle("/api/", s.authMiddleware(authed))
 

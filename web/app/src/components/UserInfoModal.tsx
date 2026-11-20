@@ -3,14 +3,13 @@ import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { QRCodeCanvas } from 'qrcode.react';
 import {
-  Modal, Button, Badge, Table, Tabs, TabPanel, Tooltip, DetailGrid, FieldLabel, FormStack, IconButton, IconUnplug,
+  Modal, Button, Badge, Table, Tabs, TabPanel, Tooltip, DetailGrid, FieldLabel, FormStack, Hint, IconButton, IconUnplug,
   useToast, type Column, type DetailItem,
 } from '@hy2scale/ui';
 import type { UserConfig, Session } from '@/api';
 import type { SharedMember, SharedMemberState } from '@/api/types';
-import * as api from '@/api';
-import { useNodeStore } from '@/store/node';
-import { PROXY_REGISTRY, DETAIL_PROXIES, type ProxyContext } from '@/config/proxyRegistry';
+import { PROXY_REGISTRY } from '@/config/proxyRegistry';
+import { getUserLinks } from '@/api/links';
 import { fmtBytes, fmtDuration } from '@/hooks/useFormat';
 import { isPast } from '@/utils/date';
 import { copyToClipboard } from '@/utils/clipboard';
@@ -249,22 +248,14 @@ function SharedMembers({ members }: { members: SharedMember[] }) {
   );
 }
 
-/** The user's share link per proxy, each with a QR code on hover. */
+/** The user's share links per proxy (public host, then LAN), each with a QR code on hover. */
 function ProxiesTab({ user, open }: { user: UserConfig; open: boolean }) {
   const { t } = useTranslation();
   const toast = useToast();
-  const node = useNodeStore((s) => s.node);
-  const { data: proxies = [] } = useQuery({ queryKey: ['proxies'], queryFn: api.getProxies, enabled: open });
-  const { data: ssConfig } = useQuery({ queryKey: ['ss'], queryFn: api.getSS, enabled: open });
-  const { data: trojanConfig } = useQuery({ queryKey: ['trojan'], queryFn: api.getTrojan, enabled: open });
-
-  const host = window.location.hostname || 'localhost';
-  const serverPort = node?.server?.listen?.replace(/.*:/, '') || '5565';
-  const ctx: ProxyContext = { serverPort, ssConfig, trojanConfig, proxies };
-  const links = DETAIL_PROXIES.map((def) => {
-    const port = def.getPort(ctx);
-    const pw = (def.authType === 'password' && user.proxy_passwords?.[def.key]) || user.password;
-    return { label: def.label, url: def.buildUrl({ host, port, username: user.username, password: pw }, ctx) };
+  const { data: all = [] } = useQuery({ queryKey: ['userLinks', user.id], queryFn: () => getUserLinks(user.id, window.location.hostname), enabled: open });
+  const links = all.map((l) => {
+    const def = PROXY_REGISTRY.find((d) => d.key === l.proto);
+    return { label: (def?.label || l.proto) + (l.lan ? ` · ${t('users.linkLAN')} ${l.host}` : ''), url: l.url };
   });
 
   const handleCopy = (url: string) => {
@@ -273,8 +264,9 @@ function ProxiesTab({ user, open }: { user: UserConfig; open: boolean }) {
 
   return (
     <FormStack gap={12}>
+      {links.length === 0 && <Hint>{t('users.noLinks')}</Hint>}
       {links.map((link) => (
-        <div key={link.label}>
+        <div key={link.url}>
           <FieldLabel>{link.label}</FieldLabel>
           <Tooltip content={
             <QRCodeCanvas value={link.url} size={220} bgColor="#ffffff" fgColor="#000000" level="M" includeMargin />

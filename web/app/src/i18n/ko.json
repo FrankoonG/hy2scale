@@ -1438,5 +1438,20 @@
   "users.accessFull": "전체 사용",
   "nodes.invisible": "비가시 접속",
   "nodes.invisibleTitle": "사용자로 접속: 상대 노드 목록에 표시되지 않음",
-  "nodes.detail.access": "접속 방식"
+  "nodes.detail.access": "접속 방식",
+  "settings.publicHostSection": "공인 주소",
+  "settings.publicHost": "공인 호스트",
+  "settings.publicHostHint": "내보낸 링크와 구독에 사용됩니다. 비우면 감지된 주소를 씁니다.",
+  "settings.publicHostNone": "감지된 공인 주소 없음",
+  "settings.publicHostInvalid": "공인 호스트: 포트 없이 호스트 이름 또는 IP",
+  "settings.lanName": "LAN 이름 (mDNS)",
+  "settings.lanNameInvalid": "LAN 이름: 소문자, 숫자, '-'",
+  "settings.lanNameOn": "{{name}}(으)로 응답 중",
+  "settings.lanNameState.on": "켜짐",
+  "settings.lanNameState.probing": "이름 확인 중…",
+  "settings.lanNameState.off": "꺼짐",
+  "settings.lanNameState.no_lan": "호스트 네트워크가 아님 (컨테이너 브리지)",
+  "settings.lanNameState.failed": "시작할 수 없음",
+  "users.linkLAN": "내부망",
+  "users.noLinks": "이 노드에 접근할 주소가 없습니다"
 }

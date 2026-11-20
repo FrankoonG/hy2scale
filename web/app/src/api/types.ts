@@ -417,6 +417,16 @@ export interface UISettings {
   // Read-only.
   auto_update_supported?: boolean;    // false: this node cannot update itself (no supervisor)
   auto_update_last?: AutoUpdateLast;
+  /** The host links of this node carry ('' = the detected public address). */
+  public_host?: string;
+  public_host_detected?: string;
+  /** LAN name (mDNS): on unless turned off; name '' = the node's name. */
+  mdns_enabled?: boolean;
+  mdns_name?: string;
+  /** read-only: the label used, the name claimed and its state */
+  mdns_label?: string;
+  mdns_claimed?: string;
+  mdns_state?: 'on' | 'probing' | 'off' | 'no_lan' | 'failed';
 }
 
 /** The last automatic-update run. */

@@ -1438,5 +1438,20 @@
   "users.accessFull": "Full use",
   "nodes.invisible": "invisible",
   "nodes.invisibleTitle": "Connected as a user: not listed by that node",
-  "nodes.detail.access": "Access"
+  "nodes.detail.access": "Access",
+  "settings.publicHostSection": "Public address",
+  "settings.publicHost": "Public host",
+  "settings.publicHostHint": "Used by exported links and the subscription. Empty: the detected address.",
+  "settings.publicHostNone": "No public address detected",
+  "settings.publicHostInvalid": "Public host: a host name or IP address, without a port",
+  "settings.lanName": "LAN name (mDNS)",
+  "settings.lanNameInvalid": "LAN name: lowercase letters, digits and '-'",
+  "settings.lanNameOn": "Answering as {{name}}",
+  "settings.lanNameState.on": "On",
+  "settings.lanNameState.probing": "Claiming the name…",
+  "settings.lanNameState.off": "Off",
+  "settings.lanNameState.no_lan": "Not on the host's network (container bridge)",
+  "settings.lanNameState.failed": "Could not start",
+  "users.linkLAN": "LAN",
+  "users.noLinks": "No address to reach this node by"
 }

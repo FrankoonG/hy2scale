@@ -145,6 +145,10 @@ type Config struct {
 	Interfaces []InterfaceConfig     `yaml:"interfaces,omitempty" json:"interfaces,omitempty"`
 	Egress     *EgressConfig         `yaml:"egress,omitempty" json:"egress,omitempty"`
 	PublicIP   *PublicIPConfig       `yaml:"public_ip,omitempty" json:"public_ip,omitempty"`
+	// PublicHost: the host links of this node carry ("" = the detected
+	// public address); MDNS: the LAN name (links.go, mdns.go).
+	PublicHost string      `yaml:"public_host,omitempty" json:"public_host,omitempty"`
+	MDNS       *MDNSConfig `yaml:"mdns,omitempty" json:"mdns,omitempty"`
 	// Storage: logs and audit records kept on disk (storage.go); nil = both off.
 	Storage *StorageConfig `yaml:"storage,omitempty" json:"storage,omitempty"`
 	// GeoIP: how the GeoIP databases are kept (geoip.go); nil = manual.
@@ -446,6 +450,8 @@ func (a *App) Run(ctx context.Context) error {
 	go a.initEgress(ctx)
 	go a.ifaces.pub.Run(ctx, a.node)
 	go a.node.RunAttrs(ctx)
+	a.ApplyMDNS()
+	go func() { <-ctx.Done(); stopMDNS() }()
 	go a.tree.Run(ctx)
 	a.exit.Start(ctx)
 	a.persisters.Add(1)
