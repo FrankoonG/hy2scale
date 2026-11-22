@@ -10,6 +10,7 @@ import { sha256, getSessionHash, getSavedCredentials, syncHubCookie } from '@/ho
 import { versionGreater } from '@/utils/version';
 import { fmtBytes } from '@/hooks/useFormat';
 import { REMOTE_TTL, readRemoteAuth, writeRemoteAuth } from '@/utils/remoteAuth';
+import RemoteAccess, { closeRemoteAccess, renewRemoteAccess } from '@/components/RemoteAccess';
 
 /*
  * Remote node dialog: sign in to a node reached through the mesh, then
@@ -82,6 +83,8 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
     setAuthState(a);
     writeAuth(chain, a);
     setPhase(a ? 'in' : 'out');
+    // remote access opened here follows the sign-in
+    if (a) renewRemoteAccess(chain, a);
   }, [chainKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** A request to the remote node through this node's proxy. */
@@ -209,6 +212,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
   function signOut() {
     const a = auth;
     credRef.current = null;
+    closeRemoteAccess(chain);
     setAuth(null);
     setInfo(null);
     setOp({ kind: 'idle' });
@@ -502,6 +506,11 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
             </div>
           </div>
           {opStatus}
+        </section>
+
+        <section className={clsx('remote-sec', 'remote-ops', !signedIn && 'locked')} aria-disabled={!signedIn}>
+          <div className="remote-sec-title">{t('remote.access')}</div>
+          <RemoteAccess chain={chain} auth={signedIn ? auth : null} />
         </section>
       </div>
     </Modal>

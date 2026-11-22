@@ -44,6 +44,8 @@ func (s *Server) webSettings(cfg app.Config) map[string]any {
 		// subscriptions served here (subscription.go)
 		"sub_no_relay": cfg.Subscription != nil && cfg.Subscription.NoRelay,
 		"sub_http":     cfg.Subscription != nil && cfg.Subscription.HTTP,
+		// ports remote access opens (remote_access.go)
+		"remote_access_ports": cfg.RemoteAccessPorts,
 	}
 }
 
@@ -168,6 +170,7 @@ type settingsBody struct {
 	SubHTTP                   *bool               `json:"sub_http"`
 	MDNSEnabled               *bool               `json:"mdns_enabled"`
 	MDNSName                  *string             `json:"mdns_name"`
+	RemoteAccessPorts         *string             `json:"remote_access_ports"`
 }
 
 // The owner of a settings write.
@@ -211,6 +214,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, own int) {
 		body.Listen, body.BasePath, body.ForceHTTPS, body.HTTPSCertID = nil, nil, nil, nil
 		body.SessionTimeoutH = nil
 		body.SubNoRelay, body.SubHTTP = nil, nil
+		body.RemoteAccessPorts = nil
 	}
 	if own&ownPublicIP == 0 {
 		body.PublicIP = nil
@@ -223,6 +227,14 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, own int) {
 		body.DNSResolverEnabled, body.DNSResolverCacheTTL, body.DNSResolverNegativeTTL = nil, nil, nil
 		body.DNSResolverCacheSize, body.DNSResolverQueryTimeoutMs = nil, nil
 		body.PublicHost, body.MDNSEnabled, body.MDNSName = nil, nil, nil
+	}
+	if body.RemoteAccessPorts != nil {
+		p := strings.TrimSpace(*body.RemoteAccessPorts)
+		if !validRAPorts(p) {
+			http.Error(w, "remote access ports: e.g. 20000-20100 or 20000,20001", 400)
+			return
+		}
+		body.RemoteAccessPorts = &p
 	}
 	if body.PublicHost != nil {
 		h := strings.TrimSpace(*body.PublicHost)
@@ -264,6 +276,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, own int) {
 		}
 		if body.SessionTimeoutH != nil {
 			c.SessionTimeoutH = *body.SessionTimeoutH
+		}
+		if body.RemoteAccessPorts != nil {
+			c.RemoteAccessPorts = *body.RemoteAccessPorts
 		}
 		if body.PathLossGraceS != nil {
 			// read per new session: effective immediately, no restart

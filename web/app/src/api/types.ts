@@ -407,6 +407,8 @@ export interface UISettings {
   force_https: boolean;
   https_cert_id: string;
   session_timeout_h: number;
+  /** ports remote access opens ("" = any free port) */
+  remote_access_ports?: string;
   path_loss_grace_s?: number;
   // Nested-discovery hard limits — hot-reloadable on PUT.
   max_nested_depth: number;

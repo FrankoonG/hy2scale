@@ -203,6 +203,8 @@ export function useWebForm(settingsQ: UseQueryResult<UISettings>) {
   // subscriptions: through other nodes (sub_no_relay off), over plain http
   const [subViaNodes, setSubViaNodes] = useState(true);
   const [subHTTP, setSubHTTP] = useState(false);
+  // ports remote access opens here ("" = any free port)
+  const [raPorts, setRaPorts] = useState('');
   const [saving, setSaving] = useState(false);
 
   const resync = useServerFormInit(settingsQ, (s) => {
@@ -212,6 +214,7 @@ export function useWebForm(settingsQ: UseQueryResult<UISettings>) {
     setSessionTimeout(String(s.session_timeout_h || 12));
     setSubViaNodes(!s.sub_no_relay);
     setSubHTTP(!!s.sub_http);
+    setRaPorts(s.remote_access_ports || '');
   });
 
   const save = async () => {
@@ -221,6 +224,7 @@ export function useWebForm(settingsQ: UseQueryResult<UISettings>) {
         listen, base_path: basePath,
         https_cert_id: httpsCertId, session_timeout_h: parseInt(sessionTimeout) || 12,
         sub_no_relay: !subViaNodes, sub_http: subHTTP,
+        remote_access_ports: raPorts.trim(),
       });
       toast.success(t('settings.saved'));
       resync();
@@ -232,7 +236,7 @@ export function useWebForm(settingsQ: UseQueryResult<UISettings>) {
   return {
     listen, setListen, basePath, setBasePath,
     httpsCertId, setHttpsCertId, sessionTimeout, setSessionTimeout,
-    subViaNodes, setSubViaNodes, subHTTP, setSubHTTP, save, saving,
+    subViaNodes, setSubViaNodes, subHTTP, setSubHTTP, raPorts, setRaPorts, save, saving,
   };
 }
 export type WebForm = ReturnType<typeof useWebForm>;

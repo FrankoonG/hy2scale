@@ -146,6 +146,19 @@
 .remote-upg-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:2px}
 .remote-progress{display:flex;flex-direction:column;gap:6px}
 @media(max-width:640px){.remote-auth-form,.remote-upg{grid-template-columns:minmax(0,1fr)}}
+/* Remote access (remote node dialog) */
+.ra{display:flex;flex-direction:column;gap:10px}
+.ra-form{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.ra-form .ra-target{flex:1 1 220px;min-width:180px;width:auto}
+.ra-form .ra-port{flex:0 0 96px;width:96px}
+.ra-list{display:flex;flex-direction:column;gap:8px}
+.ra-item{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--bg)}
+.ra-main{display:flex;align-items:center;gap:8px;min-width:0}
+.ra-main .spacer{flex:1}
+.ra-form>.hy-btn{height:36px}
+.ra-dst{font-size:13px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ra-meta{display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px}
+.ra-entry{font-size:13px;color:var(--text)}
 /* GeoIP hover card of a flag */
 .hy-tooltip-wrap:has(> .cflag){vertical-align:-.1em;margin-right:.45em}
 .hy-tooltip-wrap>.cflag{margin-right:0}
