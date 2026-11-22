@@ -166,6 +166,9 @@ type Config struct {
 	// RemoteAccessPorts: the ports remote access opens here, e.g.
 	// "20000-20100" ("" = any free port).
 	RemoteAccessPorts string `yaml:"remote_access_ports,omitempty" json:"remote_access_ports,omitempty"`
+	// RemoteAccessTargets: the addresses other nodes managing this one
+	// reach from here (the list every manager sees).
+	RemoteAccessTargets []RemoteAccessTarget `yaml:"remote_access_targets,omitempty" json:"remote_access_targets,omitempty"`
 	// PathLossGraceS: quality/aggregate connections survive this many
 	// seconds without any working path to their exit, then close.
 	// 0 = default (msess.OrphanBudget); clamped to [3, 300].
@@ -2671,4 +2674,15 @@ func loadCert(certFile, keyFile string) (tls.Certificate, error) {
 	}
 	der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
+}
+
+// RemoteAccessTarget: an address reached from this node by a node managing
+// it. Web: a URL (reverse proxy); port: host:port over tcp, udp or both.
+type RemoteAccessTarget struct {
+	ID      string `yaml:"id" json:"id"`
+	Mode    string `yaml:"mode" json:"mode"` // web | port
+	Target  string `yaml:"target" json:"target"`
+	TCP     bool   `yaml:"tcp,omitempty" json:"tcp"`
+	UDP     bool   `yaml:"udp,omitempty" json:"udp"`
+	Created int64  `yaml:"created,omitempty" json:"created"` // unix ms
 }

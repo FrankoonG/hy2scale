@@ -104,7 +104,7 @@ export default function MainLayout({ children }: { children: ReactNode }) {
   }));
 
   const versionBadge = node?.version
-    ? <VersionMenu version={node.version} limited={node.limited} />
+    ? <VersionMenu version={node.version} />
     : null;
 
   return (

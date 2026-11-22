@@ -139,6 +139,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.subscriptionRoutes(authed)
 	s.remoteAccessRoutes(authed)
 	s.remoteAccessDialRoutes(authed)
+	s.remoteAccessTargetRoutes(authed)
 
 	apiMux.Handle("/api/", s.authMiddleware(authed))
 	// Remote access, web mode: the visitor is admitted by a cookie the

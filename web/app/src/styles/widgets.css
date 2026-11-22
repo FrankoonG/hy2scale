@@ -150,13 +150,14 @@
 .ra{display:flex;flex-direction:column;gap:10px}
 .ra-form{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
 .ra-form .ra-target{flex:1 1 220px;min-width:180px;width:auto}
-.ra-form .ra-port{flex:0 0 96px;width:96px}
 .ra-list{display:flex;flex-direction:column;gap:8px}
 .ra-item{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--bg)}
 .ra-main{display:flex;align-items:center;gap:8px;min-width:0}
 .ra-main .spacer{flex:1}
 .ra-form>.hy-btn{height:36px}
 .ra-dst{font-size:13px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ra-item.off{background:var(--surface)}
+.ra-item.off .ra-dst{color:var(--text-muted)}
 .ra-meta{display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px}
 .ra-entry{font-size:13px;color:var(--text)}
 /* GeoIP hover card of a flag */

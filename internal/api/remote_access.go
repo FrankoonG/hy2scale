@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/FrankoonG/hy2scale/core/netfilter"
+	"github.com/FrankoonG/hy2scale/internal/app"
 )
 
 // Remote access, managing side: this node reaches any address from a node
@@ -58,14 +59,16 @@ type raManager struct {
 type raEntry struct {
 	ID      string
 	Chain   []string
-	Mode    string // web | port
-	Proto   string // tcp | udp
-	Target  string // web: URL; port: host:port
+	Mode     string // web | port
+	Proto    string // tcp | udp | tcp,udp
+	TargetID string // the exit's list entry ("" = given here)
+	Target   string // web: URL; port: host:port
 	Port    int
 	Visitor netip.Addr
 	Created time.Time
 
 	hostport string // the address dialled at the exit
+	tcp, udp bool
 	creator  string // this node's web session that opened it
 	firewall bool
 
@@ -91,6 +94,7 @@ type raJSON struct {
 	Chain       []string `json:"chain"`
 	Mode        string   `json:"mode"`
 	Proto       string   `json:"proto"`
+	TargetID    string   `json:"target_id,omitempty"`
 	Target      string   `json:"target"`
 	Port        int      `json:"port,omitempty"`
 	Visitor     string   `json:"visitor"`
@@ -112,7 +116,7 @@ func (e *raEntry) json() raJSON {
 		v = e.Visitor.String()
 	}
 	return raJSON{
-		ID: e.ID, Chain: e.Chain, Mode: e.Mode, Proto: e.Proto, Target: e.Target, Port: e.Port,
+		ID: e.ID, Chain: e.Chain, Mode: e.Mode, Proto: e.Proto, TargetID: e.TargetID, Target: e.Target, Port: e.Port,
 		Visitor: v, Created: e.Created.UnixMilli(), Expires: exp.UnixMilli(),
 		Active: int(e.active.Load()), Up: e.up.Load(), Down: e.down.Load(),
 		Firewall: e.firewall, HostNetwork: netfilter.CheckHostNetwork(),
@@ -354,13 +358,16 @@ func (s *Server) createRemoteAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Chain   []string `json:"chain"`
-		Token   string   `json:"token"`
-		Mode    string   `json:"mode"`
-		Target  string   `json:"target"`
-		Proto   string   `json:"proto"`
-		Port    int      `json:"port"`
-		Expires int64    `json:"expires"`
+		Chain    []string `json:"chain"`
+		Token    string   `json:"token"`
+		TargetID string   `json:"target_id"` // an entry of the exit's list
+		Mode     string   `json:"mode"`      // else a target given here
+		Target   string   `json:"target"`
+		TCP      bool     `json:"tcp"`
+		UDP      bool     `json:"udp"`
+		Proto    string   `json:"proto"` // tcp | udp (for tcp/udp)
+		Port     int      `json:"port"`
+		Expires  int64    `json:"expires"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Chain) == 0 {
 		http.Error(w, "chain required", 400)
@@ -370,49 +377,58 @@ func (s *Server) createRemoteAccess(w http.ResponseWriter, r *http.Request) {
 	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
 		visitor = ap.Addr().Unmap()
 	}
-	e := &raEntry{
-		ID:      s.generateToken()[:12],
-		Chain:   s.raChain(body.Chain),
-		Mode:    body.Mode,
-		Proto:   body.Proto,
-		Visitor: visitor,
-		Created: time.Now(),
-		creator: sessionToken(r.Context()),
-		token:   body.Token,
-		expires: raExpiry(body.Expires),
+	chain := s.raChain(body.Chain)
+	t := app.RemoteAccessTarget{Mode: body.Mode, Target: body.Target, TCP: body.TCP, UDP: body.UDP}
+	if body.Proto != "" {
+		t.TCP, t.UDP = strings.Contains(body.Proto, "tcp"), strings.Contains(body.Proto, "udp")
 	}
-	target := strings.TrimSpace(body.Target)
-	switch body.Mode {
-	case "web":
+	if t.Mode == "port" && !t.TCP && !t.UDP {
+		t.TCP = true
+	}
+	if body.TargetID != "" {
+		found, err := s.raRemoteTarget(r.Context(), chain, body.Token, body.TargetID)
+		if err != nil {
+			var de *raDialError
+			if errors.As(err, &de) && de.Status == http.StatusUnauthorized {
+				http.Error(w, "remote sign-in refused", 409)
+				return
+			}
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		t = found
+	}
+	if err := normRATarget(&t); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	e := &raEntry{
+		ID:       s.generateToken()[:12],
+		Chain:    chain,
+		Mode:     t.Mode,
+		TargetID: body.TargetID,
+		Target:   t.Target,
+		tcp:      t.TCP,
+		udp:      t.UDP,
+		Visitor:  visitor,
+		Created:  time.Now(),
+		creator:  sessionToken(r.Context()),
+		token:    body.Token,
+		expires:  raExpiry(body.Expires),
+	}
+	switch {
+	case t.TCP && t.UDP:
+		e.Proto = "tcp,udp"
+	case t.UDP:
+		e.Proto = "udp"
+	default:
 		e.Proto = "tcp"
-		if !strings.Contains(target, "://") {
-			target = "http://" + target
-		}
-		u, err := url.Parse(target)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
-			http.Error(w, "web address: http(s)://host[:port][/path]", 400)
-			return
-		}
-		port := u.Port()
-		if port == "" {
-			port = map[string]string{"http": "80", "https": "443"}[u.Scheme]
-		}
-		e.hostport = net.JoinHostPort(u.Hostname(), port)
-		e.Target = u.String()
+	}
+	if e.Mode == "web" {
+		u, hp, _ := raWebURL(t.Target)
+		e.hostport = hp
 		e.proxy = s.raWebProxy(e, u)
-	case "port":
-		if e.Proto == "" {
-			e.Proto = "tcp"
-		}
-		if e.Proto != "tcp" && e.Proto != "udp" {
-			http.Error(w, "protocol: tcp or udp", 400)
-			return
-		}
-		host, port, err := net.SplitHostPort(target)
-		if p, perr := strconv.Atoi(port); err != nil || host == "" || perr != nil || p < 1 || p > 65535 {
-			http.Error(w, "target: host:port", 400)
-			return
-		}
+	} else {
 		if body.Port < 0 || body.Port > 65535 {
 			http.Error(w, "port: 1-65535", 400)
 			return
@@ -421,16 +437,21 @@ func (s *Server) createRemoteAccess(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "the visitor's address is unknown", 400)
 			return
 		}
-		e.hostport = target
-		e.Target = target
-	default:
-		http.Error(w, "mode: web or port", 400)
-		return
+		e.hostport = t.Target
 	}
 
 	// The exit and the sign-in are tried before anything opens here.
 	ctx, cancel := context.WithTimeout(r.Context(), raDialWait)
-	c, err := s.raDialProbe(ctx, e, e.Proto, e.hostport, r.RemoteAddr, true)
+	probe := "tcp"
+	if !e.tcp {
+		probe = "udp"
+	}
+	c, err := s.raDialProbe(ctx, e, probe, e.hostport, r.RemoteAddr, true)
+	var de0 *raDialError
+	if err != nil && e.tcp && e.udp && errors.As(err, &de0) && de0.Status == http.StatusBadGateway {
+		// tcp and udp: a target that only answers udp is fine too
+		c, err = s.raDialProbe(ctx, e, "udp", e.hostport, r.RemoteAddr, true)
+	}
 	cancel()
 	if err != nil {
 		var de *raDialError
@@ -464,6 +485,35 @@ func (s *Server) createRemoteAccess(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, e.json())
 }
 
+// raRemoteTarget reads one entry of the exit's target list.
+func (s *Server) raRemoteTarget(ctx context.Context, chain []string, token, id string) (app.RemoteAccessTarget, error) {
+	var t app.RemoteAccessTarget
+	ctx, cancel := context.WithTimeout(ctx, raDialWait)
+	defer cancel()
+	resp, err := s.remoteOpen(ctx, chain, "GET", "/api/remote-access/targets", nil, nil, token)
+	if err != nil {
+		return t, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if resp.StatusCode == http.StatusNotFound {
+			msg = []byte("the remote node has no remote access list (it needs a newer version)")
+		}
+		return t, &raDialError{Status: resp.StatusCode, Msg: strings.TrimSpace(string(msg))}
+	}
+	var list []app.RemoteAccessTarget
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&list); err != nil {
+		return t, err
+	}
+	for _, x := range list {
+		if x.ID == id {
+			return x, nil
+		}
+	}
+	return t, &raDialError{Status: 404, Msg: "not in the remote node's list"}
+}
+
 func (s *Server) closeRemoteAccess(w http.ResponseWriter, r *http.Request) {
 	e := s.raGet(r.PathValue("id"))
 	if e == nil {
@@ -475,16 +525,20 @@ func (s *Server) closeRemoteAccess(w http.ResponseWriter, r *http.Request) {
 }
 
 // closeRemoteAccessChain closes every entry of ?chain=a/b (the remote sign-in
-// of that node ended on the page).
+// of that node ended on the page), or with &target_id= those of one target.
 func (s *Server) closeRemoteAccessChain(w http.ResponseWriter, r *http.Request) {
 	raw := r.URL.Query().Get("chain")
 	if raw == "" {
 		http.Error(w, "chain required", 400)
 		return
 	}
+	target := r.URL.Query().Get("target_id")
 	n := 0
 	for _, e := range s.raEntries(s.raChain(strings.Split(raw, "/"))) {
-		s.raClose(e, "remote signed out")
+		if target != "" && e.TargetID != target {
+			continue
+		}
+		s.raClose(e, "closed for the chain")
 		n++
 	}
 	writeJSON(w, map[string]int{"closed": n})
@@ -586,29 +640,43 @@ func (s *Server) raListen(e *raEntry, want int) error {
 	}
 	var lastErr error
 	for _, p := range cands {
-		addr := ":" + strconv.Itoa(p)
-		if e.Proto == "udp" {
-			pc, err := net.ListenPacket("udp", addr)
-			if err != nil {
+		// tcp and udp on the same port number
+		var ln net.Listener
+		var pc net.PacketConn
+		var err error
+		if e.tcp {
+			if ln, err = net.Listen("tcp", ":"+strconv.Itoa(p)); err != nil {
 				lastErr = err
 				continue
 			}
-			e.Port = pc.LocalAddr().(*net.UDPAddr).Port
-			e.closers = append(e.closers, func() { pc.Close() })
-			go s.raServeUDP(e, pc)
-		} else {
-			ln, err := net.Listen("tcp", addr)
-			if err != nil {
+			p = ln.Addr().(*net.TCPAddr).Port
+		}
+		if e.udp {
+			if pc, err = net.ListenPacket("udp", ":"+strconv.Itoa(p)); err != nil {
 				lastErr = err
+				if ln != nil {
+					ln.Close()
+				}
 				continue
 			}
-			e.Port = ln.Addr().(*net.TCPAddr).Port
+			p = pc.LocalAddr().(*net.UDPAddr).Port
+		}
+		e.Port = p
+		if ln != nil {
 			e.closers = append(e.closers, func() { ln.Close() })
 			go s.raServeTCP(e, ln)
+			if undo := raFWOpen(e.ID, "tcp", e.Visitor, p); undo != nil {
+				e.firewall = true
+				e.closers = append(e.closers, undo)
+			}
 		}
-		if undo := raFWOpen(e.ID, e.Proto, e.Visitor, e.Port); undo != nil {
-			e.firewall = true
-			e.closers = append(e.closers, undo)
+		if pc != nil {
+			e.closers = append(e.closers, func() { pc.Close() })
+			go s.raServeUDP(e, pc)
+			if undo := raFWOpen(e.ID, "udp", e.Visitor, p); undo != nil {
+				e.firewall = true
+				e.closers = append(e.closers, undo)
+			}
 		}
 		return nil
 	}

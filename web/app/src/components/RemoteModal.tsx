@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import {
-  Modal, Button, Input, PasswordInput, FormGroup, Badge, DetailGrid, Progress, useConfirm,
+  Modal, Button, Input, PasswordInput, FormGroup, Badge, DetailGrid, Progress, useConfirm, Tabs, TabPanel,
 } from '@hy2scale/ui';
 import { api as request, getBasePath } from '@/api/client';
 import * as api from '@/api';
@@ -72,6 +72,8 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
   const [info, setInfo] = useState<RemoteInfo | null>(null);
   const [local, setLocal] = useState<{ version: string; os: string; arch: string; size: number; official: boolean } | null>(null);
   const [op, setOp] = useState<Op>({ kind: 'idle' });
+  // management (sign-in, upgrade) | remote access (signed in only)
+  const [tab, setTab] = useState<'manage' | 'access'>('manage');
   // The password sign-in, kept in memory only, to sign in again after the
   // remote restarts (its sessions do not survive a restart).
   const credRef = useRef<{ u: string; h: string } | null>(null);
@@ -136,6 +138,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
     if (!open || !chain.length) return;
     let gone = false;
     setOp({ kind: 'idle' });
+    setTab('manage');
     setInfo(null);
     setAuthError(null);
     setPassword('');
@@ -373,6 +376,7 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
 
   // ---------------------------------------------------------------- render
   const signedIn = phase === 'in' && !!auth;
+  const shown = signedIn ? tab : 'manage';
   const busy = op.kind === 'checking' || op.kind === 'downloading' || op.kind === 'pushing' || op.kind === 'restarting';
   const platform = info ? `${info.os}/${info.arch}` : '';
   const localPlatform = local ? `${local.os}/${local.arch}` : '';
@@ -443,75 +447,88 @@ export default function RemoteModal({ open, onClose, chain, targetLabel, animate
       footer={<><span className="spacer" /><Button onClick={onClose}>{t('app.close')}</Button></>}
     >
       <div className="remote" data-testid="remote-modal">
-        <section className="remote-sec">
-          <div className="remote-sec-title">{t('remote.auth')}</div>
-          {authBody}
-        </section>
+        <Tabs
+          items={[
+            { key: 'manage', label: t('remote.manage') },
+            { key: 'access', label: t('remote.access'), disabled: !signedIn },
+          ]}
+          activeKey={shown}
+          onChange={(k) => setTab(k as 'manage' | 'access')}
+        />
+        <TabPanel activeKey={shown} keys={['manage', 'access']}>
+          {shown === 'manage' ? (
+            <div className="remote">
+              <section className="remote-sec">
+                <div className="remote-sec-title">{t('remote.auth')}</div>
+                {authBody}
+              </section>
 
-        <section className={clsx('remote-sec', 'remote-ops', !signedIn && 'locked')} aria-disabled={!signedIn} data-testid="remote-ops">
-          <div className="remote-sec-title">{t('remote.manage')}</div>
-          <DetailGrid
-            variant="plain"
-            columns={4}
-            items={[
-              [t('remote.version'), <span className="mono" data-testid="remote-version">{info?.version || '—'}</span>],
-              [t('remote.platform'), <span className="mono">{platform || '—'}</span>],
-              [t('remote.deployment'), info ? (info.inDocker ? t('remote.container') : t('remote.native')) : '—'],
-              [t('build.origin'), info?.official === undefined ? '—' : (info.official ? t('build.official') : t('build.selfBuilt'))],
-            ]}
-          />
-          <div className="remote-row">
-            <Button variant="primary" onClick={openUi} disabled={!signedIn} data-testid="remote-open-ui">{t('remote.openUi')}</Button>
-            <Button onClick={restart} disabled={!signedIn || busy || !info} data-testid="remote-restart">{t('remote.restart')}</Button>
-          </div>
+              <section className={clsx('remote-sec', 'remote-ops', !signedIn && 'locked')} aria-disabled={!signedIn} data-testid="remote-ops">
+                <div className="remote-sec-title">{t('remote.manage')}</div>
+                <DetailGrid
+                  variant="plain"
+                  columns={4}
+                  items={[
+                    [t('remote.version'), <span className="mono" data-testid="remote-version">{info?.version || '—'}</span>],
+                    [t('remote.platform'), <span className="mono">{platform || '—'}</span>],
+                    [t('remote.deployment'), info ? (info.inDocker ? t('remote.container') : t('remote.native')) : '—'],
+                    [t('build.origin'), info?.official === undefined ? '—' : (info.official ? t('build.official') : t('build.selfBuilt'))],
+                  ]}
+                />
+                <div className="remote-row">
+                  <Button variant="primary" onClick={openUi} disabled={!signedIn} data-testid="remote-open-ui">{t('remote.openUi')}</Button>
+                  <Button onClick={restart} disabled={!signedIn || busy || !info} data-testid="remote-restart">{t('remote.restart')}</Button>
+                </div>
 
-          <div className="remote-sub">{t('remote.upgradeSection')}</div>
-          {upgradeBlock && <div className="remote-muted">{upgradeBlock}</div>}
-          <div className="remote-upg">
-            <div className="remote-upg-item">
-              <div className="remote-upg-name">{t('remote.fromGithub')}</div>
-              <div className="remote-muted">
-                {op.kind === 'checked'
-                  ? (op.available ? t('remote.latestAvailable', { version: op.latest }) : t('remote.upToDate', { version: op.latest || info?.version || '' }))
-                  : t('remote.fromGithubHint')}
-              </div>
-              <div className="remote-upg-actions">
-                {op.kind === 'checked' && op.available ? (
-                  <Button size="sm" variant="primary" disabled={!signedIn || busy || !!upgradeBlock}
-                    onClick={() => upgradeGithub(op.latest)} data-testid="remote-github-upgrade">
-                    {t('remote.upgradeTo', { version: op.latest })}
-                  </Button>
-                ) : (
-                  <Button size="sm" disabled={!signedIn || busy || !!upgradeBlock} loading={op.kind === 'checking'}
-                    onClick={checkGithub} data-testid="remote-github-check">
-                    {t('remote.checkUpdate')}
-                  </Button>
-                )}
-              </div>
+                <div className="remote-sub">{t('remote.upgradeSection')}</div>
+                {upgradeBlock && <div className="remote-muted">{upgradeBlock}</div>}
+                <div className="remote-upg">
+                  <div className="remote-upg-item">
+                    <div className="remote-upg-name">{t('remote.fromGithub')}</div>
+                    <div className="remote-muted">
+                      {op.kind === 'checked'
+                        ? (op.available ? t('remote.latestAvailable', { version: op.latest }) : t('remote.upToDate', { version: op.latest || info?.version || '' }))
+                        : t('remote.fromGithubHint')}
+                    </div>
+                    <div className="remote-upg-actions">
+                      {op.kind === 'checked' && op.available ? (
+                        <Button size="sm" variant="primary" disabled={!signedIn || busy || !!upgradeBlock}
+                          onClick={() => upgradeGithub(op.latest)} data-testid="remote-github-upgrade">
+                          {t('remote.upgradeTo', { version: op.latest })}
+                        </Button>
+                      ) : (
+                        <Button size="sm" disabled={!signedIn || busy || !!upgradeBlock} loading={op.kind === 'checking'}
+                          onClick={checkGithub} data-testid="remote-github-check">
+                          {t('remote.checkUpdate')}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="remote-upg-item">
+                    <div className="remote-upg-name">{t('remote.pushLocal')}</div>
+                    <div className="remote-muted">
+                      {local ? t('remote.localBinary', { version: local.version, platform: localPlatform, size: fmtBytes(local.size) }) : '…'}
+                      {local && !local.official && <> · {t('build.selfBuilt')}</>}
+                    </div>
+                    <div className="remote-upg-actions">
+                      <span title={signedIn && pushBlock !== '…' ? pushBlock || undefined : undefined}>
+                        <Button size="sm" disabled={!signedIn || busy || !!pushBlock} onClick={pushLocal} data-testid="remote-push">
+                          {t('remote.install')}
+                        </Button>
+                      </span>
+                      {signedIn && pushBlock && pushBlock !== '…' && !upgradeBlock && <span className="remote-muted" data-testid="remote-push-reason">{pushBlock}</span>}
+                    </div>
+                  </div>
+                </div>
+                {opStatus}
+              </section>
             </div>
-            <div className="remote-upg-item">
-              <div className="remote-upg-name">{t('remote.pushLocal')}</div>
-              <div className="remote-muted">
-                {local ? t('remote.localBinary', { version: local.version, platform: localPlatform, size: fmtBytes(local.size) }) : '…'}
-                {local && !local.official && <> · {t('build.selfBuilt')}</>}
-              </div>
-              <div className="remote-upg-actions">
-                <span title={signedIn && pushBlock !== '…' ? pushBlock || undefined : undefined}>
-                  <Button size="sm" disabled={!signedIn || busy || !!pushBlock} onClick={pushLocal} data-testid="remote-push">
-                    {t('remote.install')}
-                  </Button>
-                </span>
-                {signedIn && pushBlock && pushBlock !== '…' && !upgradeBlock && <span className="remote-muted" data-testid="remote-push-reason">{pushBlock}</span>}
-              </div>
-            </div>
-          </div>
-          {opStatus}
-        </section>
-
-        <section className={clsx('remote-sec', 'remote-ops', !signedIn && 'locked')} aria-disabled={!signedIn}>
-          <div className="remote-sec-title">{t('remote.access')}</div>
-          <RemoteAccess chain={chain} auth={signedIn ? auth : null} />
-        </section>
+          ) : (
+            <section className="remote-sec" data-testid="remote-access-tab">
+              <RemoteAccess chain={chain} auth={signedIn ? auth : null} rfetch={rfetch} />
+            </section>
+          )}
+        </TabPanel>
       </div>
     </Modal>
   );
