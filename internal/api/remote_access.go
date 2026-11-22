@@ -44,11 +44,12 @@ import (
 // Entries live in memory only.
 
 const (
-	raMaxLife    = 24 * time.Hour
-	raUDPIdle    = 60 * time.Second
-	raKeyLife    = 2 * time.Minute
-	raDialWait   = 15 * time.Second
-	raCheckEvery = 10 * time.Second
+	raMaxLife     = 24 * time.Hour
+	raDefaultLife = 30 * time.Minute // no expiry given (the control socket)
+	raUDPIdle     = 60 * time.Second
+	raKeyLife     = 2 * time.Minute
+	raDialWait    = 15 * time.Second
+	raCheckEvery  = 10 * time.Second
 )
 
 type raManager struct {
@@ -57,15 +58,15 @@ type raManager struct {
 }
 
 type raEntry struct {
-	ID      string
-	Chain   []string
+	ID       string
+	Chain    []string
 	Mode     string // web | port
 	Proto    string // tcp | udp | tcp,udp
 	TargetID string // the exit's list entry ("" = given here)
 	Target   string // web: URL; port: host:port
-	Port    int
-	Visitor netip.Addr
-	Created time.Time
+	Port     int
+	Visitor  netip.Addr
+	Created  time.Time
 
 	hostport string // the address dialled at the exit
 	tcp, udp bool
@@ -259,7 +260,10 @@ func (s *Server) raChain(chain []string) []string {
 func raExpiry(ms int64) time.Time {
 	now := time.Now()
 	t := time.UnixMilli(ms)
-	if ms <= 0 || t.After(now.Add(raMaxLife)) {
+	if ms <= 0 {
+		t = now.Add(raDefaultLife)
+	}
+	if t.After(now.Add(raMaxLife)) {
 		t = now.Add(raMaxLife)
 	}
 	if t.Before(now.Add(time.Minute)) {
@@ -352,11 +356,9 @@ func (s *Server) raDialFailed(e *raEntry, err error) {
 }
 
 func (s *Server) createRemoteAccess(w http.ResponseWriter, r *http.Request) {
-	// Opened from this node's own page only: the visitor is whoever asks.
-	if relayAuthID(r.Context()) != "" || r.Header.Get("X-Hy2scale-Proxy") != "" || fromCtl(r) {
-		http.Error(w, "remote access is opened from this node's own page", 403)
-		return
-	}
+	// From this node's own page the visitor is whoever asks; the control
+	// socket, another node or a proxied page names it (port mode).
+	byPage := relayAuthID(r.Context()) == "" && r.Header.Get("X-Hy2scale-Proxy") == "" && !fromCtl(r)
 	var body struct {
 		Chain    []string `json:"chain"`
 		Token    string   `json:"token"`
@@ -367,17 +369,35 @@ func (s *Server) createRemoteAccess(w http.ResponseWriter, r *http.Request) {
 		UDP      bool     `json:"udp"`
 		Proto    string   `json:"proto"` // tcp | udp (for tcp/udp)
 		Port     int      `json:"port"`
-		Expires  int64    `json:"expires"`
+		Expires  int64    `json:"expires"` // unix ms (0 = in 30 minutes)
+		Visitor  string   `json:"visitor"` // the address let in (port mode)
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Chain) == 0 {
 		http.Error(w, "chain required", 400)
 		return
 	}
 	visitor := netip.Addr{}
-	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
+	if v := strings.TrimSpace(body.Visitor); v != "" {
+		a, err := netip.ParseAddr(strings.Trim(v, "[]"))
+		if err != nil {
+			http.Error(w, "visitor: an IP address", 400)
+			return
+		}
+		visitor = a.Unmap()
+	} else if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil && byPage {
 		visitor = ap.Addr().Unmap()
 	}
 	chain := s.raChain(body.Chain)
+	// No remote sign-in given: this node signs in itself (a session from a
+	// saved sign-in, relay trust, or the saved sign-in; as "ctl -n" does).
+	if body.Token == "" {
+		tok, err := s.raSignIn(r.Context(), chain)
+		if err != nil {
+			http.Error(w, err.Error(), 409)
+			return
+		}
+		body.Token = tok
+	}
 	t := app.RemoteAccessTarget{Mode: body.Mode, Target: body.Target, TCP: body.TCP, UDP: body.UDP}
 	if body.Proto != "" {
 		t.TCP, t.UDP = strings.Contains(body.Proto, "tcp"), strings.Contains(body.Proto, "udp")
@@ -434,7 +454,7 @@ func (s *Server) createRemoteAccess(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !visitor.IsValid() {
-			http.Error(w, "the visitor's address is unknown", 400)
+			http.Error(w, "visitor required: the address to let in", 400)
 			return
 		}
 		e.hostport = t.Target
@@ -483,6 +503,27 @@ func (s *Server) createRemoteAccess(w http.ResponseWriter, r *http.Request) {
 	s.ra.mu.Unlock()
 	log.Printf("[remote-access] %s opened: %s %s %s via %s for %s (port %d)", e.ID, e.Mode, e.Proto, e.Target, strings.Join(e.Chain, "/"), visitor, e.Port)
 	writeJSON(w, e.json())
+}
+
+// raSignIn signs this node in to the node at the end of chain the way the
+// control socket does; "" = relay trust (no session needed).
+func (s *Server) raSignIn(ctx context.Context, chain []string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, raDialWait)
+	defer cancel()
+	resp, how, err := s.remoteDo(ctx, chain, "GET", "/api/remote-access/targets", nil, nil)
+	if err != nil {
+		return "", err
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return "", fmt.Errorf("no sign-in to %s: relay trust there, or a saved sign-in (hy2scale ctl login)", strings.Join(chain, "/"))
+	}
+	if how == "trust" {
+		return "", nil
+	}
+	s.ctl.mu.Lock()
+	defer s.ctl.mu.Unlock()
+	return s.ctl.tokens[strings.Join(chain, "/")], nil
 }
 
 // raRemoteTarget reads one entry of the exit's target list.
