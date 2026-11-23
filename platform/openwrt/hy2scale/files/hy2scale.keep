@@ -1,0 +1,9 @@
+/etc/hy2scale/config.yaml
+/etc/hy2scale/node-id
+/etc/hy2scale/instance-id
+/etc/hy2scale/default.crt
+/etc/hy2scale/default.key
+/etc/hy2scale/peer-egress.json
+/etc/hy2scale/tls/
+/etc/hy2scale/vpn/
+/etc/hy2scale/ifaces/

@@ -35,6 +35,8 @@ CPU 아키텍처(`amd64` / `arm64` / `armv7` / `mips64le` /
 `HY2SCALE_VERSION=v1.4.5`, 제거하려면 `… | sudo sh -s -- --uninstall`.
 UniFi OS 게이트웨이에서는(root로 실행) 펌웨어 업데이트 후에도 남는 `/data/hy2scale`에
 설치합니다([자세히](https://github.com/FrankoonG/hy2scale/wiki/Installation-ko#unifi-os)).
+OpenWrt와 이를 기반으로 한 펌웨어에서는(root로 `wget -qO- … | sh` 실행) `hy2scale`과 `luci-app-hy2scale`
+패키지를 설치하며, LuCI의 **서비스 → hy2scale**에서 관리합니다([자세히](https://github.com/FrankoonG/hy2scale/wiki/Installation-ko#openwrt)).
 
 ### Docker
 

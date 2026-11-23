@@ -1,0 +1,357 @@
+#!/bin/sh
+# rpcd backend of luci-app-hy2scale (ubus object "luci.hy2scale").
+
+. /usr/share/libubox/jshn.sh
+
+BIN=/usr/bin/hy2scale
+INIT=/etc/init.d/hy2scale
+CACHE=/var/run/luci-hy2scale
+
+DIR="$(uci -q get hy2scale.main.data_dir)"
+DIR="${DIR:-/etc/hy2scale}"
+
+# pid of the running instance, empty when stopped
+main_pid() {
+	local p
+	p="$(ubus call service list '{"name":"hy2scale"}' 2>/dev/null |
+		jsonfilter -e '@.hy2scale.instances.*.pid' 2>/dev/null | head -n1)"
+	[ -n "$p" ] && [ -d "/proc/$p" ] && echo "$p"
+}
+
+# ctl TIMEOUT ARGS...: "hy2scale ctl" on the running node
+ctl() {
+	local t="$1"
+	shift
+	[ -S "$DIR/ctl/hy2scale.sock" ] || return 3
+	"$BIN" ctl --data "$DIR" --timeout "$t" --raw "$@"
+}
+
+now() {
+	local u
+	read -r u _ </proc/uptime
+	echo "${u%%.*}"
+}
+
+# node_info PID: $CACHE.node and $CACHE.ui hold the node's answers, asked
+# again at most every 30 s or when the pid changed
+node_info() {
+	local pid="$1" t spid st node ui
+	t="$(now)"
+	spid="" st=""
+	[ -f "$CACHE.stamp" ] && read -r spid st <"$CACHE.stamp"
+	case "$st" in
+		'' | *[!0-9]*) st=-1000 ;;
+	esac
+	[ "$spid" = "$pid" ] && [ $((t - st)) -lt 30 ] && return 0
+	node="$(ctl 3s get /api/node 2>/dev/null)" || node=""
+	ui="$(ctl 3s get /api/settings/ui 2>/dev/null)" || ui=""
+	printf '%s\n' "$node" >"$CACHE.node"
+	printf '%s\n' "$ui" >"$CACHE.ui"
+	# a failed answer is asked again at the next call
+	if [ -n "$node" ] && [ -n "$ui" ]; then
+		echo "$pid $t" >"$CACHE.stamp"
+	else
+		rm -f "$CACHE.stamp"
+	fi
+}
+
+# version of the installed program (cached until the files change)
+bin_version() {
+	local key v
+	key="$(ls -ln "$BIN" "$DIR/bin/hy2scale" 2>/dev/null | tr -s ' ' | tr '\n' ' ')"
+	if [ -f "$CACHE.ver" ] && [ "$(head -n1 "$CACHE.ver")" = "$key" ]; then
+		sed -n 2p "$CACHE.ver"
+		return
+	fi
+	v="$("$BIN" --version --data "$DIR" 2>/dev/null | head -n1)"
+	v="${v#hy2scale }"
+	printf '%s\n%s\n' "$key" "$v" >"$CACHE.ver"
+	echo "$v"
+}
+
+proc_uptime() {
+	local pid="$1" st
+	st="$(sed 's/^.*) //' "/proc/$pid/stat" 2>/dev/null)" || return
+	set -f
+	# shellcheck disable=SC2086
+	set -- $st
+	set +f
+	# field 22 of /proc/<pid>/stat (start time, clock ticks); 20th after "comm"
+	[ $# -ge 20 ] || return
+	shift 19
+	echo $(($(now) - $1 / 100))
+}
+
+free_kb() {
+	local d="$1"
+	while [ -n "$d" ] && [ ! -d "$d" ]; do
+		d="${d%/*}"
+	done
+	df -Pk "${d:-/}" 2>/dev/null | awk 'NR == 2 { print $4 }'
+}
+
+do_status() {
+	local pid v rss up node uiport base https listen free running=0 enabled boot=0
+
+	pid="$(main_pid)"
+	json_init
+	enabled="$(uci -q get hy2scale.main.enabled)"
+	[ "$enabled" = 1 ] || enabled=0
+	json_add_boolean enabled "$enabled"
+	"$INIT" enabled 2>/dev/null && boot=1
+	json_add_boolean boot "$boot"
+	json_add_boolean installed "$([ -x "$BIN" ] && echo 1 || echo 0)"
+	[ -n "$pid" ] && running=1
+	json_add_boolean running "$running"
+
+	if [ -n "$pid" ]; then
+		json_add_int pid "$pid"
+		rss="$(sed -n 's/^VmRSS:[[:space:]]*\([0-9]*\).*/\1/p' "/proc/$pid/status" 2>/dev/null)"
+		[ -n "$rss" ] && json_add_int rss_kb "$rss"
+		up="$(proc_uptime "$pid")"
+		[ -n "$up" ] && json_add_int uptime "$up"
+
+		node_info "$pid"
+		v="$(jsonfilter -i "$CACHE.node" -e '@.version' 2>/dev/null)"
+		node="$(jsonfilter -i "$CACHE.node" -e '@.name' 2>/dev/null)"
+		listen="$(jsonfilter -i "$CACHE.ui" -e '@.listen' 2>/dev/null)"
+		base="$(jsonfilter -i "$CACHE.ui" -e '@.base_path' 2>/dev/null)"
+		https="$(jsonfilter -i "$CACHE.ui" -e '@.https_active' 2>/dev/null)"
+		[ -n "$node" ] && json_add_string node "$node"
+		uiport="${listen##*:}"
+		case "$uiport" in
+			'' | *[!0-9]*) ;;
+			*) json_add_int ui_port "$uiport" ;;
+		esac
+		# base_path is "" when the UI is served at /
+		[ -n "$listen" ] && json_add_string base_path "$base"
+		case "$https" in
+			true) json_add_boolean https 1 ;;
+			false) json_add_boolean https 0 ;;
+		esac
+	fi
+	[ -n "$v" ] || v="$(bin_version)"
+	[ -n "$v" ] && json_add_string version "$v"
+
+	json_add_boolean iptables "$(command -v iptables >/dev/null 2>&1 && echo 1 || echo 0)"
+	json_add_boolean tun "$([ -c /dev/net/tun ] && echo 1 || echo 0)"
+	free="$(free_kb "$DIR")"
+	[ -n "$free" ] && json_add_int data_free_kb "$free"
+	json_dump
+}
+
+# sockets of the running node: tcp in LISTEN, udp not connected; one entry
+# per protocol and port (a wildcard address wins)
+do_listeners() {
+	local pid inodes list proto port addr
+
+	json_init
+	json_add_array listeners
+	pid="$(main_pid)"
+	if [ -n "$pid" ]; then
+		inodes="$(ls -l "/proc/$pid/fd" 2>/dev/null |
+			sed -n 's/.*socket:\[\([0-9]*\)\].*/\1/p' | tr '\n' ' ')"
+		list="$(awk -v inodes="$inodes" '
+			function hex(s,    i, v) {
+				v = 0
+				s = toupper(s)
+				for (i = 1; i <= length(s); i++)
+					v = v * 16 + index("0123456789ABCDEF", substr(s, i, 1)) - 1
+				return v
+			}
+			function ip4(h) {
+				return hex(substr(h, 7, 2)) "." hex(substr(h, 5, 2)) "." \
+					hex(substr(h, 3, 2)) "." hex(substr(h, 1, 2))
+			}
+			function ip6(h,    i, w, full, out, g) {
+				full = ""
+				for (i = 0; i < 4; i++) {
+					w = substr(h, i * 8 + 1, 8)
+					full = full substr(w, 7, 2) substr(w, 5, 2) substr(w, 3, 2) substr(w, 1, 2)
+				}
+				full = toupper(full)
+				if (full ~ /^0+$/) return "::"
+				if (full ~ /^0+1$/) return "::1"
+				if (substr(full, 1, 24) == "00000000000000000000FFFF")
+					return "::ffff:" ip4(substr(full, 31, 2) substr(full, 29, 2) substr(full, 27, 2) substr(full, 25, 2))
+				out = ""
+				for (i = 0; i < 8; i++) {
+					g = substr(full, i * 4 + 1, 4)
+					sub(/^0+/, "", g)
+					out = out (i ? ":" : "") tolower(g == "" ? "0" : g)
+				}
+				return out
+			}
+			function wild(a) { return a == "0.0.0.0" || a == "::" }
+			BEGIN {
+				n = split(inodes, a, " ")
+				for (i = 1; i <= n; i++) want[a[i]] = 1
+			}
+			FNR == 1 {
+				proto = FILENAME
+				sub(/.*\//, "", proto)
+				v6 = proto ~ /6$/
+				sub(/6$/, "", proto)
+				next
+			}
+			!($10 in want) { next }
+			proto == "tcp" && $4 != "0A" { next }
+			proto == "udp" && $4 != "07" { next }
+			{
+				split($2, la, ":")
+				port = hex(la[2])
+				addr = v6 ? ip6(la[1]) : ip4(la[1])
+				key = proto " " port
+				if (key in seen) {
+					if (wild(addr) && !wild(seen[key])) seen[key] = addr
+					next
+				}
+				seen[key] = addr
+				order[++cnt] = key
+			}
+			END {
+				for (i = 1; i <= cnt; i++) print order[i], seen[order[i]]
+			}
+		' /proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6 2>/dev/null | sort -k2,2n -k1,1)"
+		while read -r proto port addr; do
+			[ -n "$port" ] || continue
+			json_add_object
+			json_add_string proto "$proto"
+			json_add_int port "$port"
+			json_add_string addr "$addr"
+			json_close_object
+		done <<-EOF
+			$list
+		EOF
+	fi
+	json_close_array
+	json_dump
+}
+
+do_logs() {
+	local n="$1" out text="" tmp
+
+	case "$n" in
+		'' | *[!0-9]*) n=200 ;;
+	esac
+	[ "$n" -lt 1 ] && n=1
+	[ "$n" -gt 2000 ] && n=2000
+
+	if [ -n "$(main_pid)" ] && out="$(ctl 5s logs "$n" 2>/dev/null)" &&
+		[ "$(echo "$out" | jsonfilter -e '@.enabled' 2>/dev/null)" = true ]; then
+		tmp="/tmp/luci-hy2scale.logs.$$"
+		printf '%s\n' "$out" >"$tmp.j"
+		jsonfilter -i "$tmp.j" -e '@.entries[*].ts' >"$tmp.t" 2>/dev/null
+		jsonfilter -i "$tmp.j" -e '@.entries[*].level' >"$tmp.l" 2>/dev/null
+		jsonfilter -i "$tmp.j" -e '@.entries[*].msg' >"$tmp.m" 2>/dev/null
+		text="$(awk -v lf="$tmp.l" -v mf="$tmp.m" '{
+			lv = ""; msg = ""
+			getline lv <lf
+			getline msg <mf
+			printf "%s %s%s\n", strftime("%Y-%m-%d %H:%M:%S", int($1 / 1000)),
+				(lv == "" || lv == "info") ? "" : toupper(lv) " ", msg
+		}' "$tmp.t")"
+		rm -f "$tmp.j" "$tmp.t" "$tmp.l" "$tmp.m"
+	else
+		# syslog lines: "<date> daemon.err hy2scale[PID]: 2026/11/24 12:00:00 msg";
+		# keep the program's own time, else the syslog one
+		text="$(logread -e 'hy2scale\[' 2>/dev/null | awk '
+			{
+				i = index($0, "]: ")
+				if (!i) next
+				msg = substr($0, i + 3)
+				if (msg ~ /^[ \t]*$/) next
+				if (msg ~ /^[0-9][0-9][0-9][0-9]\/[0-9][0-9]\/[0-9][0-9] /) {
+					d = substr(msg, 1, 10)
+					gsub(/\//, "-", d)
+					print d substr(msg, 11)
+				} else
+					print $2 " " $3 " " $4 " " msg
+			}' | tail -n "$n")"
+	fi
+	json_init
+	json_add_string log "$text"
+	json_dump
+}
+
+do_service() {
+	local action="$1" out rc
+	json_init
+	case "$action" in
+		start | stop | restart | enable | disable) ;;
+		*)
+			json_add_boolean ok 0
+			json_add_string result "invalid action"
+			json_dump
+			return
+			;;
+	esac
+	out="$("$INIT" "$action" 2>&1)"
+	rc=$?
+	# a stopped node's cached answers are no longer valid
+	rm -f "$CACHE.stamp"
+	json_add_boolean ok "$([ "$rc" = 0 ] && echo 1 || echo 0)"
+	json_add_string result "$out"
+	json_dump
+}
+
+do_reset_login() {
+	local out rc
+	json_init
+	if [ -z "$(main_pid)" ]; then
+		json_add_boolean ok 0
+		json_add_string result "not running"
+		json_dump
+		return
+	fi
+	out="$(ctl 10s reset-login 2>&1)"
+	rc=$?
+	[ "$rc" = 0 ] || [ -n "$out" ] || out="control socket not reachable"
+	json_add_boolean ok "$([ "$rc" = 0 ] && echo 1 || echo 0)"
+	json_add_string result "$out"
+	json_dump
+}
+
+case "$1" in
+	list)
+		json_init
+		json_add_object status
+		json_close_object
+		json_add_object listeners
+		json_close_object
+		json_add_object logs
+		json_add_int lines 200
+		json_close_object
+		json_add_object service
+		json_add_string action "start"
+		json_close_object
+		json_add_object reset_login
+		json_close_object
+		json_dump
+		;;
+	call)
+		input=""
+		read -r input
+		[ -n "$input" ] || input='{}'
+		case "$2" in
+			status) do_status ;;
+			listeners) do_listeners ;;
+			logs)
+				json_load "$input" 2>/dev/null
+				json_get_var lines lines
+				do_logs "$lines"
+				;;
+			service)
+				json_load "$input" 2>/dev/null
+				json_get_var action action
+				do_service "$action"
+				;;
+			reset_login) do_reset_login ;;
+			*)
+				json_init
+				json_add_string error "unknown method"
+				json_dump
+				;;
+		esac
+		;;
+esac

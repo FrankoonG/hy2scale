@@ -12,6 +12,7 @@ name: Release
 #             (environment "release"; never checks out    no repository code
 #             or runs repository code)
 #   package / docker   archives, images, iKuai packages   read-only token
+#   openwrt   OpenWrt .ipk/.apk packages                  read-only token
 #   release   publishes the GitHub release                contents: write
 #   publish-docker     pushes to Docker Hub               Docker Hub token only
 on:
@@ -122,6 +123,13 @@ jobs:
           - { platform: linux-armv7, goarch: arm, goarm: "7" }
           - { platform: linux-mips64le, goarch: mips64le }
           - { platform: linux-mipsle-softfloat, goarch: mipsle, gomips: softfloat }
+          - { platform: linux-386, goarch: "386", go386: softfloat }
+          - { platform: linux-armv5, goarch: arm, goarm: "5" }
+          - { platform: linux-armv6, goarch: arm, goarm: "6" }
+          - { platform: linux-mips-softfloat, goarch: mips, gomips: softfloat }
+          - { platform: linux-mips64, goarch: mips64 }
+          - { platform: linux-riscv64, goarch: riscv64 }
+          - { platform: linux-loong64, goarch: loong64 }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -149,6 +157,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
           GOMIPS: ${{ matrix.gomips }}
+          GO386: ${{ matrix.go386 }}
           PLATFORM: ${{ matrix.platform }}
         run: |
           set -eu
@@ -193,6 +202,34 @@ jobs:
         with:
           name: bin-linux-mipsle-softfloat
           path: in/linux-mipsle-softfloat
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-386
+          path: in/linux-386
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-armv5
+          path: in/linux-armv5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-armv6
+          path: in/linux-armv6
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-mips-softfloat
+          path: in/linux-mips-softfloat
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-mips64
+          path: in/linux-mips64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-riscv64
+          path: in/linux-riscv64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-loong64
+          path: in/linux-loong64
 
       - name: Check the binaries
         run: |
@@ -203,7 +240,14 @@ jobs:
             'linux-arm64:ELF 64-bit LSB.*ARM aarch64' \
             'linux-armv7:ELF 32-bit LSB.*ARM' \
             'linux-mips64le:ELF 64-bit LSB.*MIPS' \
-            'linux-mipsle-softfloat:ELF 32-bit LSB.*MIPS'; do
+            'linux-mipsle-softfloat:ELF 32-bit LSB.*MIPS' \
+            'linux-386:ELF 32-bit LSB.*Intel (80386|i386)' \
+            'linux-armv5:ELF 32-bit LSB.*ARM' \
+            'linux-armv6:ELF 32-bit LSB.*ARM' \
+            'linux-mips-softfloat:ELF 32-bit MSB.*MIPS' \
+            'linux-mips64:ELF 64-bit MSB.*MIPS' \
+            'linux-riscv64:ELF 64-bit LSB.*RISC-V' \
+            'linux-loong64:ELF 64-bit LSB.*LoongArch'; do
             plat="${p%%:*}"; want="${p#*:}"
             [ "$(ls "in/$plat")" = "hy2scale-$plat" ] || { echo "::error::unexpected files for $plat: $(ls "in/$plat")"; exit 1; }
             kind="$(file -b "in/$plat/hy2scale-$plat")"
@@ -343,10 +387,65 @@ jobs:
           path: ipkg/hy2scale-${{ matrix.arch_label }}-${{ needs.version.outputs.version }}.ipkg
           if-no-files-found: error
 
+  # ─── OpenWrt packages (no secrets) ───────────────────────────────
+  # platform/openwrt/build.sh packages the signed binaries: hy2scale per
+  # OpenWrt architecture plus luci-app-hy2scale, as .ipk (opkg) and .apk
+  # (apk-tools v3). The release gets them under flat names.
+  openwrt:
+    name: OpenWrt packages
+    needs: [version, sign]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TOOLS: ${{ github.workspace }}/.owrt-tools
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signed
+          path: signed
+
+      # apk-tools v3, usign and po2lmo from the sources OpenWrt pins
+      # (platform/openwrt/tools/build-host-tools.sh); cached on that file.
+      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        id: tools
+        with:
+          path: .owrt-tools
+          key: owrt-tools-${{ runner.os }}-${{ hashFiles('platform/openwrt/tools/build-host-tools.sh') }}
+
+      - name: Host tools
+        env:
+          CACHED: ${{ steps.tools.outputs.cache-hit }}
+        run: |
+          set -eu
+          PKGS="fakeroot"
+          [ "$CACHED" = true ] || PKGS="$PKGS meson ninja-build pkg-config libssl-dev zlib1g-dev"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends $PKGS
+          bash platform/openwrt/tools/build-host-tools.sh "$TOOLS"
+
+      - name: Build packages
+        run: |
+          set -eu
+          bash platform/openwrt/build.sh --bin-dir signed --out openwrt --version "$VERSION" \
+            --tools "$TOOLS/bin" --release-assets
+          ls -la openwrt/release
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: openwrt-packages
+          path: openwrt/release/
+          if-no-files-found: error
+
   # ─── GitHub release ──────────────────────────────────────────────
   release:
     name: Create release
-    needs: [version, package, docker]
+    needs: [version, package, docker, openwrt]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -360,8 +459,10 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
+      # Only what the release carries.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          pattern: "{archives,docker-image-*,ipkg-*,openwrt-packages}"
           path: artifacts
 
       - name: Collect assets
@@ -371,6 +472,7 @@ jobs:
           cp artifacts/archives/*.tar.gz release/
           cp artifacts/docker-image-*/*.tar.gz release/
           cp artifacts/ipkg-*/*.ipkg release/
+          cp artifacts/openwrt-packages/*.ipk artifacts/openwrt-packages/*.apk release/
           (cd release && sha256sum -- * > checksums-sha256.txt && cat checksums-sha256.txt)
 
       - name: Release notes
@@ -384,7 +486,9 @@ jobs:
             echo
             echo "| Platform | File |"
             echo "|----------|------|"
-            for p in linux-amd64 linux-arm64 linux-armv7 linux-mips64le linux-mipsle-softfloat; do
+            for p in linux-amd64 linux-386 linux-arm64 linux-armv7 linux-armv6 linux-armv5 \
+              linux-mips-softfloat linux-mipsle-softfloat linux-mips64 linux-mips64le \
+              linux-riscv64 linux-loong64; do
               echo "| ${p} | \`hy2scale-${p}.tar.gz\` |"
             done
             echo
@@ -402,6 +506,13 @@ jobs:
             echo
             echo "- \`hy2scale-x86-${VERSION}.ipkg\` for x86 / x86_64 iKuai"
             echo "- \`hy2scale-arm64-${VERSION}.ipkg\` for arm64 / aarch64 iKuai"
+            echo
+            echo "### OpenWrt packages"
+            echo
+            echo "For OpenWrt and its derivatives; pick the architecture from \`opkg print-architecture\` or \`apk --print-arch\`."
+            echo
+            echo "- opkg (OpenWrt 24.10 and earlier): \`hy2scale_<version>_<arch>.ipk\` and \`luci-app-hy2scale_<version>_all.ipk\`"
+            echo "- apk (OpenWrt 25.12 and later): \`hy2scale-<version>_<arch>.apk\` and \`luci-app-hy2scale-<version>.apk\` (install with \`apk add --allow-untrusted\`)"
             echo
             echo "### Verify checksums"
             echo

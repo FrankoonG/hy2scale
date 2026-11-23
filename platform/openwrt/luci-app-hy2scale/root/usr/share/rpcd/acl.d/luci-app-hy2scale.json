@@ -1,0 +1,17 @@
+{
+	"luci-app-hy2scale": {
+		"description": "Grant access to hy2scale",
+		"read": {
+			"ubus": {
+				"luci.hy2scale": [ "status", "listeners", "logs" ]
+			},
+			"uci": [ "hy2scale" ]
+		},
+		"write": {
+			"ubus": {
+				"luci.hy2scale": [ "service", "reset_login" ]
+			},
+			"uci": [ "hy2scale" ]
+		}
+	}
+}

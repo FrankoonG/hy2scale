@@ -39,6 +39,7 @@ Commands:
         [--password-hash H]    HY2SCALE_PASSWORD or standard input
   logins                       the saved sign-ins
   forget NODE                  remove a saved sign-in
+  reset-login                  web sign-in back to admin/admin (this node)
 
 Options:
   -n, --node CHAIN   act on another node: a name, or a chain A/B/C
@@ -281,6 +282,13 @@ func runCtl(argv []string) int {
 		}
 		b, _ := json.Marshal(map[string]string{"node": o.node, "username": o.user, "password_hash": hash})
 		resp, err := do("POST", "/ctl/v1/logins", nil, b)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 3
+		}
+		return o.output(resp)
+	case "reset-login":
+		resp, err := do("POST", "/ctl/v1/reset-login", nil, nil)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 3

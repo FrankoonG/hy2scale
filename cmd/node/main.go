@@ -53,8 +53,14 @@ func main() {
 		return
 	}
 
-	// Recent log lines are also kept in memory for the web UI.
-	log.SetOutput(io.MultiWriter(os.Stderr, logbuf.Default))
+	// Recent log lines are also kept in memory for the web UI. A service
+	// manager that ranks stderr as errors (OpenWrt's procd) asks for stdout;
+	// a crash still goes to stderr.
+	var logOut io.Writer = os.Stderr
+	if os.Getenv("HY2SCALE_LOG_STDOUT") == "1" {
+		logOut = os.Stdout
+	}
+	log.SetOutput(io.MultiWriter(logOut, logbuf.Default))
 
 	// Resolve data directory: explicit flag > ./hy2scale
 	dir := *dataDir

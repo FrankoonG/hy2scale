@@ -1,0 +1,227 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: zh_Hans\n"
+"MIME-Version: 1.0\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#: htdocs/luci-static/resources/view/hy2scale/log.js:61
+#, javascript-format
+msgid "%d lines"
+msgstr "%d 行"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:148
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:169
+msgid "Address"
+msgstr "地址"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:164
+msgid "Allow on WAN"
+msgstr "在 WAN 放行"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:159
+msgid "Allowed"
+msgstr "已放行"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:58
+msgid "Available"
+msgstr "可用"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:289
+msgid "Base path"
+msgstr "基础路径"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:223
+msgid "Cancel"
+msgstr "取消"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:276
+msgid "Data directory"
+msgstr "数据目录"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:113
+msgid "Disabled"
+msgstr "已禁用"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:273
+msgid "Enable"
+msgstr "启用"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:294
+msgid "Expecting a path starting with /"
+msgstr "需要以 / 开头的路径"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:281
+msgid "Expecting an absolute path"
+msgstr "需要绝对路径"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:312
+msgid "Expecting port[-port][/tcp|udp|any]"
+msgstr "格式应为 port[-port][/tcp|udp|any]"
+
+#: htdocs/luci-static/resources/view/hy2scale/log.js:38
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:202
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:204
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:233
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:236
+#, javascript-format
+msgid "Failed: %s"
+msgstr "失败：%s"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:121
+msgid "Free space"
+msgstr "剩余空间"
+
+#: root/usr/share/rpcd/acl.d/luci-app-hy2scale.json:3
+msgid "Grant access to hy2scale"
+msgstr "授予访问 hy2scale 的权限"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:361
+msgid "Listening ports"
+msgstr "监听端口"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:157
+msgid "Local only"
+msgstr "仅本机"
+
+#: htdocs/luci-static/resources/view/hy2scale/log.js:69
+#: root/usr/share/luci/menu.d/luci-app-hy2scale.json:24
+msgid "Log"
+msgstr "日志"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:119
+msgid "Memory"
+msgstr "内存"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:298
+msgid "Memory limit (MiB)"
+msgstr "内存上限（MiB）"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:58
+msgid "Missing"
+msgstr "不可用"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:299
+msgid "No limit"
+msgstr "不限制"
+
+#: htdocs/luci-static/resources/view/hy2scale/log.js:28
+msgid "No log entries"
+msgstr "没有日志"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:118
+msgid "Node"
+msgstr "节点"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:177
+msgid "None"
+msgstr "无"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:139
+msgid "Not enabled in settings"
+msgstr "未在设置中启用"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:177
+msgid "Not running"
+msgstr "未运行"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:335
+msgid "Open web UI"
+msgstr "打开管理界面"
+
+#: root/usr/share/luci/menu.d/luci-app-hy2scale.json:15
+msgid "Overview"
+msgstr "概览"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:147
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:168
+msgid "Port"
+msgstr "端口"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:306
+msgid "Port or range, with /tcp, /udp or /any."
+msgstr "端口或端口范围，可加 /tcp、/udp 或 /any。"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:146
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:167
+msgid "Protocol"
+msgstr "协议"
+
+#: htdocs/luci-static/resources/view/hy2scale/log.js:76
+msgid "Refresh"
+msgstr "刷新"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:239
+msgid "Reset"
+msgstr "重置"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:220
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:339
+msgid "Reset sign-in"
+msgstr "重置登录"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:221
+msgid "Reset the web UI sign-in to admin/admin?"
+msgstr "将管理界面登录重置为 admin/admin？"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:331
+msgid "Restart"
+msgstr "重启"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:111
+msgid "Running"
+msgstr "运行中"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:116
+msgid "Service"
+msgstr "服务"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:270
+msgid "Settings"
+msgstr "设置"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:231
+msgid "Sign-in reset to admin/admin."
+msgstr "登录已重置为 admin/admin。"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:323
+msgid "Start"
+msgstr "启动"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:353
+msgid "Status"
+msgstr "状态"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:327
+msgid "Stop"
+msgstr "停止"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:113
+msgid "Stopped"
+msgstr "已停止"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:120
+msgid "Uptime"
+msgstr "运行时长"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:117
+msgid "Version"
+msgstr "版本"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:149
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:170
+msgid "WAN"
+msgstr "WAN"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:305
+msgid "WAN ports"
+msgstr "WAN 端口"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:302
+msgid "Web UI on WAN"
+msgstr "允许 WAN 访问管理界面"
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:285
+msgid "Web UI port"
+msgstr "管理界面端口"

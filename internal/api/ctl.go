@@ -173,6 +173,7 @@ func (s *Server) startCtl(ctx context.Context, root http.Handler) {
 		}
 		writeJSON(w, map[string]string{"status": "ok"})
 	})
+	m.HandleFunc("POST /ctl/v1/reset-login", s.ctlResetLogin)
 	// Anything else: this node's own API and UI paths.
 	m.Handle("/", root)
 
@@ -744,4 +745,18 @@ func (s *Server) ctlMesh(w http.ResponseWriter, r *http.Request, root http.Handl
 	}
 	wg.Wait()
 	writeJSON(w, rows)
+}
+
+// ctlResetLogin puts the web sign-in back to admin/admin (changed at the
+// next sign-in), for whoever can reach the control socket: root on the host,
+// e.g. a router's own management page.
+func (s *Server) ctlResetLogin(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	s.username = "admin"
+	s.passHash = sha256Hex("admin")
+	s.sessions = make(map[string]time.Time)
+	s.mu.Unlock()
+	s.app.UpdateWebCredentials("admin", sha256Hex("admin"))
+	log.Printf("[ctl] web sign-in reset to the default")
+	writeJSON(w, map[string]string{"status": "ok"})
 }

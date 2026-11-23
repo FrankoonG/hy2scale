@@ -92,6 +92,13 @@ jobs:
           - { platform: linux-armv7, goarch: arm, goarm: "7" }
           - { platform: linux-mips64le, goarch: mips64le }
           - { platform: linux-mipsle-softfloat, goarch: mipsle, gomips: softfloat }
+          - { platform: linux-386, goarch: "386", go386: softfloat }
+          - { platform: linux-armv5, goarch: arm, goarm: "5" }
+          - { platform: linux-armv6, goarch: arm, goarm: "6" }
+          - { platform: linux-mips-softfloat, goarch: mips, gomips: softfloat }
+          - { platform: linux-mips64, goarch: mips64 }
+          - { platform: linux-riscv64, goarch: riscv64 }
+          - { platform: linux-loong64, goarch: loong64 }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -118,6 +125,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
           GOMIPS: ${{ matrix.gomips }}
+          GO386: ${{ matrix.go386 }}
           PLATFORM: ${{ matrix.platform }}
         run: |
           set -eu

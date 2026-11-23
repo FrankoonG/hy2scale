@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/netip"
 	"os"
+	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -78,6 +80,10 @@ func raFWOpen(id, proto string, visitor netip.Addr, port int) func() {
 	}
 	rule := []string{"INPUT", "-s", visitor.Unmap().String(), "-p", proto, "--dport", strconv.Itoa(port),
 		"-m", "comment", "--comment", raFWTag + id, "-j", "ACCEPT"}
+	var undo []func()
+	if f := raFW4Open(id, proto, visitor.Unmap(), port); f != nil {
+		undo = append(undo, f)
+	}
 	var done []string
 	for _, prog := range raFWProgs()[fam] {
 		if !raFWFilters(prog) {
@@ -89,15 +95,70 @@ func raFWOpen(id, proto string, visitor netip.Addr, port int) func() {
 		}
 		done = append(done, prog)
 	}
-	if len(done) == 0 {
+	if len(done) > 0 {
+		log.Printf("[remote-access] firewall: %s/%d let in from %s (%s)", proto, port, visitor.Unmap(), strings.Join(done, ", "))
+		undo = append(undo, func() {
+			for _, prog := range done {
+				for i := 0; i < 4 && netfilter.Exec(prog, append([]string{"-D"}, rule...)...).Run() == nil; i++ {
+				}
+			}
+		})
+	}
+	if len(undo) == 0 {
 		return nil
 	}
-	log.Printf("[remote-access] firewall: %s/%d let in from %s (%s)", proto, port, visitor.Unmap(), strings.Join(done, ", "))
 	return func() {
-		for _, prog := range done {
-			for i := 0; i < 4 && netfilter.Exec(prog, append([]string{"-D"}, rule...)...).Run() == nil; i++ {
-			}
+		for _, f := range undo {
+			f()
 		}
+	}
+}
+
+// OpenWrt's fw4 filters in its own nftables table, which an iptables rule
+// cannot let anything through: there the rule goes first in fw4's input
+// chain. A firewall reload rebuilds that table and drops it.
+
+var raFW4 = sync.OnceValue(func() bool {
+	return exec.Command("nft", "list", "chain", "inet", "fw4", "input").Run() == nil
+})
+
+func raFW4Open(id, proto string, visitor netip.Addr, port int) func() {
+	if !raFW4() {
+		return nil
+	}
+	fam := "ip"
+	if visitor.Is6() {
+		fam = "ip6"
+	}
+	tag := raFWTag + id
+	args := []string{"insert", "rule", "inet", "fw4", "input", fam, "saddr", visitor.String(),
+		proto, "dport", strconv.Itoa(port), "counter", "accept", "comment", `"` + tag + `"`}
+	if out, err := exec.Command("nft", args...).CombinedOutput(); err != nil {
+		log.Printf("[remote-access] fw4: rule for %s: %v %s", visitor, err, strings.TrimSpace(string(out)))
+		return nil
+	}
+	log.Printf("[remote-access] firewall: %s/%d let in from %s (fw4)", proto, port, visitor)
+	return func() { raFW4Remove(func(c string) bool { return c == tag }) }
+}
+
+var raFW4Handle = regexp.MustCompile(`comment "([^"]*)".*# handle (\d+)`)
+
+// raFW4Remove deletes the tagged rules of fw4's input chain whose tag match
+// picks.
+func raFW4Remove(match func(tag string) bool) {
+	if !raFW4() {
+		return
+	}
+	out, err := exec.Command("nft", "-a", "list", "chain", "inet", "fw4", "input").Output()
+	if err != nil {
+		return
+	}
+	for _, l := range strings.Split(string(out), "\n") {
+		m := raFW4Handle.FindStringSubmatch(l)
+		if m == nil || !strings.HasPrefix(m[1], raFWTag) || !match(m[1]) {
+			continue
+		}
+		exec.Command("nft", "delete", "rule", "inet", "fw4", "input", "handle", m[2]).Run()
 	}
 }
 
@@ -106,6 +167,7 @@ func raFWSweep() {
 	if raFWMode() == "off" {
 		return
 	}
+	raFW4Remove(func(string) bool { return true })
 	for _, progs := range raFWProgs() {
 		for _, prog := range progs {
 			out, err := netfilter.Exec(prog, "-S", "INPUT").Output()

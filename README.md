@@ -35,6 +35,8 @@ a systemd service. Re-running upgrades in place. Pin a version with
 `HY2SCALE_VERSION=v1.4.5`; uninstall with `… | sudo sh -s -- --uninstall`.
 On UniFi OS gateways (run as root) it installs under `/data/hy2scale`, kept across
 firmware updates ([details](https://github.com/FrankoonG/hy2scale/wiki/Installation#unifi-os)).
+On OpenWrt and firmware built on it (run `wget -qO- … | sh` as root) it installs the `hy2scale` and
+`luci-app-hy2scale` packages, managed under **Services → hy2scale** in LuCI ([details](https://github.com/FrankoonG/hy2scale/wiki/Installation#openwrt)).
 
 ### Docker
 

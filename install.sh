@@ -14,13 +14,17 @@
 #   HY2SCALE_VERSION     release tag to install (default: latest)
 #   HY2SCALE_DATA_DIR    data dir (default /var/lib/hy2scale)
 #   HY2SCALE_BIN         binary path (default /usr/local/bin/hy2scale)
-#   HY2SCALE_PLATFORM    auto (default) | linux | unifios
+#   HY2SCALE_PLATFORM    auto (default) | linux | unifios | openwrt
 #   HY2SCALE_SCRIPT_REF  git ref the platform files come from (default main)
 #
 # UniFi OS (detected automatically) installs everything under /data/hy2scale,
 # which survives firmware updates, and is managed afterwards with
 # /data/hy2scale/manage.sh (status / update / uninstall). Files under
 # platform/unifios/ in the repository.
+#
+# OpenWrt (and builds based on it, detected automatically) installs the
+# release's hy2scale and luci-app-hy2scale packages with opkg or apk; the
+# node is then managed under Services > hy2scale in LuCI.
 
 set -eu
 
@@ -41,7 +45,7 @@ for arg in "$@"; do
   case "$arg" in
     --uninstall|--remove) UNINSTALL=1 ;;
     -h|--help)
-      sed -n 's/^# \{0,1\}//p' "$0" | sed -n '2,22p'
+      sed -n 's/^# \{0,1\}//p' "$0" | sed -n '2,26p'
       exit 0 ;;
   esac
 done
@@ -58,6 +62,123 @@ case "$(uname -s)" in
   *) err "only Linux is supported (this script ran on: $(uname -s))" ;;
 esac
 
+# ─── OpenWrt: the release's packages, through the system package manager ──
+# fetch URL [FILE]: curl, else wget (uclient-fetch on OpenWrt)
+fetch() {
+  if command -v curl >/dev/null 2>&1; then
+    if [ -n "${2:-}" ]; then curl -fsSL "$1" -o "$2"; else curl -fsSL "$1"; fi
+  else
+    if [ -n "${2:-}" ]; then wget -q "$1" -O "$2"; else wget -q "$1" -O -; fi
+  fi
+}
+
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    openssl dgst -sha256 "$1" | awk '{print $NF}'
+  fi
+}
+
+openwrt_install() {
+  if command -v apk >/dev/null 2>&1 && [ -d /etc/apk ]; then
+    PM=apk
+    OW_ARCH="$(apk --print-arch)"
+    EXT=apk
+  elif command -v opkg >/dev/null 2>&1; then
+    PM=opkg
+    OW_ARCH="$(opkg print-architecture | awk '$1 == "arch" && $2 != "all" && $2 != "noarch" {print $3, $2}' | sort -n | tail -n1 | cut -d' ' -f2)"
+    EXT=ipk
+  else
+    err "neither apk nor opkg found"
+  fi
+  [ -n "$OW_ARCH" ] || err "could not determine the package architecture"
+  . /etc/openwrt_release 2>/dev/null || true
+  info "Platform: ${DISTRIB_DESCRIPTION:-OpenWrt} (${PM}, ${OW_ARCH})"
+
+  if [ "$UNINSTALL" -eq 1 ]; then
+    info "Uninstalling hy2scale…"
+    if [ "$PM" = apk ]; then
+      apk del luci-app-hy2scale hy2scale || true
+    else
+      opkg remove luci-app-hy2scale hy2scale || true
+    fi
+    info "Data dir $(uci -q get hy2scale.main.data_dir 2>/dev/null || echo /etc/hy2scale) is preserved — delete it manually if no longer needed."
+    exit 0
+  fi
+
+  if [ -z "$VERSION" ]; then
+    info "Resolving latest release tag from GitHub…"
+    VERSION="$(fetch "https://api.github.com/repos/${REPO}/releases/latest" \
+      | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n1 \
+      | sed 's/.*"\([^"]*\)".*/\1/')"
+    [ -n "$VERSION" ] || err "could not determine latest version (rate-limited or network issue)"
+  fi
+  info "Installing hy2scale ${VERSION}…"
+
+  TMP_DIR="$(mktemp -d)"
+  trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+  fetch "https://api.github.com/repos/${REPO}/releases/tags/${VERSION}" "${TMP_DIR}/release.json" \
+    || err "could not read release ${VERSION}"
+  URLS="$(grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+"' "${TMP_DIR}/release.json" \
+    | sed 's/.*"\(https[^"]*\)"/\1/')"
+  # the node package for this architecture, and the LuCI app
+  PKG_URL="$(echo "$URLS" | grep -E "/hy2scale[-_][^/]*[._]${OW_ARCH}\.${EXT}\$" | head -n1)"
+  LUCI_URL="$(echo "$URLS" | grep -E "/luci-app-hy2scale[-_][^/]*\.${EXT}\$" | head -n1)"
+  [ -n "$PKG_URL" ] || err "release ${VERSION} has no ${EXT} package for ${OW_ARCH}"
+  fetch "https://github.com/${REPO}/releases/download/${VERSION}/checksums-sha256.txt" "${TMP_DIR}/checksums.txt" \
+    || err "could not download checksums-sha256.txt for ${VERSION}"
+
+  FILES=""
+  for u in $PKG_URL $LUCI_URL; do
+    f="${u##*/}"
+    info "Fetching $f"
+    fetch "$u" "${TMP_DIR}/${f}" || err "download of $f failed"
+    want="$(grep -E "[[:space:]]\*?${f}\$" "${TMP_DIR}/checksums.txt" | awk '{print $1}')"
+    [ -n "$want" ] || err "$f is not listed in checksums-sha256.txt"
+    [ "$(sha256_of "${TMP_DIR}/${f}")" = "$want" ] || err "checksum mismatch for $f"
+    FILES="$FILES ${TMP_DIR}/${f}"
+  done
+  info "Checksums OK"
+
+  # dependencies (kmod-tun, ca-bundle, …) come from the system's own feeds
+  if [ "$PM" = apk ]; then
+    apk update >/dev/null 2>&1 || warn "apk update failed — dependencies may not resolve"
+    # shellcheck disable=SC2086
+    apk add --allow-untrusted $FILES || err "apk add failed"
+  else
+    opkg update >/dev/null 2>&1 || warn "opkg update failed — dependencies may not resolve"
+    # shellcheck disable=SC2086
+    opkg install $FILES || err "opkg install failed"
+  fi
+
+  uci -q set hy2scale.main.enabled=1 && uci -q commit hy2scale
+  /etc/init.d/hy2scale enable
+  /etc/init.d/hy2scale restart
+  sleep 3
+  if pidof hy2scale >/dev/null 2>&1; then
+    info "Service is running."
+  else
+    warn "Service is not running. Inspect with: logread -e hy2scale"
+  fi
+
+  LAN_IP="$(uci -q get network.lan.ipaddr 2>/dev/null | cut -d/ -f1)"
+  printf '\n'
+  printf '\033[32m✓ hy2scale %s installed (%s).\033[0m\n' "$(echo "$VERSION" | sed 's/^v//')" "${DISTRIB_ID:-OpenWrt}"
+  printf '\n'
+  printf '  LuCI      Services > hy2scale\n'
+  printf '  Web UI    https://%s:%s/scale\n' "${LAN_IP:-<router>}" "$PORT"
+  printf '  Login     admin / admin (a new password is required at first login)\n'
+  printf '  Logs      logread -e hy2scale\n'
+  printf '\n'
+  exit 0
+}
+
+if [ "$PLATFORM" = openwrt ] || { [ "$PLATFORM" = auto ] && [ -f /etc/openwrt_release ]; }; then
+  PLATFORM=openwrt
+  openwrt_install
+fi
+
 for cmd in curl tar gzip uname mktemp install grep; do
   command -v "$cmd" >/dev/null 2>&1 || err "$cmd not found in PATH"
 done
@@ -71,7 +192,7 @@ case "$PLATFORM" in
       PLATFORM=linux
     fi ;;
   linux | unifios) ;;
-  *) err "unknown HY2SCALE_PLATFORM: $PLATFORM (auto, linux or unifios)" ;;
+  *) err "unknown HY2SCALE_PLATFORM: $PLATFORM (auto, linux, unifios or openwrt)" ;;
 esac
 if [ "$PLATFORM" = unifios ]; then
   [ -d /run/systemd/system ] || err "UniFi OS install needs systemd"
@@ -89,12 +210,26 @@ case "$RAW_ARCH" in
     ARCH="linux-arm64" ;;
   armv7* | armv8l | armhf | arm)
     ARCH="linux-armv7" ;;
+  armv6*)
+    ARCH="linux-armv6" ;;
+  armv5*)
+    ARCH="linux-armv5" ;;
+  i386 | i486 | i586 | i686 | x86)
+    ARCH="linux-386" ;;
   mips64le | mips64el)
     ARCH="linux-mips64le" ;;
+  mips64)
+    ARCH="linux-mips64" ;;
   mipsel | mipsle)
     ARCH="linux-mipsle-softfloat" ;;
+  mips)
+    ARCH="linux-mips-softfloat" ;;
+  riscv64)
+    ARCH="linux-riscv64" ;;
+  loongarch64)
+    ARCH="linux-loong64" ;;
   *)
-    err "unsupported architecture: $RAW_ARCH (supported: x86_64, aarch64, armv7, mips64le, mipsel)" ;;
+    err "unsupported architecture: $RAW_ARCH (supported: x86_64, i386, aarch64, armv5/6/7, mips, mipsel, mips64, mips64el, riscv64, loongarch64)" ;;
 esac
 
 # ─── 3. uninstall path ────────────────────────────────────────────────────

@@ -34,6 +34,8 @@ curl -fsSL https://raw.githubusercontent.com/FrankoonG/hy2scale/main/install.sh 
 固定版本用 `HY2SCALE_VERSION=v1.4.5`；卸载用 `… | sudo sh -s -- --uninstall`。
 在 UniFi OS 网关上（以 root 运行）会装到 `/data/hy2scale`，固件升级后依然保留
 （[详见](https://github.com/FrankoonG/hy2scale/wiki/Installation-zh#unifi-os)）。
+在 OpenWrt 及基于它的固件上（以 root 运行 `wget -qO- … | sh`）会安装 `hy2scale` 和 `luci-app-hy2scale`
+两个包，在 LuCI 的 **服务 → hy2scale** 中管理（[详见](https://github.com/FrankoonG/hy2scale/wiki/Installation-zh#openwrt)）。
 
 ### Docker
 
