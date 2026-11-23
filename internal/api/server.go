@@ -146,6 +146,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// entry link sets (remote_access.go).
 	apiMux.HandleFunc("/rweb/", s.remoteAccessWeb)
 	s.raStart(ctx)
+	s.logRollbackConfigs()
 
 	// Static files with SPA fallback — inject basePath into index.html.
 	// A build-id derived from the sha256 of the raw index.html is also

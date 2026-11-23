@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -22,6 +23,11 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "ctl" || os.Args[1] == "--version" || os.Args[1] == "-version") {
+		// a tool run of the image's binary is the in-app upgrade's when
+		// that one is newer (selfupdate.Delegate)
+		selfupdate.Delegate(toolDataDir(os.Args[1:]), api.Version)
+	}
 	if len(os.Args) > 1 && os.Args[1] == "ctl" {
 		os.Exit(runCtl(os.Args[2:]))
 	}
@@ -39,6 +45,10 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
+		if img := selfupdate.ImageVersion(); img != "" && img != api.Version {
+			fmt.Printf("hy2scale %s (image %s)\n", api.Version, img)
+			return
+		}
 		fmt.Printf("hy2scale %s\n", api.Version)
 		return
 	}
@@ -149,6 +159,7 @@ func main() {
 		os.Exit(1)
 	}
 	a.WaitPersisted(3 * time.Second)
+	selfupdate.CleanExit(dir) // a normal stop: not a failed start
 	if restart.Load() {
 		restartProcess()
 	}
@@ -182,4 +193,23 @@ func supervised() bool {
 		}
 	}
 	return os.Getenv("INVOCATION_ID") != "" // systemd service
+}
+
+// toolDataDir: the data directory of a tool run (its --data, else /data
+// when present, else ./hy2scale as the node itself defaults).
+func toolDataDir(args []string) string {
+	for i, a := range args {
+		for _, f := range []string{"--data", "-data"} {
+			if a == f && i+1 < len(args) {
+				return args[i+1]
+			}
+			if v, ok := strings.CutPrefix(a, f+"="); ok {
+				return v
+			}
+		}
+	}
+	if st, err := os.Stat("/data"); err == nil && st.IsDir() {
+		return "/data"
+	}
+	return "hy2scale"
 }

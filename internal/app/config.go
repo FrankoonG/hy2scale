@@ -141,14 +141,19 @@ type ProxyConfig struct {
 
 // ConfigStore manages dynamic configuration with persistence.
 type ConfigStore struct {
-	mu   sync.RWMutex
-	cfg  Config
-	path string
+	mu       sync.RWMutex
+	cfg      Config
+	path     string
+	loadedBy string // the version that wrote the config read at start ("" = 1.4.5 or older)
 }
 
 func NewConfigStore(cfg Config, persistPath string) *ConfigStore {
-	return &ConfigStore{cfg: cfg, path: persistPath}
+	return &ConfigStore{cfg: cfg, path: persistPath, loadedBy: cfg.WrittenBy}
 }
+
+// LoadedBy: the version that wrote the config this node started with ("" =
+// 1.4.5 or older, which did not say).
+func (s *ConfigStore) LoadedBy() string { return s.loadedBy }
 
 func (s *ConfigStore) Get() Config {
 	s.mu.RLock()
@@ -167,6 +172,7 @@ func (s *ConfigStore) persist() error {
 	if s.path == "" {
 		return nil
 	}
+	s.cfg.WrittenBy = AppVersion
 	data, err := yaml.Marshal(&s.cfg)
 	if err != nil {
 		return err

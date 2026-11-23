@@ -1516,5 +1516,6 @@
   "remote.accessProto": "Protocol",
   "remote.accessDelete": "Delete target",
   "remote.accessDeleteConfirm": "Delete {{target}} from the list of this node?",
-  "remote.accessTooOld": "This node needs version 1.4.6 or later."
+  "remote.accessTooOld": "This node needs version 1.4.6 or later.",
+  "overview.issue.rollbackConfig": "Fell back from {{version}}: its config is kept at {{file}}"
 }

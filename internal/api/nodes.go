@@ -126,6 +126,8 @@ func (s *Server) getNode(w http.ResponseWriter, r *http.Request) {
 		"active_paths":  s.app.AllActivePaths(),
 		// peers below this lack lossless quality/aggregate (UI marks them)
 		"lossless_min_version": app.MsessMinVersion,
+		// configs kept before an in-app upgrade fell back (rollback.go)
+		"rollback_configs": rollbackConfigs(s.app.DataDir()),
 	})
 }
 

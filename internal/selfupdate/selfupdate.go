@@ -24,8 +24,9 @@ import (
 
 const (
 	envHandoff = "HY2SCALE_PERSISTED" // set on the handed-over process
+	envImage   = "HY2SCALE_IMAGE"     // the image's version, on a handed-over process
 	binName    = "hy2scale"
-	maxTries   = 3 // starts in a row that never reached Healthy
+	maxTries   = 3 // starts in a row that ended abnormally before Healthy
 )
 
 func binDir(dataDir string) string { return filepath.Join(dataDir, "bin") }
@@ -34,6 +35,18 @@ func binDir(dataDir string) string { return filepath.Join(dataDir, "bin") }
 func Path(dataDir string) string { return filepath.Join(binDir(dataDir), binName) }
 
 func triesPath(dataDir string) string { return filepath.Join(binDir(dataDir), "starts") }
+
+// cleanPath: left by a stored binary that stopped normally (a restart, a
+// stop): its start does not count towards a fall-back.
+func cleanPath(dataDir string) string { return filepath.Join(binDir(dataDir), "clean-exit") }
+
+// RollbackPrefix: the config kept before falling back to the image's binary
+// is "<config>.rollback-<version>".
+const RollbackPrefix = "config.yaml.rollback-"
+
+// ImageVersion: the image's version when this process was handed over to
+// ("" = this is the image's binary, or none).
+func ImageVersion() string { return os.Getenv(envImage) }
 
 // Persisted reports whether this process is the stored binary.
 func Persisted() bool { return os.Getenv(envHandoff) != "" }
@@ -56,16 +69,52 @@ func Handoff(dataDir, selfVersion string) {
 		return
 	}
 	tries, _ := strconv.Atoi(strings.TrimSpace(readFile(triesPath(dataDir))))
+	if _, err := os.Stat(cleanPath(dataDir)); err == nil {
+		tries = 0 // the last run stopped normally: not a crash
+		os.Remove(cleanPath(dataDir))
+	}
 	if tries >= maxTries {
 		log.Printf("[upgrade] stored binary %s failed to start %d times, keeping %s", v, tries, selfVersion)
+		// this binary rewrites the config in its own (older) form: keep the
+		// newer one first
+		keep := filepath.Join(dataDir, RollbackPrefix+v)
+		if err := copyFile(filepath.Join(dataDir, "config.yaml"), keep); err == nil {
+			log.Printf("[upgrade] the config of %s is kept at %s", v, keep)
+		}
 		os.Rename(p, p+".failed")
 		os.Remove(triesPath(dataDir))
 		return
 	}
 	os.WriteFile(triesPath(dataDir), []byte(strconv.Itoa(tries+1)), 0644)
 	log.Printf("[upgrade] handing over to stored binary %s (image has %s)", v, selfVersion)
-	err := syscall.Exec(p, os.Args, append(os.Environ(), envHandoff+"=1"))
+	err := syscall.Exec(p, os.Args, append(os.Environ(), envHandoff+"=1", envImage+"="+selfVersion))
 	log.Printf("[upgrade] exec %s: %v — continuing with %s", p, err, selfVersion)
+}
+
+// Delegate hands a tool run of the image's binary (ctl, --version …) over to
+// the stored binary while that one is newer, so the newer binary is the one
+// in use wherever it is called. No start is counted. It returns when this
+// process should simply continue.
+func Delegate(dataDir, selfVersion string) {
+	if Persisted() {
+		return
+	}
+	p := Path(dataDir)
+	if _, err := os.Stat(p); err != nil {
+		return
+	}
+	if !Newer(versionOf(p), selfVersion) {
+		return
+	}
+	syscall.Exec(p, os.Args, append(os.Environ(), envHandoff+"=1", envImage+"="+selfVersion))
+}
+
+// CleanExit marks a normal stop of the stored binary (Handoff then does not
+// count its start as a failed one).
+func CleanExit(dataDir string) {
+	if Persisted() {
+		os.WriteFile(cleanPath(dataDir), nil, 0644)
+	}
 }
 
 // Healthy marks the stored binary's start as good (called once it has run
@@ -145,6 +194,14 @@ func versionOf(p string) string {
 		return ""
 	}
 	return f[1]
+}
+
+func copyFile(src, dst string) error {
+	b, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, b, 0600)
 }
 
 func readFile(p string) string {

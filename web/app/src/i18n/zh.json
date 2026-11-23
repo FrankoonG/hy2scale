@@ -1516,5 +1516,6 @@
   "remote.accessProto": "协议",
   "remote.accessDelete": "删除目标",
   "remote.accessDeleteConfirm": "从此节点的列表中删除 {{target}}？",
-  "remote.accessTooOld": "该节点需要 1.4.6 或更新版本。"
+  "remote.accessTooOld": "该节点需要 1.4.6 或更新版本。",
+  "overview.issue.rollbackConfig": "已从 {{version}} 回退，其配置保存在 {{file}}"
 }

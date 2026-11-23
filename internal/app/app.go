@@ -163,6 +163,9 @@ type Config struct {
 	ForceHTTPS  bool                  `yaml:"force_https,omitempty" json:"force_https,omitempty"` // ignored: the web UI is always https
 	HTTPSCertID     string                `yaml:"https_cert_id,omitempty" json:"https_cert_id,omitempty"`
 	SessionTimeoutH int                   `yaml:"session_timeout_h,omitempty" json:"session_timeout_h,omitempty"` // hours, default 12
+	// WrittenBy: the version that last saved this file (an older version
+	// rewriting it drops the field).
+	WrittenBy string `yaml:"written_by,omitempty" json:"-"`
 	// RemoteAccessPorts: the ports remote access opens here, e.g.
 	// "20000-20100" ("" = any free port).
 	RemoteAccessPorts string `yaml:"remote_access_ports,omitempty" json:"remote_access_ports,omitempty"`

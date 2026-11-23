@@ -1516,5 +1516,6 @@
   "remote.accessProto": "프로토콜",
   "remote.accessDelete": "대상 삭제",
   "remote.accessDeleteConfirm": "이 노드의 목록에서 {{target}}을(를) 삭제할까요?",
-  "remote.accessTooOld": "이 노드는 1.4.6 이상 버전이 필요합니다."
+  "remote.accessTooOld": "이 노드는 1.4.6 이상 버전이 필요합니다.",
+  "overview.issue.rollbackConfig": "{{version}}에서 롤백됨: 설정은 {{file}}에 보관됨"
 }

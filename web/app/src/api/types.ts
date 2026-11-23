@@ -10,6 +10,8 @@ export interface NodeConfig {
   hy2_user_auth: boolean;
   active_paths: Record<string, string>;
   lossless_min_version?: string;
+  /** configs kept when an in-app upgrade fell back to the image's binary */
+  rollback_configs?: { file: string; version: string; time: number }[];
 }
 
 export interface ServerConfig {
