@@ -762,10 +762,20 @@ func (i *Iface) DialContext(ctx context.Context, network, address string) (net.C
 	}
 	local := tcpip.FullAddress{NIC: nicID, Addr: src}
 	remote := tcpip.FullAddress{NIC: nicID, Addr: tcpipAddr(dst), Port: ap.Port()}
+	// A failed dial returns a nil net.Conn, never a nil *gonet conn inside
+	// one (callers test the interface for nil).
 	if isTCP {
-		return gonet.DialTCPWithBind(ctx, i.s, local, remote, protoOf(dst))
+		c, err := gonet.DialTCPWithBind(ctx, i.s, local, remote, protoOf(dst))
+		if err != nil {
+			return nil, err
+		}
+		return c, nil
 	}
-	return i.udpConn(&local, &remote, protoOf(dst))
+	c, err := i.udpConn(&local, &remote, protoOf(dst))
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 // udpConn opens a UDP socket on the stack with large buffers: QUIC (hy2)
@@ -824,7 +834,11 @@ func (i *Iface) ListenPacket(network string, laddr netip.AddrPort) (net.PacketCo
 	if !is4 {
 		proto = ipv6.ProtocolNumber
 	}
-	return i.udpConn(&tcpip.FullAddress{NIC: nicID, Addr: src, Port: laddr.Port()}, nil, proto)
+	c, err := i.udpConn(&tcpip.FullAddress{NIC: nicID, Addr: src, Port: laddr.Port()}, nil, proto)
+	if err != nil {
+		return nil, err // a nil net.PacketConn, not a nil *gonet.UDPConn in one
+	}
+	return c, nil
 }
 
 // Renew starts a DHCP renewal now (or a new DISCOVER when no lease is held).

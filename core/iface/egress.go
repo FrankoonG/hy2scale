@@ -261,11 +261,7 @@ func (m *Manager) Dial(ctx context.Context, network, addr string) (net.Conn, err
 func RaceDial[T any](ctx context.Context, order []T, dial func(context.Context, T) (net.Conn, error)) (net.Conn, error) {
 	rctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	type res struct {
-		c   net.Conn
-		err error
-	}
-	results := make(chan res, len(order))
+	results := make(chan dialResult, len(order))
 	next, pending := 0, 0
 	var lastErr error
 	timer := time.NewTimer(0)
@@ -279,22 +275,19 @@ func RaceDial[T any](ctx context.Context, order []T, dial func(context.Context, 
 				pending++
 				go func() {
 					c, err := dial(rctx, t)
-					results <- res{c, err}
+					results <- dialResult{c, err}
 				}()
 				timer.Reset(250 * time.Millisecond)
 			}
 		case r := <-results:
 			pending--
-			if r.err == nil {
+			if r.err == nil && r.c != nil {
 				cancel()
-				go func(n int) { // close the losers
-					for ; n > 0; n-- {
-						if l := <-results; l.c != nil {
-							l.c.Close()
-						}
-					}
-				}(pending)
+				closeLosers(results, pending)
 				return r.c, nil
+			}
+			if r.err == nil {
+				r.err = errors.New("dial: no connection")
 			}
 			lastErr = r.err
 			if next < len(order) {
@@ -303,9 +296,32 @@ func RaceDial[T any](ctx context.Context, order []T, dial func(context.Context, 
 				return nil, lastErr
 			}
 		case <-ctx.Done():
+			closeLosers(results, pending)
 			return nil, ctx.Err()
 		}
 	}
+}
+
+// closeLosers closes the connections the n attempts still running make. Only
+// a successful attempt's connection is closed: a failed one may carry a nil
+// pointer inside a non-nil net.Conn.
+func closeLosers(results <-chan dialResult, n int) {
+	if n <= 0 {
+		return
+	}
+	go func() {
+		for ; n > 0; n-- {
+			if r := <-results; r.err == nil && r.c != nil {
+				r.c.Close()
+			}
+		}
+	}()
+}
+
+// dialResult: one attempt of RaceDial.
+type dialResult struct {
+	c   net.Conn
+	err error
 }
 
 // PlainDial dials through the system routes.
