@@ -28,8 +28,8 @@
 curl -fsSL https://raw.githubusercontent.com/FrankoonG/hy2scale/main/install.sh | sudo sh
 ```
 
-CPU 아키텍처(`amd64` / `arm64` / `armv7` / `mips64le` /
-`mipsle-softfloat`)를 자동 감지해 최신 릴리스의 해당 tar 파일을 받고,
+CPU 아키텍처(`amd64` / `386` / `arm64` / `armv7` / `armv6` / `armv5` / `mips64le` / `mips64` /
+`mipsle-softfloat` / `mips-softfloat` / `riscv64` / `loong64`)를 자동 감지해 최신 릴리스의 해당 tar 파일을 받고,
 `/usr/local/bin/hy2scale`에 바이너리를 설치한 뒤 systemd 서비스를
 등록합니다. 다시 실행하면 그대로 업그레이드. 버전을 고정하려면
 `HY2SCALE_VERSION=v1.4.5`, 제거하려면 `… | sudo sh -s -- --uninstall`.
