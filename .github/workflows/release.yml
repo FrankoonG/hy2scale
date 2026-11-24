@@ -491,21 +491,49 @@ jobs:
           cp artifacts/openwrt-packages/* release/
           (cd release && sha256sum -- * > checksums-sha256.txt && cat checksums-sha256.txt)
 
-      - name: Release notes
+      # a release is compared with the previous release, a pre-release with
+      # the previous tag of any kind
+      - name: Previous release
         run: |
           set -eu
-          # a release is compared with the previous release, a pre-release
-          # with the previous tag of any kind
           if [ "$PRERELEASE" = true ]; then
             PREV="$(git describe --tags --abbrev=0 "refs/tags/${TAG}^" 2>/dev/null || true)"
           else
             PREV="$(git describe --tags --abbrev=0 --exclude '*-*' "refs/tags/${TAG}^" 2>/dev/null || true)"
           fi
+          echo "PREV=${PREV}" >> "$GITHUB_ENV"
+          echo "previous: ${PREV:-none}"
+
+      # A summary of the changes by the newest "luna" model of the API in
+      # RELEASE_AI_BASE_URL (variable) with RELEASE_AI_KEY (secret); skipped
+      # when either is unset, and never fails the release.
+      - name: Highlights
+        continue-on-error: true
+        env:
+          RELEASE_AI_KEY: ${{ secrets.RELEASE_AI_KEY }}
+          RELEASE_AI_BASE_URL: ${{ vars.RELEASE_AI_BASE_URL }}
+        run: |
+          : > highlights.md
+          [ -n "$PREV" ] || { echo "no previous release"; exit 0; }
+          bash .github/scripts/release-highlights.sh "refs/tags/${PREV}" "refs/tags/${TAG}" highlights.md
+          cat highlights.md
+
+      - name: Release notes
+        run: |
+          set -eu
           RAW="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh"
           WIKI="https://github.com/${GITHUB_REPOSITORY}/wiki/Installation"
           {
             echo "## hy2scale ${VERSION}"
             echo
+            if [ -s highlights.md ]; then
+              echo "### Highlights"
+              echo
+              cat highlights.md
+              echo
+              echo "<sub>Summarised by an AI model from the changes listed at the end.</sub>"
+              echo
+            fi
             echo "### Install or upgrade"
             echo
             echo "| Where | How |"
