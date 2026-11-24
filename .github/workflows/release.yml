@@ -524,36 +524,40 @@ jobs:
           set -eu
           RAW="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh"
           WIKI="https://github.com/${GITHUB_REPOSITORY}/wiki/Installation"
+          DL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          # link LABEL REGEX: a download link to the release file matching REGEX
+          link() {
+            f="$(ls release | grep -E "$2" | head -n1)"
+            [ -z "$f" ] || printf '[%s](%s/%s)' "$1" "$DL" "$f"
+          }
+          BIN=""
+          for p in amd64 386 arm64 armv7 armv6 armv5 mips-softfloat mipsle-softfloat mips64 mips64le riscv64 loong64; do
+            l="$(link "${p%-softfloat}" "^hy2scale-linux-${p}\.tar\.gz$")"
+            [ -z "$l" ] || BIN="${BIN:+${BIN} · }${l}"
+          done
           {
             echo "## hy2scale ${VERSION}"
+            echo
+            echo "- **Linux** (systemd, UniFi OS): \`curl -fsSL ${RAW} | sudo sh\`"
+            echo "  - Binaries: ${BIN}"
+            echo "- **OpenWrt** and derivatives: \`wget -qO- ${RAW} | sh\` (as root)"
+            echo "  - x86_64, opkg: $(link hy2scale '^hy2scale_.*_x86_64\.ipk$') + $(link LuCI '^luci-app-hy2scale_.*\.ipk$')"
+            echo "  - x86_64, apk: $(link hy2scale '^hy2scale-.*_x86_64\.apk$') + $(link LuCI '^luci-app-hy2scale-.*\.apk$')"
+            echo "  - Other architectures: [build artifact](${RUN_URL}) (GitHub sign-in, kept 90 days)"
+            echo "- **Docker**: \`docker pull frankoong/hy2scale:${VERSION}\`"
+            echo "  - Offline image: $(link amd64 '^docker-image-amd64\.tar\.gz$') · $(link arm64 '^docker-image-arm64\.tar\.gz$')"
+            echo "- **iKuai v4** (app store, local install): $(link x86 '^hy2scale-x86-.*\.ipkg$') · $(link arm64 '^hy2scale-arm64-.*\.ipkg$')"
+            echo
+            echo "[Installation](${WIKI}) · $(link 'Checksums' '^checksums-sha256\.txt$') · $(link 'OpenWrt checksums' '^openwrt-sha256\.txt$')"
             echo
             if [ -s highlights.md ]; then
               echo "### Highlights"
               echo
               cat highlights.md
               echo
-              echo "<sub>Summarised by an AI model from the changes listed at the end.</sub>"
+              echo "<sub>Summarised by an AI model from the changes below.</sub>"
               echo
             fi
-            echo "### Install or upgrade"
-            echo
-            echo "| Where | How |"
-            echo "|---|---|"
-            echo "| Linux (systemd), UniFi OS | \`curl -fsSL ${RAW} \| sudo sh\` |"
-            echo "| OpenWrt and derivatives | \`wget -qO- ${RAW} \| sh\` (as root) |"
-            echo "| Docker | \`docker pull frankoong/hy2scale:${VERSION}\` |"
-            echo "| iKuai v4 | \`hy2scale-x86-${VERSION}.ipkg\` or \`hy2scale-arm64-${VERSION}.ipkg\`, installed locally from the app store |"
-            echo
-            echo "Nodes on an earlier version can also upgrade from **Settings → Upgrade**. Details: [Installation](${WIKI})."
-            echo
-            echo "### Files"
-            echo
-            echo "- **Binaries:** \`hy2scale-linux-<platform>.tar.gz\` for amd64, 386, arm64, armv7, armv6, armv5, mips-softfloat, mipsle-softfloat, mips64, mips64le, riscv64 and loong64. Each one is signed (\`.sig\` in the archive); an official build checks the signature before it upgrades."
-            echo "- **Docker image, offline:** \`docker-image-amd64.tar.gz\`, \`docker-image-arm64.tar.gz\` (\`docker load < file\`)."
-            echo "- **OpenWrt, x86_64:** \`hy2scale_*_x86_64.ipk\` with \`luci-app-hy2scale_*_all.ipk\` (opkg, 24.10 and earlier), or \`hy2scale-*_x86_64.apk\` with \`luci-app-hy2scale-*.apk\` (apk, 25.12 and later). Install both of a pair."
-            echo "- **OpenWrt, other architectures:** the \`openwrt-packages-all\` artifact of [this build](${RUN_URL}) (GitHub sign-in needed, kept 90 days). \`openwrt-sha256.txt\` lists the checksums of every architecture's packages."
-            echo "- **Checksums:** \`sha256sum -c --ignore-missing checksums-sha256.txt\` in the folder with the downloaded files."
-            echo
             echo "<details>"
             if [ -n "$PREV" ]; then
               echo "<summary>Changes since ${PREV}</summary>"

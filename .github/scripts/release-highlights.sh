@@ -34,10 +34,13 @@ MODEL="$(printf '%s\n' "$IDS" | grep -i 'luna$' | sort -V | tail -n1)"
 
 SYSTEM='You write the "Highlights" section of the release notes of hy2scale, a Hysteria 2 mesh relay network with a web UI.
 The input is the commit messages since the previous release.
-Write 3 to 8 Markdown bullet points, each starting with "- ", for the people who run hy2scale: new features, changes in behaviour, notable fixes.
-Merge related commits into one point. Leave out releases, version bumps, web bundles, tests, CI and refactoring with no visible effect.
-Plain, factual wording: no marketing, no emojis, no commit hashes, no file, function or type names.
-Each point under 25 words. Output only the bullet points.'
+Write 3 to 6 Markdown bullet points, each starting with "- ", for the people who run hy2scale: new features, changes in behaviour, notable fixes.
+Rules:
+- Use only what the commit messages state. Do not infer causes, settings, environments or scenarios they do not describe; keep their meaning exact. When a message is unclear, leave it out.
+- One change per point, written as one short sentence of at most 20 words.
+- Leave out releases, version bumps, web bundles, documentation, tests, CI, changes to how releases are built or described, and refactoring with no visible effect.
+- Plain, factual wording: no marketing, no emojis, no commit hashes, no file, function or type names.
+Output only the bullet points.'
 
 BODY="$(jq -n --arg m "$MODEL" --arg s "$SYSTEM" --arg u "$LOG" \
   '{model: $m, messages: [{role: "system", content: $s}, {role: "user", content: $u}]}')"
