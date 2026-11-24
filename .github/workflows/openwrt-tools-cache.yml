@@ -1,0 +1,45 @@
+name: OpenWrt host tools cache
+
+# Builds the OpenWrt host tools (apk-tools, usign, po2lmo) and saves them in
+# the cache the release's "OpenWrt packages" job restores. The key is the
+# hash of build-host-tools.sh as of the given tag, so a release whose own
+# script could not fetch its sources finds the tools on a rerun.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag whose cache key to fill (e.g. v1.4.6)
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Build
+        run: |
+          set -eu
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends fakeroot meson ninja-build pkg-config libssl-dev zlib1g-dev
+          bash platform/openwrt/tools/build-host-tools.sh "$GITHUB_WORKSPACE/.owrt-tools"
+
+      # the tag's own script, for the cache key the release computes
+      - name: Script of the tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -eu
+          case "$TAG" in v[0-9]*) ;; *) echo "bad tag"; exit 1 ;; esac
+          git checkout "refs/tags/${TAG}" -- platform/openwrt/tools/build-host-tools.sh
+
+      - uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: .owrt-tools
+          key: owrt-tools-${{ runner.os }}-${{ hashFiles('platform/openwrt/tools/build-host-tools.sh') }}

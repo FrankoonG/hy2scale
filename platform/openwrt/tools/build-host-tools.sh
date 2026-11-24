@@ -13,7 +13,9 @@
 # libssl-dev zlib1g-dev).
 set -eu
 
-APK_URL=https://gitlab.alpinelinux.org/alpine/apk-tools.git
+# GitHub's mirror first: Alpine's GitLab refuses some CI runners (HTTP 418).
+# Either way the commit below is checked.
+APK_URLS="https://github.com/alpinelinux/apk-tools.git https://gitlab.alpinelinux.org/alpine/apk-tools.git"
 APK_REV=b5a31c0d865342ad80be10d68f1bb3d3ad9b0866        # apk 3.0.5, openwrt-25.12
 USIGN_URL=https://github.com/openwrt/usign.git
 USIGN_REV=c4c72b1b07945ee192361dc751291a7c98d6adcd      # openwrt-25.12
@@ -50,7 +52,12 @@ fetch() {
 }
 
 echo ">> apk-tools $APK_REV"
-fetch "$APK_URL" "$APK_REV" "$WORK/apk"
+for url in $APK_URLS; do
+	rm -rf "$WORK/apk"
+	if fetch "$url" "$APK_REV" "$WORK/apk"; then break; fi
+	echo "   $url failed"
+done
+[ -d "$WORK/apk/.git" ] && [ "$(git -C "$WORK/apk" rev-parse HEAD 2>/dev/null)" = "$APK_REV" ] || { echo "apk-tools: no source answered" >&2; exit 1; }
 (
 	cd "$WORK/apk"
 	# Same feature set as OpenWrt's host apk: no zstd (OpenWrt's apk
