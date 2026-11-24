@@ -32,7 +32,7 @@ Auto-detects the CPU architecture (`amd64`, `386`, `arm64`, `armv7`, `armv6`, `a
 `mips64le`, `mips64`, `mipsle-softfloat`, `mips-softfloat`, `riscv64`, `loong64`), downloads the matching tarball from the latest
 release, installs the binary to `/usr/local/bin/hy2scale`, and registers
 a systemd service. Re-running upgrades in place. Pin a version with
-`HY2SCALE_VERSION=v1.4.5`; uninstall with `… | sudo sh -s -- --uninstall`.
+`HY2SCALE_VERSION=v1.4.6`; uninstall with `… | sudo sh -s -- --uninstall`.
 On UniFi OS gateways (run as root) it installs under `/data/hy2scale`, kept across
 firmware updates ([details](https://github.com/FrankoonG/hy2scale/wiki/Installation#unifi-os)).
 On OpenWrt and firmware built on it (run `wget -qO- … | sh` as root) it installs the `hy2scale` and
