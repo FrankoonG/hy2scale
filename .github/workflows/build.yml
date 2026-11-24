@@ -214,10 +214,10 @@ jobs:
           set -eu
           # The ipkg manifest version must be plain X.Y.Z (iKuai rejects -rc1).
           IPKG_VERSION="${VERSION%%-*}"
-          sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${IPKG_VERSION}\"/" ipkg/hy2scale/manifest.json
-          docker save hy2scale:ikuai | gzip > ipkg/hy2scale/docker_image.tar.gz
-          (cd ipkg && tar czf "hy2scale-${ARCH_LABEL}-${LABEL}.ipkg" hy2scale/)
-          rm -f ipkg/hy2scale/docker_image.tar.gz
+          sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${IPKG_VERSION}\"/" platform/ikuai/hy2scale/manifest.json
+          docker save hy2scale:ikuai | gzip > platform/ikuai/hy2scale/docker_image.tar.gz
+          (cd platform/ikuai && tar czf "hy2scale-${ARCH_LABEL}-${LABEL}.ipkg" hy2scale/)
+          rm -f platform/ikuai/hy2scale/docker_image.tar.gz
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -229,6 +229,6 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ipkg-${{ matrix.arch_label }}-${{ env.LABEL }}
-          path: ipkg/hy2scale-${{ matrix.arch_label }}-${{ env.LABEL }}.ipkg
+          path: platform/ikuai/hy2scale-${{ matrix.arch_label }}-${{ env.LABEL }}.ipkg
           if-no-files-found: error
           retention-days: 30

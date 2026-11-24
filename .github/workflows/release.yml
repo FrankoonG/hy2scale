@@ -370,10 +370,10 @@ jobs:
           # The ipkg manifest version must be plain X.Y.Z (iKuai rejects -rc1).
           RAW_VERSION="$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/api/server.go)"
           IPKG_VERSION="${RAW_VERSION%%-*}"
-          sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${IPKG_VERSION}\"/" ipkg/hy2scale/manifest.json
-          docker save hy2scale:ikuai | gzip > ipkg/hy2scale/docker_image.tar.gz
-          (cd ipkg && tar czf "hy2scale-${ARCH_LABEL}-${VERSION}.ipkg" hy2scale/)
-          rm -f ipkg/hy2scale/docker_image.tar.gz
+          sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${IPKG_VERSION}\"/" platform/ikuai/hy2scale/manifest.json
+          docker save hy2scale:ikuai | gzip > platform/ikuai/hy2scale/docker_image.tar.gz
+          (cd platform/ikuai && tar czf "hy2scale-${ARCH_LABEL}-${VERSION}.ipkg" hy2scale/)
+          rm -f platform/ikuai/hy2scale/docker_image.tar.gz
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -384,7 +384,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ipkg-${{ matrix.arch }}
-          path: ipkg/hy2scale-${{ matrix.arch_label }}-${{ needs.version.outputs.version }}.ipkg
+          path: platform/ikuai/hy2scale-${{ matrix.arch_label }}-${{ needs.version.outputs.version }}.ipkg
           if-no-files-found: error
 
   # ─── OpenWrt packages (no secrets) ───────────────────────────────
@@ -494,64 +494,52 @@ jobs:
       - name: Release notes
         run: |
           set -eu
-          PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          # a release is compared with the previous release, a pre-release
+          # with the previous tag of any kind
+          if [ "$PRERELEASE" = true ]; then
+            PREV="$(git describe --tags --abbrev=0 "refs/tags/${TAG}^" 2>/dev/null || true)"
+          else
+            PREV="$(git describe --tags --abbrev=0 --exclude '*-*' "refs/tags/${TAG}^" 2>/dev/null || true)"
+          fi
+          RAW="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh"
+          WIKI="https://github.com/${GITHUB_REPOSITORY}/wiki/Installation"
           {
-            echo "## hy2scale ${TAG}"
+            echo "## hy2scale ${VERSION}"
             echo
-            echo "### Binary downloads"
+            echo "### Install or upgrade"
             echo
-            echo "| Platform | File |"
-            echo "|----------|------|"
-            for p in linux-amd64 linux-386 linux-arm64 linux-armv7 linux-armv6 linux-armv5 \
-              linux-mips-softfloat linux-mipsle-softfloat linux-mips64 linux-mips64le \
-              linux-riscv64 linux-loong64; do
-              echo "| ${p} | \`hy2scale-${p}.tar.gz\` |"
-            done
+            echo "| Where | How |"
+            echo "|---|---|"
+            echo "| Linux (systemd), UniFi OS | \`curl -fsSL ${RAW} \| sudo sh\` |"
+            echo "| OpenWrt and derivatives | \`wget -qO- ${RAW} \| sh\` (as root) |"
+            echo "| Docker | \`docker pull frankoong/hy2scale:${VERSION}\` |"
+            echo "| iKuai v4 | \`hy2scale-x86-${VERSION}.ipkg\` or \`hy2scale-arm64-${VERSION}.ipkg\`, installed locally from the app store |"
             echo
-            echo "Every binary is signed by this workflow (\`hy2scale-<platform>.sig\` in the archive); a node running an official build checks it before an upgrade."
+            echo "Nodes on an earlier version can also upgrade from **Settings → Upgrade**. Details: [Installation](${WIKI})."
             echo
-            echo "### Docker image"
+            echo "### Files"
             echo
-            echo '```bash'
-            echo "docker pull frankoong/hy2scale:${VERSION}"
-            echo '```'
-            echo
-            echo "Offline: \`docker load < docker-image-amd64.tar.gz\` (or \`-arm64\`)."
-            echo
-            echo "### iKuai package"
-            echo
-            echo "- \`hy2scale-x86-${VERSION}.ipkg\` for x86 / x86_64 iKuai"
-            echo "- \`hy2scale-arm64-${VERSION}.ipkg\` for arm64 / aarch64 iKuai"
-            echo
-            echo "### OpenWrt packages"
-            echo
-            echo "For OpenWrt and its derivatives, the node package and the LuCI app (install both):"
-            echo
-            echo "- opkg (OpenWrt 24.10 and earlier): \`hy2scale_<version>_x86_64.ipk\` and \`luci-app-hy2scale_<version>_all.ipk\`"
-            echo "- apk (OpenWrt 25.12 and later): \`hy2scale-<version>_x86_64.apk\` and \`luci-app-hy2scale-<version>.apk\` (install with \`apk add --allow-untrusted\`)"
-            echo
-            echo "Other architectures (\`opkg print-architecture\` or \`apk --print-arch\`): the \`openwrt-packages-all\` artifact of [this build](${RUN_URL}) (GitHub sign-in needed, kept 90 days); check them with \`openwrt-sha256.txt\`."
-            echo
-            echo "### Verify checksums"
-            echo
-            echo '```'
-            echo 'sha256sum -c checksums-sha256.txt'
-            echo '```'
+            echo "- **Binaries:** \`hy2scale-linux-<platform>.tar.gz\` for amd64, 386, arm64, armv7, armv6, armv5, mips-softfloat, mipsle-softfloat, mips64, mips64le, riscv64 and loong64. Each one is signed (\`.sig\` in the archive); an official build checks the signature before it upgrades."
+            echo "- **Docker image, offline:** \`docker-image-amd64.tar.gz\`, \`docker-image-arm64.tar.gz\` (\`docker load < file\`)."
+            echo "- **OpenWrt, x86_64:** \`hy2scale_*_x86_64.ipk\` with \`luci-app-hy2scale_*_all.ipk\` (opkg, 24.10 and earlier), or \`hy2scale-*_x86_64.apk\` with \`luci-app-hy2scale-*.apk\` (apk, 25.12 and later). Install both of a pair."
+            echo "- **OpenWrt, other architectures:** the \`openwrt-packages-all\` artifact of [this build](${RUN_URL}) (GitHub sign-in needed, kept 90 days). \`openwrt-sha256.txt\` lists the checksums of every architecture's packages."
+            echo "- **Checksums:** \`sha256sum -c --ignore-missing checksums-sha256.txt\` in the folder with the downloaded files."
             echo
             echo "<details>"
             if [ -n "$PREV" ]; then
-              echo "<summary>Changelog since ${PREV}</summary>"
+              echo "<summary>Changes since ${PREV}</summary>"
               echo
-              git log "${PREV}..${TAG}" --pretty=format:"- %s (%h)" --no-merges
+              git log "refs/tags/${PREV}..refs/tags/${TAG}" --pretty=format:"- %s (%h)" --no-merges
             else
-              echo "<summary>Full commit history</summary>"
+              echo "<summary>All changes</summary>"
               echo
-              git log "${TAG}" --pretty=format:"- %s (%h)" --no-merges
+              git log "refs/tags/${TAG}" --pretty=format:"- %s (%h)" --no-merges
             fi
             echo
             echo
             echo "</details>"
           } > notes.md
+          cat notes.md
 
       - name: Publish
         env:
