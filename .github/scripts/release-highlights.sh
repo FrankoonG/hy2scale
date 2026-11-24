@@ -16,11 +16,14 @@ warn() { echo "::warning::release highlights: $*"; exit 0; }
 
 [ -n "${RELEASE_AI_KEY:-}" ] && [ -n "${RELEASE_AI_BASE_URL:-}" ] || { echo "release highlights: not configured"; exit 0; }
 BASE="${RELEASE_AI_BASE_URL%/}"
+# The API's address stays private (the log of a public repository is
+# public): nothing here prints it, and curl runs without its own error
+# messages, which would name the host.
 
 LOG="$(git log "$1..$2" --no-merges --format='- %s%n%b' | grep -v '^[[:space:]]*$' | head -c 60000)"
 [ -n "$LOG" ] || { echo "release highlights: no commits"; exit 0; }
 
-MODELS="$(curl -fsS --max-time 30 -H "Authorization: Bearer ${RELEASE_AI_KEY}" "${BASE}/models")" \
+MODELS="$(curl -fs --max-time 30 -H "Authorization: Bearer ${RELEASE_AI_KEY}" "${BASE}/models")" \
   || warn "could not list the models"
 # the newest plain "...-luna" (a suffixed variant such as -mini only when
 # there is no plain one)
@@ -38,7 +41,7 @@ Each point under 25 words. Output only the bullet points.'
 
 BODY="$(jq -n --arg m "$MODEL" --arg s "$SYSTEM" --arg u "$LOG" \
   '{model: $m, messages: [{role: "system", content: $s}, {role: "user", content: $u}]}')"
-RESP="$(curl -fsS --max-time 300 -H "Authorization: Bearer ${RELEASE_AI_KEY}" \
+RESP="$(curl -fs --max-time 300 -H "Authorization: Bearer ${RELEASE_AI_KEY}" \
   -H 'Content-Type: application/json' -d "$BODY" "${BASE}/chat/completions")" \
   || warn "the request to ${MODEL} failed"
 

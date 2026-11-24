@@ -505,13 +505,14 @@ jobs:
           echo "previous: ${PREV:-none}"
 
       # A summary of the changes by the newest "luna" model of the API in
-      # RELEASE_AI_BASE_URL (variable) with RELEASE_AI_KEY (secret); skipped
+      # the RELEASE_AI_BASE_URL and RELEASE_AI_KEY secrets (the URL is a
+      # secret too: logs of a public repository are public); skipped
       # when either is unset, and never fails the release.
       - name: Highlights
         continue-on-error: true
         env:
           RELEASE_AI_KEY: ${{ secrets.RELEASE_AI_KEY }}
-          RELEASE_AI_BASE_URL: ${{ vars.RELEASE_AI_BASE_URL }}
+          RELEASE_AI_BASE_URL: ${{ secrets.RELEASE_AI_BASE_URL }}
         run: |
           : > highlights.md
           [ -n "$PREV" ] || { echo "no previous release"; exit 0; }
