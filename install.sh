@@ -16,6 +16,7 @@
 #   HY2SCALE_BIN         binary path (default /usr/local/bin/hy2scale)
 #   HY2SCALE_PLATFORM    auto (default) | linux | unifios | openwrt
 #   HY2SCALE_SCRIPT_REF  git ref the platform files come from (default main)
+#   HY2SCALE_PKG_DIR     OpenWrt: install the packages from this directory
 #
 # UniFi OS (detected automatically) installs everything under /data/hy2scale,
 # which survives firmware updates, and is managed afterwards with
@@ -118,27 +119,47 @@ openwrt_install() {
 
   TMP_DIR="$(mktemp -d)"
   trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
-  fetch "https://api.github.com/repos/${REPO}/releases/tags/${VERSION}" "${TMP_DIR}/release.json" \
-    || err "could not read release ${VERSION}"
-  URLS="$(grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+"' "${TMP_DIR}/release.json" \
-    | sed 's/.*"\(https[^"]*\)"/\1/')"
-  # the node package for this architecture, and the LuCI app
-  PKG_URL="$(echo "$URLS" | grep -E "/hy2scale[-_][^/]*[._]${OW_ARCH}\.${EXT}\$" | head -n1)"
-  LUCI_URL="$(echo "$URLS" | grep -E "/luci-app-hy2scale[-_][^/]*\.${EXT}\$" | head -n1)"
-  [ -n "$PKG_URL" ] || err "release ${VERSION} has no ${EXT} package for ${OW_ARCH}"
-  fetch "https://github.com/${REPO}/releases/download/${VERSION}/checksums-sha256.txt" "${TMP_DIR}/checksums.txt" \
-    || err "could not download checksums-sha256.txt for ${VERSION}"
+  # every architecture's packages are listed in the release's openwrt-sha256.txt
+  fetch "https://github.com/${REPO}/releases/download/${VERSION}/openwrt-sha256.txt" "${TMP_DIR}/checksums.txt" \
+    || err "could not download openwrt-sha256.txt for ${VERSION}"
+  checked() {
+    want="$(grep -E "[[:space:]]\*?${2}\$" "${TMP_DIR}/checksums.txt" | awk '{print $1}')"
+    [ -n "$want" ] || err "$2 is not listed in openwrt-sha256.txt of ${VERSION}"
+    [ "$(sha256_of "$1")" = "$want" ] || err "checksum mismatch for $2"
+  }
 
   FILES=""
-  for u in $PKG_URL $LUCI_URL; do
-    f="${u##*/}"
-    info "Fetching $f"
-    fetch "$u" "${TMP_DIR}/${f}" || err "download of $f failed"
-    want="$(grep -E "[[:space:]]\*?${f}\$" "${TMP_DIR}/checksums.txt" | awk '{print $1}')"
-    [ -n "$want" ] || err "$f is not listed in checksums-sha256.txt"
-    [ "$(sha256_of "${TMP_DIR}/${f}")" = "$want" ] || err "checksum mismatch for $f"
-    FILES="$FILES ${TMP_DIR}/${f}"
-  done
+  if [ -n "${HY2SCALE_PKG_DIR:-}" ]; then
+    # packages downloaded beforehand (e.g. the release build's artifact)
+    for pat in "hy2scale[-_]*[._]${OW_ARCH}.${EXT}" "luci-app-hy2scale[-_]*.${EXT}"; do
+      f="$(cd "$HY2SCALE_PKG_DIR" && ls $pat 2>/dev/null | head -n1)"
+      [ -n "$f" ] || err "no ${pat} in ${HY2SCALE_PKG_DIR}"
+      checked "${HY2SCALE_PKG_DIR}/${f}" "$f"
+      FILES="$FILES ${HY2SCALE_PKG_DIR}/${f}"
+    done
+  else
+    fetch "https://api.github.com/repos/${REPO}/releases/tags/${VERSION}" "${TMP_DIR}/release.json" \
+      || err "could not read release ${VERSION}"
+    URLS="$(grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+"' "${TMP_DIR}/release.json" \
+      | sed 's/.*"\(https[^"]*\)"/\1/')"
+    # the node package for this architecture, and the LuCI app
+    PKG_URL="$(echo "$URLS" | grep -E "/hy2scale[-_][^/]*[._]${OW_ARCH}\.${EXT}\$" | head -n1)"
+    LUCI_URL="$(echo "$URLS" | grep -E "/luci-app-hy2scale[-_][^/]*\.${EXT}\$" | head -n1)"
+    if [ -z "$PKG_URL" ]; then
+      warn "The release carries the x86_64 packages only. For ${OW_ARCH}, download the"
+      warn "openwrt-packages-all artifact linked in the release notes of ${VERSION},"
+      warn "copy hy2scale*${OW_ARCH}.${EXT} and luci-app-hy2scale*.${EXT} to a directory here, then run:"
+      warn "  HY2SCALE_VERSION=${VERSION} HY2SCALE_PKG_DIR=<directory> sh install.sh"
+      err "release ${VERSION} has no ${EXT} package for ${OW_ARCH}"
+    fi
+    for u in $PKG_URL $LUCI_URL; do
+      f="${u##*/}"
+      info "Fetching $f"
+      fetch "$u" "${TMP_DIR}/${f}" || err "download of $f failed"
+      checked "${TMP_DIR}/${f}" "$f"
+      FILES="$FILES ${TMP_DIR}/${f}"
+    done
+  fi
   info "Checksums OK"
 
   # dependencies (kmod-tun, ca-bundle, …) come from the system's own feeds

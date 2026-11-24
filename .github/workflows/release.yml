@@ -434,13 +434,28 @@ jobs:
           set -eu
           bash platform/openwrt/build.sh --bin-dir signed --out openwrt --version "$VERSION" \
             --tools "$TOOLS/bin" --release-assets
-          ls -la openwrt/release
+          # sums of every architecture's packages (attached to the release,
+          # so the run's artifact can be checked against it)
+          (cd openwrt/release && sha256sum -- *.ipk *.apk > openwrt-sha256.txt)
+          # the release carries x86_64 and the LuCI app; the rest stay in
+          # this run's artifact
+          mkdir -p openwrt/attach
+          cp openwrt/release/*_x86_64.ipk openwrt/release/*_x86_64.apk             openwrt/release/luci-app-hy2scale* openwrt/release/openwrt-sha256.txt openwrt/attach/
+          ls -la openwrt/attach
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: openwrt-packages
+          path: openwrt/attach/
+          if-no-files-found: error
+
+      # every architecture, linked from the release notes
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: openwrt-packages-all
           path: openwrt/release/
           if-no-files-found: error
+          retention-days: 90
 
   # ─── GitHub release ──────────────────────────────────────────────
   release:
@@ -453,6 +468,7 @@ jobs:
       TAG: ${{ needs.version.outputs.tag }}
       VERSION: ${{ needs.version.outputs.version }}
       PRERELEASE: ${{ needs.version.outputs.prerelease }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -472,7 +488,7 @@ jobs:
           cp artifacts/archives/*.tar.gz release/
           cp artifacts/docker-image-*/*.tar.gz release/
           cp artifacts/ipkg-*/*.ipkg release/
-          cp artifacts/openwrt-packages/*.ipk artifacts/openwrt-packages/*.apk release/
+          cp artifacts/openwrt-packages/* release/
           (cd release && sha256sum -- * > checksums-sha256.txt && cat checksums-sha256.txt)
 
       - name: Release notes
@@ -509,10 +525,12 @@ jobs:
             echo
             echo "### OpenWrt packages"
             echo
-            echo "For OpenWrt and its derivatives; pick the architecture from \`opkg print-architecture\` or \`apk --print-arch\`."
+            echo "For OpenWrt and its derivatives, the node package and the LuCI app (install both):"
             echo
-            echo "- opkg (OpenWrt 24.10 and earlier): \`hy2scale_<version>_<arch>.ipk\` and \`luci-app-hy2scale_<version>_all.ipk\`"
-            echo "- apk (OpenWrt 25.12 and later): \`hy2scale-<version>_<arch>.apk\` and \`luci-app-hy2scale-<version>.apk\` (install with \`apk add --allow-untrusted\`)"
+            echo "- opkg (OpenWrt 24.10 and earlier): \`hy2scale_<version>_x86_64.ipk\` and \`luci-app-hy2scale_<version>_all.ipk\`"
+            echo "- apk (OpenWrt 25.12 and later): \`hy2scale-<version>_x86_64.apk\` and \`luci-app-hy2scale-<version>.apk\` (install with \`apk add --allow-untrusted\`)"
+            echo
+            echo "Other architectures (\`opkg print-architecture\` or \`apk --print-arch\`): the \`openwrt-packages-all\` artifact of [this build](${RUN_URL}) (GitHub sign-in needed, kept 90 days); check them with \`openwrt-sha256.txt\`."
             echo
             echo "### Verify checksums"
             echo
