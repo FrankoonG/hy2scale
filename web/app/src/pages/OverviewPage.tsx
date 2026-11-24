@@ -557,7 +557,9 @@ export default function OverviewPage() {
 
   // ---- attention ----
   const issues: { level: 'red' | 'orange'; label: string; count?: number; to: string; state?: NavSelect & { tab?: string } }[] = [];
-  if (node?.limited) issues.push({ level: 'orange', label: t('overview.issue.limited'), to: '/settings' });
+  for (const r of node?.rollback_configs || []) {
+    issues.push({ level: 'orange', label: t('overview.issue.rollbackConfig', { version: r.version, file: r.file }), to: '/logs' });
+  }
   if (peersOffline.length) issues.push({ level: 'red', label: t('overview.issue.peersOffline'), count: peersOffline.length, to: '/nodes', state: { select: peersOffline.map((p) => p.name) } });
   if (peersBad.length) issues.push({ level: 'orange', label: t('overview.issue.peersIncompat'), count: peersBad.length, to: '/nodes', state: { select: peersBad.map((p) => p.name) } });
   for (const s of servicesDown) issues.push({ level: 'red', label: t('overview.issue.serviceDown', { name: s.label }), to: svcPage(s.key), state: { tab: s.key } });
@@ -598,7 +600,7 @@ export default function OverviewPage() {
         <Card className="ov-span-5" title={t('overview.thisNode')}>
           <div className="ov-node-head">
             <span className="ov-node-name">{node?.node_id || '—'}</span>
-            {node?.version && <VersionBadge version={node.version} limited={node.limited} update={update} />}
+            {node?.version && <VersionBadge version={node.version} update={update} />}
             {node?.exit_node && <Badge variant="blue">{t('overview.exitNode')}</Badge>}
             <span className="ov-health">
               {issues.length === 0

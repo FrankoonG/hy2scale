@@ -3,8 +3,6 @@ import clsx from 'clsx';
 
 interface Props {
   version: string;
-  /** This node: runs without the privileges some features need (red, "Limited"). */
-  limited?: boolean;
   /** A peer in compatibility mode (orange). */
   compat?: boolean;
   /** This node: a newer release is available (yellow). */
@@ -21,13 +19,11 @@ interface Props {
   title?: string;
 }
 
-/** "v1.4.0" pill, green / yellow (update) / orange (compat peer) / red (limited, incompatible). */
-export default function VersionBadge({ version, limited, compat, update, incompatible, outdated, peer, selfBuilt, className, title }: Props) {
+/** "v1.4.0" pill, green / yellow (update) / orange (compat peer) / red (incompatible). */
+export default function VersionBadge({ version, compat, update, incompatible, outdated, peer, selfBuilt, className, title }: Props) {
   const { t } = useTranslation();
-  const suffix = peer
-    ? (incompatible ? ' ✗' : outdated ? ' ↑' : '')
-    : (limited ? ` ${t('version.limited')}` : '');
-  const tone = limited ? 'limited' : incompatible ? 'incompatible' : update ? 'update' : (peer && compat) ? 'compat' : undefined;
+  const suffix = peer ? (incompatible ? ' ✗' : outdated ? ' ↑' : '') : '';
+  const tone = incompatible ? 'incompatible' : update ? 'update' : (peer && compat) ? 'compat' : undefined;
   return (
     <span className={clsx('version-badge', tone, className)} title={title ?? (selfBuilt ? t('build.selfBuilt') : undefined)} data-self-built={selfBuilt || undefined}>
       v{version}{selfBuilt ? '*' : ''}{suffix}

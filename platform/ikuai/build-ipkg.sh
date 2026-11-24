@@ -1,14 +1,14 @@
 #!/bin/bash
 # Quick build script for hy2scale iKuai ipkg package
-# Usage: cd ipkg && bash build-ipkg.sh
+# Usage: bash platform/ikuai/build-ipkg.sh
 #
 # Version is auto-read from internal/api/server.go (single source of truth)
-# Output: hy2scale-<version>.ipkg in current directory
+# Output: platform/ikuai/hy2scale-<version>.ipkg
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Extract version from Go source (single source of truth)
 VERSION=$(grep 'const Version' "$PROJECT_DIR/internal/api/server.go" | sed 's/.*"\(.*\)".*/\1/')
@@ -45,7 +45,7 @@ if [ "$PROJECT_DIR/web/app/public/logo.svg" -nt "$SCRIPT_DIR/hy2scale/ui/ico/app
     pip install -q cairosvg >/dev/null 2>&1
     python3 -c "
 import cairosvg
-cairosvg.svg2png(url=\"/work/web/app/public/logo.svg\", write_to=\"/work/ipkg/hy2scale/ui/ico/app.png\", output_width=256, output_height=256)
+cairosvg.svg2png(url=\"/work/web/app/public/logo.svg\", write_to=\"/work/platform/ikuai/hy2scale/ui/ico/app.png\", output_width=256, output_height=256)
 print(\"    Logo converted\")
 "'
 else
@@ -63,7 +63,7 @@ rm -f "$SCRIPT_DIR/hy2scale/docker_image.tar.gz"
 
 echo ""
 echo "=== Done ==="
-echo "Output: ipkg/hy2scale-${VERSION}.ipkg (${IPKG_SIZE})"
+echo "Output: platform/ikuai/hy2scale-${VERSION}.ipkg (${IPKG_SIZE})"
 echo ""
 echo "Install on iKuai:"
 echo "  Web: 高级应用 → 应用市场 → 本地安装"

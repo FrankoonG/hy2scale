@@ -3,6 +3,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -182,8 +183,26 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		s.mu.Lock()
 		s.sessions[matched] = time.Now().Add(s.sessionTimeout())
 		s.mu.Unlock()
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionTokenKey{}, matched)))
 	})
+}
+
+// sessionTokenKey: the web session a request was admitted with.
+type sessionTokenKey struct{}
+
+// sessionToken: the web session of the request ("" = the control socket or
+// a trusted relay).
+func sessionToken(ctx context.Context) string {
+	v, _ := ctx.Value(sessionTokenKey{}).(string)
+	return v
+}
+
+// sessionLive reports whether a web session is still signed in.
+func (s *Server) sessionLive(token string) bool {
+	s.mu.RLock()
+	exp, ok := s.sessions[token]
+	s.mu.RUnlock()
+	return ok && time.Now().Before(exp)
 }
 
 // getMe returns the signed-in web user (shown in the top bar user menu).

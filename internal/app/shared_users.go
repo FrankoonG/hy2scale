@@ -593,8 +593,8 @@ func (a *App) JoinShared(rec SharedRecord, key, exitNode string) (JoinResult, er
 	if err := setUserFields(&nu, rec.Fields); err != nil {
 		return res, err
 	}
-	if nu.Username == "" || nu.Password == "" {
-		return res, fmt.Errorf("username and password required")
+	if err := sharedUserSignInOK(&nu); err != nil {
+		return res, err
 	}
 	if err := NormalizeTrafficReset(&nu, TrafficNow().UTC()); err != nil {
 		return res, err
@@ -1035,4 +1035,27 @@ func (a *App) applySharedEpochs() {
 		a.rebuildUserIndex()
 		log.Printf("[shared] new traffic period: %v", reset)
 	}
+}
+
+// sharedUserSignInOK: a shared user arriving here can sign in: a name, and
+// the password of its kind (policy: every row has one; else the user's).
+func sharedUserSignInOK(u *UserConfig) error {
+	if u.Username == "" {
+		return fmt.Errorf("the shared user has no username")
+	}
+	if u.Kind() == KindPolicy {
+		if len(u.Rows) == 0 {
+			return fmt.Errorf("the shared user %q has no password rows", u.Username)
+		}
+		for _, r := range u.Rows {
+			if r.Password == "" {
+				return fmt.Errorf("a password row of the shared user %q has no password", u.Username)
+			}
+		}
+		return nil
+	}
+	if u.Password == "" {
+		return fmt.Errorf("the shared user %q has no password", u.Username)
+	}
+	return nil
 }

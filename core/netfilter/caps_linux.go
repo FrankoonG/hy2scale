@@ -175,7 +175,7 @@ func OriginalDst(conn net.Conn) (string, error) {
 	err = rc.Control(func(fd uintptr) {
 		addrLen := uint32(unsafe.Sizeof(addr))
 		_, _, errno := syscall.Syscall6(
-			syscall.SYS_GETSOCKOPT,
+			sysGetsockopt,
 			fd,
 			syscall.SOL_IP,
 			SO_ORIGINAL_DST,

@@ -37,6 +37,9 @@ export default function WebTab({ web }: { web: WebForm }) {
         <FormGroup label={t('settings.subHTTP')}>
           <Toggle checked={web.subHTTP} onChange={(e) => web.setSubHTTP(e.target.checked)} data-testid="web-sub-http" />
         </FormGroup>
+        <FormGroup label={t('settings.remoteAccessPorts')}>
+          <Input className="mono" value={web.raPorts} onChange={(e) => web.setRaPorts(e.target.value)} placeholder={t('settings.remoteAccessPortsAny')} data-testid="web-ra-ports" />
+        </FormGroup>
         <Button variant="primary" className="align-start" onClick={web.save} loading={web.saving}>{t('app.save')}</Button>
       </FormStack>
     </Card>

@@ -12,6 +12,7 @@ name: Release
 #             (environment "release"; never checks out    no repository code
 #             or runs repository code)
 #   package / docker   archives, images, iKuai packages   read-only token
+#   openwrt   OpenWrt .ipk/.apk packages                  read-only token
 #   release   publishes the GitHub release                contents: write
 #   publish-docker     pushes to Docker Hub               Docker Hub token only
 on:
@@ -122,6 +123,13 @@ jobs:
           - { platform: linux-armv7, goarch: arm, goarm: "7" }
           - { platform: linux-mips64le, goarch: mips64le }
           - { platform: linux-mipsle-softfloat, goarch: mipsle, gomips: softfloat }
+          - { platform: linux-386, goarch: "386", go386: softfloat }
+          - { platform: linux-armv5, goarch: arm, goarm: "5" }
+          - { platform: linux-armv6, goarch: arm, goarm: "6" }
+          - { platform: linux-mips-softfloat, goarch: mips, gomips: softfloat }
+          - { platform: linux-mips64, goarch: mips64 }
+          - { platform: linux-riscv64, goarch: riscv64 }
+          - { platform: linux-loong64, goarch: loong64 }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -149,6 +157,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
           GOMIPS: ${{ matrix.gomips }}
+          GO386: ${{ matrix.go386 }}
           PLATFORM: ${{ matrix.platform }}
         run: |
           set -eu
@@ -193,6 +202,34 @@ jobs:
         with:
           name: bin-linux-mipsle-softfloat
           path: in/linux-mipsle-softfloat
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-386
+          path: in/linux-386
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-armv5
+          path: in/linux-armv5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-armv6
+          path: in/linux-armv6
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-mips-softfloat
+          path: in/linux-mips-softfloat
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-mips64
+          path: in/linux-mips64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-riscv64
+          path: in/linux-riscv64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: bin-linux-loong64
+          path: in/linux-loong64
 
       - name: Check the binaries
         run: |
@@ -203,7 +240,14 @@ jobs:
             'linux-arm64:ELF 64-bit LSB.*ARM aarch64' \
             'linux-armv7:ELF 32-bit LSB.*ARM' \
             'linux-mips64le:ELF 64-bit LSB.*MIPS' \
-            'linux-mipsle-softfloat:ELF 32-bit LSB.*MIPS'; do
+            'linux-mipsle-softfloat:ELF 32-bit LSB.*MIPS' \
+            'linux-386:ELF 32-bit LSB.*Intel (80386|i386)' \
+            'linux-armv5:ELF 32-bit LSB.*ARM' \
+            'linux-armv6:ELF 32-bit LSB.*ARM' \
+            'linux-mips-softfloat:ELF 32-bit MSB.*MIPS' \
+            'linux-mips64:ELF 64-bit MSB.*MIPS' \
+            'linux-riscv64:ELF 64-bit LSB.*RISC-V' \
+            'linux-loong64:ELF 64-bit LSB.*LoongArch'; do
             plat="${p%%:*}"; want="${p#*:}"
             [ "$(ls "in/$plat")" = "hy2scale-$plat" ] || { echo "::error::unexpected files for $plat: $(ls "in/$plat")"; exit 1; }
             kind="$(file -b "in/$plat/hy2scale-$plat")"
@@ -326,10 +370,10 @@ jobs:
           # The ipkg manifest version must be plain X.Y.Z (iKuai rejects -rc1).
           RAW_VERSION="$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/api/server.go)"
           IPKG_VERSION="${RAW_VERSION%%-*}"
-          sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${IPKG_VERSION}\"/" ipkg/hy2scale/manifest.json
-          docker save hy2scale:ikuai | gzip > ipkg/hy2scale/docker_image.tar.gz
-          (cd ipkg && tar czf "hy2scale-${ARCH_LABEL}-${VERSION}.ipkg" hy2scale/)
-          rm -f ipkg/hy2scale/docker_image.tar.gz
+          sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${IPKG_VERSION}\"/" platform/ikuai/hy2scale/manifest.json
+          docker save hy2scale:ikuai | gzip > platform/ikuai/hy2scale/docker_image.tar.gz
+          (cd platform/ikuai && tar czf "hy2scale-${ARCH_LABEL}-${VERSION}.ipkg" hy2scale/)
+          rm -f platform/ikuai/hy2scale/docker_image.tar.gz
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -340,13 +384,83 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ipkg-${{ matrix.arch }}
-          path: ipkg/hy2scale-${{ matrix.arch_label }}-${{ needs.version.outputs.version }}.ipkg
+          path: platform/ikuai/hy2scale-${{ matrix.arch_label }}-${{ needs.version.outputs.version }}.ipkg
           if-no-files-found: error
+
+  # ─── OpenWrt packages (no secrets) ───────────────────────────────
+  # platform/openwrt/build.sh packages the signed binaries: hy2scale per
+  # OpenWrt architecture plus luci-app-hy2scale, as .ipk (opkg) and .apk
+  # (apk-tools v3). The release gets them under flat names.
+  openwrt:
+    name: OpenWrt packages
+    needs: [version, sign]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TOOLS: ${{ github.workspace }}/.owrt-tools
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: signed
+          path: signed
+
+      # apk-tools v3, usign and po2lmo from the sources OpenWrt pins
+      # (platform/openwrt/tools/build-host-tools.sh); cached on that file.
+      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        id: tools
+        with:
+          path: .owrt-tools
+          key: owrt-tools-${{ runner.os }}-${{ hashFiles('platform/openwrt/tools/build-host-tools.sh') }}
+
+      - name: Host tools
+        env:
+          CACHED: ${{ steps.tools.outputs.cache-hit }}
+        run: |
+          set -eu
+          PKGS="fakeroot"
+          [ "$CACHED" = true ] || PKGS="$PKGS meson ninja-build pkg-config libssl-dev zlib1g-dev"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends $PKGS
+          bash platform/openwrt/tools/build-host-tools.sh "$TOOLS"
+
+      - name: Build packages
+        run: |
+          set -eu
+          bash platform/openwrt/build.sh --bin-dir signed --out openwrt --version "$VERSION" \
+            --tools "$TOOLS/bin" --release-assets
+          # sums of every architecture's packages (attached to the release,
+          # so the run's artifact can be checked against it)
+          (cd openwrt/release && sha256sum -- *.ipk *.apk > openwrt-sha256.txt)
+          # the release carries x86_64 and the LuCI app; the rest stay in
+          # this run's artifact
+          mkdir -p openwrt/attach
+          cp openwrt/release/*_x86_64.ipk openwrt/release/*_x86_64.apk             openwrt/release/luci-app-hy2scale* openwrt/release/openwrt-sha256.txt openwrt/attach/
+          ls -la openwrt/attach
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: openwrt-packages
+          path: openwrt/attach/
+          if-no-files-found: error
+
+      # every architecture, linked from the release notes
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: openwrt-packages-all
+          path: openwrt/release/
+          if-no-files-found: error
+          retention-days: 90
 
   # ─── GitHub release ──────────────────────────────────────────────
   release:
     name: Create release
-    needs: [version, package, docker]
+    needs: [version, package, docker, openwrt]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -354,14 +468,17 @@ jobs:
       TAG: ${{ needs.version.outputs.tag }}
       VERSION: ${{ needs.version.outputs.version }}
       PRERELEASE: ${{ needs.version.outputs.prerelease }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
           fetch-depth: 0
 
+      # Only what the release carries.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          pattern: "{archives,docker-image-*,ipkg-*,openwrt-packages}"
           path: artifacts
 
       - name: Collect assets
@@ -371,58 +488,91 @@ jobs:
           cp artifacts/archives/*.tar.gz release/
           cp artifacts/docker-image-*/*.tar.gz release/
           cp artifacts/ipkg-*/*.ipkg release/
+          cp artifacts/openwrt-packages/* release/
           (cd release && sha256sum -- * > checksums-sha256.txt && cat checksums-sha256.txt)
+
+      # a release is compared with the previous release, a pre-release with
+      # the previous tag of any kind
+      - name: Previous release
+        run: |
+          set -eu
+          if [ "$PRERELEASE" = true ]; then
+            PREV="$(git describe --tags --abbrev=0 "refs/tags/${TAG}^" 2>/dev/null || true)"
+          else
+            PREV="$(git describe --tags --abbrev=0 --exclude '*-*' "refs/tags/${TAG}^" 2>/dev/null || true)"
+          fi
+          echo "PREV=${PREV}" >> "$GITHUB_ENV"
+          echo "previous: ${PREV:-none}"
+
+      # A summary of the changes by the newest "luna" model of the API in
+      # the RELEASE_AI_BASE_URL and RELEASE_AI_KEY secrets (the URL is a
+      # secret too: logs of a public repository are public); skipped
+      # when either is unset, and never fails the release.
+      - name: Highlights
+        continue-on-error: true
+        env:
+          RELEASE_AI_KEY: ${{ secrets.RELEASE_AI_KEY }}
+          RELEASE_AI_BASE_URL: ${{ secrets.RELEASE_AI_BASE_URL }}
+        run: |
+          : > highlights.md
+          [ -n "$PREV" ] || { echo "no previous release"; exit 0; }
+          bash .github/scripts/release-highlights.sh "refs/tags/${PREV}" "refs/tags/${TAG}" highlights.md
+          cat highlights.md
 
       - name: Release notes
         run: |
           set -eu
-          PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          RAW="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main/install.sh"
+          WIKI="https://github.com/${GITHUB_REPOSITORY}/wiki/Installation"
+          DL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          # link LABEL REGEX: a download link to the release file matching REGEX
+          link() {
+            f="$(ls release | grep -E "$2" | head -n1)"
+            [ -z "$f" ] || printf '[%s](%s/%s)' "$1" "$DL" "$f"
+          }
+          BIN=""
+          for p in amd64 386 arm64 armv7 armv6 armv5 mips-softfloat mipsle-softfloat mips64 mips64le riscv64 loong64; do
+            l="$(link "${p%-softfloat}" "^hy2scale-linux-${p}\.tar\.gz$")"
+            [ -z "$l" ] || BIN="${BIN:+${BIN} · }${l}"
+          done
           {
-            echo "## hy2scale ${TAG}"
+            echo "## hy2scale ${VERSION}"
             echo
-            echo "### Binary downloads"
+            echo "- **Linux** (systemd, UniFi OS): \`curl -fsSL ${RAW} | sudo sh\`"
+            echo "  - Binaries: ${BIN}"
+            echo "- **OpenWrt** and derivatives: \`wget -qO- ${RAW} | sh\` (as root)"
+            echo "  - x86_64, opkg: $(link hy2scale '^hy2scale_.*_x86_64\.ipk$') + $(link LuCI '^luci-app-hy2scale_.*\.ipk$')"
+            echo "  - x86_64, apk: $(link hy2scale '^hy2scale-.*_x86_64\.apk$') + $(link LuCI '^luci-app-hy2scale-.*\.apk$')"
+            echo "  - Other architectures: [build artifact](${RUN_URL}) (GitHub sign-in, kept 90 days)"
+            echo "- **Docker**: \`docker pull frankoong/hy2scale:${VERSION}\`"
+            echo "  - Offline image: $(link amd64 '^docker-image-amd64\.tar\.gz$') · $(link arm64 '^docker-image-arm64\.tar\.gz$')"
+            echo "- **iKuai v4** (app store, local install): $(link x86 '^hy2scale-x86-.*\.ipkg$') · $(link arm64 '^hy2scale-arm64-.*\.ipkg$')"
             echo
-            echo "| Platform | File |"
-            echo "|----------|------|"
-            for p in linux-amd64 linux-arm64 linux-armv7 linux-mips64le linux-mipsle-softfloat; do
-              echo "| ${p} | \`hy2scale-${p}.tar.gz\` |"
-            done
+            echo "[Installation](${WIKI}) · $(link 'Checksums' '^checksums-sha256\.txt$') · $(link 'OpenWrt checksums' '^openwrt-sha256\.txt$')"
             echo
-            echo "Every binary is signed by this workflow (\`hy2scale-<platform>.sig\` in the archive); a node running an official build checks it before an upgrade."
-            echo
-            echo "### Docker image"
-            echo
-            echo '```bash'
-            echo "docker pull frankoong/hy2scale:${VERSION}"
-            echo '```'
-            echo
-            echo "Offline: \`docker load < docker-image-amd64.tar.gz\` (or \`-arm64\`)."
-            echo
-            echo "### iKuai package"
-            echo
-            echo "- \`hy2scale-x86-${VERSION}.ipkg\` for x86 / x86_64 iKuai"
-            echo "- \`hy2scale-arm64-${VERSION}.ipkg\` for arm64 / aarch64 iKuai"
-            echo
-            echo "### Verify checksums"
-            echo
-            echo '```'
-            echo 'sha256sum -c checksums-sha256.txt'
-            echo '```'
-            echo
+            if [ -s highlights.md ]; then
+              echo "### Highlights"
+              echo
+              cat highlights.md
+              echo
+              echo "<sub>Summarised by an AI model from the changes below.</sub>"
+              echo
+            fi
             echo "<details>"
             if [ -n "$PREV" ]; then
-              echo "<summary>Changelog since ${PREV}</summary>"
+              echo "<summary>Changes since ${PREV}</summary>"
               echo
-              git log "${PREV}..${TAG}" --pretty=format:"- %s (%h)" --no-merges
+              git log "refs/tags/${PREV}..refs/tags/${TAG}" --pretty=format:"- %s (%h)" --no-merges
             else
-              echo "<summary>Full commit history</summary>"
+              echo "<summary>All changes</summary>"
               echo
-              git log "${TAG}" --pretty=format:"- %s (%h)" --no-merges
+              git log "refs/tags/${TAG}" --pretty=format:"- %s (%h)" --no-merges
             fi
             echo
             echo
             echo "</details>"
           } > notes.md
+          cat notes.md
 
       - name: Publish
         env:

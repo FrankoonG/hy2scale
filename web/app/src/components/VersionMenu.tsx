@@ -12,7 +12,7 @@ import { UpdateButton, hasUpdate, useSystemArch, useUpgradeFeed, useUpgradeStore
  * This node's version pill (sidebar). Yellow while a newer release is known;
  * a click opens the version / online-update panel.
  */
-export default function VersionMenu({ version, limited }: { version: string; limited?: boolean }) {
+export default function VersionMenu({ version }: { version: string }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   useUpgradeFeed();
@@ -31,7 +31,7 @@ export default function VersionMenu({ version, limited }: { version: string; lim
       <button ref={btn} type="button" className="version-menu-btn" aria-haspopup="dialog" aria-expanded={open}
         data-testid="version-menu" title={update ? t('version.updateAvailable') : undefined}
         onClick={() => setOpen((v) => !v)}>
-        <VersionBadge version={version} limited={limited} update={update} selfBuilt={arch?.official === false} />
+        <VersionBadge version={version} update={update} selfBuilt={arch?.official === false} />
       </button>
       {createPortal(
         <AnimatePresence>

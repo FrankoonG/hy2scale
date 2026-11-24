@@ -163,6 +163,15 @@ type Config struct {
 	ForceHTTPS  bool                  `yaml:"force_https,omitempty" json:"force_https,omitempty"` // ignored: the web UI is always https
 	HTTPSCertID     string                `yaml:"https_cert_id,omitempty" json:"https_cert_id,omitempty"`
 	SessionTimeoutH int                   `yaml:"session_timeout_h,omitempty" json:"session_timeout_h,omitempty"` // hours, default 12
+	// WrittenBy: the version that last saved this file (an older version
+	// rewriting it drops the field).
+	WrittenBy string `yaml:"written_by,omitempty" json:"-"`
+	// RemoteAccessPorts: the ports remote access opens here, e.g.
+	// "20000-20100" ("" = any free port).
+	RemoteAccessPorts string `yaml:"remote_access_ports,omitempty" json:"remote_access_ports,omitempty"`
+	// RemoteAccessTargets: the addresses other nodes managing this one
+	// reach from here (the list every manager sees).
+	RemoteAccessTargets []RemoteAccessTarget `yaml:"remote_access_targets,omitempty" json:"remote_access_targets,omitempty"`
 	// PathLossGraceS: quality/aggregate connections survive this many
 	// seconds without any working path to their exit, then close.
 	// 0 = default (msess.OrphanBudget); clamped to [3, 300].
@@ -2668,4 +2677,15 @@ func loadCert(certFile, keyFile string) (tls.Certificate, error) {
 	}
 	der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
+}
+
+// RemoteAccessTarget: an address reached from this node by a node managing
+// it. Web: a URL (reverse proxy); port: host:port over tcp, udp or both.
+type RemoteAccessTarget struct {
+	ID      string `yaml:"id" json:"id"`
+	Mode    string `yaml:"mode" json:"mode"` // web | port
+	Target  string `yaml:"target" json:"target"`
+	TCP     bool   `yaml:"tcp,omitempty" json:"tcp"`
+	UDP     bool   `yaml:"udp,omitempty" json:"udp"`
+	Created int64  `yaml:"created,omitempty" json:"created"` // unix ms
 }

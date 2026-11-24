@@ -1,3 +1,9 @@
+v1.4.6
+- Remote access: open a web address or TCP/UDP ports reachable from a managed node, for one visitor address, with a time limit; the target list is kept on the managed node; also from ctl and the API
+- In-app upgrades fall back to the image's version only after crashes; the newer config is kept; ctl and --version use the upgraded binary
+- OpenWrt packages with a LuCI page; more release platforms (386, armv5, armv6, mips, mips64, riscv64, loong64)
+- Fixes: a failed connection attempt through a child interface no longer crashes the node; share links carry the SNI with an untrusted certificate; users with password rows can be shared without a main password
+
 v1.4.5
 - Users: an exit group, a policy set per password, or node access; the per-protocol passwords page is replaced by a protocol choice
 - Subscription per user (for SublinkPro / Sub-Store and the like): V2Ray or Clash list, entry name format, LAN entries; a shared user's lists every holder

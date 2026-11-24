@@ -20,19 +20,6 @@ import { useShareHost } from '@/hooks/useShareHost';
 /** Endpoints → WireGuard: server settings and its peers. */
 export default function WireGuardTab() {
   const wgQ = useQuery({ queryKey: ['wireguard'], queryFn: api.getWireGuard });
-  const wg = wgQ.data;
-  const { t } = useTranslation();
-
-  // Limited runtime: no WireGuard support on this node.
-  if (wg && wg.enabled === undefined && !wg.listen_port) {
-    return (
-      <Card title={t('wg.title')}>
-        <div className="hy-limited-overlay">
-          <div className="hy-limited-msg">{t('l2tp.warnText')}</div>
-        </div>
-      </Card>
-    );
-  }
   return <WireGuardPanels wgQ={wgQ} />;
 }
 

@@ -202,8 +202,14 @@ func (ep *Endpoint) setTrust(t certTrust) {
 	ep.SNI, ep.Names, ep.Insecure, ep.Pin = t.sni, t.names, t.insecure, t.pin
 }
 
-// sniFor: the name to present when connecting to host.
+// sniFor: the name to present when connecting to host. A certificate the
+// client does not check by name (skipped or pinned) gets the host itself
+// when that is a name: networks that pass only real names in the SNI let
+// the handshake through, and the client's check does not depend on it.
 func (ep Endpoint) sniFor(host string) string {
+	if ep.Insecure && host != "" && net.ParseIP(strings.Trim(host, "[]")) == nil {
+		return host
+	}
 	return certTrust{sni: ep.SNI, names: ep.Names}.sniFor(host)
 }
 

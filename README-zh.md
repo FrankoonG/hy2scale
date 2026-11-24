@@ -28,12 +28,14 @@
 curl -fsSL https://raw.githubusercontent.com/FrankoonG/hy2scale/main/install.sh | sudo sh
 ```
 
-自动识别 CPU 架构（`amd64` / `arm64` / `armv7` / `mips64le` /
-`mipsle-softfloat`），从最新 release 下载匹配的 tar 包，把二进制装到
+自动识别 CPU 架构（`amd64` / `386` / `arm64` / `armv7` / `armv6` / `armv5` / `mips64le` / `mips64` /
+`mipsle-softfloat` / `mips-softfloat` / `riscv64` / `loong64`），从最新 release 下载匹配的 tar 包，把二进制装到
 `/usr/local/bin/hy2scale` 并注册 systemd 服务。重复运行即原地升级。
-固定版本用 `HY2SCALE_VERSION=v1.4.5`；卸载用 `… | sudo sh -s -- --uninstall`。
+固定版本用 `HY2SCALE_VERSION=v1.4.6`；卸载用 `… | sudo sh -s -- --uninstall`。
 在 UniFi OS 网关上（以 root 运行）会装到 `/data/hy2scale`，固件升级后依然保留
 （[详见](https://github.com/FrankoonG/hy2scale/wiki/Installation-zh#unifi-os)）。
+在 OpenWrt 及基于它的固件上（以 root 运行 `wget -qO- … | sh`）会安装 `hy2scale` 和 `luci-app-hy2scale`
+两个包，在 LuCI 的 **服务 → hy2scale** 中管理（[详见](https://github.com/FrankoonG/hy2scale/wiki/Installation-zh#openwrt)）。
 
 ### Docker
 

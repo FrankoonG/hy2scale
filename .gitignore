@@ -33,8 +33,8 @@ CLAUDE.md
 .playwright-mcp/
 
 # ipkg build artifacts (generated, not source)
-ipkg/*.ipkg
-ipkg/hy2scale/docker_image.tar.gz
+platform/ikuai/*.ipkg
+platform/ikuai/hy2scale/docker_image.tar.gz
 
 # Frontend build artifacts
 node_modules/

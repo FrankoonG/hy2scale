@@ -1,0 +1,31 @@
+{
+	"admin/services/hy2scale": {
+		"title": "hy2scale",
+		"order": 60,
+		"action": {
+			"type": "firstchild"
+		},
+		"depends": {
+			"acl": [ "luci-app-hy2scale" ],
+			"uci": { "hy2scale": true }
+		}
+	},
+
+	"admin/services/hy2scale/overview": {
+		"title": "Overview",
+		"order": 10,
+		"action": {
+			"type": "view",
+			"path": "hy2scale/overview"
+		}
+	},
+
+	"admin/services/hy2scale/log": {
+		"title": "Log",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "hy2scale/log"
+		}
+	}
+}

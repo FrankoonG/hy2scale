@@ -92,6 +92,13 @@ jobs:
           - { platform: linux-armv7, goarch: arm, goarm: "7" }
           - { platform: linux-mips64le, goarch: mips64le }
           - { platform: linux-mipsle-softfloat, goarch: mipsle, gomips: softfloat }
+          - { platform: linux-386, goarch: "386", go386: softfloat }
+          - { platform: linux-armv5, goarch: arm, goarm: "5" }
+          - { platform: linux-armv6, goarch: arm, goarm: "6" }
+          - { platform: linux-mips-softfloat, goarch: mips, gomips: softfloat }
+          - { platform: linux-mips64, goarch: mips64 }
+          - { platform: linux-riscv64, goarch: riscv64 }
+          - { platform: linux-loong64, goarch: loong64 }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -118,6 +125,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
           GOMIPS: ${{ matrix.gomips }}
+          GO386: ${{ matrix.go386 }}
           PLATFORM: ${{ matrix.platform }}
         run: |
           set -eu
@@ -206,10 +214,10 @@ jobs:
           set -eu
           # The ipkg manifest version must be plain X.Y.Z (iKuai rejects -rc1).
           IPKG_VERSION="${VERSION%%-*}"
-          sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${IPKG_VERSION}\"/" ipkg/hy2scale/manifest.json
-          docker save hy2scale:ikuai | gzip > ipkg/hy2scale/docker_image.tar.gz
-          (cd ipkg && tar czf "hy2scale-${ARCH_LABEL}-${LABEL}.ipkg" hy2scale/)
-          rm -f ipkg/hy2scale/docker_image.tar.gz
+          sed -i "s/\"version\": *\"[^\"]*\"/\"version\": \"${IPKG_VERSION}\"/" platform/ikuai/hy2scale/manifest.json
+          docker save hy2scale:ikuai | gzip > platform/ikuai/hy2scale/docker_image.tar.gz
+          (cd platform/ikuai && tar czf "hy2scale-${ARCH_LABEL}-${LABEL}.ipkg" hy2scale/)
+          rm -f platform/ikuai/hy2scale/docker_image.tar.gz
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -221,6 +229,6 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ipkg-${{ matrix.arch_label }}-${{ env.LABEL }}
-          path: ipkg/hy2scale-${{ matrix.arch_label }}-${{ env.LABEL }}.ipkg
+          path: platform/ikuai/hy2scale-${{ matrix.arch_label }}-${{ env.LABEL }}.ipkg
           if-no-files-found: error
           retention-days: 30

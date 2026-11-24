@@ -67,6 +67,7 @@ const (
 	InRules     = "rules"
 	InAccess    = "access"
 	InRelay     = "relay"
+	InRemote    = "remote" // remote access from a managing node
 )
 
 // Results.

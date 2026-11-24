@@ -1,0 +1,223 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+
+#: htdocs/luci-static/resources/view/hy2scale/log.js:61
+#, javascript-format
+msgid "%d lines"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:148
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:169
+msgid "Address"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:164
+msgid "Allow on WAN"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:159
+msgid "Allowed"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:58
+msgid "Available"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:289
+msgid "Base path"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:223
+msgid "Cancel"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:276
+msgid "Data directory"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:113
+msgid "Disabled"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:273
+msgid "Enable"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:294
+msgid "Expecting a path starting with /"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:281
+msgid "Expecting an absolute path"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:312
+msgid "Expecting port[-port][/tcp|udp|any]"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/log.js:38
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:202
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:204
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:233
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:236
+#, javascript-format
+msgid "Failed: %s"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:121
+msgid "Free space"
+msgstr ""
+
+#: root/usr/share/rpcd/acl.d/luci-app-hy2scale.json:3
+msgid "Grant access to hy2scale"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:361
+msgid "Listening ports"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:157
+msgid "Local only"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/log.js:69
+#: root/usr/share/luci/menu.d/luci-app-hy2scale.json:24
+msgid "Log"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:119
+msgid "Memory"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:298
+msgid "Memory limit (MiB)"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:58
+msgid "Missing"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:299
+msgid "No limit"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/log.js:28
+msgid "No log entries"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:118
+msgid "Node"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:177
+msgid "None"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:139
+msgid "Not enabled in settings"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:177
+msgid "Not running"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:335
+msgid "Open web UI"
+msgstr ""
+
+#: root/usr/share/luci/menu.d/luci-app-hy2scale.json:15
+msgid "Overview"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:147
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:168
+msgid "Port"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:306
+msgid "Port or range, with /tcp, /udp or /any."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:146
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:167
+msgid "Protocol"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/log.js:76
+msgid "Refresh"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:239
+msgid "Reset"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:220
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:339
+msgid "Reset sign-in"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:221
+msgid "Reset the web UI sign-in to admin/admin?"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:331
+msgid "Restart"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:111
+msgid "Running"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:116
+msgid "Service"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:270
+msgid "Settings"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:231
+msgid "Sign-in reset to admin/admin."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:323
+msgid "Start"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:353
+msgid "Status"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:327
+msgid "Stop"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:113
+msgid "Stopped"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:120
+msgid "Uptime"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:117
+msgid "Version"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:149
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:170
+msgid "WAN"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:305
+msgid "WAN ports"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:302
+msgid "Web UI on WAN"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/hy2scale/overview.js:285
+msgid "Web UI port"
+msgstr ""

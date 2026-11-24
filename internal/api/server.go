@@ -59,6 +59,9 @@ type Server struct {
 
 	// targets the tools ran against (tools_history.go)
 	toolsHist toolsHistoryStore
+
+	// remote access opened from this node (remote_access.go)
+	ra raManager
 }
 
 func NewServer(a *app.App, addr, basePath string) *Server {
@@ -134,8 +137,16 @@ func (s *Server) Start(ctx context.Context) error {
 	s.storageRoutes(authed)
 	s.linkRoutes(authed)
 	s.subscriptionRoutes(authed)
+	s.remoteAccessRoutes(authed)
+	s.remoteAccessDialRoutes(authed)
+	s.remoteAccessTargetRoutes(authed)
 
 	apiMux.Handle("/api/", s.authMiddleware(authed))
+	// Remote access, web mode: the visitor is admitted by a cookie the
+	// entry link sets (remote_access.go).
+	apiMux.HandleFunc("/rweb/", s.remoteAccessWeb)
+	s.raStart(ctx)
+	s.logRollbackConfigs()
 
 	// Static files with SPA fallback — inject basePath into index.html.
 	// A build-id derived from the sha256 of the raw index.html is also
@@ -298,7 +309,7 @@ func (s *Server) Start(ctx context.Context) error {
 // --- Node ---
 
 // Version is the application version. Update this on each release.
-const Version = "1.4.5"
+const Version = "1.4.6"
 
 func init() {
 	app.AppVersion = Version
